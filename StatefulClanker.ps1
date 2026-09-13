@@ -298,7 +298,7 @@ function RunTask([string]$id,[string]$override) {
 function Retry([string]$id){if(-not$id){throw'-TaskId required.'};$t=Task $id;$t.status='ready';$t.blockReason=$null;SaveTask $t;Event'task.retried'"Retry $id"@{taskId=$id};Write-Host'Task reset to ready.'}
 function Complete([string]$id){if(-not$id){throw'-TaskId required.'};$t=Task $id;$t.status='complete';$t.blockReason=$null;SaveTask $t;Event'task.completed.manual'"Completed $id manually"@{taskId=$id};UpdateReady;Write-Host'Task completed.'}
 function Block([string]$id,[string]$why){if(-not$id){throw'-TaskId required.'};if(-not$why){throw'-Reason required.'};$t=Task $id;$t.status='blocked';$t.blockReason=$why;SaveTask $t;Event'task.blocked'$why@{taskId=$id};Write-Host'Task blocked.'}
-function Providers{$c=Config;@(foreach($p in$c.providers.PSObject.Properties){[pscustomobject]@{name=$p.Name;command=$p.Value.command;mode=$p.Value.mode}})|Format-Table -AutoSize}
+function Providers{$c=Config;@(foreach($p in $c.providers.PSObject.Properties){[pscustomobject]@{name=$p.Name;command=$p.Value.command;mode=$p.Value.mode}})|Format-Table -AutoSize}
 function ShowTelemetry([string]$sub,[string]$id) {
     if([string]::IsNullOrWhiteSpace($sub)){$sub='active'}
     switch($sub.ToLowerInvariant()){
