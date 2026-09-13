@@ -120,6 +120,7 @@ function Upgrade-SCStateLayout {
     $state=Get-SCState;$changed=$false
     if(-not$state.PSObject.Properties['schemaVersion']-or[int]$state.schemaVersion-lt 4){Set-SCProperty $state 'schemaVersion' 4;$changed=$true}
     if(-not$state.PSObject.Properties['revision']){Set-SCProperty $state 'revision' 0;$changed=$true}
+    if(-not$state.PSObject.Properties['directionRevision']){Set-SCProperty $state 'directionRevision' 0;$changed=$true}
     if($changed){Save-SCState $state;Add-SCEvent 'state.migrated' 'Upgraded durable state layout to schema version 4.' @{schemaVersion=4}}
 }
 function Initialize-SC {
@@ -128,16 +129,17 @@ function Initialize-SC {
     New-Item -ItemType Directory -Force -Path $dir|Out-Null
     foreach($child in @('tasks','plans','runs','critiques','validations','prompts','compilations','proposals','progress','telemetry','telemetry/active','telemetry/runs')){New-Item -ItemType Directory -Force -Path (Join-Path $dir $child)|Out-Null}
     $now=(Get-Date).ToUniversalTime().ToString('o')
-    Write-SCJson (Join-Path $dir 'state.json') ([ordered]@{schemaVersion=4;revision=0;projectId=New-SCId 'project';projectRoot=Get-SCRoot;goal='';activePlanId=$null;planApproved=$false;createdAt=$now;updatedAt=$now})
+    Write-SCJson (Join-Path $dir 'state.json') ([ordered]@{schemaVersion=4;revision=0;directionRevision=0;projectId=New-SCId 'project';projectRoot=Get-SCRoot;goal='';activePlanId=$null;planApproved=$false;createdAt=$now;updatedAt=$now})
     ''|Set-Content -LiteralPath (Join-Path $dir 'events.jsonl') -Encoding UTF8
     ''|Set-Content -LiteralPath (Join-Path $dir 'telemetry/events.jsonl') -Encoding UTF8
     ''|Set-Content -LiteralPath (Join-Path $dir 'telemetry/context-faults.jsonl') -Encoding UTF8
     $example=Join-Path $script:StatefulClankerHome 'statefulclanker.example.json'
     if(Test-Path $example){Copy-Item -LiteralPath $example -Destination (Join-Path $dir 'config.json')}
-    else{Write-SCJson (Join-Path $dir 'config.json') ([ordered]@{defaultProvider='opencode';criticProvider=$null;validatorProvider=$null;providers=[ordered]@{};workingSetBudgetChars=24000;maxFileChars=8000;recentEventCount=12;stagnationWarningThreshold=2;requireHumanApprovalForPlan=$true;criticEnabled=$true;validatorEnabled=$true})}
+    else{Write-SCJson (Join-Path $dir 'config.json') ([ordered]@{defaultProvider='opencode';criticProvider=$null;validatorProvider=$null;providers=[ordered]@{};workingSetBudgetChars=24000;maxFileChars=8000;dependencyResultBudgetChars=8000;recentEventCount=12;recentEventBudgetChars=4000;stagnationWarningThreshold=2;requireHumanApprovalForPlan=$true;criticEnabled=$true;validatorEnabled=$true})}
     Add-SCEvent 'project.initialized' 'StatefulClanker initialized.' @{root=Get-SCRoot};Write-Host "Initialized $dir"
 }
 function Set-SCGoal([string]$Text) { Assert-SCInitialized;if([string]::IsNullOrWhiteSpace($Text)){throw 'Goal text required.'};$state=Get-SCState;$state.goal=$Text;Save-SCState $state;Add-SCEvent 'goal.changed' $Text;Write-Host 'Goal updated.' }
+function Add-SCDirection([string]$Text) { Assert-SCInitialized;if([string]::IsNullOrWhiteSpace($Text)){throw '-Message required.'};$state=Get-SCState;$current=if($state.PSObject.Properties['directionRevision']){[int]$state.directionRevision}else{0};Set-SCProperty $state 'directionRevision' ($current+1);Save-SCState $state;Add-SCEvent 'user.note' $Text @{directionRevision=$state.directionRevision};Write-Host 'Direction recorded.' }
 function New-SCTaskObject([string]$Id,[string]$TaskTitle,[string]$TaskInstruction,$TaskAcceptance,$TaskDepends,$TaskRelations,$TaskRetrieval,$TaskEvidence,[string]$TaskProvider,[string]$TaskRole,[bool]$TaskHumanGate) {
     $now=(Get-Date).ToUniversalTime().ToString('o')
     return [ordered]@{schemaVersion=2;id=$Id;title=$TaskTitle;instruction=$TaskInstruction;acceptance=@($TaskAcceptance);dependsOn=@($TaskDepends);relations=@(ConvertTo-SCRelations $TaskRelations);retrieval=@($TaskRetrieval);evidence=@($TaskEvidence);provider=if($TaskProvider){$TaskProvider}else{$null};role=if($TaskRole){$TaskRole}else{'worker'};humanGate=$TaskHumanGate;status='pending';stateRevision=0;attemptCount=0;latestRunId=$null;latestCompilationId=$null;latestProposalId=$null;latestCritiqueId=$null;latestValidationId=$null;blockReason=$null;createdAt=$now;updatedAt=$now}
