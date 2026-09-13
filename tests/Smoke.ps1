@@ -1,12 +1,12 @@
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $harness = Join-Path $repo 'StatefulClanker.ps1'
-$mock = Join-Path $PSScriptRoot 'MockProvider.ps1'
+$mockPs = Join-Path $PSScriptRoot 'MockProvider.ps1'
+$mockCmd = Join-Path $PSScriptRoot 'MockProvider.cmd'
 $mcp = Join-Path $repo 'mcp\StatefulClanker.Mcp.ps1'
 $cockpit = Join-Path $repo 'desktop\StatefulClanker.Cockpit.ps1'
-$shell = (Get-Process -Id $PID).Path
 
-foreach($script in @($harness,$mock,$mcp,$cockpit)){
+foreach($script in @($harness,$mockPs,$mcp,$cockpit)){
     $tokens=$null;$errors=$null
     [void][System.Management.Automation.Language.Parser]::ParseFile($script,[ref]$tokens,[ref]$errors)
     if($errors.Count -gt 0){throw "Parse failure in $script : $($errors | Out-String)"}
@@ -24,8 +24,8 @@ try {
     $cfg.criticProvider = 'mock'
     $cfg.validatorProvider = 'mock'
     $cfg.providers | Add-Member -NotePropertyName mock -NotePropertyValue ([pscustomobject]@{
-        command = $shell
-        args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$mock,'-PromptFile','{promptFile}')
+        command = 'cmd.exe'
+        args = @('/d','/c',$mockCmd)
         mode = 'prompt-file'
     }) -Force
     $cfg | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
