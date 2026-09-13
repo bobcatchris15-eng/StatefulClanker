@@ -13,11 +13,11 @@ $harness=Join-Path (Split-Path -Parent $PSScriptRoot) 'StatefulClanker.ps1'
 if(-not(Test-Path (Join-Path $stateDir 'state.json'))){[System.Windows.Forms.MessageBox]::Show("StatefulClanker is not initialized in:`r`n$ProjectPath",'StatefulClanker Cockpit');exit 1}
 
 function ReadJson([string]$p){if(-not(Test-Path $p)){return $null};$r=Get-Content -Raw -LiteralPath $p;if([string]::IsNullOrWhiteSpace($r)){return $null};$r|ConvertFrom-Json}
-function ReadJsonDir([string]$p){if(-not(Test-Path $p)){return @()};@(Get-ChildItem -LiteralPath $p -Filter'*.json'-File|ForEach-Object{ReadJson $_.FullName})}
+function ReadJsonDir([string]$p){if(-not(Test-Path $p)){return @()};@(Get-ChildItem -LiteralPath $p -Filter '*.json' -File | ForEach-Object { ReadJson $_.FullName })}
 function InvokeHarness([string[]]$args){Push-Location $ProjectPath;try{& $harness @args | Out-String}finally{Pop-Location}}
 
 $form=New-Object Windows.Forms.Form
-$form.Text="StatefulClanker Cockpit — $ProjectPath";$form.Width=1220;$form.Height=780;$form.StartPosition='CenterScreen'
+$form.Text="StatefulClanker Cockpit - $ProjectPath";$form.Width=1220;$form.Height=780;$form.StartPosition='CenterScreen'
 
 $tabs=New-Object Windows.Forms.TabControl;$tabs.Dock='Fill'
 $overview=New-Object Windows.Forms.TabPage;$overview.Text='Live'
@@ -44,23 +44,23 @@ $entryPanel.Controls.AddRange(@($input,$send,$runNext,$refresh))
 
 function Table($rows,[string[]]$props){
     $dt=New-Object System.Data.DataTable
-    foreach($p in$props){[void]$dt.Columns.Add($p)}
-    foreach($r in@($rows)){$row=$dt.NewRow();foreach($p in$props){$v=$r.PSObject.Properties[$p];if($v){$row[$p]=[string]$v.Value}};$dt.Rows.Add($row)}
+    foreach($p in $props){[void]$dt.Columns.Add($p)}
+    foreach($r in @($rows)){$row=$dt.NewRow();foreach($p in $props){$v=$r.PSObject.Properties[$p];if($v){$row[$p]=[string]$v.Value}};$dt.Rows.Add($row)}
     $dt
 }
 function RefreshUI{
     try{
-        $activeRows=ReadJsonDir(Join-Path $stateDir'telemetry\active')|Sort-Object startedAt
-        $taskRows=ReadJsonDir(Join-Path $stateDir'tasks')|Sort-Object createdAt
-        $histRows=ReadJsonDir(Join-Path $stateDir'telemetry\runs')|Sort-Object startedAt -Descending|Select-Object -First 250
+        $activeRows=ReadJsonDir(Join-Path $stateDir 'telemetry\active')|Sort-Object startedAt
+        $taskRows=ReadJsonDir(Join-Path $stateDir 'tasks')|Sort-Object createdAt
+        $histRows=ReadJsonDir(Join-Path $stateDir 'telemetry\runs')|Sort-Object startedAt -Descending|Select-Object -First 250
         $active.DataSource=Table $activeRows @('agentId','taskId','stage','provider','lifecycle','processId','startedAt','heartbeatAt')
         $tasks.DataSource=Table $taskRows @('id','status','role','title')
         $histGrid.DataSource=Table $histRows @('agentId','taskId','stage','provider','lifecycle','exitCode','verdict','durationSeconds','startedAt')
-        $ep=Join-Path $stateDir'events.jsonl';if(Test-Path $ep){$events.Lines=@(Get-Content $ep|Where-Object{$_}|Select-Object -Last 80)}
+        $ep=Join-Path $stateDir 'events.jsonl';if(Test-Path $ep){$events.Lines=@(Get-Content $ep|Where-Object{$_}|Select-Object -Last 80)}
         $notes=@()
-        if(Test-Path $ep){foreach($line in@(Get-Content $ep|Where-Object{$_}|Select-Object -Last 120)){try{$e=$line|ConvertFrom-Json;if($e.type-eq'user.note'){$notes+="[$($e.ts)] YOU: $($e.message)"}}catch{}}}
+        if(Test-Path $ep){foreach($line in @(Get-Content $ep|Where-Object{$_}|Select-Object -Last 120)){try{$e=$line|ConvertFrom-Json;if($e.type-eq'user.note'){$notes+="[$($e.ts)] YOU: $($e.message)"}}catch{}}}
         $conversation.Lines=$notes
-    }catch{$form.Text="StatefulClanker Cockpit — refresh error: $($_.Exception.Message)"}
+    }catch{$form.Text="StatefulClanker Cockpit - refresh error: $($_.Exception.Message)"}
 }
 $send.Add_Click({
     $m=$input.Text.Trim();if(-not$m){return}
