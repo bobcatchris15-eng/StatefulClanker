@@ -22,6 +22,10 @@
   "maxConcurrent": 3,
   "workingSetBudgetChars": 24000,
   "maxFileChars": 8000,
+  "dependencyResultBudgetChars": 8000,
+  "recentEventCount": 12,
+  "recentEventBudgetChars": 4000,
+  "stagnationWarningThreshold": 2,
   "requireHumanApprovalForPlan": true,
   "criticEnabled": true,
   "validatorEnabled": true

@@ -1,6 +1,6 @@
 {
   "name": "example-feature",
-  "summary": "Add a small feature through inspect, implement, and validate stages.",
+  "summary": "Add a small feature through inspect, implement, and validate stages while preserving causal relationships.",
   "tasks": [
     {
       "id": "inspect-current-behavior",
@@ -11,7 +11,8 @@
         "Current behavior and compatibility constraints are stated"
       ],
       "dependsOn": [],
-      "retrieval": ["feature implementation", "feature tests"],
+      "relations": [],
+      "retrieval": ["src/*", "tests/*"],
       "evidence": [],
       "provider": null,
       "role": "worker",
@@ -20,13 +21,16 @@
     {
       "id": "implement-feature",
       "title": "Implement feature",
-      "instruction": "Implement the requested feature using the inspection result as a dependency. Keep the change scoped and update tests.",
+      "instruction": "Implement the requested feature using the accepted inspection result as a dependency. Keep the change scoped and update tests.",
       "acceptance": [
         "Implementation is present",
         "Automated tests cover the new behavior"
       ],
       "dependsOn": ["inspect-current-behavior"],
-      "retrieval": ["dependency result: inspect-current-behavior"],
+      "relations": [
+        {"type": "derived_from", "target": "inspect-current-behavior"}
+      ],
+      "retrieval": ["src/*", "tests/*"],
       "evidence": [],
       "provider": null,
       "role": "worker",
@@ -36,9 +40,15 @@
       "id": "validate-feature",
       "title": "Validate feature",
       "instruction": "Run the relevant tests and a focused behavior probe. Report exact commands and outcomes.",
-      "acceptance": ["Relevant tests pass", "Behavior probe passes"],
+      "acceptance": [
+        "Relevant tests pass",
+        "Behavior probe passes"
+      ],
       "dependsOn": ["implement-feature"],
-      "retrieval": ["dependency result: implement-feature"],
+      "relations": [
+        {"type": "evidence_for", "target": "implement-feature"}
+      ],
+      "retrieval": ["tests/*"],
       "evidence": [],
       "provider": null,
       "role": "validator",
