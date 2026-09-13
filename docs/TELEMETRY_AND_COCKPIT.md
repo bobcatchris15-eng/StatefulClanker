@@ -55,4 +55,4 @@ Current MCP tools:
 - `telemetry_run`
 - `direction_add`
 
-The desktop cockpit and MCP server intentionally consume the same on-disk state and telemetry.
+The desktop cockpit and MCP server intentionally consume the same on-disk state and telemetry. The Windows smoke workflow parses all PowerShell entrypoints and exercises the full worker/review/telemetry lifecycle.
