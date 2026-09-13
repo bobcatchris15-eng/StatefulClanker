@@ -10,11 +10,13 @@ Workers are cold-start invocations. Continuity is reconstructed from durable sta
 
 ### Context compilation
 
-Every worker cycle creates a durable compilation receipt containing a typed model-visible IR, read set, input fingerprint, retrieval budget accounting, provenance/authority tags, file hashes, dependency identities, and the exact recent-event projection used.
+Every worker cycle creates a durable compilation receipt containing a typed model-visible IR, read set, input fingerprint, context fingerprint, retrieval budget accounting, provenance/authority tags, file hashes, dependency identities, human-direction revision, task-control revision, and the exact recent-event projection used.
 
 ### Freshness checks
 
-The compiler read set is checked immediately before dispatch. Logical dependencies, goal identity, task definition, and active plan identity are checked again before completion is committed.
+The compiler read set is checked immediately before dispatch. Goal identity, active plan identity, human-direction revision, task definition/control revision, and logical dependency state are checked again at stage and completion boundaries.
+
+Explicit human task control is therefore authoritative over in-flight model work: `block`, `retry`, or manual `complete` advances the task-control revision and invalidates any older compilation.
 
 Filesystem hashes are intentionally dispatch-time guards only. A worker may legitimately modify files it read, so post-worker file-hash comparison would confuse expected writes with external races until StatefulClanker has explicit write-set attribution.
 
@@ -32,7 +34,7 @@ Scheduling dependencies are explicit. Retrying or blocking previously accepted u
 
 ### Context-fault telemetry
 
-Workers may emit `CONTEXT_REQUEST:` when a required fact/artifact was omitted. The harness records those misses separately from generic run failure. Compilation receipts also retain unmatched selectors, truncation, and budget exhaustion.
+Workers may emit `CONTEXT_REQUEST:` when a required fact/artifact was omitted. The harness records those misses separately from generic run failure. A context request is a non-advancing outcome: the task moves to `needs_rework` and that cycle does not create a completion proposal. Compilation receipts also retain unmatched selectors, truncation, and budget exhaustion.
 
 ### Progress telemetry
 
@@ -78,9 +80,12 @@ When changing the harness, verify all of the following:
 - [ ] Worker input can be reconstructed from durable objects.
 - [ ] The exact compiled working set is persisted.
 - [ ] Retrieval omissions/truncation are observable.
+- [ ] An explicit context request cannot advance completion.
 - [ ] Worker claims remain non-authoritative until commit.
 - [ ] Required critic/validator stages fail closed.
 - [ ] Reviewers judge the worker against the same compiled snapshot.
+- [ ] New human direction invalidates older compiled assumptions.
+- [ ] Explicit human task control cannot be overwritten by an older in-flight cycle.
 - [ ] Stale upstream assumptions cannot silently retain downstream authority.
 - [ ] Scheduling dependencies are not conflated with semantic relationships.
 - [ ] Failed/rejected attempts remain durable evidence.
