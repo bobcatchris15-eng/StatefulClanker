@@ -17,9 +17,10 @@ observe
   -> validate read-set freshness
   -> invoke one cold-start worker
   -> persist receipt
+  -> stop/recompile on context fault or stale authority
   -> propose state transition
   -> critique / validate / human gate as required
-  -> revalidate logical dependencies
+  -> revalidate logical dependencies and human authority
   -> commit or reject proposal
   -> record progress
   -> repeat
@@ -41,7 +42,9 @@ A model response never becomes canonical simply because it exists.
 
 ### Project state
 
-`state.json` contains compact current project state: identity, goal, active plan, approval state, revision, and timestamps. Historical detail belongs in append-only events and receipts.
+`state.json` contains compact current project state: identity, goal, active plan, approval state, project revision, human-direction revision, and timestamps. Historical detail belongs in append-only events and receipts.
+
+The human-direction revision advances whenever the `event` command records new user direction. Compilations capture that revision so older in-flight work cannot commit after the user has redirected the project.
 
 ### Events
 
@@ -60,7 +63,7 @@ A task carries:
 - provider / role preference
 - human-gate flag
 - lifecycle status
-- revision and attempt count
+- ordinary state revision, human task-control revision, and attempt count
 - pointers to latest compilation, proposal, run, critique, and validation
 
 Core lifecycle states are:
@@ -70,6 +73,8 @@ Core lifecycle states are:
 with side states including `blocked`, `failed`, `needs_rework`, and `stale`.
 
 `stale` means the task was once accepted but an upstream dependency was later invalidated. The old receipts remain evidence; the completion is no longer current authority.
+
+The task-control revision is different from ordinary lifecycle revision. It advances only on explicit human control operations such as `block`, `retry`, and manual `complete`. A compilation records the value it was built against, preventing an older worker/reviewer cycle from taking authority back after a human intervenes.
 
 ### Typed relationships
 
@@ -99,6 +104,8 @@ It contains:
 
 - exact task projection
 - current project goal / active plan identity
+- human-direction revision
+- task-control revision
 - dependency outcomes
 - retrieved files/evidence
 - hashes of retrieved files
@@ -107,6 +114,7 @@ It contains:
 - retrieval budget/truncation/unmatched-selector statistics
 - a logical/file read set
 - an input fingerprint
+- a context fingerprint for the exact projected IR
 - the exact typed intermediate representation sent to the worker
 
 The compilation is not canonical state. It is a reproducible snapshot/projection derived from canonical state.
@@ -119,11 +127,15 @@ Before dispatch, StatefulClanker checks:
 
 - project goal identity
 - active plan identity
+- human-direction revision
 - task definition
+- task-control revision
 - dependency state/receipt identity
 - retrieved file hashes
 
-Before committing completion, it rechecks logical dependencies and definitions. Retrieved file hashes are intentionally not used as a post-worker freshness gate because a worker may legitimately modify the files it read. Correct attribution of concurrent file writes requires a stronger write-set model and is not claimed yet.
+After the worker and between review stages, it rechecks the non-filesystem authority inputs. Before committing completion, it rechecks them again. Human redirection or task control therefore invalidates older compiled work before it can become canonical.
+
+Retrieved file hashes are intentionally not used as a post-worker freshness gate because a worker may legitimately modify the files it read. Correct attribution of concurrent file writes requires a stronger write-set model and is not claimed yet.
 
 This distinction prevents false staleness while still giving the harness a real plan/context freshness boundary.
 
@@ -150,16 +162,18 @@ when required project state or evidence was absent from the compilation.
 
 These records are stored under `telemetry/context-faults.jsonl`. They provide an observable approximation of semantic page faults and make retrieval-policy mistakes measurable instead of anecdotal.
 
+A context request is deliberately non-advancing. The task moves to `needs_rework`, a progress record is written, and that worker cycle does **not** create a completion proposal. The correct response is to improve retrieval/decomposition and retry, not to let the worker guess through the fault.
+
 Compilation receipts additionally expose unmatched selectors, truncation, and budget exhaustion.
 
 ### Proposals
 
-A normal successful run creates a candidate completion proposal under `proposals/`.
+A normal successful run creates a candidate completion proposal under `proposals/` only after the worker returns without a context fault and the compilation is still fresh.
 
 A proposal records:
 
 - base compilation and input fingerprint
-- task-definition hash
+- task-definition hash and task-control revision
 - worker run receipt
 - critic receipt/verdict when enabled
 - validator receipt/verdict when enabled
@@ -177,6 +191,8 @@ Critic: **What looks wrong, incomplete, risky, contradictory, or poorly reasoned
 Validator: **Do the observable acceptance conditions pass from the available evidence?**
 
 Neither silently rewrites the worker result. Both review the same compiled context used by the worker rather than re-running retrieval and accidentally judging a different world snapshot.
+
+If canonical authority changes while review is in flight, the older proposal is rejected or abandoned rather than allowed to overwrite that change.
 
 ### Progress
 
@@ -236,17 +252,18 @@ Normal automated completion follows:
 state N
   -> compile against N
   -> worker result
+  -> freshness/context-fault gate
   -> candidate proposal
   -> critic / validator evidence
-  -> freshness check
+  -> freshness + human-authority check
   -> COMMIT -> state N+1
        or
-     REJECT -> canonical completion unchanged
+     REJECT/STOP -> canonical completion unchanged
 ```
 
 This is not a database transaction in the distributed-systems sense, but it enforces the important semantic rule: **model writes are proposals until the harness accepts them**.
 
-Manual completion is an explicit human-authority commit and is recorded separately.
+Manual completion is an explicit human-authority commit and is recorded separately. Human `block`, `retry`, and manual `complete` advance task-control revision so earlier compiled work cannot supersede them later.
 
 ## Dependency invalidation
 
@@ -290,13 +307,17 @@ It should:
 
 The user is not a fallback parser. Human gates represent product, design, risk, credential, cost, or preference decisions that cannot be resolved mechanically from established project state.
 
-Human direction should become a durable event and, when execution-relevant, a plan/task/state change.
+Human direction becomes a durable event **and** advances the project direction revision, invalidating older compiled assumptions at subsequent freshness gates. Explicit task-control commands similarly advance task-control revision.
+
+This is intentionally conservative: a user note recorded through `event` is treated as execution-relevant direction rather than being left as an advisory chat-only comment.
 
 ## Concurrency
 
 The task model still permits ready tasks with independent dependency closures to run concurrently, and configuration retains `maxConcurrent`.
 
 The current PowerShell entrypoint dispatches one task per invocation. StatefulClanker does **not** yet claim a full distributed multi-writer consistency model. Append-only events and immutable receipts are naturally merge-friendly; authoritative plan heads, approvals, proposals, and completion commits will need stronger conflict control before ClankerFog-style distributed execution is allowed to write them concurrently.
+
+The human task-control revision closes one narrower class of race—an in-flight local worker cannot silently overwrite a later explicit human task transition—but it is not a substitute for a distributed transaction/locking model.
 
 ## External effects
 
@@ -322,6 +343,12 @@ Receipts, compilations, context faults, and progress records create the corpus n
 
 Such changes should be regression-evaluated before promotion. StatefulClanker does not currently mutate its own policy automatically.
 
+## Standalone runtime bootstrap
+
+A full repository checkout loads the versioned modules under `lib/` directly.
+
+The one-file quick-start path remains supported: the downloaded `StatefulClanker.ps1` entry script fetches a SHA-pinned matching runtime into `.statefulclanker/runtime/<ref>/`. The runtime therefore cannot silently float to newer library code than the entry script was written against.
+
 ## Invariants
 
 1. Durable project state is authoritative over model recollection.
@@ -330,13 +357,15 @@ Such changes should be regression-evaluated before promotion. StatefulClanker do
 4. A task cannot become ready until all scheduling dependencies are complete.
 5. A task is marked running before provider invocation.
 6. A run receipt is written even when the provider fails.
-7. A worker cannot mark its own task complete merely by claiming success.
-8. Automated completion advances through an explicit proposal/commit boundary.
-9. Required review stages fail closed.
-10. Logical dependencies are revalidated before a completion commit.
-11. Retried/invalidated upstream work invalidates downstream authority.
-12. Human-gated transitions require explicit human authority.
-13. No worker needs the full historical transcript to operate correctly.
-14. Activity and progress remain separately observable.
-15. Cross-project skill memory is not canonical project state.
-16. External side-effect exactly-once safety is not claimed until an effect ledger exists.
+7. An explicit context request cannot produce a completion proposal.
+8. A worker cannot mark its own task complete merely by claiming success.
+9. Automated completion advances through an explicit proposal/commit boundary.
+10. Required review stages fail closed.
+11. Goal, plan, human direction, task control/definition, and logical dependencies are revalidated before a completion commit.
+12. Explicit human task control cannot be overwritten by an older in-flight compiled cycle.
+13. Retried/invalidated upstream work invalidates downstream authority.
+14. Human-gated transitions require explicit human authority.
+15. No worker needs the full historical transcript to operate correctly.
+16. Activity and progress remain separately observable.
+17. Cross-project skill memory is not canonical project state.
+18. External side-effect exactly-once safety is not claimed until an effect ledger exists.
