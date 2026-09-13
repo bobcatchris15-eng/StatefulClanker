@@ -4,9 +4,9 @@ StatefulClanker is a Windows-first PowerShell harness for doing long-running age
 
 The core loop is deliberately simple:
 
-`observe -> retrieve -> compile -> one-shot inference -> structured result -> persist -> repeat`
+`observe -> retrieve -> compile -> one-shot inference -> persist -> critique -> validate -> repeat`
 
-The durable project state lives on disk. Models are treated as replaceable workers. A fresh worker gets only the state, task, evidence, constraints, and files it needs for the current step.
+The durable project state lives on disk. Models are treated as replaceable workers. A fresh worker gets only the state, task, evidence, constraints, dependency outputs, and project files it needs for the current step.
 
 ## Why
 
@@ -18,7 +18,7 @@ Large tasks fail when the model must carry the entire project in conversational 
 - run receipts
 - critiques and validations
 - provider configuration
-- retrieved evidence and file pointers
+- retrieved evidence and bounded file excerpts
 
 This lets a project continue across sessions, providers, context resets, or machines without pretending an LLM has durable working memory.
 
@@ -41,7 +41,7 @@ irm https://raw.githubusercontent.com/bobcatchris15-eng/StatefulClanker/main/Sta
 .\StatefulClanker.ps1 status
 ```
 
-Copy `statefulclanker.example.json` to `.statefulclanker\config.json` and adjust the provider commands for the CLIs installed on your system.
+`init` copies `statefulclanker.example.json` into `.statefulclanker\config.json`. Adjust the provider commands for the CLIs installed on your system.
 
 To add tasks manually:
 
@@ -49,7 +49,8 @@ To add tasks manually:
 .\StatefulClanker.ps1 task add `
   -Title "Implement cache index" `
   -Instruction "Implement the cache index described in docs/cache.md" `
-  -Accept "Tests pass; existing behavior remains compatible"
+  -Accept "Tests pass; existing behavior remains compatible" `
+  -Retrieval "docs/cache.md","src/*.ps1"
 ```
 
 Then execute the next ready task:
@@ -58,11 +59,38 @@ Then execute the next ready task:
 .\StatefulClanker.ps1 run
 ```
 
-Or force a provider:
+Or force the worker provider:
 
 ```powershell
 .\StatefulClanker.ps1 run -Provider claude
 ```
+
+## Execution pipeline
+
+A successful `run` now executes the whole state transition:
+
+1. Resolve one ready task.
+2. Retrieve the task-declared files/globs and dependency receipts.
+3. Compile a cold-start packet within `workingSetBudgetChars` and `maxFileChars`.
+4. Dispatch a one-shot worker.
+5. Persist the worker receipt.
+6. If enabled, dispatch a critic against the task, worker receipt, and retrieved evidence.
+7. If the critic passes, dispatch a validator against the acceptance criteria and evidence.
+8. Mark the task `complete` only after the enabled review stages pass.
+9. On review failure, mark it `needs_rework` and preserve every receipt.
+
+The critic and validator can use separate providers through `criticProvider` and `validatorProvider`. If either is `null`, that stage falls back to the task provider and then the default provider.
+
+Reviewer output is intentionally simple: the first non-empty line must be exactly `VERDICT: PASS` or `VERDICT: FAIL`. A malformed review is treated as failure rather than optimistic success.
+
+## Retrieval
+
+`-Retrieval` and `-Evidence` accept files, directories, or glob selectors relative to the project root. StatefulClanker reads matching text files into the invocation packet while respecting two config limits:
+
+- `workingSetBudgetChars`: total retrieved text budget per invocation
+- `maxFileChars`: maximum characters read from one file
+
+Runtime state under `.statefulclanker` is never retrieved into worker context through these selectors.
 
 ## State layout
 
@@ -79,6 +107,7 @@ StatefulClanker creates this local directory in the target project:
   critiques/
   validations/
   prompts/
+  retrieval/
 ```
 
 `.statefulclanker/` is intended to be local runtime state and is ignored by this repository's `.gitignore`. If you want project state versioned, remove that ignore rule in the target project.
@@ -92,31 +121,39 @@ status                       Show project/task status
 task add ...                 Add a task
 task list                    List tasks
 task show -TaskId <id>       Show one task
+task retry -TaskId <id>      Reset a failed/rework task to ready
 plan import -Path <file>     Import a JSON plan and task graph
 plan approve                 Approve the active plan
-run [-TaskId id]             Run the next ready task
+run [-TaskId id]             Run worker + enabled review pipeline
 complete -TaskId id          Mark a task complete manually
 block -TaskId id -Reason ... Block a task
 event -Message ...           Append an observation to the event log
 provider list                Show configured providers
 ```
 
-## Worker contract
+## Worker, critic, and validator contracts
 
-A worker should not decide what the entire project means from scratch. StatefulClanker compiles a cold-start packet containing the project goal, one task and its acceptance criteria, dependency results, recent relevant events, explicit file pointers/evidence, constraints, and the requested output contract.
+A worker should not decide what the entire project means from scratch. StatefulClanker compiles a cold-start packet containing the project goal, one task and its acceptance criteria, dependency results, recent events, retrieved file evidence, constraints, and the output contract.
 
-The worker returns a structured result. StatefulClanker records the complete receipt before advancing project state.
+The **critic** does not perform the work. It checks omissions, contradictions, risky assumptions, regressions, and whether the result actually addresses the bounded task.
 
-## Critic and validator roles
+The **validator** independently judges the acceptance criteria from the available evidence. It is explicitly told not to trust the worker's claim merely because the worker says something passed.
 
-The intended flow is not "worker writes code and declares victory."
+Every invocation produces a durable receipt before state advances.
 
-- **Worker** performs one bounded task.
-- **Critic** checks the result for omissions, contradictions, risky assumptions, and likely edge cases.
-- **Validator** checks objective acceptance criteria: tests, probes, file changes, commands, or other verifiable outcomes.
-- **Human gate** is used where the plan or task explicitly requires a decision.
+## Tests
 
-The first implementation stores these roles and receipts; provider-specific automatic critic/validator dispatch can be layered on top without changing the state model.
+A deterministic provider is included so the orchestration path can be tested without model quota or API access:
+
+```powershell
+.\tests\Smoke.ps1
+```
+
+The smoke test creates a temporary project and exercises:
+
+`worker -> critic -> validator -> complete`
+
+A `windows-latest` GitHub Actions workflow runs the same smoke test on pushes and pull requests.
 
 ## Skills
 
@@ -131,11 +168,11 @@ Two model-facing skills are included:
 - Workers get the smallest sufficient context.
 - Plans are graphs, not prose checklists.
 - Every model call produces a receipt.
-- Retrieval is explicit and task-scoped.
-- A failed run is evidence, not lost context.
+- Retrieval is explicit, bounded, and task-scoped.
+- A failed run or rejected review is evidence, not lost context.
 - Providers are interchangeable.
 - Human approval is a first-class state transition.
-- Do not make the orchestrator secretly do the worker's job.
+- The orchestrator must not secretly do the worker's job.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed state model and execution lifecycle.
 
