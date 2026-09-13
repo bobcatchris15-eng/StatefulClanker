@@ -1,0 +1,16 @@
+name: StatefulClanker smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run end-to-end smoke test
+        shell: powershell
+        run: .\tests\Smoke.ps1
