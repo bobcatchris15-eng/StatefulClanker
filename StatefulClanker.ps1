@@ -11,9 +11,27 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
-. (Join-Path $PSScriptRoot "lib\StatefulClanker.Core.ps1")
-. (Join-Path $PSScriptRoot "lib\StatefulClanker.Context.ps1")
-. (Join-Path $PSScriptRoot "lib\StatefulClanker.Execution.ps1")
+$runtimeRef='6f0cfbf9865968f0dfd551e825a19c0e02724b9d'
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Context.ps1','StatefulClanker.Execution.ps1')
+$checkedOutLib=Join-Path $PSScriptRoot 'lib'
+$useCheckedOut=$true
+foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
+if($useCheckedOut){
+    $runtimeLib=$checkedOutLib
+}else{
+    $runtimeLib=Join-Path (Join-Path (Join-Path (Get-Location).Path '.statefulclanker') 'runtime') $runtimeRef
+    if(-not(Test-Path -LiteralPath $runtimeLib)){New-Item -ItemType Directory -Force -Path $runtimeLib|Out-Null}
+    foreach($name in $runtimeNames){
+        $target=Join-Path $runtimeLib $name
+        if(-not(Test-Path -LiteralPath $target -PathType Leaf)){
+            $uri="https://raw.githubusercontent.com/bobcatchris15-eng/StatefulClanker/$runtimeRef/lib/$name"
+            try{Invoke-WebRequest -Uri $uri -UseBasicParsing -OutFile $target}catch{throw "StatefulClanker runtime module '$name' is missing and could not be fetched from pinned ref $runtimeRef. Use a full repository checkout or restore network access. $($_.Exception.Message)"}
+        }
+    }
+}
+. (Join-Path $runtimeLib 'StatefulClanker.Core.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.Context.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.Execution.ps1')
 
 if($Command.ToLowerInvariant()-ne'init'-and(Test-Path (Get-SCPath 'state.json'))){Upgrade-SCStateLayout}
 
@@ -26,7 +44,7 @@ switch($Command.ToLowerInvariant()){
 'run'{Invoke-SCTask $TaskId $Provider;break}
 'complete'{Complete-SCTask $TaskId;break}
 'block'{Block-SCTask $TaskId $Reason;break}
-'event'{if(-not$Message){throw '-Message required.'};Add-SCEvent 'user.note' $Message;Write-Host 'Event recorded.';break}
+'event'{Add-SCDirection $Message;break}
 'provider'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};if($Subcommand.ToLowerInvariant()-eq'list'){Show-SCProviders}else{throw "Unknown provider subcommand: $Subcommand"};break}
 'telemetry'{Show-SCTelemetry $Subcommand $RunId;break}
 'context'{Show-SCContext $Subcommand $CompilationId;break}
