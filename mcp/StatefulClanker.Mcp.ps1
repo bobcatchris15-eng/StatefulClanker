@@ -21,7 +21,7 @@ function ToolList{
 @{name='progress_history';description='Read recent task progress/stagnation records.';inputSchema=@{type='object';properties=@{limit=@{type='integer';minimum=1;maximum=500}}}},
 @{name='proposal_get';description='Read one candidate/committed/rejected state-transition proposal.';inputSchema=@{type='object';properties=@{proposalId=@{type='string'}};required=@('proposalId')}},
 @{name='task_list';description='List task graph state, including compilation/proposal pointers and semantic relations.';inputSchema=@{type='object';properties=@{}}},
-@{name='direction_add';description='Record human conversational direction into durable project events.';inputSchema=@{type='object';properties=@{message=@{type='string'}};required=@('message')}}
+@{name='direction_add';description='Record human direction durably and advance the project direction revision so older compilations become stale.';inputSchema=@{type='object';properties=@{message=@{type='string'}};required=@('message')}}
 )
 }
 function CallTool([string]$name,$args){
@@ -35,7 +35,7 @@ switch($name){
 'progress_history'{$limit=100;if($args-and$args.PSObject.Properties['limit']){$limit=[Math]::Min(500,[Math]::Max(1,[int]$args.limit))};$r=ReadDir(Join-Path $stateDir 'progress')|Sort-Object ts -Descending|Select-Object -First $limit;return TextResult(@($r))}
 'proposal_get'{$p=Join-Path $stateDir("proposals\{0}.json"-f$args.proposalId);$r=ReadJson $p;if(-not$r){throw"Unknown proposalId: $($args.proposalId)"};return TextResult $r}
 'task_list'{return TextResult(@(ReadDir(Join-Path $stateDir 'tasks')|Sort-Object createdAt))}
-'direction_add'{Push-Location $ProjectPath;try{&$harness event -Message ([string]$args.message)|Out-Null}finally{Pop-Location};return TextResult(@{recorded=$true})}
+'direction_add'{Push-Location $ProjectPath;try{&$harness event -Message ([string]$args.message)|Out-Null}finally{Pop-Location};return TextResult(@{recorded=$true;invalidatesOlderCompilations=$true})}
 default{throw"Unknown tool: $name"}
 }}
 while($null-ne($line=[Console]::In.ReadLine())){
@@ -43,7 +43,7 @@ if([string]::IsNullOrWhiteSpace($line)){continue}
 try{
 $q=$line|ConvertFrom-Json;$method=[string]$q.method;$id=$q.id
 switch($method){
-'initialize'{Reply $id ([ordered]@{protocolVersion='2025-06-18';capabilities=@{tools=@{}};serverInfo=@{name='statefulclanker';version='0.3.0'}})}
+'initialize'{Reply $id ([ordered]@{protocolVersion='2025-06-18';capabilities=@{tools=@{}};serverInfo=@{name='statefulclanker';version='0.4.0'}})}
 'notifications/initialized'{}
 'tools/list'{Reply $id (@{tools=ToolList})}
 'tools/call'{$args=$q.params.arguments;Reply $id (CallTool ([string]$q.params.name) $args)}
