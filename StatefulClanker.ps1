@@ -1,324 +1,109 @@
 <#
 .SYNOPSIS
-StatefulClanker: a durable-state orchestration harness for one-shot CLI workers.
+StatefulClanker: durable-state orchestration for cold-start CLI workers.
 #>
 [CmdletBinding(PositionalBinding=$false)]
 param(
-    [Parameter(Position=0)][string]$Command = 'status',
+    [Parameter(Position=0)][string]$Command='status',
     [Parameter(Position=1)][string]$Subcommand,
-    [string]$Title,
-    [string]$Instruction,
-    [string[]]$Accept,
-    [string[]]$DependsOn,
-    [string[]]$Retrieval,
-    [string[]]$Evidence,
-    [string]$Provider,
-    [string]$Role = 'worker',
-    [switch]$HumanGate,
-    [string]$TaskId,
-    [string]$Path,
-    [string]$Reason,
-    [string]$Message
+    [string]$Title,[string]$Instruction,[string[]]$Accept,[string[]]$DependsOn,
+    [string[]]$Retrieval,[string[]]$Evidence,[string]$Provider,[string]$Role='worker',
+    [switch]$HumanGate,[string]$TaskId,[string]$Path,[string]$Reason,[string]$Message
 )
 Set-StrictMode -Version 2.0
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference='Stop'
 
-function Get-SCRoot { (Get-Location).Path }
-function Get-SCDir { Join-Path (Get-SCRoot) '.statefulclanker' }
-function Get-SCPath([string]$Child) { Join-Path (Get-SCDir) $Child }
-function ConvertTo-SCJson($Value, [int]$Depth = 12) { $Value | ConvertTo-Json -Depth $Depth }
-function Write-SCJson([string]$Path, $Value) {
-    $parent = Split-Path -Parent $Path
-    if ($parent -and -not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
-    $tmp = "$Path.tmp"
-    ConvertTo-SCJson $Value | Set-Content -LiteralPath $tmp -Encoding UTF8
-    Move-Item -Force -LiteralPath $tmp -Destination $Path
-}
-function Read-SCJson([string]$Path) {
-    if (-not (Test-Path $Path)) { return $null }
-    $raw = Get-Content -Raw -LiteralPath $Path
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
-    $raw | ConvertFrom-Json
-}
-function Assert-SCInitialized {
-    if (-not (Test-Path (Get-SCPath 'state.json'))) { throw 'StatefulClanker is not initialized here. Run: .\StatefulClanker.ps1 init' }
-}
-function New-SCId([string]$Prefix) {
-    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
-    $rand = [Guid]::NewGuid().ToString('N').Substring(0,8)
-    "$Prefix-$stamp-$rand"
-}
-function Add-SCEvent([string]$Type, [string]$Text, $Data = $null) {
-    Assert-SCInitialized
-    $evt = [ordered]@{ ts=(Get-Date).ToUniversalTime().ToString('o'); type=$Type; message=$Text; data=$Data }
-    (ConvertTo-SCJson $evt -Depth 8 -replace "`r?`n", '') | Add-Content -LiteralPath (Get-SCPath 'events.jsonl') -Encoding UTF8
-}
-function Get-SCState { Assert-SCInitialized; Read-SCJson (Get-SCPath 'state.json') }
-function Save-SCState($State) { $State.updatedAt=(Get-Date).ToUniversalTime().ToString('o'); Write-SCJson (Get-SCPath 'state.json') $State }
-function Get-SCConfig {
-    Assert-SCInitialized
-    $cfg = Read-SCJson (Get-SCPath 'config.json')
-    if ($null -eq $cfg) { throw 'Missing .statefulclanker/config.json' }
-    $cfg
-}
-function Get-SCTask([string]$Id) {
-    $task = Read-SCJson (Get-SCPath ("tasks/{0}.json" -f $Id))
-    if ($null -eq $task) { throw "Unknown task: $Id" }
-    $task
-}
-function Save-SCTask($Task) { $Task.updatedAt=(Get-Date).ToUniversalTime().ToString('o'); Write-SCJson (Get-SCPath ("tasks/{0}.json" -f $Task.id)) $Task }
-function Get-SCTasks {
-    Assert-SCInitialized
-    $dir=Get-SCPath 'tasks'
-    if (-not (Test-Path $dir)) { return @() }
-    @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File | ForEach-Object { Read-SCJson $_.FullName })
-}
-function Update-SCReadiness {
-    $tasks=@(Get-SCTasks); $byId=@{}
-    foreach ($t in $tasks) { $byId[$t.id]=$t }
-    foreach ($t in $tasks) {
-        if ($t.status -ne 'pending') { continue }
-        $ready=$true
-        foreach ($dep in @($t.dependsOn)) {
-            if (-not $byId.ContainsKey($dep) -or $byId[$dep].status -ne 'complete') { $ready=$false; break }
+function Root { (Get-Location).Path }
+function SCDir { Join-Path (Root) '.statefulclanker' }
+function SCPath([string]$p) { Join-Path (SCDir) $p }
+function ToJson($v,[int]$d=12) { $v | ConvertTo-Json -Depth $d }
+function WriteJson([string]$p,$v) { $parent=Split-Path -Parent $p; if($parent -and -not(Test-Path $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null}; $tmp="$p.tmp"; ToJson $v 16|Set-Content -LiteralPath $tmp -Encoding UTF8; Move-Item -Force $tmp $p }
+function ReadJson([string]$p) { if(-not(Test-Path $p)){return $null}; $r=Get-Content -Raw -LiteralPath $p; if([string]::IsNullOrWhiteSpace($r)){return $null}; $r|ConvertFrom-Json }
+function AssertInit { if(-not(Test-Path (SCPath 'state.json'))){throw 'Not initialized. Run: .\StatefulClanker.ps1 init'} }
+function NewId([string]$p) { "$p-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))-$([Guid]::NewGuid().ToString('N').Substring(0,8))" }
+function Event([string]$type,[string]$text,$data=$null) { AssertInit; $e=[ordered]@{ts=(Get-Date).ToUniversalTime().ToString('o');type=$type;message=$text;data=$data}; (ToJson $e 8 -replace "`r?`n",'')|Add-Content -LiteralPath (SCPath 'events.jsonl') -Encoding UTF8 }
+function State { AssertInit; ReadJson (SCPath 'state.json') }
+function SaveState($s) { $s.updatedAt=(Get-Date).ToUniversalTime().ToString('o'); WriteJson (SCPath 'state.json') $s }
+function Config { AssertInit; $c=ReadJson (SCPath 'config.json'); if($null -eq $c){throw 'Missing .statefulclanker/config.json'}; $c }
+function Task([string]$id) { $t=ReadJson (SCPath ("tasks/{0}.json" -f $id)); if($null -eq $t){throw "Unknown task: $id"}; $t }
+function SaveTask($t) { $t.updatedAt=(Get-Date).ToUniversalTime().ToString('o'); WriteJson (SCPath ("tasks/{0}.json" -f $t.id)) $t }
+function Tasks { AssertInit; $d=SCPath 'tasks'; if(-not(Test-Path $d)){return @()}; @(Get-ChildItem -LiteralPath $d -Filter '*.json' -File|ForEach-Object{ReadJson $_.FullName}) }
+function UpdateReady {
+    $all=@(Tasks); $map=@{}; foreach($t in $all){if($t.id){$map[[string]$t.id]=$t}}
+    foreach($t in $all){
+        if($t.status -ne 'pending'){continue}; $ok=$true
+        foreach($dep in @($t.dependsOn)){
+            if([string]::IsNullOrWhiteSpace([string]$dep)){continue}
+            if(-not $map.ContainsKey([string]$dep) -or $map[[string]$dep].status -ne 'complete'){$ok=$false;break}
         }
-        if ($ready) { $t.status='ready'; Save-SCTask $t }
+        if($ok){$t.status='ready';SaveTask $t}
     }
 }
-function Initialize-SC {
-    $dir=Get-SCDir
-    if (Test-Path (Join-Path $dir 'state.json')) { Write-Host 'Already initialized.'; return }
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    foreach ($child in @('tasks','plans','runs','critiques','validations','prompts','retrieval')) { New-Item -ItemType Directory -Force -Path (Join-Path $dir $child) | Out-Null }
-    $now=(Get-Date).ToUniversalTime().ToString('o')
-    $state=[ordered]@{ schemaVersion=2; projectId=New-SCId 'project'; projectRoot=Get-SCRoot; goal=''; activePlanId=$null; planApproved=$false; createdAt=$now; updatedAt=$now }
-    Write-SCJson (Join-Path $dir 'state.json') $state
-    '' | Set-Content -LiteralPath (Join-Path $dir 'events.jsonl') -Encoding UTF8
-    $example=Join-Path $PSScriptRoot 'statefulclanker.example.json'
-    if (Test-Path $example) { Copy-Item -LiteralPath $example -Destination (Join-Path $dir 'config.json') }
-    else { Write-SCJson (Join-Path $dir 'config.json') ([ordered]@{ defaultProvider='opencode'; criticProvider=$null; validatorProvider=$null; providers=[ordered]@{}; workingSetBudgetChars=24000; maxFileChars=8000; requireHumanApprovalForPlan=$true; criticEnabled=$true; validatorEnabled=$true }) }
-    Add-SCEvent 'project.initialized' 'StatefulClanker initialized.' @{ root=Get-SCRoot }
-    Write-Host "Initialized $dir"
+function Init {
+    $d=SCDir; if(Test-Path (Join-Path $d 'state.json')){Write-Host 'Already initialized.';return}
+    New-Item -ItemType Directory -Force -Path $d|Out-Null; foreach($x in @('tasks','plans','runs','critiques','validations','prompts')){New-Item -ItemType Directory -Force -Path (Join-Path $d $x)|Out-Null}
+    $now=(Get-Date).ToUniversalTime().ToString('o'); WriteJson (Join-Path $d 'state.json') ([ordered]@{schemaVersion=2;projectId=NewId 'project';projectRoot=Root;goal='';activePlanId=$null;planApproved=$false;createdAt=$now;updatedAt=$now}); ''|Set-Content (Join-Path $d 'events.jsonl') -Encoding UTF8
+    $ex=Join-Path $PSScriptRoot 'statefulclanker.example.json'; if(Test-Path $ex){Copy-Item $ex (Join-Path $d 'config.json')}else{WriteJson (Join-Path $d 'config.json') ([ordered]@{defaultProvider='opencode';criticProvider=$null;validatorProvider=$null;providers=[ordered]@{};workingSetBudgetChars=24000;maxFileChars=8000;requireHumanApprovalForPlan=$true;criticEnabled=$true;validatorEnabled=$true})}
+    Event 'project.initialized' 'StatefulClanker initialized.' @{root=Root}; Write-Host "Initialized $d"
 }
-function Set-SCGoal([string]$Text) {
-    Assert-SCInitialized
-    if ([string]::IsNullOrWhiteSpace($Text)) { throw 'Goal text is required.' }
-    $s=Get-SCState; $s.goal=$Text; Save-SCState $s; Add-SCEvent 'goal.changed' $Text; Write-Host 'Goal updated.'
+function SetGoal([string]$text) { AssertInit; if([string]::IsNullOrWhiteSpace($text)){throw 'Goal text required.'}; $s=State;$s.goal=$text;SaveState $s;Event 'goal.changed' $text;Write-Host 'Goal updated.' }
+function AddTask {
+    if([string]::IsNullOrWhiteSpace($Title)){throw '-Title is required.'};if([string]::IsNullOrWhiteSpace($Instruction)){throw '-Instruction is required.'}
+    $id=if($TaskId){$TaskId}else{NewId 'task'}; if(@(Tasks|Where-Object{$_.id -eq $id}).Count -gt 0){throw "Task exists: $id"};$now=(Get-Date).ToUniversalTime().ToString('o')
+    $t=[ordered]@{id=$id;title=$Title;instruction=$Instruction;acceptance=@($Accept);dependsOn=@($DependsOn);retrieval=@($Retrieval);evidence=@($Evidence);provider=if($Provider){$Provider}else{$null};role=$Role;humanGate=[bool]$HumanGate;status='pending';latestRunId=$null;latestCritiqueId=$null;latestValidationId=$null;blockReason=$null;createdAt=$now;updatedAt=$now}
+    SaveTask $t;UpdateReady;Event 'task.created' $Title @{taskId=$id};Write-Host $id
 }
-function Add-SCTask {
-    if ([string]::IsNullOrWhiteSpace($Title)) { throw '-Title is required.' }
-    if ([string]::IsNullOrWhiteSpace($Instruction)) { throw '-Instruction is required.' }
-    $id=if ($TaskId) { $TaskId } else { New-SCId 'task' }
-    if (Get-SCTasks | Where-Object { $_.id -eq $id }) { throw "Task already exists: $id" }
-    $now=(Get-Date).ToUniversalTime().ToString('o')
-    $task=[ordered]@{ id=$id; title=$Title; instruction=$Instruction; acceptance=@($Accept); dependsOn=@($DependsOn); retrieval=@($Retrieval); evidence=@($Evidence); provider=if($Provider){$Provider}else{$null}; role=$Role; humanGate=[bool]$HumanGate; status='pending'; latestRunId=$null; latestCritiqueId=$null; latestValidationId=$null; blockReason=$null; createdAt=$now; updatedAt=$now }
-    Save-SCTask $task; Update-SCReadiness; Add-SCEvent 'task.created' $Title @{ taskId=$id }; Write-Host $id
+function ShowStatus { AssertInit;UpdateReady;$s=State;$a=@(Tasks);Write-Host "Goal: $($s.goal)";Write-Host "Plan: $($s.activePlanId)  Approved: $($s.planApproved)";if($a.Count -eq 0){Write-Host 'Tasks: none';return};$a|Sort-Object createdAt|Select-Object id,status,role,title|Format-Table -AutoSize }
+function ImportPlan([string]$p) {
+    AssertInit;if(-not(Test-Path $p)){throw "Plan not found: $p"};$resolved=(Resolve-Path $p).Path;$plan=ReadJson $resolved;if($null -eq $plan -or $null -eq $plan.tasks){throw 'Plan must contain tasks.'};$pid=NewId 'plan';WriteJson (SCPath ("plans/{0}.json" -f $pid)) ([ordered]@{id=$pid;name=$plan.name;summary=$plan.summary;source=$resolved;importedAt=(Get-Date).ToUniversalTime().ToString('o');tasks=@($plan.tasks)})
+    foreach($x in @($plan.tasks)){$id=if($x.id){[string]$x.id}else{NewId 'task'};$now=(Get-Date).ToUniversalTime().ToString('o');$t=[ordered]@{id=$id;title=[string]$x.title;instruction=[string]$x.instruction;acceptance=@($x.acceptance);dependsOn=@($x.dependsOn);retrieval=@($x.retrieval);evidence=@($x.evidence);provider=if($x.provider){[string]$x.provider}else{$null};role=if($x.role){[string]$x.role}else{'worker'};humanGate=[bool]$x.humanGate;status='pending';latestRunId=$null;latestCritiqueId=$null;latestValidationId=$null;blockReason=$null;createdAt=$now;updatedAt=$now};SaveTask $t}
+    $s=State;$s.activePlanId=$pid;$c=Config;$s.planApproved=-not[bool]$c.requireHumanApprovalForPlan;SaveState $s;UpdateReady;Event 'plan.imported' "Imported $pid" @{taskCount=@($plan.tasks).Count};Write-Host "Imported $pid"
 }
-function Show-SCStatus {
-    Assert-SCInitialized; Update-SCReadiness; $s=Get-SCState; $tasks=@(Get-SCTasks)
-    Write-Host "Goal: $($s.goal)"; Write-Host "Plan: $($s.activePlanId)  Approved: $($s.planApproved)"
-    if ($tasks.Count -eq 0) { Write-Host 'Tasks: none'; return }
-    $tasks | Sort-Object createdAt | Select-Object id,status,role,title | Format-Table -AutoSize
-}
-function Show-SCTaskList { Update-SCReadiness; Get-SCTasks | Sort-Object createdAt | Select-Object id,status,role,humanGate,title | Format-Table -AutoSize }
-function Import-SCPlan([string]$PlanPath) {
-    Assert-SCInitialized
-    if (-not (Test-Path $PlanPath)) { throw "Plan file not found: $PlanPath" }
-    $resolved=(Resolve-Path $PlanPath).Path; $plan=Read-SCJson $resolved
-    if ($null -eq $plan -or $null -eq $plan.tasks) { throw 'Plan must contain a tasks array.' }
-    $planId=New-SCId 'plan'
-    Write-SCJson (Get-SCPath ("plans/{0}.json" -f $planId)) ([ordered]@{ id=$planId; name=$plan.name; summary=$plan.summary; importedAt=(Get-Date).ToUniversalTime().ToString('o'); source=$resolved; tasks=@($plan.tasks) })
-    foreach ($p in @($plan.tasks)) {
-        $id=if ($p.id) { [string]$p.id } else { New-SCId 'task' }
-        if (Test-Path (Get-SCPath ("tasks/{0}.json" -f $id))) { throw "Plan task id already exists: $id" }
-        $now=(Get-Date).ToUniversalTime().ToString('o')
-        $task=[ordered]@{ id=$id; title=[string]$p.title; instruction=[string]$p.instruction; acceptance=@($p.acceptance); dependsOn=@($p.dependsOn); retrieval=@($p.retrieval); evidence=@($p.evidence); provider=if($p.provider){[string]$p.provider}else{$null}; role=if($p.role){[string]$p.role}else{'worker'}; humanGate=[bool]$p.humanGate; status='pending'; latestRunId=$null; latestCritiqueId=$null; latestValidationId=$null; blockReason=$null; createdAt=$now; updatedAt=$now }
-        Save-SCTask $task
+function ApprovePlan { $s=State;if(-not$s.activePlanId){throw 'No active plan.'};$s.planApproved=$true;SaveState $s;Event 'plan.approved' "Approved $($s.activePlanId)";Write-Host 'Plan approved.' }
+function RecentEvents([int]$n=12) { $p=SCPath 'events.jsonl';if(-not(Test-Path $p)){return @()};@(Get-Content $p|Where-Object{-not[string]::IsNullOrWhiteSpace($_)}|Select-Object -Last $n) }
+function DepSummary($t) { $o=@();foreach($d in @($t.dependsOn)){if([string]::IsNullOrWhiteSpace([string]$d)){continue};$x=Task ([string]$d);$r=[ordered]@{id=$x.id;title=$x.title;status=$x.status;latestRunId=$x.latestRunId};if($x.latestRunId){$rr=ReadJson (SCPath ("runs/{0}.json" -f $x.latestRunId));if($rr){$r.result=$rr.stdout}};$o+=$r};$o }
+function Retrieve($t) {
+    $c=Config;$budget=if($c.PSObject.Properties['workingSetBudgetChars']){[int]$c.workingSetBudgetChars}else{24000};$max=if($c.PSObject.Properties['maxFileChars']){[int]$c.maxFileChars}else{8000};$left=$budget;$items=@();$seen=@{}
+    foreach($sel in @($t.retrieval)+@($t.evidence)){
+        if([string]::IsNullOrWhiteSpace([string]$sel)-or$left-le 0){continue};$pat=[string]$sel;$matches=@()
+        try{if($pat -match '[*?\[]'){$matches=@(Get-ChildItem -Path $pat -File -Recurse -ErrorAction SilentlyContinue)}elseif(Test-Path -LiteralPath $pat -PathType Leaf){$matches=@(Get-Item -LiteralPath $pat)}elseif(Test-Path -LiteralPath $pat -PathType Container){$matches=@(Get-ChildItem -LiteralPath $pat -File -Recurse -ErrorAction SilentlyContinue)}}catch{$matches=@()}
+        foreach($m in $matches){if($left-le 0){break};$full=$m.FullName;if($full.StartsWith((SCDir),[StringComparison]::OrdinalIgnoreCase)){continue};if($seen.ContainsKey($full)){continue};$seen[$full]=$true;try{$txt=Get-Content -Raw -LiteralPath $full}catch{continue};if($null-eq$txt){$txt=''};$take=[Math]::Min([Math]::Min($txt.Length,$max),$left);$excerpt=if($take-gt 0){$txt.Substring(0,$take)}else{''};$rel=($full.Substring((Root).Length) -replace '^[\\/]+' ,'');$items+=[ordered]@{path=$rel;chars=$take;truncated=($txt.Length-gt$take);content=$excerpt};$left-=$take}
     }
-    $s=Get-SCState; $s.activePlanId=$planId; $cfg=Get-SCConfig; $s.planApproved=-not [bool]$cfg.requireHumanApprovalForPlan; Save-SCState $s
-    Update-SCReadiness; Add-SCEvent 'plan.imported' "Imported plan $($plan.name)" @{ planId=$planId; taskCount=@($plan.tasks).Count }; Write-Host "Imported $planId"
+    [ordered]@{budgetChars=$budget;usedChars=($budget-$left);items=$items}
 }
-function Approve-SCPlan {
-    $s=Get-SCState; if (-not $s.activePlanId) { throw 'No active plan.' }
-    $s.planApproved=$true; Save-SCState $s; Add-SCEvent 'plan.approved' "Approved plan $($s.activePlanId)"; Write-Host 'Plan approved.'
+function WorkerPrompt($t) { $s=State;$packet=[ordered]@{projectGoal=$s.goal;projectRoot=Root;task=[ordered]@{id=$t.id;title=$t.title;instruction=$t.instruction;role=$t.role;acceptance=@($t.acceptance);retrieval=@($t.retrieval);evidence=@($t.evidence)};dependencies=@(DepSummary $t);retrieved=(Retrieve $t);recentEvents=@(RecentEvents 12);outputContract='Perform only this task. Report files changed, commands run, failures, and unresolved risks. Do not claim verification you did not perform.'};"You are a cold-start StatefulClanker worker. Durable state and project files are authoritative.`r`n`r`nSTATEFULCLANKER PACKET`r`n======================`r`n$(ToJson $packet 14)`r`n`r`nComplete only this bounded task." }
+function ReviewPrompt($t,$run,[string]$stage) { $s=State;$rule=if($stage-eq'critic'){'Check omissions, contradictions, risky assumptions, regressions, and whether the worker addressed the task.'}else{'Judge acceptance criteria from available evidence. Do not trust the worker claim without evidence.'};"You are the $stage in StatefulClanker. You did not perform the work.`r`n$rule`r`n`r`nPROJECT GOAL:`r`n$($s.goal)`r`n`r`nTASK:`r`n$(ToJson ([ordered]@{id=$t.id;title=$t.title;instruction=$t.instruction;acceptance=@($t.acceptance)}) 8)`r`n`r`nWORKER RECEIPT:`r`n$(ToJson ([ordered]@{runId=$run.id;exitCode=$run.exitCode;stdout=$run.stdout;stderr=$run.stderr}) 8)`r`n`r`nRETRIEVED EVIDENCE:`r`n$(ToJson (Retrieve $t) 12)`r`n`r`nFirst non-empty line MUST be exactly VERDICT: PASS or VERDICT: FAIL. Then explain evidence briefly." }
+function ResolveProvider($t,[string]$override,[string]$stage='worker') { $c=Config;$name=$null;if($override){$name=$override}elseif($stage-eq'critic'-and$c.PSObject.Properties['criticProvider']-and$c.criticProvider){$name=[string]$c.criticProvider}elseif($stage-eq'validator'-and$c.PSObject.Properties['validatorProvider']-and$c.validatorProvider){$name=[string]$c.validatorProvider}elseif($t.provider){$name=[string]$t.provider}else{$name=[string]$c.defaultProvider};$p=$c.providers.PSObject.Properties[$name];if($null-eq$p){throw "Provider '$name' not configured."};[ordered]@{name=$name;config=$p.Value} }
+function ExpandArg([string]$a,[string]$prompt,[string]$pf,$t) { $a.Replace('{prompt}',$prompt).Replace('{promptFile}',$pf).Replace('{projectRoot}',(Root)).Replace('{taskId}',[string]$t.id) }
+function InvokeProvider($t,[string]$prompt,[string]$stage,[string]$override) {
+    $pr=ResolveProvider $t $override $stage;$id=NewId $stage;$pf=SCPath ("prompts/{0}.txt"-f$id);$prompt|Set-Content -LiteralPath $pf -Encoding UTF8;$exe=[string]$pr.config.command;$args=@();foreach($a in @($pr.config.args)){$args+=ExpandArg ([string]$a) $prompt $pf $t};$outf=SCPath ("runs/{0}.stdout.txt"-f$id);$errf=SCPath ("runs/{0}.stderr.txt"-f$id);$start=(Get-Date).ToUniversalTime();$out='';$err='';$exit=-1
+    try{$proc=Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory (Root) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $outf -RedirectStandardError $errf;$exit=$proc.ExitCode;if(Test-Path$outf){$out=Get-Content -Raw $outf};if(Test-Path$errf){$err=Get-Content -Raw $errf}}catch{$err=$_|Out-String;$exit=-1};$end=(Get-Date).ToUniversalTime();[ordered]@{id=$id;taskId=$t.id;stage=$stage;provider=$pr.name;command=$exe;args=$args;promptPath=$pf;startedAt=$start.ToString('o');endedAt=$end.ToString('o');durationSeconds=[math]::Round(($end-$start).TotalSeconds,3);exitCode=$exit;stdout=$out;stderr=$err}
 }
-function Get-SCRecentEvents([int]$Count=12) {
-    $path=Get-SCPath 'events.jsonl'; if (-not (Test-Path $path)) { return @() }
-    @(Get-Content -LiteralPath $path | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last $Count)
+function Verdict([string]$text,[int]$exit) { if($exit-ne 0){return'FAIL'};foreach($line in @($text-split"`r?`n")){$x=$line.Trim();if(-not$x){continue};if($x-match'^VERDICT:\s*PASS\s*$'){return'PASS'};if($x-match'^VERDICT:\s*FAIL\s*$'){return'FAIL'};break};'FAIL' }
+function Review($t,$run,[string]$stage) { $r=InvokeProvider $t (ReviewPrompt $t $run $stage) $stage $null;$r.verdict=Verdict ([string]$r.stdout) ([int]$r.exitCode);$dir=if($stage-eq'critic'){'critiques'}else{'validations'};WriteJson (SCPath ("{0}/{1}.json"-f$dir,$r.id)) $r;Event "$stage.finished" "$stage $($r.id): $($r.verdict)" @{taskId=$t.id;receiptId=$r.id;verdict=$r.verdict};$r }
+function RunTask([string]$id,[string]$override) {
+    AssertInit;UpdateReady;$s=State;$c=Config;if($s.activePlanId-and[bool]$c.requireHumanApprovalForPlan-and-not[bool]$s.planApproved){throw 'Active plan requires approval.'};$t=if($id){Task $id}else{Tasks|Where-Object{$_.status-eq'ready'-and-not$_.humanGate}|Sort-Object createdAt|Select-Object -First 1};if($null-eq$t){throw'No runnable ready task.'};if($t.status-ne'ready'){throw"Task $($t.id) is $($t.status), not ready."};if($t.humanGate){throw'Task requires human gate.'}
+    $t.status='running';SaveTask$t;Event 'run.started' 'Worker started' @{taskId=$t.id};$run=InvokeProvider $t (WorkerPrompt $t) 'run' $override;WriteJson (SCPath ("runs/{0}.json"-f$run.id)) $run;$t=Task$t.id;$t.latestRunId=$run.id
+    if([int]$run.exitCode-ne 0){$t.status='failed';$t.blockReason="Worker exited $($run.exitCode)";SaveTask$t;Event 'run.failed' $t.blockReason @{taskId=$t.id;runId=$run.id};Write-Warning$t.blockReason;return};Event 'run.finished' "Worker finished $($run.id)" @{taskId=$t.id;runId=$run.id}
+    if([bool]$c.criticEnabled){$t.status='reviewing';SaveTask$t;$r=Review $t $run 'critic';$t=Task$t.id;$t.latestCritiqueId=$r.id;if($r.verdict-ne'PASS'){$t.status='needs_rework';$t.blockReason='Critic rejected worker result.';SaveTask$t;Write-Warning$t.blockReason;return}}
+    if([bool]$c.validatorEnabled){$t.status='validating';SaveTask$t;$r=Review $t $run 'validator';$t=Task$t.id;$t.latestValidationId=$r.id;if($r.verdict-ne'PASS'){$t.status='needs_rework';$t.blockReason='Validator rejected worker result.';SaveTask$t;Write-Warning$t.blockReason;return}}
+    $t.status='complete';$t.blockReason=$null;SaveTask$t;Event 'task.completed' "Completed $($t.id) after review pipeline" @{taskId=$t.id;runId=$run.id};UpdateReady;Write-Host "Task complete: $($t.id)"
 }
-function Get-SCDependencySummary($Task) {
-    $out=@()
-    foreach ($dep in @($Task.dependsOn)) {
-        $dt=Get-SCTask $dep; $summary=[ordered]@{ id=$dt.id; title=$dt.title; status=$dt.status; latestRunId=$dt.latestRunId }
-        if ($dt.latestRunId) { $run=Read-SCJson (Get-SCPath ("runs/{0}.json" -f $dt.latestRunId)); if ($run) { $summary.result=$run.stdout } }
-        $out += $summary
-    }
-    $out
-}
-function Get-SCRetrievalPacket($Task) {
-    $cfg=Get-SCConfig
-    $budget=24000; if ($cfg.PSObject.Properties['workingSetBudgetChars']) { $budget=[int]$cfg.workingSetBudgetChars }
-    $maxFile=8000; if ($cfg.PSObject.Properties['maxFileChars']) { $maxFile=[int]$cfg.maxFileChars }
-    $remaining=$budget; $items=@(); $seen=@{}
-    $selectors=@($Task.retrieval) + @($Task.evidence)
-    foreach ($selector in $selectors) {
-        if ([string]::IsNullOrWhiteSpace([string]$selector) -or $remaining -le 0) { continue }
-        $pattern=[string]$selector
-        $matches=@()
-        try {
-            if ($pattern.IndexOfAny(@('*','?','[')) -ge 0) { $matches=@(Get-ChildItem -Path $pattern -File -Recurse -ErrorAction SilentlyContinue) }
-            elseif (Test-Path -LiteralPath $pattern -PathType Leaf) { $matches=@(Get-Item -LiteralPath $pattern) }
-            elseif (Test-Path -LiteralPath $pattern -PathType Container) { $matches=@(Get-ChildItem -LiteralPath $pattern -File -Recurse -ErrorAction SilentlyContinue) }
-        } catch { $matches=@() }
-        foreach ($m in $matches) {
-            if ($remaining -le 0) { break }
-            $full=$m.FullName
-            if ($full.StartsWith((Get-SCDir), [StringComparison]::OrdinalIgnoreCase)) { continue }
-            if ($seen.ContainsKey($full)) { continue }; $seen[$full]=$true
-            try { $text=Get-Content -Raw -LiteralPath $full -ErrorAction Stop } catch { continue }
-            if ($null -eq $text) { $text='' }
-            $take=[Math]::Min([Math]::Min($text.Length,$maxFile),$remaining)
-            $excerpt=if($take -gt 0){$text.Substring(0,$take)}else{''}
-            $rel=$full.Substring((Get-SCRoot).Length).TrimStart('\','/')
-            $items += [ordered]@{ path=$rel; chars=$take; truncated=($text.Length -gt $take); content=$excerpt }
-            $remaining-=$take
-        }
-    }
-    [ordered]@{ budgetChars=$budget; usedChars=($budget-$remaining); items=$items }
-}
-function New-SCWorkerPrompt($Task) {
-    $s=Get-SCState; $retrieved=Get-SCRetrievalPacket $Task
-    $packet=[ordered]@{ projectGoal=$s.goal; projectRoot=Get-SCRoot; task=[ordered]@{ id=$Task.id; title=$Task.title; instruction=$Task.instruction; role=$Task.role; acceptance=@($Task.acceptance); retrieval=@($Task.retrieval); evidence=@($Task.evidence) }; dependencies=@(Get-SCDependencySummary $Task); retrieved=$retrieved; recentEvents=@(Get-SCRecentEvents 12); outputContract=@{ instruction='Perform only this task. Be explicit about files changed, commands run, failures, and unresolved risks. Do not claim acceptance criteria passed unless you verified them.' } }
-@"
-You are a cold-start worker in StatefulClanker. You have no useful conversational history beyond this packet.
-Treat project files and supplied durable state as authoritative.
+function Retry([string]$id){if(-not$id){throw'-TaskId required.'};$t=Task$id;$t.status='ready';$t.blockReason=$null;SaveTask$t;Event'task.retried'"Retry $id"@{taskId=$id};Write-Host'Task reset to ready.'}
+function Complete([string]$id){if(-not$id){throw'-TaskId required.'};$t=Task$id;$t.status='complete';$t.blockReason=$null;SaveTask$t;Event'task.completed.manual'"Completed $id manually"@{taskId=$id};UpdateReady;Write-Host'Task completed.'}
+function Block([string]$id,[string]$why){if(-not$id){throw'-TaskId required.'};if(-not$why){throw'-Reason required.'};$t=Task$id;$t.status='blocked';$t.blockReason=$why;SaveTask$t;Event'task.blocked'$why@{taskId=$id};Write-Host'Task blocked.'}
+function Providers{$c=Config;@(foreach($p in$c.providers.PSObject.Properties){[pscustomobject]@{name=$p.Name;command=$p.Value.command;mode=$p.Value.mode}})|Format-Table -AutoSize}
 
-STATEFULCLANKER PACKET
-======================
-$(ConvertTo-SCJson $packet -Depth 14)
-
-Return a concise task result. If you cannot complete the task, report blocking evidence precisely rather than improvising project-wide decisions.
-"@
-}
-function New-SCReviewPrompt($Task,$Run,[string]$Stage) {
-    $s=Get-SCState; $retrieved=Get-SCRetrievalPacket $Task
-    $contract=if($Stage -eq 'critic'){'Check omissions, contradictions, risky assumptions, regressions, and whether the worker actually addressed the task.'}else{'Judge the acceptance criteria using available evidence. Prefer objective verification. Do not trust the worker claim without evidence.'}
-@"
-You are the $Stage in StatefulClanker. You did not perform the work.
-$contract
-
-PROJECT GOAL:
-$($s.goal)
-
-TASK:
-$(ConvertTo-SCJson ([ordered]@{id=$Task.id;title=$Task.title;instruction=$Task.instruction;acceptance=@($Task.acceptance)}) -Depth 8)
-
-WORKER RECEIPT:
-$(ConvertTo-SCJson ([ordered]@{runId=$Run.id;exitCode=$Run.exitCode;stdout=$Run.stdout;stderr=$Run.stderr}) -Depth 8)
-
-RETRIEVED EVIDENCE:
-$(ConvertTo-SCJson $retrieved -Depth 12)
-
-Your first non-empty line MUST be exactly VERDICT: PASS or VERDICT: FAIL.
-Then explain the evidence briefly. On FAIL, state the concrete reason and what must change.
-"@
-}
-function Resolve-SCProviderByName([string]$Name) {
-    $cfg=Get-SCConfig
-    $prop=$cfg.providers.PSObject.Properties[$Name]; if ($null -eq $prop) { throw "Provider '$Name' is not configured in .statefulclanker/config.json" }
-    [ordered]@{ name=$Name; config=$prop.Value }
-}
-function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
-    $cfg=Get-SCConfig; $name=$null
-    if ($Override) { $name=$Override }
-    elseif ($Stage -eq 'critic' -and $cfg.PSObject.Properties['criticProvider'] -and $cfg.criticProvider) { $name=[string]$cfg.criticProvider }
-    elseif ($Stage -eq 'validator' -and $cfg.PSObject.Properties['validatorProvider'] -and $cfg.validatorProvider) { $name=[string]$cfg.validatorProvider }
-    elseif ($Task.provider) { $name=[string]$Task.provider }
-    else { $name=[string]$cfg.defaultProvider }
-    Resolve-SCProviderByName $name
-}
-function Expand-SCArg([string]$Arg,[string]$Prompt,[string]$PromptFile,$Task) { $Arg.Replace('{prompt}',$Prompt).Replace('{promptFile}',$PromptFile).Replace('{projectRoot}',(Get-SCRoot)).Replace('{taskId}',[string]$Task.id) }
-function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride) {
-    $providerRec=Resolve-SCProvider $Task $ProviderOverride $Stage; $providerCfg=$providerRec.config; $receiptId=New-SCId $Stage
-    $promptPath=Get-SCPath ("prompts/{0}.txt" -f $receiptId); $prompt | Set-Content -LiteralPath $promptPath -Encoding UTF8
-    $exe=[string]$providerCfg.command; $args=@(); foreach($a in @($providerCfg.args)){ $args += (Expand-SCArg ([string]$a) $prompt $promptPath $Task) }
-    $stdoutFile=Get-SCPath ("runs/{0}.stdout.txt" -f $receiptId); $stderrFile=Get-SCPath ("runs/{0}.stderr.txt" -f $receiptId)
-    $started=(Get-Date).ToUniversalTime(); $stdout=''; $stderr=''; $exit=-1
-    try {
-        $proc=Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory (Get-SCRoot) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
-        $exit=$proc.ExitCode; if(Test-Path $stdoutFile){$stdout=Get-Content -Raw -LiteralPath $stdoutFile}; if(Test-Path $stderrFile){$stderr=Get-Content -Raw -LiteralPath $stderrFile}
-    } catch { $stderr=$_ | Out-String; $exit=-1 }
-    $ended=(Get-Date).ToUniversalTime()
-    [ordered]@{ id=$receiptId; taskId=$Task.id; stage=$Stage; provider=$providerRec.name; command=$exe; args=$args; promptPath=$promptPath; startedAt=$started.ToString('o'); endedAt=$ended.ToString('o'); durationSeconds=[math]::Round(($ended-$started).TotalSeconds,3); exitCode=$exit; stdout=$stdout; stderr=$stderr }
-}
-function Get-SCVerdict([string]$Text,[int]$ExitCode) {
-    if ($ExitCode -ne 0) { return 'FAIL' }
-    foreach ($line in @($Text -split "`r?`n")) {
-        $t=$line.Trim(); if (-not $t) { continue }
-        if ($t -match '^VERDICT:\s*PASS\s*$') { return 'PASS' }
-        if ($t -match '^VERDICT:\s*FAIL\s*$') { return 'FAIL' }
-        break
-    }
-    'FAIL'
-}
-function Invoke-SCReviewStage($Task,$Run,[string]$Stage,[string]$ProviderOverride) {
-    $prompt=New-SCReviewPrompt $Task $Run $Stage; $receipt=Invoke-SCProvider $Task $prompt $Stage $ProviderOverride; $receipt.verdict=Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode)
-    $dir=if($Stage -eq 'critic'){'critiques'}else{'validations'}
-    Write-SCJson (Get-SCPath ("{0}/{1}.json" -f $dir,$receipt.id)) $receipt
-    Add-SCEvent ("{0}.finished" -f $Stage) ("$Stage $($receipt.id): $($receipt.verdict)") @{taskId=$Task.id;receiptId=$receipt.id;verdict=$receipt.verdict}
-    $receipt
-}
-function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
-    Assert-SCInitialized; Update-SCReadiness; $s=Get-SCState; $cfg=Get-SCConfig
-    if ($s.activePlanId -and [bool]$cfg.requireHumanApprovalForPlan -and -not [bool]$s.planApproved) { throw 'Active plan requires approval. Run: .\StatefulClanker.ps1 plan approve' }
-    $task=if($RequestedTaskId){Get-SCTask $RequestedTaskId}else{Get-SCTasks | Where-Object { $_.status -eq 'ready' -and -not $_.humanGate } | Sort-Object createdAt | Select-Object -First 1}
-    if ($null -eq $task) { throw 'No runnable ready task found.' }
-    if ($task.status -ne 'ready') { throw "Task $($task.id) is '$($task.status)', not ready." }
-    if ($task.humanGate) { throw "Task $($task.id) requires a human gate." }
-    $task.status='running'; Save-SCTask $task; Add-SCEvent 'run.started' "Worker started" @{taskId=$task.id}
-    $run=Invoke-SCProvider $task (New-SCWorkerPrompt $task) 'run' $ProviderOverride
-    Write-SCJson (Get-SCPath ("runs/{0}.json" -f $run.id)) $run
-    $task=Get-SCTask $task.id; $task.latestRunId=$run.id
-    if ([int]$run.exitCode -ne 0) {
-        $task.status='failed'; $task.blockReason="Worker exited $($run.exitCode)"; Save-SCTask $task; Add-SCEvent 'run.failed' $task.blockReason @{taskId=$task.id;runId=$run.id}; Write-Warning $task.blockReason; return
-    }
-    Add-SCEvent 'run.finished' "Worker finished $($run.id)" @{taskId=$task.id;runId=$run.id}
-    if ([bool]$cfg.criticEnabled) {
-        $task.status='reviewing'; Save-SCTask $task
-        $crit=Invoke-SCReviewStage $task $run 'critic' $null; $task=Get-SCTask $task.id; $task.latestCritiqueId=$crit.id
-        if ($crit.verdict -ne 'PASS') { $task.status='needs_rework'; $task.blockReason='Critic rejected worker result.'; Save-SCTask $task; Write-Warning $task.blockReason; return }
-    }
-    if ([bool]$cfg.validatorEnabled) {
-        $task.status='validating'; Save-SCTask $task
-        $val=Invoke-SCReviewStage $task $run 'validator' $null; $task=Get-SCTask $task.id; $task.latestValidationId=$val.id
-        if ($val.verdict -ne 'PASS') { $task.status='needs_rework'; $task.blockReason='Validator rejected worker result.'; Save-SCTask $task; Write-Warning $task.blockReason; return }
-    }
-    $task.status='complete'; $task.blockReason=$null; Save-SCTask $task; Add-SCEvent 'task.completed' "Completed $($task.id) after automatic review pipeline" @{taskId=$task.id;runId=$run.id}; Update-SCReadiness
-    Write-Host "Task complete: $($task.id)"
-}
-function Retry-SCTask([string]$Id) { if(-not $Id){throw '-TaskId is required.'}; $t=Get-SCTask $Id; $t.status='ready'; $t.blockReason=$null; Save-SCTask $t; Add-SCEvent 'task.retried' "Retry $Id" @{taskId=$Id}; Write-Host 'Task reset to ready.' }
-function Complete-SCTask([string]$Id) { if(-not $Id){throw '-TaskId is required.'}; $t=Get-SCTask $Id; $t.status='complete'; $t.blockReason=$null; Save-SCTask $t; Add-SCEvent 'task.completed.manual' "Completed $Id manually" @{taskId=$Id}; Update-SCReadiness; Write-Host 'Task completed.' }
-function Block-SCTask([string]$Id,[string]$Why) { if(-not $Id){throw '-TaskId is required.'}; if(-not $Why){throw '-Reason is required.'}; $t=Get-SCTask $Id; $t.status='blocked'; $t.blockReason=$Why; Save-SCTask $t; Add-SCEvent 'task.blocked' $Why @{taskId=$Id}; Write-Host 'Task blocked.' }
-function Show-SCProviders { $cfg=Get-SCConfig; $rows=@(foreach($p in $cfg.providers.PSObject.Properties){[pscustomobject]@{name=$p.Name;command=$p.Value.command;mode=$p.Value.mode}}); $rows | Format-Table -AutoSize }
-
-switch ($Command.ToLowerInvariant()) {
-    'init' { Initialize-SC; break }
-    'goal' { $text=if($Message){$Message}elseif($Subcommand){$Subcommand}else{$Title}; Set-SCGoal $text; break }
-    'status' { Show-SCStatus; break }
-    'task' {
-        if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'}
-        switch($Subcommand.ToLowerInvariant()) { 'add'{Add-SCTask;break}; 'list'{Show-SCTaskList;break}; 'show'{if(-not $TaskId){throw '-TaskId is required.'}; Get-SCTask $TaskId | ConvertTo-SCJson -Depth 12 | Write-Host;break}; 'retry'{Retry-SCTask $TaskId;break}; default{throw "Unknown task subcommand: $Subcommand"} }
-        break
-    }
-    'plan' {
-        if($null -eq $Subcommand){$Subcommand=''}
-        switch($Subcommand.ToLowerInvariant()) { 'import'{if(-not $Path){throw '-Path is required.'}; Import-SCPlan $Path;break}; 'approve'{Approve-SCPlan;break}; default{throw "Unknown plan subcommand: $Subcommand"} }
-        break
-    }
-    'run' { Invoke-SCTask $TaskId $Provider; break }
-    'complete' { Complete-SCTask $TaskId; break }
-    'block' { Block-SCTask $TaskId $Reason; break }
-    'event' { if(-not $Message){throw '-Message is required.'}; Add-SCEvent 'user.note' $Message; Write-Host 'Event recorded.'; break }
-    'provider' { if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'}; if($Subcommand.ToLowerInvariant() -eq 'list'){Show-SCProviders}else{throw "Unknown provider subcommand: $Subcommand"}; break }
-    default { throw "Unknown command: $Command" }
+switch($Command.ToLowerInvariant()){
+'init'{Init;break}
+'goal'{$text=if($Message){$Message}elseif($Subcommand){$Subcommand}else{$Title};SetGoal$text;break}
+'status'{ShowStatus;break}
+'task'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};switch($Subcommand.ToLowerInvariant()){'add'{AddTask;break};'list'{UpdateReady;Tasks|Sort-Object createdAt|Select-Object id,status,role,humanGate,title|Format-Table -AutoSize;break};'show'{if(-not$TaskId){throw'-TaskId required.'};Task$TaskId|ToJson -d 12|Write-Host;break};'retry'{Retry$TaskId;break};default{throw"Unknown task subcommand: $Subcommand"}};break}
+'plan'{if($null-eq$Subcommand){$Subcommand=''};switch($Subcommand.ToLowerInvariant()){'import'{if(-not$Path){throw'-Path required.'};ImportPlan$Path;break};'approve'{ApprovePlan;break};default{throw"Unknown plan subcommand: $Subcommand"}};break}
+'run'{RunTask$TaskId$Provider;break}
+'complete'{Complete$TaskId;break}
+'block'{Block$TaskId$Reason;break}
+'event'{if(-not$Message){throw'-Message required.'};Event'user.note'$Message;Write-Host'Event recorded.';break}
+'provider'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};if($Subcommand.ToLowerInvariant()-eq'list'){Providers}else{throw"Unknown provider subcommand: $Subcommand"};break}
+default{throw"Unknown command: $Command"}
 }
