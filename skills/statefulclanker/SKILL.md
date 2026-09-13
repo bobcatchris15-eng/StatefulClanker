@@ -20,11 +20,12 @@ Do not secretly absorb implementation work that should be represented as a worke
 6. Verify the compiled state is still fresh before dispatch.
 7. Dispatch one bounded worker.
 8. Persist the complete run receipt before deciding what happens next.
-9. Treat worker output as evidence for a candidate transition, not canonical truth.
-10. Route the proposal through critic, validator, or human gates as configured.
-11. Revalidate logical dependencies before commit.
-12. Commit or reject the proposal and record whether the project actually advanced.
-13. Repeat until blocked, complete, stale, or redirected by the user.
+9. If the worker reports missing context, persist the context fault and stop that cycle without proposing completion.
+10. Otherwise treat worker output as evidence for a candidate transition, not canonical truth.
+11. Route the proposal through critic, validator, or human gates as configured.
+12. Revalidate goal/plan/direction, task control/definition, and logical dependencies before commit.
+13. Commit or reject the proposal and record whether the project actually advanced.
+14. Repeat until blocked, complete, stale, or redirected by the user.
 
 ## State authority
 
@@ -38,13 +39,15 @@ Keep these layers distinct:
 
 Never describe a worker assertion as accepted state before the commit boundary.
 
+Explicit human control outranks in-flight model work. `block`, `retry`, and manual `complete` advance task-control revision; new human direction advances project direction revision. An older compilation must not later overwrite either.
+
 ## Conversation behavior
 
 Keep the user-facing thread concise. Surface what changed, genuine blockers/decisions, stale assumptions, repeated non-progress, context faults that materially affect retrieval, and material critic/validator findings.
 
 Do not narrate every internal state write.
 
-When the user gives new direction, record it durably and update plan/task structure when execution semantics change. Do not rely on chat recollection.
+When the user gives new direction, record it durably. The current harness conservatively treats an `event` as execution-relevant direction and advances direction revision, so any older in-flight compilation will fail a subsequent freshness gate. Update plan/task structure as needed rather than relying on chat recollection.
 
 ## Compiled-context rules
 
@@ -53,6 +56,7 @@ Every worker packet must stand alone and be traceable to a compilation receipt.
 Include:
 
 - project goal and active plan identity
+- human-direction and task-control revisions
 - task instruction and acceptance criteria
 - scheduling dependencies and their validated outcomes
 - semantic task relations when relevant
@@ -71,6 +75,8 @@ A worker that lacks required state should request it explicitly rather than infe
 Treat `CONTEXT_REQUEST:` output as a context/page fault:
 
 - persist it
+- treat the cycle as non-advancing
+- do not create a completion proposal from that run
 - determine whether retrieval policy, task decomposition, or the task's declared selectors were insufficient
 - avoid repeatedly dispatching the same compiled input when the same missing state has already been identified
 
