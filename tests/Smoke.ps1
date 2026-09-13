@@ -48,8 +48,6 @@ try {
         $active=@()
         if(Test-Path $activeDir){$active=@(Get-ChildItem -LiteralPath $activeDir -Filter '*.json' -File | ForEach-Object { Get-Content -Raw $_.FullName })}
         $taskSnapshot=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\smoke-task.json')
-        Stop-Job -Job $job -ErrorAction SilentlyContinue
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
         throw "Pipeline exceeded 15 seconds. Task=$taskSnapshot ActiveTelemetry=$($active -join ' | ')"
     }
     Receive-Job -Job $job | Write-Host
@@ -79,5 +77,4 @@ try {
 finally {
     Write-Host 'STEP 8: cleanup'
     Pop-Location
-    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
