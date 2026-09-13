@@ -36,8 +36,24 @@ try {
     & $harness goal -Message 'Exercise worker-review-validation and telemetry.'
     & $harness task add -TaskId smoke-task -Title 'Smoke task' -Instruction 'Return a successful bounded result.' -Accept 'Mock validator passes' -Retrieval 'evidence.txt'
 
-    Write-Host 'STEP 4: execute worker/review pipeline'
-    & $harness run -TaskId smoke-task
+    Write-Host 'STEP 4: execute worker/review pipeline in bounded job'
+    $job = Start-Job -ArgumentList $harness,$temp -ScriptBlock {
+        param($HarnessPath,$ProjectPath)
+        Set-Location $ProjectPath
+        & $HarnessPath run -TaskId smoke-task
+    }
+    $finished = Wait-Job -Job $job -Timeout 15
+    if($null -eq $finished){
+        $activeDir=Join-Path $temp '.statefulclanker\telemetry\active'
+        $active=@()
+        if(Test-Path $activeDir){$active=@(Get-ChildItem -LiteralPath $activeDir -Filter '*.json' -File | ForEach-Object { Get-Content -Raw $_.FullName })}
+        $taskSnapshot=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\smoke-task.json')
+        Stop-Job -Job $job -ErrorAction SilentlyContinue
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        throw "Pipeline exceeded 15 seconds. Task=$taskSnapshot ActiveTelemetry=$($active -join ' | ')"
+    }
+    Receive-Job -Job $job | Write-Host
+    Remove-Job -Job $job -Force
     Write-Host 'STEP 5: pipeline returned'
 
     $task = Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\smoke-task.json') | ConvertFrom-Json
