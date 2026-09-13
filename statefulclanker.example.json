@@ -1,5 +1,7 @@
 {
   "defaultProvider": "opencode",
+  "criticProvider": null,
+  "validatorProvider": null,
   "providers": {
     "opencode": {
       "command": "opencode",
@@ -19,6 +21,7 @@
   },
   "maxConcurrent": 3,
   "workingSetBudgetChars": 24000,
+  "maxFileChars": 8000,
   "requireHumanApprovalForPlan": true,
   "criticEnabled": true,
   "validatorEnabled": true
