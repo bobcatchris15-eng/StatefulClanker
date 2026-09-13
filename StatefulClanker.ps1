@@ -11,7 +11,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
-$runtimeRef='6f0cfbf9865968f0dfd551e825a19c0e02724b9d'
+$runtimeRef='9604edb85131f0d547aa29c49c06b3132c94ac26'
 $runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Context.ps1','StatefulClanker.Execution.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
