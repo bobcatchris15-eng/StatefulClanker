@@ -44,7 +44,7 @@ irm https://raw.githubusercontent.com/bobcatchris15-eng/StatefulClanker/main/Sta
 .\StatefulClanker.ps1 status
 ```
 
-`init` creates `.statefulclanker` and copies `statefulclanker.example.json` into `.statefulclanker\config.json`. Running `init` again on an older project upgrades the durable layout in place while preserving prior receipts.
+`init` creates `.statefulclanker` and copies `statefulclanker.example.json` into `.statefulclanker\config.json` when that file is present beside the entry script. A standalone downloaded entry script uses the same built-in defaults and fetches its SHA-pinned runtime modules into `.statefulclanker\runtime`. Running `init` again on an older project upgrades the durable layout in place while preserving prior receipts.
 
 Add a task manually:
 
@@ -75,14 +75,14 @@ A run is a state-transition cycle, not a chat continuation:
 
 1. Resolve one ready task.
 2. Retrieve only task-declared files/evidence and dependency receipts.
-3. **Compile** them into a typed, durable context receipt with provenance, file hashes, dependency state, and an input fingerprint.
+3. **Compile** them into a typed, durable context receipt with provenance, file hashes, dependency state, human-direction/task-control revisions, and an input fingerprint.
 4. Check that the compiled read set is still fresh immediately before dispatch.
 5. Dispatch one cold-start worker.
 6. Persist its complete receipt.
-7. Convert missing-context requests into explicit context-fault telemetry.
-8. Create a **candidate completion proposal**. Worker success alone does not mutate canonical task completion.
+7. Convert missing-context requests into explicit context-fault telemetry. A context fault is non-advancing: the task returns to `needs_rework` and no completion proposal is created.
+8. If the worker completed without a context fault and the compiled read set is still fresh, create a **candidate completion proposal**. Worker success alone does not mutate canonical task completion.
 9. If enabled, run critic and validator against the same compiled context and worker receipt.
-10. Revalidate logical dependencies before commit.
+10. Revalidate goal/plan/direction, task control/definition, and logical dependencies at stage and commit boundaries.
 11. Commit the proposal only if the required review stages pass and its read set is still valid.
 12. Record whether the cycle actually advanced the project.
 
@@ -95,14 +95,15 @@ This makes the model's reasoning ephemeral while preserving the inputs, evidence
 Each compilation stores:
 
 - project goal and active plan identity
-- task definition and acceptance criteria
+- human-direction revision
+- task definition, task-control revision, and acceptance criteria
 - typed task relationships
 - dependency status and receipt identities
 - retrieved context/evidence with hashes and authority labels
 - bounded recent events
 - working-set usage and truncation/unmatched-selector statistics
 - a read set and deterministic input fingerprint
-- the exact model-visible intermediate representation
+- the exact model-visible intermediate representation and its context fingerprint
 
 Inspect it with:
 
@@ -120,7 +121,7 @@ A worker that cannot safely proceed because required state is absent should emit
 CONTEXT_REQUEST: exact description of the missing state or evidence
 ```
 
-StatefulClanker records these as semantic/context page faults instead of forcing the worker to guess. Inspect recent faults with:
+StatefulClanker records these as semantic/context page faults instead of forcing the worker to guess. A reported context fault prevents that cycle from proposing completion and moves the task to `needs_rework` so retrieval or decomposition can change before retry. Inspect recent faults with:
 
 ```powershell
 .\StatefulClanker.ps1 telemetry faults
@@ -134,9 +135,9 @@ This gives retrieval policy something measurable to improve: misses, repeated re
 
 A successful worker produces evidence for a transition; it does not certify the transition itself.
 
-For normal automated completion StatefulClanker persists a proposal under `proposals/`, attaches critic/validator outcomes, checks that the task/goal/dependency read set has not become stale, and only then marks the task complete.
+For normal automated completion StatefulClanker persists a proposal under `proposals/`, attaches critic/validator outcomes, checks that the task/goal/plan/human-direction/dependency read set has not become stale, checks that explicit human task control has not changed, and only then marks the task complete.
 
-Manual `complete` remains an explicit human-authority commit and is recorded as such.
+Manual `complete` remains an explicit human-authority commit and is recorded as such. Human `block`, `retry`, and manual `complete` advance a task-control revision, so an in-flight worker/reviewer cycle compiled before that decision cannot later overwrite it.
 
 ## Dependency invalidation
 
@@ -172,6 +173,8 @@ The intent is to make "spin" observable before adding more elaborate replanning 
 
 - `workingSetBudgetChars` caps the total retrieved text in one worker compilation.
 - `maxFileChars` caps one file's contribution.
+- `dependencyResultBudgetChars` caps dependency-result text carried into a compilation.
+- `recentEventBudgetChars` bounds the recent-event projection independently of event count.
 - evidence and ordinary context are tagged separately in the compiled packet.
 - runtime files under `.statefulclanker` are never pulled in through normal selectors.
 
@@ -193,6 +196,7 @@ Unmatched selectors and truncation are persisted in the compilation receipt rath
   validations/
   progress/
   prompts/
+  runtime/                 # standalone bootstrap only
   telemetry/
     events.jsonl
     context-faults.jsonl
@@ -217,7 +221,7 @@ plan approve                          Approve the active plan
 run [-TaskId id]                      Run compile -> worker -> review -> commit
 complete -TaskId id                   Explicit human completion commit
 block -TaskId id -Reason ...          Block a task
-event -Message ...                    Append a human observation/direction
+event -Message ...                    Append human direction and advance direction revision
 provider list                         Show providers
 telemetry active|history|faults       Inspect agent and context telemetry
 telemetry show -RunId <agentId>       Inspect one telemetry run
@@ -264,6 +268,7 @@ See `docs/ARCHITECTURE.md` and `docs/STATE_CONTROL.md` for the detailed model.
 - Every model call produces a durable receipt.
 - Worker output proposes state; it does not certify state.
 - A validated commit boundary advances canonical state.
+- Human control and new direction invalidate older compiled assumptions.
 - Stale dependencies invalidate downstream assumptions.
 - A failed or rejected run is evidence, not lost context.
 - Activity and progress are different things.
