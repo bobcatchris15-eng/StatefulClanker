@@ -9,6 +9,7 @@ on:
 jobs:
   smoke:
     runs-on: windows-latest
+    timeout-minutes: 2
     steps:
       - uses: actions/checkout@v4
       - name: Run end-to-end smoke test
