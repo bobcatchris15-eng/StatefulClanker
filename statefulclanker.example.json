@@ -1,0 +1,25 @@
+{
+  "defaultProvider": "opencode",
+  "providers": {
+    "opencode": {
+      "command": "opencode",
+      "args": ["run", "--format", "json", "{promptFile}"],
+      "mode": "prompt-file"
+    },
+    "claude": {
+      "command": "claude",
+      "args": ["-p", "{prompt}"],
+      "mode": "inline"
+    },
+    "agy": {
+      "command": "agy",
+      "args": ["run", "--prompt-file", "{promptFile}"],
+      "mode": "prompt-file"
+    }
+  },
+  "maxConcurrent": 3,
+  "workingSetBudgetChars": 24000,
+  "requireHumanApprovalForPlan": true,
+  "criticEnabled": true,
+  "validatorEnabled": true
+}

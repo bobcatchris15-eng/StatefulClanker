@@ -1,0 +1,48 @@
+{
+  "name": "example-feature",
+  "summary": "Add a small feature through inspect, implement, and validate stages.",
+  "tasks": [
+    {
+      "id": "inspect-current-behavior",
+      "title": "Map current feature behavior",
+      "instruction": "Inspect the current implementation and tests. Produce a concise implementation note naming the relevant files, symbols, constraints, and existing behavior.",
+      "acceptance": [
+        "Relevant implementation and test files are identified",
+        "Current behavior and compatibility constraints are stated"
+      ],
+      "dependsOn": [],
+      "retrieval": ["feature implementation", "feature tests"],
+      "evidence": [],
+      "provider": null,
+      "role": "worker",
+      "humanGate": false
+    },
+    {
+      "id": "implement-feature",
+      "title": "Implement feature",
+      "instruction": "Implement the requested feature using the inspection result as a dependency. Keep the change scoped and update tests.",
+      "acceptance": [
+        "Implementation is present",
+        "Automated tests cover the new behavior"
+      ],
+      "dependsOn": ["inspect-current-behavior"],
+      "retrieval": ["dependency result: inspect-current-behavior"],
+      "evidence": [],
+      "provider": null,
+      "role": "worker",
+      "humanGate": false
+    },
+    {
+      "id": "validate-feature",
+      "title": "Validate feature",
+      "instruction": "Run the relevant tests and a focused behavior probe. Report exact commands and outcomes.",
+      "acceptance": ["Relevant tests pass", "Behavior probe passes"],
+      "dependsOn": ["implement-feature"],
+      "retrieval": ["dependency result: implement-feature"],
+      "evidence": [],
+      "provider": null,
+      "role": "validator",
+      "humanGate": false
+    }
+  ]
+}
