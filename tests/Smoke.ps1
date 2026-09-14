@@ -105,6 +105,22 @@ try {
     if (@($telemetry | Where-Object { $_.stage -eq 'validator' -and $_.verdict -eq 'PASS' }).Count -ne 1) { throw 'Missing passing validator telemetry.' }
     if (@(Get-ChildItem -LiteralPath (Join-Path $temp '.statefulclanker\telemetry\active') -Filter '*.json' -File).Count -ne 0) { throw 'Active telemetry should be empty after completion.' }
 
+    Write-Host 'STEP 6b: every .jsonl line is a single JSON object'
+    # `ConvertTo-SCJson $x 12 -replace ...` binds -replace as a PARAMETER of the
+    # command, not as an operator, so the newline-flattening silently never happened
+    # and every append wrote pretty-printed multi-line JSON. It stayed hidden because
+    # the readers swallow parse errors, so context faults simply read back as empty.
+    foreach ($jsonl in @('events.jsonl', 'telemetry\events.jsonl', 'telemetry\context-faults.jsonl')) {
+        $jsonlPath = Join-Path $temp ".statefulclanker\$jsonl"
+        if (-not (Test-Path -LiteralPath $jsonlPath)) { continue }
+        $n = 0
+        foreach ($line in @(Get-Content -LiteralPath $jsonlPath | Where-Object { $_ })) {
+            $n++
+            try { $line | ConvertFrom-Json | Out-Null }
+            catch { throw "$jsonl line ${n} is not a standalone JSON object: $line" }
+        }
+    }
+
     Write-Host 'STEP 7: exercise telemetry CLI'
     $history = (& $harness telemetry history | Out-String)
     if ($history -notmatch 'smoke-task') { throw 'Telemetry CLI did not show smoke task.' }
@@ -124,6 +140,10 @@ Write-Host 'STEP 10: parallel execution'
 & (Join-Path $PSScriptRoot 'Concurrency.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Concurrency tests failed (exit $LASTEXITCODE)." }
 
-Write-Host 'STEP 11: integrations catalogue'
+Write-Host 'STEP 11: periodic project review'
+& (Join-Path $PSScriptRoot 'ProjectReview.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Project review tests failed (exit $LASTEXITCODE)." }
+
+Write-Host 'STEP 12: integrations catalogue'
 & (Join-Path $PSScriptRoot 'Integrations.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Integration tests failed (exit $LASTEXITCODE)." }

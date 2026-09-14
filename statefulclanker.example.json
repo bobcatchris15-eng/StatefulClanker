@@ -5,17 +5,29 @@
   "providers": {
     "opencode": {
       "command": "opencode",
-      "args": ["run", "--format", "json", "{promptFile}"],
+      "args": [
+        "run",
+        "--format",
+        "json",
+        "{promptFile}"
+      ],
       "mode": "prompt-file"
     },
     "claude": {
       "command": "claude",
-      "args": ["-p", "{prompt}"],
+      "args": [
+        "-p",
+        "{prompt}"
+      ],
       "mode": "inline"
     },
     "agy": {
       "command": "agy",
-      "args": ["run", "--prompt-file", "{promptFile}"],
+      "args": [
+        "run",
+        "--prompt-file",
+        "{promptFile}"
+      ],
       "mode": "prompt-file"
     }
   },
@@ -28,5 +40,12 @@
   "stagnationWarningThreshold": 2,
   "requireHumanApprovalForPlan": true,
   "criticEnabled": true,
-  "validatorEnabled": true
+  "validatorEnabled": true,
+  "projectReviewEveryTasks": 5,
+  "projectReviewAfterMultiMerge": true,
+  "projectCriticEnabled": true,
+  "projectValidatorEnabled": true,
+  "projectValidateCommand": null,
+  "projectValidateTimeoutSeconds": 600,
+  "projectReviewRemediationTask": true
 }

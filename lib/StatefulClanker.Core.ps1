@@ -80,7 +80,7 @@ function Get-SCFileHashValue([string]$FilePath) {
 function Add-SCEvent([string]$Type,[string]$Text,$Data=$null) {
     Assert-SCInitialized
     $evt=[ordered]@{id=New-SCId 'event';ts=(Get-Date).ToUniversalTime().ToString('o');type=$Type;message=$Text;data=$Data}
-    Invoke-SCLocked { (ConvertTo-SCJson $evt 12 -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'events.jsonl') -Encoding UTF8 }
+    Invoke-SCLocked { ((ConvertTo-SCJson $evt 12) -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'events.jsonl') -Encoding UTF8 }
 }
 function Get-SCState { Assert-SCInitialized;Read-SCJson (Get-SCPath 'state.json') }
 function Save-SCState($State) {
@@ -157,7 +157,7 @@ function Ensure-SCTelemetryLayout {
 function Add-SCTelemetryEvent([string]$Type,$Record) {
     Ensure-SCTelemetryLayout
     $evt=[ordered]@{ts=(Get-Date).ToUniversalTime().ToString('o');type=$Type;agentId=$Record.agentId;taskId=$Record.taskId;stage=$Record.stage;lifecycle=$Record.lifecycle;provider=$Record.provider;compilationId=if($Record.PSObject.Properties['compilationId']){$Record.compilationId}else{$null}}
-    (ConvertTo-SCJson $evt 8 -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'telemetry/events.jsonl') -Encoding UTF8
+    ((ConvertTo-SCJson $evt 8) -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'telemetry/events.jsonl') -Encoding UTF8
 }
 function Save-SCActiveTelemetry($Record) { Ensure-SCTelemetryLayout;Write-SCJson (Get-SCPath ("telemetry/active/{0}.json"-f$Record.agentId)) $Record }
 function Complete-SCTelemetry($Record) {
@@ -171,7 +171,7 @@ function Get-SCContextFaults([int]$Limit=100) { Ensure-SCTelemetryLayout;$p=Get-
 
 function Upgrade-SCStateLayout {
     Assert-SCInitialized
-    foreach($child in @('tasks','plans','runs','critiques','validations','prompts','compilations','proposals','progress','telemetry','telemetry/active','telemetry/runs')){$target=Get-SCPath $child;if(-not(Test-Path $target)){New-Item -ItemType Directory -Force -Path $target|Out-Null}}
+    foreach($child in @('tasks','plans','runs','critiques','validations','prompts','compilations','proposals','progress','reviews','telemetry','telemetry/active','telemetry/runs')){$target=Get-SCPath $child;if(-not(Test-Path $target)){New-Item -ItemType Directory -Force -Path $target|Out-Null}}
     Ensure-SCTelemetryLayout
     $state=Get-SCState;$changed=$false
     if(-not$state.PSObject.Properties['schemaVersion']-or[int]$state.schemaVersion-lt 4){Set-SCProperty $state 'schemaVersion' 4;$changed=$true}
@@ -183,7 +183,7 @@ function Initialize-SC {
     $dir=Get-SCDir
     if(Test-Path (Join-Path $dir 'state.json')){Upgrade-SCStateLayout;Write-Host 'Already initialized; state layout checked.';return}
     New-Item -ItemType Directory -Force -Path $dir|Out-Null
-    foreach($child in @('tasks','plans','runs','critiques','validations','prompts','compilations','proposals','progress','telemetry','telemetry/active','telemetry/runs')){New-Item -ItemType Directory -Force -Path (Join-Path $dir $child)|Out-Null}
+    foreach($child in @('tasks','plans','runs','critiques','validations','prompts','compilations','proposals','progress','reviews','telemetry','telemetry/active','telemetry/runs')){New-Item -ItemType Directory -Force -Path (Join-Path $dir $child)|Out-Null}
     $now=(Get-Date).ToUniversalTime().ToString('o')
     Write-SCJson (Join-Path $dir 'state.json') ([ordered]@{schemaVersion=4;revision=0;directionRevision=0;projectId=New-SCId 'project';projectRoot=Get-SCRoot;goal='';activePlanId=$null;planApproved=$false;createdAt=$now;updatedAt=$now})
     ''|Set-Content -LiteralPath (Join-Path $dir 'events.jsonl') -Encoding UTF8

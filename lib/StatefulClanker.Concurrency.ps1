@@ -131,6 +131,7 @@ function Start-SCCycleProcess([string]$StateRoot, $Worktree, [string]$TaskId, [s
 
 function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$HarnessPath, [switch]$NoMerge) {
     Assert-SCInitialized
+    Assert-SCNotHeld
     $stateRoot = Get-SCStateRoot
 
     if (-not (Test-SCGitAvailable)) { throw 'Parallel execution needs git on PATH.' }
@@ -224,7 +225,16 @@ function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$
     $mergedCount = @($results | Where-Object { $_.merged }).Count
     if ($mergedCount -gt 1) {
         Write-Host ''
-        Write-Warning "$mergedCount branches were merged. Merging cleanly is not the same as still working: run your own full test suite now. Two changes that each passed alone can break together with no textual conflict."
+        Write-Warning "$mergedCount branches were merged. Merging cleanly is not the same as still working: two changes that each passed alone can break together with no textual conflict."
+    }
+
+    # A multi-branch merge is exactly where integration breakage comes from, so
+    # review immediately rather than waiting for the task counter to trip.
+    $afterMerge = [bool](Get-SCProjectReviewSetting 'projectReviewAfterMultiMerge' $true)
+    if ($mergedCount -gt 1 -and $afterMerge -and (Get-SCProjectReviewInterval) -gt 0) {
+        Invoke-SCProjectReview 'multi-merge' | Out-Null
+    } elseif ($mergedCount -gt 0) {
+        Invoke-SCProjectReviewIfDue 'interval' | Out-Null
     }
     return $results
 }

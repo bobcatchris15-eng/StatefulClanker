@@ -124,6 +124,24 @@ CLI login exits nonzero with an auth message; a permission-gated headless CLI ex
 **zero having produced nothing**, which then surfaces much later as a critic
 rejecting an empty result. The probe names both directly.
 
+### Project review
+
+| Tool | Purpose |
+|---|---|
+| `project_review` | Run a project-wide critic and validator now (detached) |
+| `review_history` | Recent reviews: trigger, verdict, validate exit code |
+| `review_get` | One review in full, including the evidence packet |
+| `hold_status` | Is dispatch held after a failed review, and why |
+| `hold_clear` | **Gated.** Human release of a hold. |
+
+A project review fires automatically every `projectReviewEveryTasks` completed tasks
+and after any multi-branch merge. On FAIL it halts dispatch and queues a human-gated
+remediation task, so `run_start` and `run_parallel` will refuse until `hold_clear`.
+Check `hold_status` when a run is refused for no obvious reason.
+
+`hold_clear` is gated with the other human-authority tools: the hold exists because
+the project is believed broken, and releasing it is a human judgement.
+
 ### Observation
 
 `direction_add`, `telemetry_active`, `telemetry_history`,

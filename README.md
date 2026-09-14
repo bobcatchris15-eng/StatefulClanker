@@ -281,6 +281,47 @@ receipt. Two things are deliberately not handed over:
 
 See `docs/MCP.md` for the full tool surface and a worked session.
 
+## Periodic project review
+
+The per-task critic and validator each judge **one** task against one compiled
+context. Nothing looked at the project as a whole, so N tasks that each passed their
+own review could still leave the project broken — most obviously after a parallel
+batch, where two changes that merged cleanly can break together.
+
+Every `projectReviewEveryTasks` completed tasks (default 5), and immediately after
+any multi-branch merge, StatefulClanker runs a **project critic** and a **project
+validator** over the whole project:
+
+```powershell
+.\StatefulClanker.ps1 review run          # force one now
+.\StatefulClanker.ps1 review history      # trigger, verdict, validate exit code
+.\StatefulClanker.ps1 review show -RunId <id>
+```
+
+Configure `projectValidateCommand` — this is the single most valuable setting here.
+Its exit code and output go into the review packet as evidence. Without it the
+project validator is an LLM reading a diff, and it is told to say so rather than
+infer success from the absence of failure.
+
+On **FAIL** the harness:
+
+1. records a durable review receipt under `reviews/`,
+2. queues a **human-gated** remediation task carrying the findings,
+3. **holds dispatch** — further `run` and `run -Parallel` are refused.
+
+```powershell
+.\StatefulClanker.ps1 hold status
+.\StatefulClanker.ps1 hold clear          # explicit human release
+```
+
+Holding is the point: it stops the queue piling more work onto a broken base. The
+remediation task is human-gated because the harness generated it — read the review
+before releasing it. Set `projectReviewEveryTasks` to `0` to disable the whole
+mechanism.
+
+Reviewers must be **read-only**. A reviewer provider that edits files leaves the
+tree dirty, which then blocks the next parallel run.
+
 ## Worker, critic, and validator contracts
 
 The **worker** performs only one bounded task from a cold-start packet. It should report changed files, commands, failures, and unresolved risks. If needed state was omitted, it requests that state instead of fabricating continuity.

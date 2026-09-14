@@ -13,7 +13,7 @@ $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
 $runtimeRef='a836ab1bcfdfad2453ba78d42c5ae86e3cd195fc'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Context.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Concurrency.ps1')
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Context.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -34,11 +34,15 @@ if($useCheckedOut){
 . (Join-Path $runtimeLib 'StatefulClanker.Context.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Execution.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Concurrency.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.ProjectReview.ps1')
 
 # -StateRoot lets a cycle run inside a git worktree while reading and writing the
 # one canonical .statefulclanker in the main tree. Without it the cycle would look
 # for durable state inside the worktree, where it does not exist.
-if($StateRoot){Set-SCRoots (Get-Location).Path $StateRoot}
+# A -StateRoot cycle is a worktree child managed by the parallel scheduler. It must
+# not run its own project review: the scheduler runs one for the whole batch.
+$script:SCManagedChild=$false
+if($StateRoot){Set-SCRoots (Get-Location).Path $StateRoot;$script:SCManagedChild=$true}
 
 if($Command.ToLowerInvariant()-ne'init'-and(Test-Path (Get-SCPath 'state.json'))){Upgrade-SCStateLayout}
 
@@ -56,5 +60,7 @@ switch($Command.ToLowerInvariant()){
 'telemetry'{Show-SCTelemetry $Subcommand $RunId;break}
 'context'{Show-SCContext $Subcommand $CompilationId;break}
 'progress'{Show-SCProgress $Subcommand;break}
+'review'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='history'};if($Subcommand.ToLowerInvariant()-eq'run'){Invoke-SCProjectReview 'manual' -Force|Out-Null}else{Show-SCProjectReviews $Subcommand $RunId};break}
+'hold'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){'clear'{Clear-SCProjectHold;break};'status'{$h=Get-SCProjectHold;if($h){Write-Host "HELD since $($h.since): $($h.reason) (review $($h.reviewId))"}else{Write-Host 'Not held.'};break};default{throw "Unknown hold subcommand: $Subcommand"}};break}
 default{throw "Unknown command: $Command"}
 }

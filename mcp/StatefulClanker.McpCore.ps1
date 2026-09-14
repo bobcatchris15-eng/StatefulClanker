@@ -513,6 +513,42 @@ function Start-McpParallelRun([string]$Project, $Arguments) {
     return $record
 }
 
+<# Launch a harness command detached, under the single-flight lock. #>
+function Start-McpDetachedHarness([string]$Project, [string[]]$CliArgs, [string]$Label) {
+    Assert-McpInitialized $Project
+    $stateDir = Get-McpStateDir $Project
+    $mcpDir = Join-Path $stateDir 'mcp'
+    if (-not (Test-Path -LiteralPath $mcpDir)) { New-Item -ItemType Directory -Force -Path $mcpDir | Out-Null }
+
+    $busy = @(Get-McpBusyTasks $Project)
+    if ($busy.Count -gt 0) {
+        $ids = ($busy | ForEach-Object { $_.id }) -join ', '
+        throw "Work is already in flight for task(s): $ids. Poll run_status first."
+    }
+    if (-not (Enter-McpRunLock $Project)) {
+        throw 'Another run is already starting or running in this project. Poll run_status until inFlight is false.'
+    }
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
+    $logPath = Join-Path $mcpDir ("{0}-{1}-{2}.log" -f $Label, $stamp, [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    $psArgs = ((@('-NoProfile', '-NonInteractive', '-File', $script:McpHarness) + $CliArgs) |
+        ForEach-Object { ConvertTo-McpWindowsArg $_ }) -join ' '
+    try {
+        $proc = Start-Process -FilePath (Get-McpPwshPath) -ArgumentList $psArgs -WorkingDirectory $Project `
+            -RedirectStandardOutput $logPath -RedirectStandardError "$logPath.err" -WindowStyle Hidden -PassThru
+    } catch { Exit-McpRunLock $Project; throw }
+    try {
+        ("{0}|{1}" -f $proc.Id, (Get-Date).ToUniversalTime().ToString('o')) |
+            Set-Content -LiteralPath (Get-McpLockPath $Project) -Encoding UTF8 -NoNewline
+    } catch { }
+    $record = [ordered]@{
+        startedAt = (Get-Date).ToUniversalTime().ToString('o'); mode = $Label
+        processId = $proc.Id; logPath = $logPath
+        note = 'Runs detached. Poll run_status until inFlight is false, then read review_history.'
+    }
+    $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Get-McpRunRecordPath $Project) -Encoding UTF8
+    return $record
+}
+
 function Get-McpRunStatus([string]$Project) {
     Assert-McpInitialized $Project
     $stateDir = Get-McpStateDir $Project
@@ -583,6 +619,11 @@ function Get-McpToolList {
         # ---- execution ----
         @{ name = 'run_start'; description = 'Start one compile -> worker -> critic -> validator -> commit cycle DETACHED. Returns immediately; poll run_status. Refuses if a cycle is already in flight.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ taskId = @{ type = 'string'; description = 'Omit to run the next ready task.' }; provider = @{ type = 'string' } }) } },
         @{ name = 'run_parallel'; description = 'Start SEVERAL ready tasks at once, each in its own git worktree, then merge the ones that pass. Detached; poll run_status. Requires the project to be a git repo with a clean working tree.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ maxConcurrent = @{ type = 'integer'; minimum = 1; maximum = 16; description = 'Defaults to maxConcurrent in config.json.' }; provider = @{ type = 'string' }; noMerge = @{ type = 'boolean'; description = 'Commit each task to its own branch but do not merge. Use to review before integrating.' } }) } },
+        @{ name = 'project_review'; description = 'Run a PROJECT-level critic and validator now, over the whole project rather than one task. Runs projectValidateCommand for evidence. On FAIL it halts dispatch and queues a human-gated remediation task.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
+        @{ name = 'review_history'; description = 'List recent project reviews: trigger, pass/fail, and the exit code of the project validate command.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ limit = @{ type = 'integer'; minimum = 1; maximum = 500 } }) } },
+        @{ name = 'review_get'; description = 'Read one project review in full, including the evidence packet the reviewers saw.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ reviewId = @{ type = 'string' } }); required = @('reviewId') } },
+        @{ name = 'hold_status'; description = 'Report whether dispatch is held after a failed project review, and why.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
+        @{ name = 'hold_clear'; description = 'HUMAN AUTHORITY: release a project hold set by a failed review. Disabled unless mcp.allowHumanAuthorityTools is true.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
         @{ name = 'run_status'; description = 'Poll the detached cycle: whether it is in flight, which agents are active, and the tail of its log.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
 
         # ---- observation ----
@@ -712,6 +753,41 @@ function Invoke-McpTool([string]$Name, $Arguments) {
         'run_parallel' {
             $record = Start-McpParallelRun $project $Arguments
             return New-McpTextResult $record
+        }
+        'project_review' {
+            # Two provider dispatches plus the project's own test command: too slow to
+            # block a tool call, so it runs detached like run_start.
+            $record = Start-McpDetachedHarness $project @('review', 'run') 'review'
+            return New-McpTextResult $record
+        }
+        'review_history' {
+            Assert-McpInitialized $project
+            $limit = Get-McpArgLimit $Arguments
+            return New-McpTextResult (@(Read-McpJsonDir (Join-Path $stateDir 'reviews') |
+                Sort-Object ts -Descending | Select-Object -First $limit |
+                ForEach-Object { [ordered]@{ id = $_.id; ts = $_.ts; trigger = $_.trigger; passed = $_.passed; stages = $_.stages; projectValidate = $_.projectValidate } }))
+        }
+        'review_get' {
+            Assert-McpInitialized $project
+            $id = Get-McpArgRequired $Arguments 'reviewId'
+            $r = Read-McpJson (Join-Path $stateDir ("reviews\{0}.json" -f $id))
+            if (-not $r) { throw "Unknown reviewId: $id" }
+            return New-McpTextResult $r
+        }
+        'hold_status' {
+            Assert-McpInitialized $project
+            $state = Read-McpJson (Join-Path $stateDir 'state.json')
+            $held = $false; $hold = $null
+            if ($state -and $state.PSObject.Properties['projectHold'] -and $state.projectHold -and [bool]$state.projectHold.active) {
+                $held = $true; $hold = $state.projectHold
+            }
+            return New-McpTextResult ([ordered]@{ held = $held; hold = $hold; note = if ($held) { 'Dispatch is refused until this is cleared. Read the review first.' } else { 'Dispatch is allowed.' } })
+        }
+        'hold_clear' {
+            Assert-McpInitialized $project
+            Assert-McpHumanAuthority $project 'hold_clear'
+            $r = Invoke-McpHarness $project @('hold', 'clear')
+            return New-McpTextResult ([ordered]@{ cleared = $true; authority = 'human'; output = $r.stdout })
         }
         'run_status' {
             return New-McpTextResult (Get-McpRunStatus $project)

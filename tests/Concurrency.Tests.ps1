@@ -40,10 +40,16 @@ function New-TestProject([string]$Path, [string]$TargetFile, [int]$TaskCount, [i
         & $pwshPath -NoProfile -File $harness init | Out-Null
         $cfgPath = Join-Path $Path '.statefulclanker\config.json'
         $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
-        $cfg.defaultProvider = 'w'; $cfg.criticProvider = 'w'; $cfg.validatorProvider = 'w'
+        # Only the WORKER writes files. Reviewers are read-only by contract, and a
+        # reviewer that edits the tree would leave it dirty - which then blocks the
+        # next parallel run, since merging into uncommitted work is unsafe.
+        $cfg.defaultProvider = 'w'; $cfg.criticProvider = 'ro'; $cfg.validatorProvider = 'ro'
         $cfg | Add-Member -NotePropertyName maxConcurrent -NotePropertyValue $MaxConcurrent -Force
         $cfg.providers | Add-Member -NotePropertyName w -NotePropertyValue ([pscustomobject]@{
                 command = 'cmd.exe'; args = @('/d', '/c', $writer, '{taskId}', $TargetFile); mode = 'inline'
+            }) -Force
+        $cfg.providers | Add-Member -NotePropertyName ro -NotePropertyValue ([pscustomobject]@{
+                command = 'cmd.exe'; args = @('/d', '/c', (Join-Path $PSScriptRoot 'MockProvider.cmd'), '{promptFile}'); mode = 'prompt-file'
             }) -Force
         $cfg | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
 

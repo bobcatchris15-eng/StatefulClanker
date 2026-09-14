@@ -46,6 +46,7 @@ owning worker coordination, validation gating, and durable state.
 | t8 | c1: state/work root split + cross-process state lock | DONE | 1 | SCWorkRoot/SCStateRoot split + named mutex; smoke green |
 | t9 | c2: worktree provisioning + parallel scheduler | DONE | 1 | 3 tasks concurrent in 4s, own worktree each |
 | t10 | c3: merge gate + conflict hold | DONE | 1 | clean merges land; collision held on branch, tree clean |
+| t11 | periodic project critic + validator | DONE | 1 | interval + multi-merge triggers; hold + remediation verified |
 
 - D7 2026-09-14: Verdict parsing relaxed from 'first non-empty line must be exactly
   VERDICT: X'. The user hit real false FAILs: a reviewer that explains itself before
@@ -98,7 +99,34 @@ owning worker coordination, validation gating, and durable state.
   than one branch merged. Revisit if a per-project validate command is ever added to
   config.json; that is the missing piece for a real integration gate.
 
+- D17 2026-09-14: Periodic PROJECT review added (every N completed tasks, default 5,
+  plus after any multi-branch merge). This is the integration gate D16 said was
+  missing. projectValidateCommand supplies the only direct evidence the project still
+  runs; without it the validator is told to say it could not verify rather than infer
+  success from absence of failure.
+- D18 2026-09-14: On FAIL the harness HOLDS dispatch and queues a HUMAN-GATED
+  remediation task. Holding is the point - it stops the queue piling work onto a
+  broken base. Human-gated because this is the first time the harness generates its
+  own work; a human reads the review before releasing it. Release is CLI 'hold clear'
+  or MCP hold_clear, which is gated with the other human-authority tools.
+- D19 2026-09-14: Worktree children (-StateRoot) must NOT run project reviews; the
+  scheduler runs one for the whole batch. Otherwise a 3-way parallel run would fire
+  three full project reviews.
+- FOUND (pre-existing, present in the original upstream clone b6db03e): every .jsonl
+  writer used `ConvertTo-SCJson $x 12 -replace ...`, which binds -replace as a
+  PARAMETER of the command rather than as an operator. The newline flattening never
+  happened, so events.jsonl, telemetry/events.jsonl and context-faults.jsonl were all
+  written as pretty-printed multi-line JSON. Every line-by-line reader got garbage,
+  and it stayed invisible because the readers swallow parse errors in try/catch -
+  context faults simply read back empty. Fixed in all three writers; Smoke STEP 6b
+  now asserts every .jsonl line parses standalone.
+
 ## Unverified assumptions
+- Project review quality is unverified: the test providers vote PASS or FAIL
+  unconditionally, so the TRIGGERING, evidence packet and failure handling are
+  proven but the usefulness of a real model's project-level judgement is not.
+- Reviewer providers are assumed read-only. A reviewer configured in an edit-capable
+  mode will dirty the tree and block the next parallel run. Documented, not enforced.
 - Parallel execution is verified with the mock/writing test providers only. It has
   NOT been run against a real agent CLI doing real edits, where workers are slower
   and far likelier to touch overlapping files.
