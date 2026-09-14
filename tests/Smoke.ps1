@@ -19,14 +19,15 @@ foreach($script in @(Get-ChildItem -LiteralPath $repo -Recurse -Filter '*.ps1' -
 
 Write-Host 'STEP 1b: bareword-concatenation guard'
 # `return'PASS'` parses clean but tokenizes into a bareword command name
-# `returnPASS` and only fails at runtime. Catch the shape statically.
+# `returnPASS` and only fails at runtime. Anchored to statement position so that
+# ordinary calls like .Add('Exit') are not flagged.
 foreach($script in @(Get-ChildItem -LiteralPath $repo -Recurse -Filter '*.ps1' -File |
         Where-Object { -not $_.FullName.Contains('.statefulclanker') } )){
     $n=0
     foreach($line in (Get-Content -LiteralPath $script.FullName)){
         $n++
         if($line.TrimStart().StartsWith('#')){continue}
-        if($line -match '(?<![-\w])(return|throw|exit|break|continue)[''"]'){
+        if($line -match '(^|[;{}])\s*(return|throw|exit|break|continue)[''"]'){
             throw "Bareword concatenation in $($script.FullName) line ${n}: $line"
         }
     }
@@ -118,3 +119,7 @@ finally {
 Write-Host 'STEP 9: MCP control plane'
 & (Join-Path $PSScriptRoot 'Mcp.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "MCP tests failed (exit $LASTEXITCODE)." }
+
+Write-Host 'STEP 10: integrations catalogue'
+& (Join-Path $PSScriptRoot 'Integrations.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Integration tests failed (exit $LASTEXITCODE)." }

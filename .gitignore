@@ -1,3 +1,7 @@
 .statefulclanker/
 *.tmp
 *.log
+
+# Installer build output and generated icon
+install/output/
+install/StatefulClanker.ico

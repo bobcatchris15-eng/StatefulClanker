@@ -42,6 +42,7 @@ owning worker coordination, validation gating, and durable state.
 | t4 | tests/Mcp.Tests.ps1 + Smoke wiring | DONE | 1 | 8 MCP tests green as Smoke STEP 9 |
 | t5 | docs/MCP.md + install script | DONE | 1 | Install-McpServer.ps1 + docs/MCP.md + README section |
 | t6 | provider_set/provider_test + docs/SETUP.md | DONE | 1 | closed the no-provider-config gap; 10 MCP tests green |
+| t7 | lib/Integrations.ps1 + tray app + Inno installer | DONE | 1 | Setup.exe built, installed, verified, uninstalled clean |
 
 - D7 2026-09-14: Verdict parsing relaxed from 'first non-empty line must be exactly
   VERDICT: X'. The user hit real false FAILs: a reviewer that explains itself before
@@ -52,7 +53,30 @@ owning worker coordination, validation gating, and durable state.
   reflection VERDICT: PASS' returned PASS. Ambiguity must fail closed. Revisit if a
   reviewer legitimately needs to revise a verdict within one response.
 
+- D8 2026-09-14: Tray app is WinForms-in-PowerShell, matching the existing Cockpit.
+  No .NET SDK on this box and the repo has never had a build step; a compiled app
+  would add a toolchain dependency for a local dev tool. Revisit if the UI outgrows
+  what WinForms-by-script can carry.
+- D9 2026-09-14: Installer is Inno Setup, PER-USER (PrivilegesRequired=lowest). No
+  UAC, and the MCP client configs it manages are per-user anyway. Inno 6.7.3 was
+  already installed at %LOCALAPPDATA%\Programs, so nothing new was added to the box.
+- D10 2026-09-14: Hidden launch uses a .vbs (WScript.Shell.Run style 0). A shortcut
+  to pwsh flashes a console even with -WindowStyle Hidden, because the host is
+  created before the style applies. Needs nothing beyond stock Windows.
+- D11 2026-09-14: Integration/provider catalogue entries carry a `verified` flag and
+  the UI surfaces UNVERIFIED loudly. Config paths and preset command lines that were
+  not confirmed on a real install are guesses, and the shipped agy preset being wrong
+  is precisely the failure this advertises rather than hides.
+
 ## Unverified assumptions
+- Tray app: only the PROJECTS tab was visually confirmed to render correctly. The
+  workstation locked partway through, after which CopyFromScreen returns black, so
+  Integrations/Providers/Server were verified by logic and parse only. They use the
+  same dock-layout helpers as Projects, but a visual pass is still owed.
+- Config paths for Windsurf, Opencode and Antigravity are unconfirmed guesses
+  (flagged verified=$false, and the UI warns before writing).
+- Provider presets for opencode/aider/goose/openhands/pi/codex/gemini/cursor-agent
+  are unverified command lines. claude and agy were confirmed against the real CLIs.
 - ChatGPT / Gemini connector support for a localhost MCP URL is UNVERIFIED. Their
   connectors have historically been fetched server-side, which cannot reach 127.0.0.1.
   stdio is known-good for Claude Desktop/Code and Opencode. Must be tested per app by

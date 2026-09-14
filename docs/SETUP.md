@@ -1,14 +1,63 @@
 # Setup: from nothing to a running cycle
 
-A start-to-finish walkthrough for installing StatefulClanker on a Windows machine
-and driving a project from a desktop chat app.
+Installing StatefulClanker on a Windows machine and driving a project from a
+desktop chat app.
 
 `docs/MCP.md` is the reference for the tool surface. This page is the walkthrough.
 
-**Time:** about 10 minutes. **You will need:** Windows, PowerShell 7, git, and at
-least one CLI coding agent.
+**Time:** about 10 minutes. **You will need:** Windows, PowerShell 7, and at least
+one CLI coding agent that you are already signed in to.
 
 ---
+
+## The quick path: the installer
+
+Download `StatefulClankerSetup-<version>.exe` and run it. It is a **per-user**
+install, so there is no UAC prompt and no administrator rights are needed.
+
+It offers to start StatefulClanker when you sign in. Either way you get a tray
+icon; the app lives there and the window closes back to it rather than exiting.
+
+Open it from the tray and work left to right through the tabs:
+
+| Tab | What it does |
+|---|---|
+| **Projects** | Pick the folder holding your code, and initialize it |
+| **Providers** | Pick the agent CLI that does the work, save it, then **Test** it |
+| **Integrations** | Register the MCP server with your chat app in one click |
+| **Server** | Only if your app wants a URL rather than a local command |
+
+The **Integrations** tab always shows the exact connection details for whichever
+app is selected — the stdio JSON block and the HTTP URL plus bearer token — so an
+app the installer cannot write to automatically can still be set up by pasting.
+
+Two buttons are worth calling out:
+
+- **Providers → Test provider** dispatches a real probe prompt. Use it. The two
+  failures you will actually hit are both quiet: an expired CLI login exits
+  nonzero, and a permission-gated headless CLI exits *zero having done nothing*,
+  which otherwise only shows up later as a critic rejecting an empty result.
+- **Integrations → Register** merges into the app's config and keeps a timestamped
+  backup. It refuses to touch a config file it cannot parse rather than
+  overwriting the other MCP servers you have configured there.
+
+Rows marked **UNVERIFIED** are best guesses — a preset command line, or a config
+path that was not confirmed on a real install. They are starting points, which is
+exactly why Test and Copy exist next to them.
+
+### Building the installer yourself
+
+```powershell
+winget install JRSoftware.InnoSetup
+.\install\Build-Installer.ps1 -Version 0.5.0
+```
+
+Output lands in `install\output\`.
+
+---
+
+The rest of this page is the manual path: what the installer automates, and what
+to do when something does not work.
 
 ## Step 1 — Prerequisites
 
@@ -38,7 +87,7 @@ worker failure at the point where you are least able to debug it.
 
 ---
 
-## Step 2 — Install
+## Step 2 — Install (manual)
 
 ```powershell
 git clone https://github.com/bobcatchris15-eng/StatefulClanker.git C:\tools\StatefulClanker
@@ -116,7 +165,7 @@ hit.
 
 ---
 
-## Step 5 — Connect your app
+## Step 5 — Connect your app (manual)
 
 ```powershell
 cd C:\tools\StatefulClanker

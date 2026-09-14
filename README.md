@@ -34,6 +34,21 @@ This lets work resume across sessions, models, providers, context resets, or mac
 
 StatefulClanker does not require or embed a particular model API. Provider support is ordinary command configuration.
 
+## Install (Windows)
+
+Run `StatefulClankerSetup-<version>.exe` — a per-user install, no administrator
+rights, no UAC prompt. You get a tray app with four tabs: pick a **project**,
+choose and **test** the agent CLI that does the work, **register** the MCP server
+with your chat app in one click, and optionally host the loopback **HTTP**
+endpoint for clients that want a URL.
+
+The Integrations tab always shows the exact connection details for the selected
+app — stdio JSON block, and HTTP URL plus bearer token — so apps it cannot
+configure automatically can still be set up by pasting.
+
+Build it yourself with `winget install JRSoftware.InnoSetup` then
+`.\install\Build-Installer.ps1`. See `docs/SETUP.md`.
+
 ## Quick start
 
 ```powershell
