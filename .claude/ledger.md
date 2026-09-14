@@ -43,15 +43,14 @@ owning worker coordination, validation gating, and durable state.
 | t5 | docs/MCP.md + install script | DONE | 1 | Install-McpServer.ps1 + docs/MCP.md + README section |
 | t6 | provider_set/provider_test + docs/SETUP.md | DONE | 1 | closed the no-provider-config gap; 10 MCP tests green |
 
-## OPEN - needs the user's decision
-- lib/StatefulClanker.Execution.ps1 has an UNCOMMITTED working-tree change to
-  Get-SCVerdict that I did not make and cannot attribute. It loosens the review gate:
-  the committed version requires the FIRST non-empty line to be exactly
-  'VERDICT: PASS|FAIL' and otherwise fails closed; the working version scans every
-  line, matches VERDICT anywhere in a line, and takes the LAST match. Effect:
-  'VERDICT: FAIL ... on reflection VERDICT: PASS' now returns PASS, and a PASS after
-  a chatty preamble is accepted. Left in the working tree, deliberately NOT committed
-  and NOT reverted, pending the user's call.
+- D7 2026-09-14: Verdict parsing relaxed from 'first non-empty line must be exactly
+  VERDICT: X'. The user hit real false FAILs: a reviewer that explains itself before
+  voting was scored FAIL on work that passed. New rule: a verdict must be its OWN
+  line (decoration tolerated, prose mentions ignored), any FAIL wins, no verdict is
+  FAIL. Any-FAIL-wins rather than last-match-wins is deliberate - the user's interim
+  fix matched VERDICT anywhere and took the last hit, so 'VERDICT: FAIL ... on
+  reflection VERDICT: PASS' returned PASS. Ambiguity must fail closed. Revisit if a
+  reviewer legitimately needs to revise a verdict within one response.
 
 ## Unverified assumptions
 - ChatGPT / Gemini connector support for a localhost MCP URL is UNVERIFIED. Their

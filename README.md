@@ -272,7 +272,13 @@ The **critic** checks omissions, contradictions, risky assumptions, regressions,
 
 The **validator** independently judges acceptance criteria from available evidence. It is explicitly told not to trust the worker merely because the worker says something passed.
 
-Reviewer output remains deliberately machine-simple: the first non-empty line must be exactly `VERDICT: PASS` or `VERDICT: FAIL`. Malformed review output fails closed.
+Reviewer output remains deliberately machine-simple. A verdict must appear on a line of its own as `VERDICT: PASS` or `VERDICT: FAIL`; surrounding explanation is fine, and markdown decoration, indentation and trailing punctuation are tolerated. Three rules govern the rest:
+
+- A nonzero provider exit is always `FAIL`.
+- A verdict mentioned inside prose is not a vote — it must be its own line.
+- If any `FAIL` line appears, the result is `FAIL`, and no verdict line at all is `FAIL`.
+
+Ambiguity therefore fails closed, and a reviewer that votes `FAIL` and then discusses a `PASS` cannot flip the gate open.
 
 ## What StatefulClanker deliberately does not own
 

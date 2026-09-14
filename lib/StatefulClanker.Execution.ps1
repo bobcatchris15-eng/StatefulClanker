@@ -23,7 +23,18 @@ function Capture-SCContextRequests($Task,$Run,$Compilation) {
     }
     return @($requests)
 }
-function Get-SCVerdict([string]$Text,[int]$ExitCode) { if($ExitCode-ne 0){return 'FAIL'};foreach($line in @($Text-split"`r?`n")){$trimmed=$line.Trim();if(-not$trimmed){continue};if($trimmed-match'^VERDICT:\s*PASS\s*$'){return 'PASS'};if($trimmed-match'^VERDICT:\s*FAIL\s*$'){return 'FAIL'};break};return 'FAIL' }
+<# Verdict parsing. Three rules, in order:
+     1. Nonzero exit is always FAIL.
+     2. A verdict must be its OWN line. Decoration is allowed (markdown bold, a
+        bullet, trailing punctuation) but prose is not: a reviewer writing
+        "do not emit VERDICT: PASS unless tests ran" has not voted.
+     3. Any FAIL among the verdict lines wins, and no verdict line at all is FAIL.
+   Rule 2 replaces the original "first non-empty line must be exactly VERDICT: X",
+   which failed closed on any reviewer that wrote a preamble first and produced
+   false FAILs on work that had actually passed.
+   Rule 3 is why this does not simply take the last match: a reviewer that votes
+   FAIL and then discusses a PASS must not flip the gate open. Ambiguity fails. #>
+function Get-SCVerdict([string]$Text,[int]$ExitCode) { if($ExitCode-ne 0){return 'FAIL'};$seen=@();foreach($line in @($Text-split"`r?`n")){$trimmed=$line.Trim();if($trimmed-match'^[\s>*_#`~\-\[\]()."'':]*VERDICT\s*:\s*(PASS|FAIL)[\s*_`~.!,:;''"\[\]()]*$'){$seen+=$Matches[1].ToUpperInvariant()}};if($seen-contains'FAIL'){return 'FAIL'};if($seen-contains'PASS'){return 'PASS'};return 'FAIL' }
 function Set-SCTelemetryVerdict([string]$AgentId,[string]$Verdict) { $path=Get-SCPath ("telemetry/runs/{0}.json"-f$AgentId);$record=Read-SCJson $path;if($record){$record.verdict=$Verdict;Write-SCJson $path $record} }
 function Invoke-SCReview($Task,$Run,$Compilation,[string]$Stage) {
     $receipt=Invoke-SCProvider $Task (New-SCReviewPrompt $Task $Run $Compilation $Stage) $Stage $null $Run.agentId $Compilation;$receipt.verdict=Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode);Set-SCTelemetryVerdict $receipt.agentId $receipt.verdict;$dir=if($Stage-eq'critic'){'critiques'}else{'validations'};Write-SCJson (Get-SCPath ("{0}/{1}.json"-f$dir,$receipt.id)) $receipt;Add-SCEvent "$Stage.finished" "$Stage $($receipt.id): $($receipt.verdict)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$receipt.verdict;compilationId=$Compilation.id};return $receipt
