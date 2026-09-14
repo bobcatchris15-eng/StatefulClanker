@@ -62,12 +62,16 @@ Source: "{#RepoRoot}\desktop\*.ps1";                  DestDir: "{app}\desktop"; 
 Source: "{#RepoRoot}\docs\*.md";                      DestDir: "{app}\docs";     Flags: ignoreversion
 Source: "{#RepoRoot}\skills\*";                       DestDir: "{app}\skills";   Flags: ignoreversion recursesubdirs
 Source: "{#RepoRoot}\examples\*";                     DestDir: "{app}\examples"; Flags: ignoreversion recursesubdirs
+; Ship the suite: docs tell the user to run it, and it is the only way to verify
+; an install without a real model - it uses the mock providers throughout.
+Source: "{#RepoRoot}\tests\*";                        DestDir: "{app}\tests";    Flags: ignoreversion recursesubdirs
 Source: "{#RepoRoot}\install\StatefulClankerTray.vbs"; DestDir: "{app}";         Flags: ignoreversion
 Source: "{#RepoRoot}\install\StatefulClanker.ico";    DestDir: "{app}\install";  Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}";                  Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\install\StatefulClanker.ico"; Comment: "Open the StatefulClanker tray app"
 Name: "{group}\Setup guide";                   Filename: "{app}\docs\SETUP.md"
+Name: "{group}\Verify installation";           Filename: "powershell.exe"; Parameters: "-NoExit -NoProfile -ExecutionPolicy Bypass -File ""{app}\tests\Smoke.ps1"""; Comment: "Run the full test suite against this install"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}";            Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\install\StatefulClanker.ico"; Tasks: desktopicon
 Name: "{userstartup}\{#MyAppName}";            Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\install\StatefulClanker.ico"; Tasks: startupicon
