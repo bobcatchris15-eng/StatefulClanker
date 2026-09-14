@@ -6,12 +6,38 @@ $mockCmd = Join-Path $PSScriptRoot 'MockProvider.cmd'
 $mcp = Join-Path $repo 'mcp\StatefulClanker.Mcp.ps1'
 $cockpit = Join-Path $repo 'desktop\StatefulClanker.Cockpit.ps1'
 
-Write-Host 'STEP 1: parse PowerShell entrypoints'
-foreach($script in @($harness,$mockPs,$mcp,$cockpit)){
+Write-Host 'STEP 1: parse every PowerShell file in the repo'
+# Parse-check the whole repo, not just the entrypoints. lib/ was previously
+# unchecked, so a parse error there shipped green and broke every command.
+foreach($script in @(Get-ChildItem -LiteralPath $repo -Recurse -Filter '*.ps1' -File |
+        Where-Object { -not $_.FullName.Contains('.statefulclanker') } |
+        Select-Object -ExpandProperty FullName)){
     $tokens=$null;$errors=$null
     [void][System.Management.Automation.Language.Parser]::ParseFile($script,[ref]$tokens,[ref]$errors)
     if($errors.Count -gt 0){throw "Parse failure in $script : $($errors | Out-String)"}
 }
+
+Write-Host 'STEP 1b: bareword-concatenation guard'
+# `return'PASS'` parses clean but tokenizes into a bareword command name
+# `returnPASS` and only fails at runtime. Catch the shape statically.
+foreach($script in @(Get-ChildItem -LiteralPath $repo -Recurse -Filter '*.ps1' -File |
+        Where-Object { -not $_.FullName.Contains('.statefulclanker') } )){
+    $n=0
+    foreach($line in (Get-Content -LiteralPath $script.FullName)){
+        $n++
+        if($line.TrimStart().StartsWith('#')){continue}
+        if($line -match '(?<![-\w])(return|throw|exit|break|continue)[''"]'){
+            throw "Bareword concatenation in $($script.FullName) line ${n}: $line"
+        }
+    }
+}
+
+Write-Host 'STEP 1c: verdict parser contract'
+. (Join-Path $repo 'lib\StatefulClanker.Execution.ps1')
+if((Get-SCVerdict "VERDICT: PASS" 0) -ne 'PASS'){throw 'Get-SCVerdict failed to parse PASS.'}
+if((Get-SCVerdict "VERDICT: FAIL" 0) -ne 'FAIL'){throw 'Get-SCVerdict failed to parse FAIL.'}
+if((Get-SCVerdict "VERDICT: PASS" 1) -ne 'FAIL'){throw 'Get-SCVerdict must fail closed on nonzero exit.'}
+if((Get-SCVerdict "chatty preamble" 0) -ne 'FAIL'){throw 'Get-SCVerdict must fail closed on malformed output.'}
 
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('statefulclanker-smoke-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
