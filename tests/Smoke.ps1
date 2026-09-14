@@ -104,3 +104,7 @@ finally {
     Write-Host 'STEP 8: cleanup'
     Pop-Location
 }
+
+Write-Host 'STEP 9: MCP control plane'
+& (Join-Path $PSScriptRoot 'Mcp.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "MCP tests failed (exit $LASTEXITCODE)." }

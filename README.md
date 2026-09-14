@@ -230,6 +230,36 @@ context faults                        Inspect context misses
 progress history                      Inspect progress/stagnation records
 ```
 
+## Driving it from a conversational agent (MCP)
+
+StatefulClanker ships an MCP server so a chat session can act as the planner while
+the harness keeps owning dispatch, review, and state.
+
+```powershell
+.\Install-McpServer.ps1 -Client claude-desktop -ProjectPath C:\work\myproject -Write
+.\Install-McpServer.ps1 -Client claude-code    -ProjectPath C:\work\myproject
+```
+
+For clients that take a URL rather than launching a command, run the HTTP transport
+(loopback only, bearer token, no Administrator rights needed):
+
+```powershell
+pwsh -NoProfile -File .\mcp\StatefulClanker.McpHttp.ps1 -ProjectPath C:\work\myproject -Port 7337
+```
+
+The session can set the goal, add and import tasks, start cycles, and read every
+receipt. Two things are deliberately not handed over:
+
+- **`run_start` is asynchronous.** A cycle is worker + critic + validator and cannot
+  block a tool call. It returns a handle; poll `run_status`. Only one cycle runs at a
+  time per project, enforced with an atomic lock.
+- **`task_complete` and `plan_approve` are disabled by default.** Both bypass the
+  validation gate, and an agent that can approve its own plan and complete its own
+  tasks has routed around the entire point of the harness. Enable with
+  `mcp.allowHumanAuthorityTools` if you want that anyway.
+
+See `docs/MCP.md` for the full tool surface and a worked session.
+
 ## Worker, critic, and validator contracts
 
 The **worker** performs only one bounded task from a cold-start packet. It should report changed files, commands, failures, and unresolved risks. If needed state was omitted, it requests that state instead of fabricating continuity.

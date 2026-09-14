@@ -1,53 +1,40 @@
-param([string]$ProjectPath=(Get-Location).Path)
+<# StatefulClanker MCP server, stdio transport.
+
+   Register this with any MCP client that launches a local command (Claude Desktop,
+   Claude Code, Opencode, Antigravity). For clients that only accept a URL, use
+   StatefulClanker.McpHttp.ps1 instead. Both share McpCore.ps1.
+
+   -ProjectPath sets the default project. Every tool also takes an optional
+   "project" argument, so one registered server can drive many projects. #>
+param([string]$ProjectPath = (Get-Location).Path)
+
 Set-StrictMode -Version 2.0
-$ErrorActionPreference='Stop'
-$ProjectPath=(Resolve-Path $ProjectPath).Path
-$stateDir=Join-Path $ProjectPath '.statefulclanker'
-$harness=Join-Path (Split-Path -Parent $PSScriptRoot) 'StatefulClanker.ps1'
-function ReadJson([string]$p){if(-not(Test-Path $p)){return $null};$r=Get-Content -Raw -LiteralPath $p;if([string]::IsNullOrWhiteSpace($r)){return $null};$r|ConvertFrom-Json}
-function ReadDir([string]$p){if(-not(Test-Path $p)){return @()};@(Get-ChildItem -LiteralPath $p -Filter '*.json' -File |ForEach-Object{ReadJson $_.FullName})}
-function ReadJsonl([string]$p,[int]$limit=100){if(-not(Test-Path $p)){return @()};@(Get-Content -LiteralPath $p|Where-Object{$_}|Select-Object -Last $limit|ForEach-Object{try{$_|ConvertFrom-Json}catch{}})}
-function Reply($id,$result){[ordered]@{jsonrpc='2.0';id=$id;result=$result} | ConvertTo-Json -Depth 30 -Compress}
-function Err($id,[int]$code,[string]$message){[ordered]@{jsonrpc='2.0';id=$id;error=[ordered]@{code=$code;message=$message}} | ConvertTo-Json -Depth 10 -Compress}
-function TextResult($x){@{content=@(@{type='text';text=($x | ConvertTo-Json -Depth 30)})}}
-function ToolList{
-@(
-@{name='project_status';description='Read canonical StatefulClanker project state and task summary.';inputSchema=@{type='object';properties=@{}}},
-@{name='telemetry_active';description='List currently active subagents.';inputSchema=@{type='object';properties=@{}}},
-@{name='telemetry_history';description='List historical subagent telemetry.';inputSchema=@{type='object';properties=@{limit=@{type='integer';minimum=1;maximum=500}}}},
-@{name='telemetry_run';description='Get one historical subagent run by agentId.';inputSchema=@{type='object';properties=@{agentId=@{type='string'}};required=@('agentId')}},
-@{name='context_faults';description='Read recent explicit missing-context requests emitted by workers.';inputSchema=@{type='object';properties=@{limit=@{type='integer';minimum=1;maximum=500}}}},
-@{name='compilation_get';description='Read one durable compiled-context receipt including read set and exact worker IR.';inputSchema=@{type='object';properties=@{compilationId=@{type='string'}};required=@('compilationId')}},
-@{name='progress_history';description='Read recent task progress/stagnation records.';inputSchema=@{type='object';properties=@{limit=@{type='integer';minimum=1;maximum=500}}}},
-@{name='proposal_get';description='Read one candidate/committed/rejected state-transition proposal.';inputSchema=@{type='object';properties=@{proposalId=@{type='string'}};required=@('proposalId')}},
-@{name='task_list';description='List task graph state, including compilation/proposal pointers and semantic relations.';inputSchema=@{type='object';properties=@{}}},
-@{name='direction_add';description='Record human direction durably and advance the project direction revision so older compilations become stale.';inputSchema=@{type='object';properties=@{message=@{type='string'}};required=@('message')}}
-)
+$ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'StatefulClanker.McpCore.ps1')
+
+if ($ProjectPath -and (Test-Path -LiteralPath $ProjectPath -PathType Container)) {
+    Set-McpDefaultProject $ProjectPath
 }
-function CallTool([string]$name,$args){
-switch($name){
-'project_status'{$s=ReadJson(Join-Path $stateDir 'state.json');$tasks=ReadDir(Join-Path $stateDir 'tasks');return TextResult([ordered]@{state=$s;tasks=$tasks})}
-'telemetry_active'{return TextResult(@(ReadDir(Join-Path $stateDir 'telemetry\active')|Sort-Object startedAt))}
-'telemetry_history'{$limit=100;if($args-and$args.PSObject.Properties['limit']){$limit=[Math]::Min(500,[Math]::Max(1,[int]$args.limit))};$r=ReadDir(Join-Path $stateDir 'telemetry\runs') | Sort-Object startedAt -Descending | Select-Object -First $limit;return TextResult(@($r))}
-'telemetry_run'{$p=Join-Path $stateDir("telemetry\runs\{0}.json"-f$args.agentId);$r=ReadJson $p;if(-not$r){throw "Unknown agentId: $($args.agentId)"};return TextResult $r}
-'context_faults'{$limit=100;if($args-and$args.PSObject.Properties['limit']){$limit=[Math]::Min(500,[Math]::Max(1,[int]$args.limit))};return TextResult(@(ReadJsonl(Join-Path $stateDir 'telemetry\context-faults.jsonl') $limit))}
-'compilation_get'{$p=Join-Path $stateDir("compilations\{0}.json"-f$args.compilationId);$r=ReadJson $p;if(-not$r){throw "Unknown compilationId: $($args.compilationId)"};return TextResult $r}
-'progress_history'{$limit=100;if($args-and$args.PSObject.Properties['limit']){$limit=[Math]::Min(500,[Math]::Max(1,[int]$args.limit))};$r=ReadDir(Join-Path $stateDir 'progress')|Sort-Object ts -Descending|Select-Object -First $limit;return TextResult(@($r))}
-'proposal_get'{$p=Join-Path $stateDir("proposals\{0}.json"-f$args.proposalId);$r=ReadJson $p;if(-not$r){throw "Unknown proposalId: $($args.proposalId)"};return TextResult $r}
-'task_list'{return TextResult(@(ReadDir(Join-Path $stateDir 'tasks')|Sort-Object createdAt))}
-'direction_add'{Push-Location $ProjectPath;try{&$harness event -Message ([string]$args.message)|Out-Null}finally{Pop-Location};return TextResult(@{recorded=$true;invalidatesOlderCompilations=$true})}
-default{throw "Unknown tool: $name"}
-}}
-while($null-ne($line=[Console]::In.ReadLine())){
-if([string]::IsNullOrWhiteSpace($line)){continue}
-try{
-$q=$line|ConvertFrom-Json;$method=[string]$q.method;$id=$q.id
-switch($method){
-'initialize'{Reply $id ([ordered]@{protocolVersion='2025-06-18';capabilities=@{tools=@{}};serverInfo=@{name='statefulclanker';version='0.4.0'}})}
-'notifications/initialized'{}
-'tools/list'{Reply $id (@{tools=ToolList})}
-'tools/call'{$args=$q.params.arguments;Reply $id (CallTool ([string]$q.params.name) $args)}
-default{if($null-ne$id){Err $id -32601 "Method not found: $method"}}
-}
-}catch{try{Err $null -32603 $_.Exception.Message}catch{}}
+
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    $id = $null
+    try {
+        $request = $line | ConvertFrom-Json
+        # Capture the id before dispatch so a failure can still echo it. Returning
+        # id:null leaves a client that correlates by id waiting forever.
+        if ($request.PSObject.Properties['id']) { $id = $request.id }
+        $response = Invoke-McpRpc $request
+        if ($null -ne $response) {
+            ($response | ConvertTo-Json -Depth 30 -Compress)
+        }
+    } catch {
+        if ($null -ne $id) {
+            ([ordered]@{ jsonrpc = '2.0'; id = $id; error = [ordered]@{ code = -32603; message = $_.Exception.Message } } | ConvertTo-Json -Depth 10 -Compress)
+        } else {
+            # No id recoverable: the line was not valid JSON-RPC at all.
+            ([ordered]@{ jsonrpc = '2.0'; id = $null; error = [ordered]@{ code = -32700; message = "Parse error: $($_.Exception.Message)" } } | ConvertTo-Json -Depth 10 -Compress)
+        }
+    }
 }
