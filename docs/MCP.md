@@ -100,7 +100,8 @@ registered server drives as many projects as you like.
 
 | Tool | Purpose |
 |---|---|
-| `run_start` | Start one cycle **detached**; returns immediately |
+| `run_start` | Start ONE cycle **detached**; returns immediately |
+| `run_parallel` | Start SEVERAL ready tasks at once, each in its own git worktree |
 | `run_status` | Poll: in-flight, active agents, log tail |
 
 ### Providers
@@ -143,7 +144,33 @@ run_status -> { inFlight, processAlive, busyTasks, activeAgents, logTail, errorT
 Poll `run_status` until `inFlight` is false, then read `task_show` and
 `progress_history` to find out what actually happened.
 
-**Only one cycle runs at a time per project.** This is enforced with an atomic lock
+### Running several tasks at once
+
+`run_parallel` dispatches up to `maxConcurrent` ready tasks simultaneously. Each
+gets **its own git worktree**, so two workers cannot overwrite each other's files.
+When a task's cycle passes, its worktree is committed and merged back into the main
+checkout; when it fails, the worktree is discarded.
+
+Requirements: the project must be a git repository with a **clean working tree**.
+Both are refused with a clear message rather than risking a destructive merge.
+
+Worktree isolation is used because tasks declare what they **read** (`retrieval`,
+`evidence`) and never what they **write**. The scheduler therefore cannot know
+whether two ready tasks will touch the same file. On a shared checkout that is
+silent corruption — both workers report success and one overwrites the other. A
+worktree turns it into an explicit merge-time question instead.
+
+When two tasks do collide, the first merges and the second is **held**: the merge is
+aborted so the main tree is never left with conflict markers, the work is preserved
+on its `sc/task/<id>` branch, and the task returns to `needs_rework` saying why.
+
+**Merging cleanly is not the same as still working.** Two changes that each passed
+their own review can break together with no textual conflict — a renamed function
+one worker updated only within its own files, a caller left pointing at a changed
+signature. Git resolves text; nothing checked semantics. Run your own suite after a
+multi-task merge; `run_parallel` warns you when more than one branch landed.
+
+**Only one BATCH runs at a time per project.** This is enforced with an atomic lock
 file, not with task status. Task status is not usable as a lock: the detached process
 does not mark a task `running` until it has started, so two `run_start` calls
 milliseconds apart both see an idle project and both launch. That was observed in

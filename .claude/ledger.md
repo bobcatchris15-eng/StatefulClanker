@@ -43,6 +43,9 @@ owning worker coordination, validation gating, and durable state.
 | t5 | docs/MCP.md + install script | DONE | 1 | Install-McpServer.ps1 + docs/MCP.md + README section |
 | t6 | provider_set/provider_test + docs/SETUP.md | DONE | 1 | closed the no-provider-config gap; 10 MCP tests green |
 | t7 | lib/Integrations.ps1 + tray app + Inno installer | DONE | 1 | Setup.exe built, installed, verified, uninstalled clean |
+| t8 | c1: state/work root split + cross-process state lock | DONE | 1 | SCWorkRoot/SCStateRoot split + named mutex; smoke green |
+| t9 | c2: worktree provisioning + parallel scheduler | DONE | 1 | 3 tasks concurrent in 4s, own worktree each |
+| t10 | c3: merge gate + conflict hold | DONE | 1 | clean merges land; collision held on branch, tree clean |
 
 - D7 2026-09-14: Verdict parsing relaxed from 'first non-empty line must be exactly
   VERDICT: X'. The user hit real false FAILs: a reviewer that explains itself before
@@ -68,7 +71,37 @@ owning worker coordination, validation gating, and durable state.
   not confirmed on a real install are guesses, and the shipped agy preset being wrong
   is precisely the failure this advertises rather than hides.
 
+- D12 2026-09-14: CONCURRENCY WAS NEVER IMPLEMENTED. Confirmed: Invoke-SCTask does
+  Select-Object -First 1 (one task per invocation, fully synchronous), maxConcurrent
+  is read by no code at all, and the MCP run_start lock I added refuses a second
+  cycle outright. ARCHITECTURE.md:318 already admitted this. User hit it testing with
+  opencode. Building it for real, user chose: git worktree per worker + harness-side
+  scheduler.
+- D13 2026-09-14: The blocking design problem is that Get-SCRoot serves two different
+  roles - it locates .statefulclanker AND resolves the worker's files. A worktree
+  cycle needs shared state in the MAIN tree but file resolution in the WORKTREE, so
+  those must be split into SCStateRoot and SCWorkRoot before anything else can work.
+  Sequenced as t8 -> t9 -> t10; t8 is load-bearing for both others.
+- D14 2026-09-14: Tasks declare what they READ (retrieval/evidence) but never what
+  they WRITE. That is why shared-tree concurrency was rejected: the scheduler cannot
+  know if two ready tasks will edit the same file. Worktrees sidestep it by making
+  collision a merge-time question instead of a silent corruption.
+
+- D15 2026-09-14: Parallel merge gate COMMITS on the user's behalf. The harness
+  previously never touched git; worktree isolation requires it to commit each
+  worktree and merge the branch. Refuses to start if the tree is dirty, because
+  merging into uncommitted work is destructive. Conflicts abort the merge, keep the
+  branch, and set the task needs_rework - the main tree is never left conflicted.
+- D16 2026-09-14: NOT doing an automatic post-merge full re-validate. The harness has
+  no project-level test command to run - VALIDATE lives in each project's own
+  CLAUDE.md, which the harness does not read. Instead run_parallel WARNS when more
+  than one branch merged. Revisit if a per-project validate command is ever added to
+  config.json; that is the missing piece for a real integration gate.
+
 ## Unverified assumptions
+- Parallel execution is verified with the mock/writing test providers only. It has
+  NOT been run against a real agent CLI doing real edits, where workers are slower
+  and far likelier to touch overlapping files.
 - Tray app: only the PROJECTS tab was visually confirmed to render correctly. The
   workstation locked partway through, after which CopyFromScreen returns black, so
   Integrations/Providers/Server were verified by logic and parse only. They use the

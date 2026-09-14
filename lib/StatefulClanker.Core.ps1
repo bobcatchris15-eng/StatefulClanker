@@ -1,6 +1,53 @@
-function Get-SCRoot { (Get-Location).Path }
-function Get-SCDir { Join-Path (Get-SCRoot) '.statefulclanker' }
+<# Two distinct roots.
+
+   WorkRoot  - where the worker operates and retrieval selectors resolve.
+   StateRoot - where .statefulclanker lives.
+
+   They are the same directory for an ordinary run. They differ when a cycle runs
+   inside a git worktree: the worker edits an isolated checkout while durable state
+   stays canonical in the main tree, shared by every concurrent cycle. Before this
+   split, Get-SCRoot served both roles, so a worktree cycle would have looked for
+   .statefulclanker inside the worktree, where it does not exist. #>
+$script:SCWorkRoot = $null
+$script:SCStateRoot = $null
+function Set-SCRoots([string]$WorkRoot, [string]$StateRoot) {
+    if ($WorkRoot) { $script:SCWorkRoot = (Resolve-Path -LiteralPath $WorkRoot).Path }
+    if ($StateRoot) { $script:SCStateRoot = (Resolve-Path -LiteralPath $StateRoot).Path }
+}
+function Get-SCRoot { if ($script:SCWorkRoot) { $script:SCWorkRoot } else { (Get-Location).Path } }
+function Get-SCStateRoot { if ($script:SCStateRoot) { $script:SCStateRoot } else { Get-SCRoot } }
+function Get-SCDir { Join-Path (Get-SCStateRoot) '.statefulclanker' }
 function Get-SCPath([string]$Child) { Join-Path (Get-SCDir) $Child }
+
+<# Cross-process mutual exclusion over durable state.
+
+   Concurrent cycles are separate processes, so an in-process lock is useless. Every
+   read-modify-write of state.json, the task files and the event log goes through
+   here. Update-SCReadiness is the sharpest edge: it rewrites the status of tasks
+   that the calling cycle does not own, so two unsynchronised cycles will clobber
+   each other's work. #>
+function Get-SCLockName {
+    'Local\StatefulClanker-' + (Get-SCHashString ((Get-SCStateRoot).ToLowerInvariant())).Substring(0, 32)
+}
+function Invoke-SCLocked([scriptblock]$Body, [int]$TimeoutSeconds = 120) {
+    $mutex = New-Object System.Threading.Mutex($false, (Get-SCLockName))
+    $held = $false
+    try {
+        try {
+            $held = $mutex.WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))
+        } catch [System.Threading.AbandonedMutexException] {
+            # The previous holder died without releasing. We now own it, and the
+            # state on disk is whatever that process left behind; every write here
+            # is atomic (temp file + move), so a half-written file is not possible.
+            $held = $true
+        }
+        if (-not $held) { throw "Timed out after ${TimeoutSeconds}s waiting for the StatefulClanker state lock." }
+        return (& $Body)
+    } finally {
+        if ($held) { try { $mutex.ReleaseMutex() } catch { } }
+        $mutex.Dispose()
+    }
+}
 function ConvertTo-SCJson($Value,[int]$Depth=12) { $Value | ConvertTo-Json -Depth $Depth }
 function Set-SCProperty($Object,[string]$Name,$Value) {
     if($Object -is [System.Collections.IDictionary]){$Object[$Name]=$Value;return}
@@ -33,18 +80,22 @@ function Get-SCFileHashValue([string]$FilePath) {
 function Add-SCEvent([string]$Type,[string]$Text,$Data=$null) {
     Assert-SCInitialized
     $evt=[ordered]@{id=New-SCId 'event';ts=(Get-Date).ToUniversalTime().ToString('o');type=$Type;message=$Text;data=$Data}
-    (ConvertTo-SCJson $evt 12 -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'events.jsonl') -Encoding UTF8
+    Invoke-SCLocked { (ConvertTo-SCJson $evt 12 -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'events.jsonl') -Encoding UTF8 }
 }
 function Get-SCState { Assert-SCInitialized;Read-SCJson (Get-SCPath 'state.json') }
 function Save-SCState($State) {
-    $revision=0;if($State.PSObject.Properties['revision']){$revision=[int]$State.revision}
-    Set-SCProperty $State 'revision' ($revision+1);Set-SCProperty $State 'updatedAt' ((Get-Date).ToUniversalTime().ToString('o'));Write-SCJson (Get-SCPath 'state.json') $State
+    Invoke-SCLocked {
+        $revision=0;if($State.PSObject.Properties['revision']){$revision=[int]$State.revision}
+        Set-SCProperty $State 'revision' ($revision+1);Set-SCProperty $State 'updatedAt' ((Get-Date).ToUniversalTime().ToString('o'));Write-SCJson (Get-SCPath 'state.json') $State
+    }
 }
 function Get-SCConfig { Assert-SCInitialized;$cfg=Read-SCJson (Get-SCPath 'config.json');if($null-eq$cfg){throw 'Missing .statefulclanker/config.json'};return $cfg }
 function Get-SCTask([string]$Id) { $task=Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$Id));if($null-eq$task){throw "Unknown task: $Id"};return $task }
 function Save-SCTask($Task) {
-    $revision=0;if($Task.PSObject.Properties['stateRevision']){$revision=[int]$Task.stateRevision}
-    Set-SCProperty $Task 'stateRevision' ($revision+1);Set-SCProperty $Task 'updatedAt' ((Get-Date).ToUniversalTime().ToString('o'));Write-SCJson (Get-SCPath ("tasks/{0}.json"-f$Task.id)) $Task
+    Invoke-SCLocked {
+        $revision=0;if($Task.PSObject.Properties['stateRevision']){$revision=[int]$Task.stateRevision}
+        Set-SCProperty $Task 'stateRevision' ($revision+1);Set-SCProperty $Task 'updatedAt' ((Get-Date).ToUniversalTime().ToString('o'));Write-SCJson (Get-SCPath ("tasks/{0}.json"-f$Task.id)) $Task
+    }
 }
 function Get-SCTasks { Assert-SCInitialized;$dir=Get-SCPath 'tasks';if(-not(Test-Path $dir)){return @()};return @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File|ForEach-Object{Read-SCJson $_.FullName}) }
 function Get-SCTaskControlRevision($Task) { if($Task.PSObject.Properties['controlRevision']){return [int]$Task.controlRevision};return 0 }
@@ -70,6 +121,9 @@ function Get-SCTaskDefinitionHash($Task) {
     return Get-SCHashString (ConvertTo-SCJson $definition 14)
 }
 function Update-SCReadiness {
+    Invoke-SCLocked { Update-SCReadinessCore }
+}
+function Update-SCReadinessCore {
     $tasks=@(Get-SCTasks);$map=@{}
     foreach($task in $tasks){if($task.id){$map[[string]$task.id]=$task}}
     foreach($task in $tasks){

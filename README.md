@@ -270,8 +270,10 @@ The session can set the goal, add and import tasks, start cycles, and read every
 receipt. Two things are deliberately not handed over:
 
 - **`run_start` is asynchronous.** A cycle is worker + critic + validator and cannot
-  block a tool call. It returns a handle; poll `run_status`. Only one cycle runs at a
-  time per project, enforced with an atomic lock.
+  block a tool call. It returns a handle; poll `run_status`.
+- **`run_parallel` runs several tasks at once**, each in its own git worktree,
+  merging back the ones that pass. Needs a git repo with a clean tree. One batch at
+  a time per project, enforced with an atomic lock.
 - **`task_complete` and `plan_approve` are disabled by default.** Both bypass the
   validation gate, and an agent that can approve its own plan and complete its own
   tasks has routed around the entire point of the harness. Enable with

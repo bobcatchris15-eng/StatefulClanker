@@ -449,6 +449,70 @@ function Start-McpRun([string]$Project, [string]$TaskId, [string]$Provider) {
     return $record
 }
 
+<# Parallel batch. Shares the single-flight lock with run_start: one BATCH at a
+   time, several workers inside it. The harness scheduler owns worktree creation,
+   merging and cleanup; this only launches and tracks it. #>
+function Start-McpParallelRun([string]$Project, $Arguments) {
+    Assert-McpInitialized $Project
+    $stateDir = Get-McpStateDir $Project
+    $mcpDir = Join-Path $stateDir 'mcp'
+    if (-not (Test-Path -LiteralPath $mcpDir)) { New-Item -ItemType Directory -Force -Path $mcpDir | Out-Null }
+
+    $busy = @(Get-McpBusyTasks $Project)
+    if ($busy.Count -gt 0) {
+        $ids = ($busy | ForEach-Object { $_.id }) -join ', '
+        throw "Work is already in flight for task(s): $ids. Poll run_status, or clear with task_retry."
+    }
+    if (-not (Enter-McpRunLock $Project)) {
+        throw 'Another run is already starting or running in this project. Poll run_status until inFlight is false.'
+    }
+
+    $maxConcurrent = 0
+    if ($Arguments -and $Arguments.PSObject.Properties['maxConcurrent'] -and $Arguments.maxConcurrent) {
+        $maxConcurrent = [Math]::Min(16, [Math]::Max(1, [int]$Arguments.maxConcurrent))
+    }
+    if ($maxConcurrent -gt 0) {
+        $cli = @('run', '-Parallel', [string]$maxConcurrent)
+    } else {
+        # 'run parallel' selects the mode without pinning a limit, so the harness
+        # falls back to maxConcurrent from config.json.
+        $cli = @('run', 'parallel')
+    }
+    $provider = Get-McpArgOptional $Arguments 'provider'
+    if ($provider) { $cli += @('-Provider', $provider) }
+    if ($Arguments -and $Arguments.PSObject.Properties['noMerge'] -and [bool]$Arguments.noMerge) { $cli += '-NoMerge' }
+
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
+    $logPath = Join-Path $mcpDir ("parallel-{0}-{1}.log" -f $stamp, [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    $pwshPath = Get-McpPwshPath
+    $psArgs = ((@('-NoProfile', '-NonInteractive', '-File', $script:McpHarness) + $cli) |
+        ForEach-Object { ConvertTo-McpWindowsArg $_ }) -join ' '
+
+    try {
+        $proc = Start-Process -FilePath $pwshPath -ArgumentList $psArgs -WorkingDirectory $Project `
+            -RedirectStandardOutput $logPath -RedirectStandardError "$logPath.err" `
+            -WindowStyle Hidden -PassThru
+    } catch {
+        Exit-McpRunLock $Project
+        throw
+    }
+    try {
+        ("{0}|{1}" -f $proc.Id, (Get-Date).ToUniversalTime().ToString('o')) |
+            Set-Content -LiteralPath (Get-McpLockPath $Project) -Encoding UTF8 -NoNewline
+    } catch { }
+
+    $record = [ordered]@{
+        startedAt = (Get-Date).ToUniversalTime().ToString('o')
+        mode = 'parallel'
+        maxConcurrent = if ($maxConcurrent -gt 0) { $maxConcurrent } else { '(config maxConcurrent)' }
+        processId = $proc.Id
+        logPath = $logPath
+        note = 'Each task runs in its own git worktree and is merged back if it passes. Poll run_status until inFlight is false, then read the log for MERGED/HELD/FAILED per task.'
+    }
+    $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Get-McpRunRecordPath $Project) -Encoding UTF8
+    return $record
+}
+
 function Get-McpRunStatus([string]$Project) {
     Assert-McpInitialized $Project
     $stateDir = Get-McpStateDir $Project
@@ -518,6 +582,7 @@ function Get-McpToolList {
 
         # ---- execution ----
         @{ name = 'run_start'; description = 'Start one compile -> worker -> critic -> validator -> commit cycle DETACHED. Returns immediately; poll run_status. Refuses if a cycle is already in flight.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ taskId = @{ type = 'string'; description = 'Omit to run the next ready task.' }; provider = @{ type = 'string' } }) } },
+        @{ name = 'run_parallel'; description = 'Start SEVERAL ready tasks at once, each in its own git worktree, then merge the ones that pass. Detached; poll run_status. Requires the project to be a git repo with a clean working tree.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ maxConcurrent = @{ type = 'integer'; minimum = 1; maximum = 16; description = 'Defaults to maxConcurrent in config.json.' }; provider = @{ type = 'string' }; noMerge = @{ type = 'boolean'; description = 'Commit each task to its own branch but do not merge. Use to review before integrating.' } }) } },
         @{ name = 'run_status'; description = 'Poll the detached cycle: whether it is in flight, which agents are active, and the tail of its log.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
 
         # ---- observation ----
@@ -642,6 +707,10 @@ function Invoke-McpTool([string]$Name, $Arguments) {
         }
         'run_start' {
             $record = Start-McpRun $project (Get-McpArgOptional $Arguments 'taskId') (Get-McpArgOptional $Arguments 'provider')
+            return New-McpTextResult $record
+        }
+        'run_parallel' {
+            $record = Start-McpParallelRun $project $Arguments
             return New-McpTextResult $record
         }
         'run_status' {

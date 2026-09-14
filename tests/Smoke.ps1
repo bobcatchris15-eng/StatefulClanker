@@ -120,6 +120,10 @@ Write-Host 'STEP 9: MCP control plane'
 & (Join-Path $PSScriptRoot 'Mcp.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "MCP tests failed (exit $LASTEXITCODE)." }
 
-Write-Host 'STEP 10: integrations catalogue'
+Write-Host 'STEP 10: parallel execution'
+& (Join-Path $PSScriptRoot 'Concurrency.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Concurrency tests failed (exit $LASTEXITCODE)." }
+
+Write-Host 'STEP 11: integrations catalogue'
 & (Join-Path $PSScriptRoot 'Integrations.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Integration tests failed (exit $LASTEXITCODE)." }
