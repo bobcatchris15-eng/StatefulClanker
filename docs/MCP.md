@@ -1,5 +1,8 @@
 # Driving StatefulClanker from a conversational agent
 
+> Setting this up for the first time? **`docs/SETUP.md`** is the step-by-step
+> walkthrough. This page is the tool reference.
+
 StatefulClanker exposes an MCP server so a chat session can act as the *planner*
 while the harness keeps owning worker dispatch, review gating, and durable state.
 
@@ -100,9 +103,29 @@ registered server drives as many projects as you like.
 | `run_start` | Start one cycle **detached**; returns immediately |
 | `run_status` | Poll: in-flight, active agents, log tail |
 
+### Providers
+
+| Tool | Purpose |
+|---|---|
+| `provider_list` | Show configured providers and the default/critic/validator assignment |
+| `provider_set` | Add or update a provider; optionally assign it. **Required before the first `run_start`** |
+| `provider_test` | Dispatch a probe prompt and report whether the provider is genuinely usable |
+
+Provider configuration lives only in `config.json` and has no CLI command, so
+without `provider_set` a freshly installed server can be connected but can never
+actually run anything.
+
+`provider_set` validates before writing: the command must exist on PATH, and `args`
+must contain `{prompt}` or `{promptFile}`, or the worker receives no task at all.
+
+`provider_test` exists because the two realistic failures are both quiet. An expired
+CLI login exits nonzero with an auth message; a permission-gated headless CLI exits
+**zero having produced nothing**, which then surfaces much later as a critic
+rejecting an empty result. The probe names both directly.
+
 ### Observation
 
-`direction_add`, `provider_list`, `telemetry_active`, `telemetry_history`,
+`direction_add`, `telemetry_active`, `telemetry_history`,
 `telemetry_run`, `context_faults`, `compilation_get`, `proposal_get`,
 `progress_history`, `events_recent`.
 

@@ -41,6 +41,17 @@ owning worker coordination, validation gating, and durable state.
 | t3 | mcp/StatefulClanker.McpHttp.ps1 | DONE | 1 | TcpListener, loopback, bearer token; verified 401/200 |
 | t4 | tests/Mcp.Tests.ps1 + Smoke wiring | DONE | 1 | 8 MCP tests green as Smoke STEP 9 |
 | t5 | docs/MCP.md + install script | DONE | 1 | Install-McpServer.ps1 + docs/MCP.md + README section |
+| t6 | provider_set/provider_test + docs/SETUP.md | DONE | 1 | closed the no-provider-config gap; 10 MCP tests green |
+
+## OPEN - needs the user's decision
+- lib/StatefulClanker.Execution.ps1 has an UNCOMMITTED working-tree change to
+  Get-SCVerdict that I did not make and cannot attribute. It loosens the review gate:
+  the committed version requires the FIRST non-empty line to be exactly
+  'VERDICT: PASS|FAIL' and otherwise fails closed; the working version scans every
+  line, matches VERDICT anywhere in a line, and takes the LAST match. Effect:
+  'VERDICT: FAIL ... on reflection VERDICT: PASS' now returns PASS, and a PASS after
+  a chatty preamble is accepted. Left in the working tree, deliberately NOT committed
+  and NOT reverted, pending the user's call.
 
 ## Unverified assumptions
 - ChatGPT / Gemini connector support for a localhost MCP URL is UNVERIFIED. Their
@@ -51,6 +62,13 @@ owning worker coordination, validation gating, and durable state.
   MCP layer now serialises cycles with an atomic lock file, but the CLI itself is
   still unguarded: two `StatefulClanker.ps1 run` invocations from two terminals will
   still interleave writes to state.json. Fixing that belongs in lib/, not mcp/.
+
+- D6 2026-09-14: Added provider_set/provider_test. Provider config lived ONLY in
+  config.json with no CLI command and no doc anywhere, so the install path dead-ended:
+  connect the server, call run_start, fail. provider_test probes with a real prompt
+  because both realistic failures are quiet - expired login exits nonzero, a headless
+  permission gate exits ZERO with empty output. Revisit if provider config ever moves
+  behind a real CLI command.
 
 ## Confirmed by testing (was assumption, now fact)
 - D1 was right for a stronger reason than predicted: task status is NOT a usable lock.
@@ -64,3 +82,7 @@ owning worker coordination, validation gating, and durable state.
 - The CLI reports via Write-Host, which does NOT reach stdout, so in-process
   redirection captured nothing. Running the CLI as a child process fixes capture and
   $LASTEXITCODE together.
+- Start-Process -ArgumentList joins an ARRAY WITHOUT QUOTING, so any project path
+  containing a space was split into separate arguments. Fixed with an explicit
+  CommandLineToArgvW-rules quoter; verified by running a full cycle from a path with
+  a space in it.

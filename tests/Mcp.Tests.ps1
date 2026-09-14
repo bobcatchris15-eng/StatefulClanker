@@ -22,10 +22,29 @@ function Invoke-McpLines([string]$Project, [string[]]$Lines) {
     Get-Content -LiteralPath $inputPath | & $pwsh -NoProfile -File $mcpStdio -ProjectPath $Project 1> $outPath 2>$null
     $raw = @(Get-Content -LiteralPath $outPath | Where-Object { $_ })
     Remove-Item -LiteralPath $inputPath, $outPath -Force -ErrorAction SilentlyContinue
-    return @($raw | ForEach-Object { $_ | ConvertFrom-Json })
+    if ($raw.Count -eq 0) { throw "MCP server returned no output for: $($Lines -join ' | ')" }
+    # The comma keeps this an array: a function returning @() unrolls to $null, and
+    # the caller's [0] then fails with a misleading "cannot index into a null array".
+    return , @($raw | ForEach-Object { $_ | ConvertFrom-Json })
+}
+
+<# Build one JSON-RPC line. Use this rather than hand-concatenating JSON: Windows
+   paths need doubled backslashes and getting that wrong yields a parse error whose
+   symptom is a confusing null-result several lines later. #>
+function New-McpCall([int]$Id, [string]$Tool, [hashtable]$Arguments) {
+    if ($null -eq $Arguments) { $Arguments = @{} }
+    return (@{ jsonrpc = '2.0'; id = $Id; method = 'tools/call'; params = @{ name = $Tool; arguments = $Arguments } } |
+        ConvertTo-Json -Depth 12 -Compress)
 }
 
 function Get-ToolPayload($Response) {
+    if ($null -eq $Response) { throw 'Expected a response object, got $null (fewer responses than requests).' }
+    if ($Response.PSObject.Properties['error'] -and $Response.error) {
+        throw "Server returned a protocol error $($Response.error.code): $($Response.error.message)"
+    }
+    if ($null -eq $Response.result) {
+        throw "Response carried no result: $($Response | ConvertTo-Json -Depth 8 -Compress)"
+    }
     if ($Response.result.PSObject.Properties['isError'] -and $Response.result.isError) {
         throw "Tool returned isError: $($Response.result.content[0].text)"
     }
@@ -82,6 +101,35 @@ try {
             command = 'cmd.exe'; args = @('/d', '/c', $mockCmd); mode = 'prompt-file'
         }) -Force
     $cfg | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
+
+    Write-Host '  MCP 3b: provider_set validates before writing config'
+    # Without provider configuration over MCP there is no way to reach a working
+    # first run from a chat session: the setting lives only in config.json and has
+    # no CLI command.
+    $r = Invoke-McpLines $temp @(
+        '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"provider_set","arguments":{"name":"ghost","command":"definitely-not-installed-xyz","args":["-p","{prompt}"]}}}',
+        '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"provider_set","arguments":{"name":"noplaceholder","command":"cmd.exe","args":["/c","echo hi"]}}}'
+    )
+    Assert-True ([bool]$r[0].result.isError) 'provider_set must reject a command that is not installed.'
+    Assert-True ([bool]$r[1].result.isError) 'provider_set must reject args with no {prompt}/{promptFile} placeholder.'
+
+    Write-Host '  MCP 3c: provider_set writes a usable provider, provider_test probes it'
+    $r = Invoke-McpLines $temp @(
+        (New-McpCall 1 'provider_set' @{
+            name = 'mock'; command = 'cmd.exe'; args = @('/d', '/c', $mockCmd, '{promptFile}')
+            setDefault = $true; setCritic = $true; setValidator = $true
+        }),
+        (New-McpCall 2 'provider_list' @{})
+    )
+    $set = Get-ToolPayload $r[0]
+    Assert-True ($set.mode -eq 'prompt-file') "mode should be inferred from {promptFile}, got '$($set.mode)'."
+    Assert-True (@($set.assignedTo) -contains 'defaultProvider') 'setDefault did not take effect.'
+    $providers = Get-ToolPayload $r[1]
+    Assert-True ($providers.defaultProvider -eq 'mock') 'defaultProvider not persisted.'
+
+    $probe = Get-ToolPayload (Invoke-McpLines $temp @('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"provider_test","arguments":{"name":"mock","timeoutSeconds":60}}}'))[0]
+    Assert-True ($null -ne $probe.diagnosis -and $probe.diagnosis.Length -gt 0) 'provider_test returned no diagnosis.'
+    Assert-True ($probe.provider -eq 'mock') 'provider_test probed the wrong provider.'
 
     Write-Host '  MCP 4: array arguments survive the CLI bridge intact'
     # pwsh -File passes args as literal tokens with no expression parsing, so a

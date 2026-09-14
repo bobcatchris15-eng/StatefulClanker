@@ -12,7 +12,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('generic', 'claude-code', 'claude-desktop', 'opencode', 'vscode')]
+    [ValidateSet('generic', 'claude-code', 'claude-desktop', 'opencode', 'vscode', 'antigravity', 'cursor')]
     [string]$Client = 'generic',
     [ValidateSet('stdio', 'http')]
     [string]$Transport = 'stdio',
@@ -88,6 +88,18 @@ switch ($Client) {
     }
     'vscode' {
         Show-Snippet ([ordered]@{ servers = [ordered]@{ statefulclanker = $serverEntry } }) 'Add to .vscode/mcp.json:'
+        return
+    }
+    'cursor' {
+        Show-Snippet ([ordered]@{ mcpServers = [ordered]@{ statefulclanker = $serverEntry } }) 'Add to ~/.cursor/mcp.json (or .cursor/mcp.json in a project):'
+        return
+    }
+    'antigravity' {
+        Show-Snippet ([ordered]@{ mcpServers = [ordered]@{ statefulclanker = $serverEntry } }) 'Antigravity / other mcpServers-style clients:'
+        Write-Host 'NOTE: the exact config file location for this client is not verified here.' -ForegroundColor Yellow
+        Write-Host 'Look for an "MCP servers" setting in the app and paste the block above.' -ForegroundColor Yellow
+        Write-Host 'Most desktop harnesses use this same mcpServers shape.' -ForegroundColor Yellow
+        Write-Host ''
         return
     }
 }

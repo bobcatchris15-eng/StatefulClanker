@@ -101,6 +101,32 @@ function Assert-McpHumanAuthority([string]$Project, [string]$Tool) {
 <# Run the CLI inside the project directory and capture its output. Writes must go
    through the CLI: Add-SCTask and friends take no parameters, they read $Title /
    $Instruction / etc. from StatefulClanker.ps1's script scope. #>
+<# Quote one argument for a Windows command line (CommandLineToArgvW rules). #>
+function ConvertTo-McpWindowsArg($Value) {
+    $text = [string]$Value
+    if ($text -eq '') { return '""' }
+    if ($text -notmatch '[ \t"]') { return $text }
+    $sb = New-Object Text.StringBuilder
+    [void]$sb.Append('"')
+    $slashes = 0
+    foreach ($ch in $text.ToCharArray()) {
+        if ($ch -eq '\') {
+            $slashes++
+        } elseif ($ch -eq '"') {
+            [void]$sb.Append('\' * ($slashes * 2 + 1))
+            [void]$sb.Append('"')
+            $slashes = 0
+            continue
+        } else {
+            if ($slashes -gt 0) { [void]$sb.Append('\' * $slashes); $slashes = 0 }
+        }
+        if ($ch -ne '\') { [void]$sb.Append($ch) }
+    }
+    if ($slashes -gt 0) { [void]$sb.Append('\' * ($slashes * 2)) }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
 function Get-McpPwshPath {
     $self = (Get-Process -Id $PID).Path
     if (-not [string]::IsNullOrWhiteSpace($self)) { return $self }
@@ -176,6 +202,147 @@ function Invoke-McpHarness([string]$Project, [object[]]$CliArgs) {
     return [ordered]@{ exitCode = $code; stdout = $stdout.Trim(); stderr = $stderr.Trim(); command = $command }
 }
 
+<# Provider configuration lives only in config.json and has no CLI command, so
+   without these a freshly installed server can be connected but never actually run
+   anything: the first run_start fails on an unconfigured or wrong provider. #>
+function Set-McpProvider([string]$Project, $Arguments) {
+    Assert-McpInitialized $Project
+    $cfgPath = Join-Path (Get-McpStateDir $Project) 'config.json'
+    $cfg = Read-McpJson $cfgPath
+    if ($null -eq $cfg) { throw "Missing config.json in $Project" }
+
+    $name = Get-McpArgRequired $Arguments 'name'
+    $command = Get-McpArgRequired $Arguments 'command'
+    $providerArgs = @(Get-McpArgArray $Arguments 'args')
+    if ($providerArgs.Count -eq 0) { throw 'args is required: it must contain {prompt} or {promptFile} so the task text reaches the worker.' }
+
+    $mode = Get-McpArgOptional $Arguments 'mode'
+    if (-not $mode) { $mode = if (($providerArgs -join ' ') -match '\{promptFile\}') { 'prompt-file' } else { 'inline' } }
+
+    $joined = $providerArgs -join ' '
+    if ($joined -notmatch '\{prompt\}' -and $joined -notmatch '\{promptFile\}') {
+        throw "Provider args must contain the {prompt} or {promptFile} placeholder, otherwise the worker receives no task. Got: $joined"
+    }
+    if (-not (Get-Command $command -ErrorAction SilentlyContinue) -and -not (Test-Path -LiteralPath $command)) {
+        throw "Command not found on PATH: $command. Install it first, or give a full path."
+    }
+
+    if (-not $cfg.PSObject.Properties['providers'] -or $null -eq $cfg.providers) {
+        $cfg | Add-Member -NotePropertyName providers -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    $cfg.providers | Add-Member -NotePropertyName $name -NotePropertyValue ([pscustomobject]@{
+            command = $command; args = $providerArgs; mode = $mode
+        }) -Force
+
+    $assigned = @()
+    foreach ($pair in @(@('setDefault', 'defaultProvider'), @('setCritic', 'criticProvider'), @('setValidator', 'validatorProvider'))) {
+        if ($Arguments -and $Arguments.PSObject.Properties[$pair[0]] -and [bool]$Arguments.$($pair[0])) {
+            $cfg | Add-Member -NotePropertyName $pair[1] -NotePropertyValue $name -Force
+            $assigned += $pair[1]
+        }
+    }
+
+    $cfg | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
+    return [ordered]@{ provider = $name; command = $command; args = $providerArgs; mode = $mode; assignedTo = $assigned; configPath = $cfgPath }
+}
+
+<# Dispatch a trivial prompt and report whether the provider is actually usable.
+   Worth its own tool because the two realistic failures are both silent-ish: an
+   expired CLI login exits nonzero with an auth message, and a permission-gated
+   headless CLI exits ZERO having produced nothing at all. #>
+function Test-McpProvider([string]$Project, $Arguments) {
+    Assert-McpInitialized $Project
+    $cfg = Read-McpJson (Join-Path (Get-McpStateDir $Project) 'config.json')
+    $name = Get-McpArgOptional $Arguments 'name'
+    if (-not $name) {
+        if (-not $cfg.PSObject.Properties['defaultProvider'] -or -not $cfg.defaultProvider) { throw 'No provider named and no defaultProvider configured.' }
+        $name = [string]$cfg.defaultProvider
+    }
+    if (-not $cfg.PSObject.Properties['providers'] -or -not $cfg.providers.PSObject.Properties[$name]) {
+        throw "Provider '$name' is not configured. Use provider_set first."
+    }
+    $entry = $cfg.providers.$name
+
+    $timeout = 90
+    if ($Arguments -and $Arguments.PSObject.Properties['timeoutSeconds'] -and $Arguments.timeoutSeconds) {
+        $timeout = [Math]::Min(300, [Math]::Max(10, [int]$Arguments.timeoutSeconds))
+    }
+
+    $probe = 'Reply with exactly this text and nothing else: STATEFULCLANKER_PROVIDER_OK'
+    $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("sc-probe-{0}" -f [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+    $promptFile = Join-Path $tempDir 'prompt.txt'
+    $probe | Set-Content -LiteralPath $promptFile -Encoding UTF8
+    $outPath = Join-Path $tempDir 'out.txt'
+    $errPath = Join-Path $tempDir 'err.txt'
+
+    $expanded = @()
+    foreach ($a in @($entry.args)) {
+        $expanded += ([string]$a).Replace('{prompt}', $probe).Replace('{promptFile}', $promptFile).Replace('{projectRoot}', $Project).Replace('{taskId}', 'provider-probe')
+    }
+
+    $exitCode = $null
+    $timedOut = $false
+    try {
+        # Run through a job using the native call operator rather than Start-Process:
+        # Start-Process -ArgumentList joins an array WITHOUT quoting, so the probe
+        # prompt (and any path containing a space) is split into separate arguments.
+        $job = Start-Job -ScriptBlock {
+            param($Exe, $Argv, $Out, $Err, $Wd)
+            Set-Location -LiteralPath $Wd
+            & $Exe @Argv 1> $Out 2> $Err
+            if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+        } -ArgumentList ([string]$entry.command), $expanded, $outPath, $errPath, $Project
+
+        if (Wait-Job -Job $job -Timeout $timeout) {
+            $exitCode = [int](Receive-Job -Job $job)
+        } else {
+            $timedOut = $true
+            Stop-Job -Job $job -ErrorAction SilentlyContinue
+        }
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    } catch {
+        return [ordered]@{ provider = $name; usable = $false; diagnosis = "Could not start '$($entry.command)': $($_.Exception.Message)" }
+    }
+
+    $stdout = ''; $stderr = ''
+    if (Test-Path -LiteralPath $outPath) { $raw = Get-Content -Raw -LiteralPath $outPath; if ($null -ne $raw) { $stdout = [string]$raw } }
+    if (Test-Path -LiteralPath $errPath) { $raw = Get-Content -Raw -LiteralPath $errPath; if ($null -ne $raw) { $stderr = [string]$raw } }
+    Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    $combined = "$stdout $stderr"
+    $usable = $false
+    $diagnosis = ''
+    if ($timedOut) {
+        $diagnosis = "No response within ${timeout}s. The command may be waiting for interactive input; headless/print mode is required."
+    } elseif ($exitCode -ne 0) {
+        if ($combined -match '(?i)auth|login|oauth|credential|api[_ -]?key|token') {
+            $diagnosis = "Exited $exitCode with an authentication error. Sign the CLI in, then retry. Detail: $(($combined.Trim() -split "`n")[0])"
+        } else {
+            $diagnosis = "Exited $exitCode. Detail: $(($combined.Trim() -split "`n")[0])"
+        }
+    } elseif ([string]::IsNullOrWhiteSpace($stdout)) {
+        $diagnosis = "Exited 0 but produced NO output. Usually a permission gate: the CLI could not prompt in headless mode and auto-denied its tools. Detail: $(($combined.Trim() -split "`n")[0])"
+    } elseif ($stdout -match 'STATEFULCLANKER_PROVIDER_OK') {
+        $usable = $true
+        $diagnosis = 'Provider responded correctly.'
+    } else {
+        $usable = $true
+        $diagnosis = 'Provider responded, though not with the exact probe text. Usable, but check it is in non-interactive print mode.'
+    }
+
+    return [ordered]@{
+        provider   = $name
+        command    = [string]$entry.command
+        usable     = $usable
+        exitCode   = $exitCode
+        timedOut   = $timedOut
+        diagnosis  = $diagnosis
+        stdoutHead = if ($stdout.Length -gt 400) { $stdout.Substring(0, 400) } else { $stdout }
+        stderrHead = if ($stderr.Length -gt 400) { $stderr.Substring(0, 400) } else { $stderr }
+    }
+}
+
 function Get-McpRunRecordPath([string]$Project) { Join-Path (Get-McpStateDir $Project) 'mcp\run.json' }
 
 function Get-McpBusyTasks([string]$Project) {
@@ -247,9 +414,12 @@ function Start-McpRun([string]$Project, [string]$TaskId, [string]$Provider) {
     if ($TaskId) { $cli += @('-TaskId', $TaskId) }
     if ($Provider) { $cli += @('-Provider', $Provider) }
 
-    $pwshPath = (Get-Process -Id $PID).Path
-    if ([string]::IsNullOrWhiteSpace($pwshPath)) { $pwshPath = 'pwsh' }
-    $psArgs = @('-NoProfile', '-NonInteractive', '-File', $script:McpHarness) + $cli
+    $pwshPath = Get-McpPwshPath
+    # Quote explicitly: Start-Process -ArgumentList joins an array WITHOUT quoting, so
+    # any path containing a space (C:\My Projects\...) is split into separate
+    # arguments and the cycle dies on a bogus path.
+    $psArgs = ((@('-NoProfile', '-NonInteractive', '-File', $script:McpHarness) + $cli) |
+        ForEach-Object { ConvertTo-McpWindowsArg $_ }) -join ' '
 
     try {
         $proc = Start-Process -FilePath $pwshPath -ArgumentList $psArgs -WorkingDirectory $Project `
@@ -352,7 +522,17 @@ function Get-McpToolList {
 
         # ---- observation ----
         @{ name = 'direction_add'; description = 'Record human direction durably and advance the project direction revision, staling older compilations.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ message = @{ type = 'string' } }); required = @('message') } },
-        @{ name = 'provider_list'; description = 'List configured worker providers.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
+        @{ name = 'provider_list'; description = 'List configured worker providers and which one is default/critic/validator.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
+        @{ name = 'provider_set'; description = 'Add or update a worker provider (the CLI that actually does the work) and optionally make it the default/critic/validator. Required before the first run_start.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{
+            name        = @{ type = 'string'; description = 'Short id, e.g. claude, opencode, agy.' }
+            command     = @{ type = 'string'; description = 'Executable to run. Must be on PATH or a full path.' }
+            args        = @{ type = 'array'; items = @{ type = 'string' }; description = 'Arguments. MUST include {prompt} or {promptFile}. Also supports {projectRoot} and {taskId}.' }
+            mode        = @{ type = 'string'; enum = @('inline', 'prompt-file'); description = 'Inferred from the placeholder when omitted.' }
+            setDefault  = @{ type = 'boolean' }
+            setCritic   = @{ type = 'boolean' }
+            setValidator = @{ type = 'boolean' }
+        }); required = @('name', 'command', 'args') } },
+        @{ name = 'provider_test'; description = 'Dispatch a trivial probe prompt to a provider and report whether it is actually usable. Catches expired logins and headless permission gates before a real cycle wastes an attempt.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ name = @{ type = 'string'; description = 'Defaults to the configured default provider.' }; timeoutSeconds = @{ type = 'integer'; minimum = 10; maximum = 300 } }) } },
         @{ name = 'telemetry_active'; description = 'List currently active subagents.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
         @{ name = 'telemetry_history'; description = 'List historical subagent telemetry.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ limit = @{ type = 'integer'; minimum = 1; maximum = 500 } }) } },
         @{ name = 'telemetry_run'; description = 'Get one historical subagent run by agentId.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ agentId = @{ type = 'string' } }); required = @('agentId') } },
@@ -483,6 +663,12 @@ function Invoke-McpTool([string]$Name, $Arguments) {
                 }
             }
             return New-McpTextResult ([ordered]@{ defaultProvider = $cfg.defaultProvider; criticProvider = $cfg.criticProvider; validatorProvider = $cfg.validatorProvider; providers = @($rows) })
+        }
+        'provider_set' {
+            return New-McpTextResult (Set-McpProvider $project $Arguments)
+        }
+        'provider_test' {
+            return New-McpTextResult (Test-McpProvider $project $Arguments)
         }
         'telemetry_active' {
             Assert-McpInitialized $project

@@ -235,6 +235,10 @@ progress history                      Inspect progress/stagnation records
 StatefulClanker ships an MCP server so a chat session can act as the planner while
 the harness keeps owning dispatch, review, and state.
 
+**New here? Follow `docs/SETUP.md`** — a start-to-finish walkthrough from a clean
+machine to a first completed cycle, including the step with no working default:
+configuring a worker CLI. `docs/MCP.md` is the tool reference.
+
 ```powershell
 .\Install-McpServer.ps1 -Client claude-desktop -ProjectPath C:\work\myproject -Write
 .\Install-McpServer.ps1 -Client claude-code    -ProjectPath C:\work\myproject
