@@ -34,6 +34,21 @@ This lets work resume across sessions, models, providers, context resets, or mac
 
 StatefulClanker does not require or embed a particular model API. Provider support is ordinary command configuration.
 
+## Install (Windows)
+
+Run `StatefulClankerSetup-<version>.exe` — a per-user install, no administrator
+rights, no UAC prompt. You get a tray app with four tabs: pick a **project**,
+choose and **test** the agent CLI that does the work, **register** the MCP server
+with your chat app in one click, and optionally host the loopback **HTTP**
+endpoint for clients that want a URL.
+
+The Integrations tab always shows the exact connection details for the selected
+app — stdio JSON block, and HTTP URL plus bearer token — so apps it cannot
+configure automatically can still be set up by pasting.
+
+Build it yourself with `winget install JRSoftware.InnoSetup` then
+`.\install\Build-Installer.ps1`. See `docs/SETUP.md`.
+
 ## Quick start
 
 ```powershell
@@ -68,6 +83,33 @@ Or force a worker provider:
 ```powershell
 .\StatefulClanker.ps1 run -Provider claude
 ```
+
+## How the prompt reaches the worker
+
+A one-shot prompt is a compiled context, not a sentence. It is **always** written to
+`prompts/<receiptId>.txt` and delivered out of band:
+
+```json
+{ "command": "claude", "args": ["-p"], "mode": "stdin" }
+```
+
+| mode | delivery |
+|---|---|
+| `stdin` | prompt piped to the provider's stdin. **Default and recommended.** |
+| `prompt-file` | args carry `{promptFile}`, the path to the prompt |
+| `inline` | args carry `{prompt}`. Supported, but see below. |
+
+**Do not use `inline`.** Passing the prompt as a command-line argument is a latent
+failure: `cmd.exe` caps a command line at 8191 characters and `CreateProcess` at
+32767, while the shipped retrieval budgets alone total 36000. Measured on a small
+project, an 11k-character prompt already fails with `The command line is too long`
+and exit 1 — which reads like a broken provider rather than a prompt that did not
+fit. The harness now refuses an oversized inline command line itself and tells you
+how to fix it, rather than letting the OS produce that error.
+
+Note that `stdin` means **no prompt flag with a value**. `claude -p` reads stdin;
+`agy` reads stdin only when `-p` is absent, since a bare `-p` errors with "flag
+needs an argument". `provider_test` will tell you which shape your CLI wants.
 
 ## Execution pipeline
 
@@ -230,6 +272,83 @@ context faults                        Inspect context misses
 progress history                      Inspect progress/stagnation records
 ```
 
+## Driving it from a conversational agent (MCP)
+
+StatefulClanker ships an MCP server so a chat session can act as the planner while
+the harness keeps owning dispatch, review, and state.
+
+**New here? Follow `docs/SETUP.md`** — a start-to-finish walkthrough from a clean
+machine to a first completed cycle, including the step with no working default:
+configuring a worker CLI. `docs/MCP.md` is the tool reference.
+
+```powershell
+.\Install-McpServer.ps1 -Client claude-desktop -ProjectPath C:\work\myproject -Write
+.\Install-McpServer.ps1 -Client claude-code    -ProjectPath C:\work\myproject
+```
+
+For clients that take a URL rather than launching a command, run the HTTP transport
+(loopback only, bearer token, no Administrator rights needed):
+
+```powershell
+pwsh -NoProfile -File .\mcp\StatefulClanker.McpHttp.ps1 -ProjectPath C:\work\myproject -Port 7337
+```
+
+The session can set the goal, add and import tasks, start cycles, and read every
+receipt. Two things are deliberately not handed over:
+
+- **`run_start` is asynchronous.** A cycle is worker + critic + validator and cannot
+  block a tool call. It returns a handle; poll `run_status`.
+- **`run_parallel` runs several tasks at once**, each in its own git worktree,
+  merging back the ones that pass. Needs a git repo with a clean tree. One batch at
+  a time per project, enforced with an atomic lock.
+- **`task_complete` and `plan_approve` are disabled by default.** Both bypass the
+  validation gate, and an agent that can approve its own plan and complete its own
+  tasks has routed around the entire point of the harness. Enable with
+  `mcp.allowHumanAuthorityTools` if you want that anyway.
+
+See `docs/MCP.md` for the full tool surface and a worked session.
+
+## Periodic project review
+
+The per-task critic and validator each judge **one** task against one compiled
+context. Nothing looked at the project as a whole, so N tasks that each passed their
+own review could still leave the project broken — most obviously after a parallel
+batch, where two changes that merged cleanly can break together.
+
+Every `projectReviewEveryTasks` completed tasks (default 5), and immediately after
+any multi-branch merge, StatefulClanker runs a **project critic** and a **project
+validator** over the whole project:
+
+```powershell
+.\StatefulClanker.ps1 review run          # force one now
+.\StatefulClanker.ps1 review history      # trigger, verdict, validate exit code
+.\StatefulClanker.ps1 review show -RunId <id>
+```
+
+Configure `projectValidateCommand` — this is the single most valuable setting here.
+Its exit code and output go into the review packet as evidence. Without it the
+project validator is an LLM reading a diff, and it is told to say so rather than
+infer success from the absence of failure.
+
+On **FAIL** the harness:
+
+1. records a durable review receipt under `reviews/`,
+2. queues a **human-gated** remediation task carrying the findings,
+3. **holds dispatch** — further `run` and `run -Parallel` are refused.
+
+```powershell
+.\StatefulClanker.ps1 hold status
+.\StatefulClanker.ps1 hold clear          # explicit human release
+```
+
+Holding is the point: it stops the queue piling more work onto a broken base. The
+remediation task is human-gated because the harness generated it — read the review
+before releasing it. Set `projectReviewEveryTasks` to `0` to disable the whole
+mechanism.
+
+Reviewers must be **read-only**. A reviewer provider that edits files leaves the
+tree dirty, which then blocks the next parallel run.
+
 ## Worker, critic, and validator contracts
 
 The **worker** performs only one bounded task from a cold-start packet. It should report changed files, commands, failures, and unresolved risks. If needed state was omitted, it requests that state instead of fabricating continuity.
@@ -238,7 +357,13 @@ The **critic** checks omissions, contradictions, risky assumptions, regressions,
 
 The **validator** independently judges acceptance criteria from available evidence. It is explicitly told not to trust the worker merely because the worker says something passed.
 
-Reviewer output remains deliberately machine-simple: the first non-empty line must be exactly `VERDICT: PASS` or `VERDICT: FAIL`. Malformed review output fails closed.
+Reviewer output remains deliberately machine-simple. A verdict must appear on a line of its own as `VERDICT: PASS` or `VERDICT: FAIL`; surrounding explanation is fine, and markdown decoration, indentation and trailing punctuation are tolerated. Three rules govern the rest:
+
+- A nonzero provider exit is always `FAIL`.
+- A verdict mentioned inside prose is not a vote — it must be its own line.
+- If any `FAIL` line appears, the result is `FAIL`, and no verdict line at all is `FAIL`.
+
+Ambiguity therefore fails closed, and a reviewer that votes `FAIL` and then discusses a `PASS` cannot flip the gate open.
 
 ## What StatefulClanker deliberately does not own
 

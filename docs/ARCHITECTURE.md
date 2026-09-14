@@ -315,7 +315,7 @@ This is intentionally conservative: a user note recorded through `event` is trea
 
 The task model still permits ready tasks with independent dependency closures to run concurrently, and configuration retains `maxConcurrent`.
 
-The current PowerShell entrypoint dispatches one task per invocation. StatefulClanker does **not** yet claim a full distributed multi-writer consistency model. Append-only events and immutable receipts are naturally merge-friendly; authoritative plan heads, approvals, proposals, and completion commits will need stronger conflict control before ClankerFog-style distributed execution is allowed to write them concurrently.
+`run` dispatches one task per invocation; `run -Parallel N` dispatches up to N ready tasks concurrently, each in its own git worktree, merging back the ones whose review gates pass. Durable state stays canonical in the main tree and is serialised across processes by a named mutex. `maxConcurrent` is now read. StatefulClanker does **not** yet claim a full distributed multi-writer consistency model. Append-only events and immutable receipts are naturally merge-friendly; authoritative plan heads, approvals, proposals, and completion commits will need stronger conflict control before ClankerFog-style distributed execution is allowed to write them concurrently.
 
 The human task-control revision closes one narrower class of race—an in-flight local worker cannot silently overwrite a later explicit human task transition—but it is not a substitute for a distributed transaction/locking model.
 
