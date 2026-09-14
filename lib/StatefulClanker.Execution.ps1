@@ -23,7 +23,7 @@ function Capture-SCContextRequests($Task,$Run,$Compilation) {
     }
     return @($requests)
 }
-function Get-SCVerdict([string]$Text,[int]$ExitCode) { if($ExitCode-ne 0){return'FAIL'};foreach($line in @($Text-split"`r?`n")){$trimmed=$line.Trim();if(-not$trimmed){continue};if($trimmed-match'^VERDICT:\s*PASS\s*$'){return'PASS'};if($trimmed-match'^VERDICT:\s*FAIL\s*$'){return'FAIL'};break};return'FAIL' }
+function Get-SCVerdict([string]$Text,[int]$ExitCode) { if($ExitCode-ne 0){return 'FAIL'};foreach($line in @($Text-split"`r?`n")){$trimmed=$line.Trim();if(-not$trimmed){continue};if($trimmed-match'^VERDICT:\s*PASS\s*$'){return 'PASS'};if($trimmed-match'^VERDICT:\s*FAIL\s*$'){return 'FAIL'};break};return 'FAIL' }
 function Set-SCTelemetryVerdict([string]$AgentId,[string]$Verdict) { $path=Get-SCPath ("telemetry/runs/{0}.json"-f$AgentId);$record=Read-SCJson $path;if($record){$record.verdict=$Verdict;Write-SCJson $path $record} }
 function Invoke-SCReview($Task,$Run,$Compilation,[string]$Stage) {
     $receipt=Invoke-SCProvider $Task (New-SCReviewPrompt $Task $Run $Compilation $Stage) $Stage $null $Run.agentId $Compilation;$receipt.verdict=Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode);Set-SCTelemetryVerdict $receipt.agentId $receipt.verdict;$dir=if($Stage-eq'critic'){'critiques'}else{'validations'};Write-SCJson (Get-SCPath ("{0}/{1}.json"-f$dir,$receipt.id)) $receipt;Add-SCEvent "$Stage.finished" "$Stage $($receipt.id): $($receipt.verdict)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$receipt.verdict;compilationId=$Compilation.id};return $receipt

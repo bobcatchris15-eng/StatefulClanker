@@ -88,7 +88,7 @@ function Invalidate-SCDependents([string]$ChangedTaskId,[string]$Why) {
         $current=[string]$queue.Dequeue();if($seen.ContainsKey($current)){continue};$seen[$current]=$true
         foreach($task in @(Get-SCTasks|Where-Object{@($_.dependsOn)-contains$current})){
             if($task.status-ne'running'){
-                $was=$task.status;$task.status=if($was-eq'complete'){'stale'}else{'pending'};$task.blockReason="Invalidated by $current: $Why";Save-SCTask $task
+                $was=$task.status;$task.status=if($was-eq'complete'){'stale'}else{'pending'};$task.blockReason="Invalidated by ${current}: $Why";Save-SCTask $task
                 Add-SCEvent 'task.invalidated' "Invalidated $($task.id) because $current changed." @{taskId=$task.id;sourceTaskId=$current;previousStatus=$was;reason=$Why}
             }
             $queue.Enqueue([string]$task.id)

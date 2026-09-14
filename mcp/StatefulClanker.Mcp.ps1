@@ -29,14 +29,14 @@ switch($name){
 'project_status'{$s=ReadJson(Join-Path $stateDir 'state.json');$tasks=ReadDir(Join-Path $stateDir 'tasks');return TextResult([ordered]@{state=$s;tasks=$tasks})}
 'telemetry_active'{return TextResult(@(ReadDir(Join-Path $stateDir 'telemetry\active')|Sort-Object startedAt))}
 'telemetry_history'{$limit=100;if($args-and$args.PSObject.Properties['limit']){$limit=[Math]::Min(500,[Math]::Max(1,[int]$args.limit))};$r=ReadDir(Join-Path $stateDir 'telemetry\runs') | Sort-Object startedAt -Descending | Select-Object -First $limit;return TextResult(@($r))}
-'telemetry_run'{$p=Join-Path $stateDir("telemetry\runs\{0}.json"-f$args.agentId);$r=ReadJson $p;if(-not$r){throw"Unknown agentId: $($args.agentId)"};return TextResult $r}
+'telemetry_run'{$p=Join-Path $stateDir("telemetry\runs\{0}.json"-f$args.agentId);$r=ReadJson $p;if(-not$r){throw "Unknown agentId: $($args.agentId)"};return TextResult $r}
 'context_faults'{$limit=100;if($args-and$args.PSObject.Properties['limit']){$limit=[Math]::Min(500,[Math]::Max(1,[int]$args.limit))};return TextResult(@(ReadJsonl(Join-Path $stateDir 'telemetry\context-faults.jsonl') $limit))}
-'compilation_get'{$p=Join-Path $stateDir("compilations\{0}.json"-f$args.compilationId);$r=ReadJson $p;if(-not$r){throw"Unknown compilationId: $($args.compilationId)"};return TextResult $r}
+'compilation_get'{$p=Join-Path $stateDir("compilations\{0}.json"-f$args.compilationId);$r=ReadJson $p;if(-not$r){throw "Unknown compilationId: $($args.compilationId)"};return TextResult $r}
 'progress_history'{$limit=100;if($args-and$args.PSObject.Properties['limit']){$limit=[Math]::Min(500,[Math]::Max(1,[int]$args.limit))};$r=ReadDir(Join-Path $stateDir 'progress')|Sort-Object ts -Descending|Select-Object -First $limit;return TextResult(@($r))}
-'proposal_get'{$p=Join-Path $stateDir("proposals\{0}.json"-f$args.proposalId);$r=ReadJson $p;if(-not$r){throw"Unknown proposalId: $($args.proposalId)"};return TextResult $r}
+'proposal_get'{$p=Join-Path $stateDir("proposals\{0}.json"-f$args.proposalId);$r=ReadJson $p;if(-not$r){throw "Unknown proposalId: $($args.proposalId)"};return TextResult $r}
 'task_list'{return TextResult(@(ReadDir(Join-Path $stateDir 'tasks')|Sort-Object createdAt))}
 'direction_add'{Push-Location $ProjectPath;try{&$harness event -Message ([string]$args.message)|Out-Null}finally{Pop-Location};return TextResult(@{recorded=$true;invalidatesOlderCompilations=$true})}
-default{throw"Unknown tool: $name"}
+default{throw "Unknown tool: $name"}
 }}
 while($null-ne($line=[Console]::In.ReadLine())){
 if([string]::IsNullOrWhiteSpace($line)){continue}
