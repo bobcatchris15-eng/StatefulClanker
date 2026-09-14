@@ -47,6 +47,7 @@ owning worker coordination, validation gating, and durable state.
 | t9 | c2: worktree provisioning + parallel scheduler | DONE | 1 | 3 tasks concurrent in 4s, own worktree each |
 | t10 | c3: merge gate + conflict hold | DONE | 1 | clean merges land; collision held on branch, tree clean |
 | t11 | periodic project critic + validator | DONE | 1 | interval + multi-merge triggers; hold + remediation verified |
+| t12 | prompt delivery: stdin everywhere + length guard | DONE | 1 | 11.5k prompt via stdin to real agy; inline refused |
 
 - D7 2026-09-14: Verdict parsing relaxed from 'first non-empty line must be exactly
   VERDICT: X'. The user hit real false FAILs: a reviewer that explains itself before
@@ -120,6 +121,27 @@ owning worker coordination, validation gating, and durable state.
   and it stayed invisible because the readers swallow parse errors in try/catch -
   context faults simply read back empty. Fixed in all three writers; Smoke STEP 6b
   now asserts every .jsonl line parses standalone.
+
+- D20 2026-09-14: ALL prompt delivery moves to stdin. User flagged it; confirmed it
+  is a live bug, not style. cmd.exe caps a command line at 8191 chars and
+  CreateProcess at 32767, while the shipped retrieval budgets total 36000. Measured:
+  an 11k prompt fails with 'The command line is too long', exit 1 - indistinguishable
+  from a broken provider. Every one of the 11 presets I shipped used inline {prompt},
+  so this affected all of them. Verified end to end: 11,483-char prompt over stdin to
+  a real agy worker, which created its file and passed critic+validator.
+- D21 2026-09-14: 'stdin' means NO prompt flag carrying a value. claude -p reads
+  stdin; agy reads stdin only when -p is ABSENT (a bare -p errors 'flag needs an
+  argument'). Both verified against the real CLIs. The preset note records this.
+- FOUND: my own concurrency work had a read/write race. Writes were under the state
+  mutex but READS were not, and Write-SCJson replaces via temp-file + Move-Item, so a
+  concurrent reader could catch the target absent and get $null - surfacing as a
+  spurious 'Unknown task' that killed a cycle mid-review. Seen once as an
+  intermittent conflict-test failure (task stuck at 'reviewing'). Get-SCTask,
+  Get-SCState and Get-SCTasks now take the same lock; concurrency test run 6x clean.
+- NOTE for later: unmatched retrieval selectors do NOT stop a cycle. A task whose
+  retrieval matched nothing compiles an empty working set and the worker, critic and
+  validator can all still pass. Recorded in the compilation receipt, acted on by
+  nothing. Worth a guard.
 
 ## Unverified assumptions
 - Project review quality is unverified: the test providers vote PASS or FAIL

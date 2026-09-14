@@ -207,41 +207,48 @@ function Unregister-SCIntegration($Target, [string]$ServerName = 'statefulclanke
    machine. UNVERIFIED presets are starting points, not contracts - the shipped
    example config's agy entry was wrong, which is exactly the failure this flag
    exists to advertise. The UI must route every preset through provider_test
-   before anyone relies on it. #>
+   before anyone relies on it.
+
+   Every preset uses mode 'stdin' and carries NO {prompt} in args. A one-shot prompt
+   is a compiled context, not a sentence: passing it as a command-line argument fails
+   outright once retrieval grows, because cmd.exe caps a command line at 8191
+   characters and CreateProcess at 32767. Measured: an 11k-character prompt - a small
+   one - already fails with "The command line is too long". stdin has no such limit
+   and needs no shell quoting of arbitrary prompt text. #>
 function Get-SCProviderPresets {
     @(
         [ordered]@{ id = 'claude'; name = 'Claude Code'; command = 'claude'
-            args = @('-p', '{prompt}'); mode = 'inline'; verified = $true
-            note = 'Must be signed in. Add --permission-mode acceptEdits to let it write files.' },
+            args = @('-p'); mode = 'stdin'; verified = $true
+            note = 'Prompt is piped to stdin. Must be signed in. Add --permission-mode acceptEdits to let it write files.' },
         [ordered]@{ id = 'agy'; name = 'Antigravity (agy)'; command = 'agy'
-            args = @('--mode', 'accept-edits', '-p', '{prompt}'); mode = 'inline'; verified = $true
-            note = 'Verified working. accept-edits lets it write files without prompting.' },
+            args = @('--mode', 'accept-edits'); mode = 'stdin'; verified = $true
+            note = 'Verified: prompt piped to stdin, and NO -p flag - agy rejects a bare -p ("flag needs an argument"). accept-edits lets it write files without prompting.' },
         [ordered]@{ id = 'opencode'; name = 'Opencode'; command = 'opencode'
-            args = @('run', '{prompt}'); mode = 'inline'; verified = $false
+            args = @('run'); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. The repo example used "run --format json {promptFile}"; check opencode --help.' },
         [ordered]@{ id = 'aider'; name = 'Aider'; command = 'aider'
-            args = @('--message', '{prompt}', '--yes'); mode = 'inline'; verified = $false
+            args = @('--yes'); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. --yes auto-confirms edits. Check aider --help.' },
         [ordered]@{ id = 'goose'; name = 'Goose'; command = 'goose'
-            args = @('run', '-t', '{prompt}'); mode = 'inline'; verified = $false
+            args = @('run'); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. Check goose run --help.' },
         [ordered]@{ id = 'openhands'; name = 'OpenHands'; command = 'openhands'
-            args = @('-t', '{prompt}'); mode = 'inline'; verified = $false
+            args = @(); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. OpenHands CLI flags vary by version; check openhands --help.' },
         [ordered]@{ id = 'pi'; name = 'Pi'; command = 'pi'
-            args = @('-p', '{prompt}'); mode = 'inline'; verified = $false
+            args = @('-p'); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. Confirm the non-interactive flag with pi --help.' },
         [ordered]@{ id = 'codex'; name = 'Codex CLI'; command = 'codex'
-            args = @('exec', '{prompt}'); mode = 'inline'; verified = $false
+            args = @('exec'); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. Check codex exec --help.' },
         [ordered]@{ id = 'gemini'; name = 'Gemini CLI'; command = 'gemini'
-            args = @('-p', '{prompt}'); mode = 'inline'; verified = $false
+            args = @('-p'); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. Check gemini --help.' },
         [ordered]@{ id = 'cursor-agent'; name = 'Cursor Agent'; command = 'cursor-agent'
-            args = @('-p', '{prompt}'); mode = 'inline'; verified = $false
+            args = @('-p'); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. Check cursor-agent --help.' },
         [ordered]@{ id = 'custom'; name = 'Custom command...'; command = ''
-            args = @('-p', '{prompt}'); mode = 'inline'; verified = $false
+            args = @('-p'); mode = 'stdin'; verified = $false
             note = 'Any CLI that accepts a prompt non-interactively. Must include {prompt} or {promptFile}.' }
     )
 }

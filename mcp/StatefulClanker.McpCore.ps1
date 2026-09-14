@@ -216,12 +216,31 @@ function Set-McpProvider([string]$Project, $Arguments) {
     $providerArgs = @(Get-McpArgArray $Arguments 'args')
     if ($providerArgs.Count -eq 0) { throw 'args is required: it must contain {prompt} or {promptFile} so the task text reaches the worker.' }
 
-    $mode = Get-McpArgOptional $Arguments 'mode'
-    if (-not $mode) { $mode = if (($providerArgs -join ' ') -match '\{promptFile\}') { 'prompt-file' } else { 'inline' } }
-
     $joined = $providerArgs -join ' '
-    if ($joined -notmatch '\{prompt\}' -and $joined -notmatch '\{promptFile\}') {
-        throw "Provider args must contain the {prompt} or {promptFile} placeholder, otherwise the worker receives no task. Got: $joined"
+    $mode = Get-McpArgOptional $Arguments 'mode'
+    if (-not $mode) {
+        # Default to stdin: it has no length limit and needs no shell quoting.
+        $mode = if ($joined -match '\{promptFile\}') { 'prompt-file' } elseif ($joined -match '\{prompt\}') { 'inline' } else { 'stdin' }
+    }
+    switch ($mode) {
+        'stdin' {
+            if ($joined -match '\{prompt\}') {
+                throw "mode 'stdin' pipes the prompt to the provider, so args must NOT contain {prompt}. Got: $joined"
+            }
+        }
+        'prompt-file' {
+            if ($joined -notmatch '\{promptFile\}') {
+                throw "mode 'prompt-file' requires {promptFile} in args, otherwise the worker receives no task. Got: $joined"
+            }
+        }
+        'inline' {
+            if ($joined -notmatch '\{prompt\}') {
+                throw "mode 'inline' requires {prompt} in args, otherwise the worker receives no task. Got: $joined"
+            }
+            # Allowed, but it is a latent failure: a compiled context routinely
+            # exceeds the 8191-char cmd.exe command-line limit.
+        }
+        default { throw "Unknown mode '$mode'. Use stdin (recommended), prompt-file, or inline." }
     }
     if (-not (Get-Command $command -ErrorAction SilentlyContinue) -and -not (Test-Path -LiteralPath $command)) {
         throw "Command not found on PATH: $command. Install it first, or give a full path."

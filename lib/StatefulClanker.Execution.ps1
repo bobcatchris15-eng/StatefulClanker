@@ -2,6 +2,51 @@ function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
     $cfg=Get-SCConfig;$name=$null;if($Override){$name=$Override}elseif($Stage-eq'critic'-and$cfg.PSObject.Properties['criticProvider']-and$cfg.criticProvider){$name=[string]$cfg.criticProvider}elseif($Stage-eq'validator'-and$cfg.PSObject.Properties['validatorProvider']-and$cfg.validatorProvider){$name=[string]$cfg.validatorProvider}elseif($Task.provider){$name=[string]$Task.provider}else{$name=[string]$cfg.defaultProvider};$property=$cfg.providers.PSObject.Properties[$name];if($null-eq$property){throw "Provider '$name' not configured."};return [ordered]@{name=$name;config=$property.Value}
 }
 function Expand-SCArg([string]$Arg,[string]$Prompt,[string]$PromptFile,$Task) { $Arg.Replace('{prompt}',$Prompt).Replace('{promptFile}',$PromptFile).Replace('{projectRoot}',(Get-SCRoot)).Replace('{taskId}',[string]$Task.id) }
+
+<# Command-line budget for the executable being launched.
+
+   cmd.exe (and .bat/.cmd shims, which run through it) cap the whole command line at
+   8191 characters. Everything else goes through CreateProcess, which caps at 32767.
+   These are hard OS limits, not guidance. #>
+function Get-SCCommandLineLimit([string]$Exe) {
+    $leaf = try { [IO.Path]::GetFileName($Exe) } catch { [string]$Exe }
+    if ($leaf -match '(?i)^cmd(\.exe)?$' -or $leaf -match '(?i)\.(bat|cmd)$') { return 8191 }
+    return 32767
+}
+
+<# A one-shot prompt is a compiled context, not a sentence.
+
+   Passing it as a command-line argument ({prompt}) is a latent failure: with the
+   shipped budgets a realistic packet is tens of thousands of characters, and the
+   process simply refuses to start. The observed failure is "The command line is too
+   long" with exit 1, which looks like a broken provider rather than a prompt that
+   did not fit. Fail here instead, naming the fix.
+
+   The prompt file is ALWAYS written, so every provider can use {promptFile} or
+   stdin regardless of how it is configured. #>
+function Assert-SCPromptFits([string]$Exe,[string[]]$ArgList,[string]$ProviderName,[string]$PromptFile) {
+    # NOT named $Args: that is a PowerShell automatic variable, and a parameter of
+    # that name silently never receives the caller's value.
+    $limit = Get-SCCommandLineLimit $Exe
+    $length = ([string]$Exe).Length + 1
+    foreach($a in $ArgList){ $length += ([string]$a).Length + 3 }
+    if($length -le $limit){return}
+    throw @"
+Provider '$ProviderName' passes the prompt on the command line, and this prompt does not fit.
+
+  command line : $length characters
+  OS limit     : $limit characters ($([IO.Path]::GetFileName($Exe)))
+
+A compiled context is tens of thousands of characters, so {prompt} will keep failing
+as soon as retrieval grows. Switch the provider to deliver the prompt out of band:
+
+  "mode": "stdin"                       and drop {prompt} from args   (most CLIs)
+  "args": [..., "{promptFile}", ...]    if the CLI takes a file path
+
+The prompt was still written in full to:
+  $PromptFile
+"@
+}
 function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null) {
     $providerRecord=Resolve-SCProvider $Task $ProviderOverride $Stage;$receiptId=New-SCId $Stage;$agentId=New-SCId 'agent';$promptPath=Get-SCPath ("prompts/{0}.txt"-f$receiptId);$Prompt|Set-Content -LiteralPath $promptPath -Encoding UTF8
     $exe=[string]$providerRecord.config.command;$args=@();foreach($arg in @($providerRecord.config.args)){$args+=Expand-SCArg ([string]$arg) $Prompt $promptPath $Task}
@@ -9,7 +54,18 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
     $compilationId=if($Compilation){$Compilation.id}else{$null};$fingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};$retrievedChars=0;if($Compilation-and$Compilation.ir.sources.retrieved){$retrievedChars=[int]$Compilation.ir.sources.retrieved.usedChars}
     $telemetry=[ordered]@{schemaVersion=2;agentId=$agentId;receiptId=$receiptId;parentAgentId=$ParentAgentId;taskId=$Task.id;taskTitle=$Task.title;stage=$Stage;provider=$providerRecord.name;model=$null;lifecycle='running';processId=$null;startedAt=$started.ToString('o');heartbeatAt=$started.ToString('o');endedAt=$null;durationSeconds=$null;promptChars=$Prompt.Length;retrievedChars=$retrievedChars;compilationId=$compilationId;inputFingerprint=$fingerprint;command=$exe;args=$args;exitCode=$null;verdict=$null;stdoutPath=$stdoutPath;stderrPath=$stderrPath;error=$null}
     Save-SCActiveTelemetry $telemetry;Add-SCTelemetryEvent 'agent.started' $telemetry;$stdout='';$stderr='';$exitCode=-1
-    try{& $exe @args 1> $stdoutPath 2> $stderrPath;$exitCode=$LASTEXITCODE;if($null-eq$exitCode){$exitCode=0};if(Test-Path $stdoutPath){$stdout=Get-Content -Raw -LiteralPath $stdoutPath};if(Test-Path $stderrPath){$stderr=Get-Content -Raw -LiteralPath $stderrPath}}catch{$stderr=$_|Out-String;$telemetry.error=$stderr;$exitCode=-1}
+    $mode=if($providerRecord.config.PSObject.Properties['mode']){[string]$providerRecord.config.mode}else{''}
+    try{
+        if($mode-eq'stdin'){
+            # Pipe the prompt file to the provider's stdin: no OS length limit, and
+            # no shell quoting of arbitrary prompt text.
+            Get-Content -Raw -LiteralPath $promptPath | & $exe @args 1> $stdoutPath 2> $stderrPath
+        }else{
+            Assert-SCPromptFits $exe $args $providerRecord.name $promptPath
+            & $exe @args 1> $stdoutPath 2> $stderrPath
+        }
+        $exitCode=$LASTEXITCODE;if($null-eq$exitCode){$exitCode=0};if(Test-Path $stdoutPath){$stdout=Get-Content -Raw -LiteralPath $stdoutPath};if(Test-Path $stderrPath){$stderr=Get-Content -Raw -LiteralPath $stderrPath}
+    }catch{$stderr=$_|Out-String;$telemetry.error=$stderr;$exitCode=-1}
     $ended=(Get-Date).ToUniversalTime();$telemetry.lifecycle=if($exitCode-eq 0){'completed'}else{'failed'};$telemetry.exitCode=$exitCode;$telemetry.endedAt=$ended.ToString('o');$telemetry.heartbeatAt=$telemetry.endedAt;$telemetry.durationSeconds=[math]::Round(($ended-$started).TotalSeconds,3);Complete-SCTelemetry $telemetry
     return [ordered]@{schemaVersion=2;id=$receiptId;agentId=$agentId;taskId=$Task.id;stage=$Stage;provider=$providerRecord.name;compilationId=$compilationId;inputFingerprint=$fingerprint;command=$exe;args=$args;promptPath=$promptPath;startedAt=$started.ToString('o');endedAt=$ended.ToString('o');durationSeconds=$telemetry.durationSeconds;exitCode=$exitCode;stdout=$stdout;stderr=$stderr}
 }

@@ -259,7 +259,7 @@ $txtArgs = New-Object Windows.Forms.TextBox
 $txtArgs.Dock = 'Top'
 $lblArgsHelp = New-Object Windows.Forms.Label
 $lblArgsHelp.Dock = 'Top'; $lblArgsHelp.Height = 20; $lblArgsHelp.ForeColor = [Drawing.Color]::DimGray
-$lblArgsHelp.Text = 'Arguments - space separated. MUST contain {prompt} or {promptFile}, or the worker receives no task.'
+$lblArgsHelp.Text = 'Arguments - flags only, space separated. The prompt is piped to the provider on stdin. Use {promptFile} only if the CLI wants a path.'
 $lblArgs = New-Object Windows.Forms.Label
 $lblArgs.Dock = 'Top'; $lblArgs.Height = 18; $lblArgs.Text = 'Arguments'
 $argsRow.Controls.Add($lblArgsHelp)
@@ -585,13 +585,14 @@ $btnSaveProv.Add_Click({
     $cmd = $txtCmd.Text.Trim()
     $argList = @($txtArgs.Text -split '\r?\n|\s+' | Where-Object { $_ })
     if (-not $cmd) { [void][Windows.Forms.MessageBox]::Show('Command is required.', 'StatefulClanker'); return }
-    if (($argList -join ' ') -notmatch '\{prompt\}|\{promptFile\}') {
-        [void][Windows.Forms.MessageBox]::Show('Arguments must contain {prompt} or {promptFile}, otherwise the worker receives no task.', 'StatefulClanker'); return
+    $joinedArgs = ($argList -join ' ')
+    if ($joinedArgs -match '\{prompt\}') {
+        [void][Windows.Forms.MessageBox]::Show("{prompt} puts the whole compiled context on the command line, which fails once retrieval grows (cmd.exe caps at 8191 characters).`r`n`r`nDrop {prompt} and leave the arguments as flags only - the prompt is piped to the provider on stdin.", 'StatefulClanker'); return
     }
     try {
         $cfgPath = Join-Path (Get-Project) '.statefulclanker\config.json'
         $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
-        $mode = if (($argList -join ' ') -match '\{promptFile\}') { 'prompt-file' } else { 'inline' }
+        $mode = if ($joinedArgs -match '\{promptFile\}') { 'prompt-file' } else { 'stdin' }
         if (-not $cfg.PSObject.Properties['providers'] -or $null -eq $cfg.providers) {
             $cfg | Add-Member -NotePropertyName providers -NotePropertyValue ([pscustomobject]@{}) -Force
         }

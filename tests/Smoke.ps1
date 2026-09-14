@@ -132,6 +132,10 @@ finally {
     Pop-Location
 }
 
+Write-Host 'STEP 8b: prompt delivery'
+& (Join-Path $PSScriptRoot 'Prompt.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Prompt tests failed (exit $LASTEXITCODE)." }
+
 Write-Host 'STEP 9: MCP control plane'
 & (Join-Path $PSScriptRoot 'Mcp.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "MCP tests failed (exit $LASTEXITCODE)." }

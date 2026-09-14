@@ -84,6 +84,33 @@ Or force a worker provider:
 .\StatefulClanker.ps1 run -Provider claude
 ```
 
+## How the prompt reaches the worker
+
+A one-shot prompt is a compiled context, not a sentence. It is **always** written to
+`prompts/<receiptId>.txt` and delivered out of band:
+
+```json
+{ "command": "claude", "args": ["-p"], "mode": "stdin" }
+```
+
+| mode | delivery |
+|---|---|
+| `stdin` | prompt piped to the provider's stdin. **Default and recommended.** |
+| `prompt-file` | args carry `{promptFile}`, the path to the prompt |
+| `inline` | args carry `{prompt}`. Supported, but see below. |
+
+**Do not use `inline`.** Passing the prompt as a command-line argument is a latent
+failure: `cmd.exe` caps a command line at 8191 characters and `CreateProcess` at
+32767, while the shipped retrieval budgets alone total 36000. Measured on a small
+project, an 11k-character prompt already fails with `The command line is too long`
+and exit 1 — which reads like a broken provider rather than a prompt that did not
+fit. The harness now refuses an oversized inline command line itself and tells you
+how to fix it, rather than letting the OS produce that error.
+
+Note that `stdin` means **no prompt flag with a value**. `claude -p` reads stdin;
+`agy` reads stdin only when `-p` is absent, since a bare `-p` errors with "flag
+needs an argument". `provider_test` will tell you which shape your CLI wants.
+
 ## Execution pipeline
 
 A run is a state-transition cycle, not a chat continuation:

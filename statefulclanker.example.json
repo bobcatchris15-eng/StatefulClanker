@@ -3,32 +3,27 @@
   "criticProvider": null,
   "validatorProvider": null,
   "providers": {
-    "opencode": {
-      "command": "opencode",
-      "args": [
-        "run",
-        "--format",
-        "json",
-        "{promptFile}"
-      ],
-      "mode": "prompt-file"
-    },
     "claude": {
       "command": "claude",
       "args": [
-        "-p",
-        "{prompt}"
+        "-p"
       ],
-      "mode": "inline"
+      "mode": "stdin"
     },
     "agy": {
       "command": "agy",
       "args": [
-        "run",
-        "--prompt-file",
-        "{promptFile}"
+        "--mode",
+        "accept-edits"
       ],
-      "mode": "prompt-file"
+      "mode": "stdin"
+    },
+    "opencode": {
+      "command": "opencode",
+      "args": [
+        "run"
+      ],
+      "mode": "stdin"
     }
   },
   "maxConcurrent": 3,

@@ -107,11 +107,19 @@ try {
     # first run from a chat session: the setting lives only in config.json and has
     # no CLI command.
     $r = Invoke-McpLines $temp @(
-        '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"provider_set","arguments":{"name":"ghost","command":"definitely-not-installed-xyz","args":["-p","{prompt}"]}}}',
-        '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"provider_set","arguments":{"name":"noplaceholder","command":"cmd.exe","args":["/c","echo hi"]}}}'
+        (New-McpCall 1 'provider_set' @{ name = 'ghost'; command = 'definitely-not-installed-xyz'; args = @('-p') }),
+        # stdin pipes the prompt, so {prompt} in args is a contradiction.
+        (New-McpCall 2 'provider_set' @{ name = 'contradiction'; command = 'cmd.exe'; args = @('/c', '{prompt}'); mode = 'stdin' }),
+        # prompt-file without the placeholder means the worker gets no task at all.
+        (New-McpCall 3 'provider_set' @{ name = 'nofile'; command = 'cmd.exe'; args = @('/c', 'echo'); mode = 'prompt-file' }),
+        # No placeholder and no mode is the normal case: default to stdin.
+        (New-McpCall 4 'provider_set' @{ name = 'viastdin'; command = 'cmd.exe'; args = @('/d', '/c', 'more.com') })
     )
     Assert-True ([bool]$r[0].result.isError) 'provider_set must reject a command that is not installed.'
-    Assert-True ([bool]$r[1].result.isError) 'provider_set must reject args with no {prompt}/{promptFile} placeholder.'
+    Assert-True ([bool]$r[1].result.isError) 'mode stdin with {prompt} in args must be rejected.'
+    Assert-True ([bool]$r[2].result.isError) 'mode prompt-file without {promptFile} must be rejected.'
+    $stdinSet = Get-ToolPayload $r[3]
+    Assert-True ($stdinSet.mode -eq 'stdin') "Args with no placeholder should default to stdin, got '$($stdinSet.mode)'."
 
     Write-Host '  MCP 3c: provider_set writes a usable provider, provider_test probes it'
     $r = Invoke-McpLines $temp @(

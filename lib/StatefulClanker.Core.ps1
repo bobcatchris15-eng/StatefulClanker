@@ -82,7 +82,7 @@ function Add-SCEvent([string]$Type,[string]$Text,$Data=$null) {
     $evt=[ordered]@{id=New-SCId 'event';ts=(Get-Date).ToUniversalTime().ToString('o');type=$Type;message=$Text;data=$Data}
     Invoke-SCLocked { ((ConvertTo-SCJson $evt 12) -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'events.jsonl') -Encoding UTF8 }
 }
-function Get-SCState { Assert-SCInitialized;Read-SCJson (Get-SCPath 'state.json') }
+function Get-SCState { Assert-SCInitialized;Invoke-SCLocked { Read-SCJson (Get-SCPath 'state.json') } }
 function Save-SCState($State) {
     Invoke-SCLocked {
         $revision=0;if($State.PSObject.Properties['revision']){$revision=[int]$State.revision}
@@ -90,14 +90,22 @@ function Save-SCState($State) {
     }
 }
 function Get-SCConfig { Assert-SCInitialized;$cfg=Read-SCJson (Get-SCPath 'config.json');if($null-eq$cfg){throw 'Missing .statefulclanker/config.json'};return $cfg }
-function Get-SCTask([string]$Id) { $task=Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$Id));if($null-eq$task){throw "Unknown task: $Id"};return $task }
+<# Reads take the same lock as writes.
+
+   Write-SCJson replaces a file with temp-file + Move-Item. That is atomic for the
+   final rename, but a concurrent reader can still catch the target absent or locked
+   during the replace and get $null back - which surfaces as a spurious "Unknown
+   task" and kills a cycle mid-review. Observed as an intermittent failure in the
+   parallel conflict test: a cycle stopped at status 'reviewing' with no error.
+   The mutex is reentrant per-thread, so nesting inside a Save-* is fine. #>
+function Get-SCTask([string]$Id) { $task=Invoke-SCLocked { Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$Id)) };if($null-eq$task){throw "Unknown task: $Id"};return $task }
 function Save-SCTask($Task) {
     Invoke-SCLocked {
         $revision=0;if($Task.PSObject.Properties['stateRevision']){$revision=[int]$Task.stateRevision}
         Set-SCProperty $Task 'stateRevision' ($revision+1);Set-SCProperty $Task 'updatedAt' ((Get-Date).ToUniversalTime().ToString('o'));Write-SCJson (Get-SCPath ("tasks/{0}.json"-f$Task.id)) $Task
     }
 }
-function Get-SCTasks { Assert-SCInitialized;$dir=Get-SCPath 'tasks';if(-not(Test-Path $dir)){return @()};return @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File|ForEach-Object{Read-SCJson $_.FullName}) }
+function Get-SCTasks { Assert-SCInitialized;$dir=Get-SCPath 'tasks';if(-not(Test-Path $dir)){return @()};return @(Invoke-SCLocked { @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File|ForEach-Object{Read-SCJson $_.FullName}|Where-Object{$null-ne$_}) }) }
 function Get-SCTaskControlRevision($Task) { if($Task.PSObject.Properties['controlRevision']){return [int]$Task.controlRevision};return 0 }
 function Advance-SCTaskControlRevision($Task) { $next=(Get-SCTaskControlRevision $Task)+1;Set-SCProperty $Task 'controlRevision' $next;return $next }
 function ConvertTo-SCRelations($InputRelations) {

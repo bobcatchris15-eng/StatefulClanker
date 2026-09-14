@@ -131,15 +131,20 @@ Edit `.statefulclanker\config.json`:
   "providers": {
     "claude": {
       "command": "claude",
-      "args": ["-p", "{prompt}"],
-      "mode": "inline"
+      "args": ["-p"],
+      "mode": "stdin"
     }
   }
 }
 ```
 
-`args` **must** contain `{prompt}` (the task text as an argument) or `{promptFile}`
-(a path to a file holding it). `{projectRoot}` and `{taskId}` are also substituted.
+`args` holds **flags only**. The prompt is piped to the provider on stdin, so there
+is no `{prompt}` placeholder and no command-line length limit. Use `mode` of
+`prompt-file` with `{promptFile}` instead if your CLI wants a path.
+`{projectRoot}` and `{taskId}` are also substituted.
+
+Do not put the prompt in `args`: a compiled context routinely exceeds the 8191-char
+`cmd.exe` command-line limit, and the failure reads like a broken provider.
 
 Two things worth knowing, both learned the hard way:
 

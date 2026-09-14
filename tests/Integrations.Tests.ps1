@@ -27,9 +27,14 @@ try {
     Assert-True ($presets.Count -ge 6) 'Expected several provider presets.'
     foreach ($p in $presets) {
         if ($p.id -eq 'custom') { continue }
-        # A preset with no placeholder would configure a provider that silently
-        # receives no task at all.
-        Assert-True ((@($p.args) -join ' ') -match '\{prompt\}|\{promptFile\}') "Preset $($p.id) has no {prompt}/{promptFile} placeholder."
+        # The prompt must reach the worker out of band. {prompt} on the command
+        # line fails outright once retrieval grows: cmd.exe caps at 8191 chars.
+        $joinedArgs = (@($p.args) -join ' ')
+        Assert-True ($joinedArgs -notmatch '\{prompt\}') "Preset $($p.id) passes {prompt} on the command line."
+        Assert-True (@('stdin', 'prompt-file') -contains $p.mode) "Preset $($p.id) has mode '$($p.mode)'."
+        if ($p.mode -eq 'prompt-file') {
+            Assert-True ($joinedArgs -match '\{promptFile\}') "Preset $($p.id) is prompt-file mode but has no {promptFile}."
+        }
         Assert-True ([bool]$p.command) "Preset $($p.id) has no command."
     }
 
