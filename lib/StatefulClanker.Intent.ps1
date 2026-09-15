@@ -119,3 +119,22 @@ function Capture-SCContextRequests($Task,$Run,$Compilation) {
     }
     return @($requests)
 }
+
+# Prompt construction uses the exact persisted compilation receipt instead of
+# serializing the live PowerShell object graph again. The persisted receipt is the
+# provenance-bearing snapshot that actually defines this invocation.
+function Get-SCPersistedCompilationText($Compilation) {
+    $path=Get-SCPath ("compilations/{0}.json"-f$Compilation.id)
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Missing compilation receipt: $($Compilation.id)"}
+    return Get-Content -Raw -LiteralPath $path
+}
+function New-SCWorkerPrompt($Compilation) {
+    $compiled=Get-SCPersistedCompilationText $Compilation
+    return "You are a cold-start StatefulClanker worker. The compiled receipt below is the exact temporary projection for this invocation. The project intent contract inside it is orchestrator-owned and READ-ONLY: never modify, weaken, or reinterpret it. Raise INTENT_QUESTION or INTENT_CONFLICT instead of guessing or changing intent.`r`n`r`nSTATEFULCLANKER COMPILED RECEIPT`r`n=================================`r`n$compiled`r`n`r`nComplete only this bounded task."
+}
+function New-SCReviewPrompt($Task,$Run,$Compilation,[string]$Stage) {
+    $rule=if($Stage-eq'critic'){'Check omissions, contradictions, risky assumptions, regressions, whether the worker addressed the bounded task, and especially whether it preserved the authoritative intent contract.'}else{'Judge acceptance criteria and intent-contract compliance from the compiled evidence and worker receipt. Do not trust the worker claim without evidence.'}
+    $compiled=Get-SCPersistedCompilationText $Compilation
+    $worker=ConvertTo-SCJson ([ordered]@{runId=$Run.id;exitCode=$Run.exitCode;stdout=$Run.stdout;stderr=$Run.stderr;contextRequests=if($Run.PSObject.Properties['contextRequests']){@($Run.contextRequests)}else{@()};intentQuestions=if($Run.PSObject.Properties['intentQuestions']){@($Run.intentQuestions)}else{@()};intentConflicts=if($Run.PSObject.Properties['intentConflicts']){@($Run.intentConflicts)}else{@()}}) 12
+    return "You are the $Stage in StatefulClanker. You did not perform the work.`r`n$rule`r`n`r`nCOMPILED RECEIPT:`r`n$compiled`r`n`r`nWORKER RECEIPT:`r`n$worker`r`n`r`nFirst non-empty line MUST be exactly VERDICT: PASS or VERDICT: FAIL. Then explain evidence briefly."
+}
