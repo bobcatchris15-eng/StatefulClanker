@@ -1,37 +1,20 @@
 <# Cross-process durable-state lock.
 
-   The original implementation used a named System.Threading.Mutex. A smoke run
-   exposed a nasty boundary: after a native provider returned successfully, the
-   next state read could wait forever on the mutex even though no other worker was
-   active. Mutex ownership is thread-affine; that is a poor fit for a PowerShell
-   harness that crosses runspaces, jobs and native-process boundaries.
-
-   This implementation uses an exclusively opened lock file instead. File handles
-   are process-crash-safe (the OS closes them when the process dies), work across
-   the independent PowerShell processes used by parallel execution, and are not
-   thread-owned kernel mutexes. Same-thread nesting is handled explicitly because
-   Core intentionally nests locked helpers (Update-SCReadiness -> Get/Save task).
-
-   Important PowerShell detail: never `return (& $Body)` from inside the lock's
-   try/finally. PowerShell streams command output, so the caller can begin consuming
-   output before the finally has released the file handle. Materialize the body
-   result first, release the handle, then emit the result.
+   Diagnostic build: fail quickly with the calling function when a durable-state
+   lock cannot be acquired. This makes CI identify the exact contending state
+   operation instead of leaving a background job parked for the full smoke timeout.
 #>
 $script:SCLockDepth = 0
 $script:SCLockOwnerThreadId = $null
 $script:SCLockHandle = $null
 
-function Invoke-SCLocked([scriptblock]$Body, [int]$TimeoutSeconds = 120) {
+function Invoke-SCLocked([scriptblock]$Body, [int]$TimeoutSeconds = 3) {
     $threadId=[System.Threading.Thread]::CurrentThread.ManagedThreadId
 
     if($script:SCLockDepth -gt 0 -and $script:SCLockOwnerThreadId -eq $threadId){
         $script:SCLockDepth++
         $nestedResult=$null
-        try{
-            $nestedResult=@(& $Body)
-        }finally{
-            $script:SCLockDepth--
-        }
+        try{$nestedResult=@(& $Body)}finally{$script:SCLockDepth--}
         if($nestedResult.Count-eq 0){return}
         if($nestedResult.Count-eq 1){return $nestedResult[0]}
         return $nestedResult
@@ -41,38 +24,25 @@ function Invoke-SCLocked([scriptblock]$Body, [int]$TimeoutSeconds = 120) {
     $parent=Split-Path -Parent $lockPath
     if($parent-and-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null}
 
+    $caller='unknown'
+    try{$stack=@(Get-PSCallStack);if($stack.Count-gt 1){$caller=[string]$stack[1].FunctionName}}catch{}
     $deadline=[DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $stream=$null
     while($null-eq$stream){
         try{
-            $stream=[System.IO.File]::Open(
-                $lockPath,
-                [System.IO.FileMode]::OpenOrCreate,
-                [System.IO.FileAccess]::ReadWrite,
-                [System.IO.FileShare]::None
-            )
+            $stream=[System.IO.File]::Open($lockPath,[System.IO.FileMode]::OpenOrCreate,[System.IO.FileAccess]::ReadWrite,[System.IO.FileShare]::None)
         }catch [System.IO.IOException]{
-            if([DateTime]::UtcNow-ge$deadline){throw "Timed out after ${TimeoutSeconds}s waiting for the StatefulClanker state lock."}
+            if([DateTime]::UtcNow-ge$deadline){throw "Timed out after ${TimeoutSeconds}s waiting for StatefulClanker state lock in $caller (thread $threadId, depth $($script:SCLockDepth))."}
             Start-Sleep -Milliseconds 25
         }catch [System.UnauthorizedAccessException]{
-            if([DateTime]::UtcNow-ge$deadline){throw "Timed out after ${TimeoutSeconds}s waiting for the StatefulClanker state lock: $($_.Exception.Message)"}
+            if([DateTime]::UtcNow-ge$deadline){throw "Timed out after ${TimeoutSeconds}s waiting for StatefulClanker state lock in $caller: $($_.Exception.Message)"}
             Start-Sleep -Milliseconds 25
         }
     }
 
-    $script:SCLockHandle=$stream
-    $script:SCLockOwnerThreadId=$threadId
-    $script:SCLockDepth=1
+    $script:SCLockHandle=$stream;$script:SCLockOwnerThreadId=$threadId;$script:SCLockDepth=1
     $result=$null
-    try{
-        $result=@(& $Body)
-    }finally{
-        $script:SCLockDepth=0
-        $script:SCLockOwnerThreadId=$null
-        $script:SCLockHandle=$null
-        $stream.Dispose()
-    }
-
+    try{$result=@(& $Body)}finally{$script:SCLockDepth=0;$script:SCLockOwnerThreadId=$null;$script:SCLockHandle=$null;$stream.Dispose()}
     if($result.Count-eq 0){return}
     if($result.Count-eq 1){return $result[0]}
     return $result
