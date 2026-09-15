@@ -7,8 +7,6 @@ $mcp = Join-Path $repo 'mcp\StatefulClanker.Mcp.ps1'
 $cockpit = Join-Path $repo 'desktop\StatefulClanker.Cockpit.ps1'
 
 Write-Host 'STEP 1: parse every PowerShell file in the repo'
-# Parse-check the whole repo, not just the entrypoints. lib/ was previously
-# unchecked, so a parse error there shipped green and broke every command.
 foreach($script in @(Get-ChildItem -LiteralPath $repo -Recurse -Filter '*.ps1' -File |
         Where-Object { -not $_.FullName.Contains('.statefulclanker') } |
         Select-Object -ExpandProperty FullName)){
@@ -18,9 +16,6 @@ foreach($script in @(Get-ChildItem -LiteralPath $repo -Recurse -Filter '*.ps1' -
 }
 
 Write-Host 'STEP 1b: bareword-concatenation guard'
-# `return'PASS'` parses clean but tokenizes into a bareword command name
-# `returnPASS` and only fails at runtime. Anchored to statement position so that
-# ordinary calls like .Add('Exit') are not flagged.
 foreach($script in @(Get-ChildItem -LiteralPath $repo -Recurse -Filter '*.ps1' -File |
         Where-Object { -not $_.FullName.Contains('.statefulclanker') } )){
     $n=0
@@ -39,13 +34,9 @@ if((Get-SCVerdict "VERDICT: PASS" 0) -ne 'PASS'){throw 'Get-SCVerdict failed to 
 if((Get-SCVerdict "VERDICT: FAIL" 0) -ne 'FAIL'){throw 'Get-SCVerdict failed to parse FAIL.'}
 if((Get-SCVerdict "VERDICT: PASS" 1) -ne 'FAIL'){throw 'Get-SCVerdict must fail closed on nonzero exit.'}
 if((Get-SCVerdict "chatty preamble" 0) -ne 'FAIL'){throw 'Get-SCVerdict must fail closed on malformed output.'}
-# A reviewer that explains itself before voting has still voted. Requiring the
-# verdict on the FIRST line produced false FAILs on work that actually passed.
 if((Get-SCVerdict "I reviewed the diff and the tests run.`n`nVERDICT: PASS" 0) -ne 'PASS'){throw 'Get-SCVerdict must accept a verdict after a preamble.'}
 if((Get-SCVerdict "Findings:`n- all criteria met`n**VERDICT: PASS**" 0) -ne 'PASS'){throw 'Get-SCVerdict must tolerate markdown decoration.'}
 if((Get-SCVerdict "Analysis.`n  VERDICT: PASS.  " 0) -ne 'PASS'){throw 'Get-SCVerdict must tolerate indentation and trailing punctuation.'}
-# ...but the gate must not be flippable. These are the reasons this does not simply
-# take the last match, nor match VERDICT anywhere in a line.
 if((Get-SCVerdict "VERDICT: FAIL`nOn reflection VERDICT: PASS" 0) -ne 'FAIL'){throw 'A later PASS must not override an earlier FAIL.'}
 if((Get-SCVerdict "Do not emit VERDICT: PASS unless tests ran." 0) -ne 'FAIL'){throw 'A prose mention of a verdict is not a vote.'}
 if((Get-SCVerdict "The worker said VERDICT: PASS but is wrong.`nVERDICT: FAIL" 0) -ne 'FAIL'){throw 'Prose PASS must not outrank a real FAIL.'}
@@ -81,11 +72,18 @@ try {
     }
     $finished = Wait-Job -Job $job -Timeout 15
     if($null -eq $finished){
-        $activeDir=Join-Path $temp '.statefulclanker\telemetry\active'
-        $active=@()
+        $stateDir=Join-Path $temp '.statefulclanker'
+        $activeDir=Join-Path $stateDir 'telemetry\active'
+        $completedDir=Join-Path $stateDir 'telemetry\runs'
+        $promptDir=Join-Path $stateDir 'prompts'
+        $active=@();$completed=@();$prompts=@();$events='';$jobOutput=''
         if(Test-Path $activeDir){$active=@(Get-ChildItem -LiteralPath $activeDir -Filter '*.json' -File | ForEach-Object { Get-Content -Raw $_.FullName })}
-        $taskSnapshot=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\smoke-task.json')
-        throw "Pipeline exceeded 15 seconds. Task=$taskSnapshot ActiveTelemetry=$($active -join ' | ')"
+        if(Test-Path $completedDir){$completed=@(Get-ChildItem -LiteralPath $completedDir -Filter '*.json' -File | ForEach-Object { Get-Content -Raw $_.FullName })}
+        if(Test-Path $promptDir){$prompts=@(Get-ChildItem -LiteralPath $promptDir -File | Select-Object -ExpandProperty Name)}
+        $eventsPath=Join-Path $stateDir 'events.jsonl';if(Test-Path $eventsPath){$events=(Get-Content -LiteralPath $eventsPath|Where-Object{$_}) -join ' | '}
+        try{$jobOutput=(Receive-Job -Job $job -Keep -ErrorAction SilentlyContinue 2>&1|Out-String)}catch{$jobOutput="<receive failed: $($_.Exception.Message)>"}
+        $taskSnapshot=Get-Content -Raw -LiteralPath (Join-Path $stateDir 'tasks\smoke-task.json')
+        throw "Pipeline exceeded 15 seconds. Task=$taskSnapshot ActiveTelemetry=$($active -join ' | ') CompletedTelemetry=$($completed -join ' | ') Prompts=$($prompts -join ',') Events=$events JobOutput=$jobOutput"
     }
     Receive-Job -Job $job | Write-Host
     Remove-Job -Job $job -Force
@@ -106,10 +104,6 @@ try {
     if (@(Get-ChildItem -LiteralPath (Join-Path $temp '.statefulclanker\telemetry\active') -Filter '*.json' -File).Count -ne 0) { throw 'Active telemetry should be empty after completion.' }
 
     Write-Host 'STEP 6b: every .jsonl line is a single JSON object'
-    # `ConvertTo-SCJson $x 12 -replace ...` binds -replace as a PARAMETER of the
-    # command, not as an operator, so the newline-flattening silently never happened
-    # and every append wrote pretty-printed multi-line JSON. It stayed hidden because
-    # the readers swallow parse errors, so context faults simply read back as empty.
     foreach ($jsonl in @('events.jsonl', 'telemetry\events.jsonl', 'telemetry\context-faults.jsonl')) {
         $jsonlPath = Join-Path $temp ".statefulclanker\$jsonl"
         if (-not (Test-Path -LiteralPath $jsonlPath)) { continue }
