@@ -13,7 +13,7 @@ $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
 $runtimeRef='a836ab1bcfdfad2453ba78d42c5ae86e3cd195fc'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Context.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1')
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Context.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -31,9 +31,9 @@ if($useCheckedOut){
     }
 }
 . (Join-Path $runtimeLib 'StatefulClanker.Core.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.Intent.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Context.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Execution.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.Intent.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Concurrency.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.ProjectReview.ps1')
 
@@ -53,7 +53,7 @@ switch($Command.ToLowerInvariant()){
 'status'{Show-SCStatus;break}
 'task'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};switch($Subcommand.ToLowerInvariant()){'add'{Add-SCTask;break};'list'{Update-SCReadiness;Get-SCTasks|Sort-Object createdAt|Select-Object id,status,attemptCount,role,humanGate,title|Format-Table -AutoSize;break};'show'{if(-not$TaskId){throw '-TaskId required.'};Get-SCTask $TaskId|ConvertTo-SCJson -Depth 16|Write-Host;break};'retry'{Retry-SCTask $TaskId;break};default{throw "Unknown task subcommand: $Subcommand"}};break}
 'plan'{if($null-eq$Subcommand){$Subcommand=''};switch($Subcommand.ToLowerInvariant()){'import'{if(-not$Path){throw '-Path required.'};Import-SCPlan $Path;break};'approve'{Approve-SCPlan;break};default{throw "Unknown plan subcommand: $Subcommand"}};break}
-'intent'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='show'};switch($Subcommand.ToLowerInvariant()){'show'{Show-SCIntent 'show';break};'history'{Show-SCIntent 'history';break};'replace'{Replace-SCIntentContract $Path $Reason;break};default{throw "Unknown intent subcommand: $Subcommand"}};break}
+'intent'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='show'};switch($Subcommand.ToLowerInvariant()){'show'{Show-SCIntent 'show';break};'history'{Show-SCIntent 'history';break};'escalations'{Show-SCIntent 'escalations';break};'replace'{Replace-SCIntentContract $Path $Reason;break};default{throw "Unknown intent subcommand: $Subcommand"}};break}
 'run'{if($Parallel -gt 0 -or $Subcommand -eq 'parallel'){Invoke-SCParallel $Parallel $Provider $PSCommandPath -NoMerge:$NoMerge}else{Invoke-SCTask $TaskId $Provider};break}
 'complete'{Complete-SCTask $TaskId;break}
 'block'{Block-SCTask $TaskId $Reason;break}
