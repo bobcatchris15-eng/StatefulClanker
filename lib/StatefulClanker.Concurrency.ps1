@@ -35,9 +35,6 @@ function Get-SCMaxConcurrent([int]$Override = 0) {
     return 1
 }
 
-# Never call `git branch -D` speculatively under Windows PowerShell. A missing
-# branch writes stderr, which becomes a terminating NativeCommandError when the
-# harness runs with ErrorActionPreference=Stop. Cleanup is deliberately idempotent.
 function Test-SCBranchExists([string]$StateRoot,[string]$Branch) {
     & git -C $StateRoot show-ref --verify --quiet "refs/heads/$Branch"
     return ($LASTEXITCODE -eq 0)
@@ -119,6 +116,13 @@ function Start-SCCycleProcess([string]$StateRoot, $Worktree, [string]$TaskId, [s
     }
 }
 
+function Get-SCParallelChildOutput($Run) {
+    $stdout = if (Test-Path -LiteralPath $Run.logPath) { Get-Content -Raw -LiteralPath $Run.logPath } else { '' }
+    $errPath = "$($Run.logPath).err"
+    $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -Raw -LiteralPath $errPath } else { '' }
+    return [ordered]@{ stdout=[string]$stdout; stderr=[string]$stderr }
+}
+
 function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$HarnessPath, [switch]$NoMerge) {
     Assert-SCInitialized
     Assert-SCNotHeld
@@ -157,10 +161,8 @@ function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$
     foreach ($r in $running) { $r.process.WaitForExit() }
     foreach ($r in $running) {
         if ($r.process.ExitCode -ne 0) {
-            $stdout = if (Test-Path -LiteralPath $r.logPath) { Get-Content -Raw -LiteralPath $r.logPath } else { '' }
-            $errPath = "$($r.logPath).err"
-            $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -Raw -LiteralPath $errPath } else { '' }
-            Write-Warning "parallel child $($r.taskId) exited $($r.process.ExitCode). STDOUT: $stdout STDERR: $stderr"
+            $child=Get-SCParallelChildOutput $r
+            Write-Warning "parallel child $($r.taskId) exited $($r.process.ExitCode). STDOUT: $($child.stdout) STDERR: $($child.stderr)"
         }
     }
 
@@ -169,7 +171,9 @@ function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$
         $task = Get-SCTask $r.taskId
         $entry = [ordered]@{ taskId = $r.taskId; status = $task.status; committed = $false; merged = $false; reason = $null; logPath = $r.logPath }
         if ($task.status -ne 'complete') {
+            $child=Get-SCParallelChildOutput $r
             $entry.reason = if ($task.blockReason) { [string]$task.blockReason } else { "cycle ended as '$($task.status)'" }
+            Write-Warning "parallel child $($r.taskId) exited $($r.process.ExitCode) without completing task. STDOUT: $($child.stdout) STDERR: $($child.stderr)"
             Remove-SCWorktree $stateRoot $r.taskId
             $results += $entry
             continue
