@@ -25,12 +25,16 @@ function Invoke-SCLocked([scriptblock]$Body, [int]$TimeoutSeconds = 3) {
     if($result.Count-eq 0){return};if($result.Count-eq 1){return $result[0]};return $result
 }
 
-# Temporary diagnostic overrides. These preserve Core semantics but expose the
-# exact boundary crossed after a provider returns; Smoke captures job output.
 function Write-SCJson([string]$TargetPath,$Value) {
     Write-Host "TRACE Write-SCJson enter $TargetPath"
     $parent=Split-Path -Parent $TargetPath;if($parent-and-not(Test-Path $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null}
-    $tmp="$TargetPath.tmp";ConvertTo-SCJson $Value 30|Set-Content -LiteralPath $tmp -Encoding UTF8;Move-Item -Force -LiteralPath $tmp -Destination $TargetPath
+    $tmp="$TargetPath.tmp"
+    Write-Host "TRACE Write-SCJson serialize-begin $TargetPath"
+    $json=ConvertTo-SCJson $Value 30
+    Write-Host "TRACE Write-SCJson serialize-end $TargetPath chars=$($json.Length)"
+    $json|Set-Content -LiteralPath $tmp -Encoding UTF8
+    Write-Host "TRACE Write-SCJson temp-written $TargetPath"
+    Move-Item -Force -LiteralPath $tmp -Destination $TargetPath
     Write-Host "TRACE Write-SCJson exit $TargetPath"
 }
 function Get-SCTask([string]$Id) {
