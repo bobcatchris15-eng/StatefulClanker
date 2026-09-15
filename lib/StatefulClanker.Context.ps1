@@ -6,7 +6,7 @@ function Get-SCRecentEvents([int]$Count=12,[int]$BudgetChars=4000) {
 }
 function Get-SCExecutionPolicyHash { return Get-SCHashString (ConvertTo-SCJson (Get-SCConfig) 20) }
 function Get-SCActivePlanIntent($State) {
-    if(-not$State.activePlanId){return $null}
+    if($null-eq$State-or-not$State.activePlanId){return $null}
     $plan=Read-SCJson (Get-SCPath ("plans/{0}.json"-f$State.activePlanId))
     if($null-eq$plan){return [ordered]@{id=$State.activePlanId;name=$null;summary=$null}}
     return [ordered]@{id=$plan.id;name=$plan.name;summary=$plan.summary}
@@ -47,7 +47,13 @@ function New-SCCompilation($Task) {
     return $receipt
 }
 function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit') {
-    $reasons=@();$state=Get-SCState;$task=Get-SCTask ([string]$Compilation.taskId);$intent=Read-SCJson (Get-SCPath 'intent/contract.json');$planIntent=Get-SCActivePlanIntent $state
+    $reasons=@()
+    try{$state=Read-SCJson (Get-SCPath 'state.json')}catch{$state=$null}
+    try{$task=Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$Compilation.taskId))}catch{$task=$null}
+    try{$intent=Read-SCJson (Get-SCPath 'intent/contract.json')}catch{$intent=$null}
+    if($null-eq$state){$reasons+='project state unavailable during freshness check';return [ordered]@{fresh=$false;mode=$Mode;checkedAt=(Get-Date).ToUniversalTime().ToString('o');reasons=@($reasons)}}
+    if($null-eq$task){$reasons+='task unavailable during freshness check';return [ordered]@{fresh=$false;mode=$Mode;checkedAt=(Get-Date).ToUniversalTime().ToString('o');reasons=@($reasons)}}
+    $planIntent=Get-SCActivePlanIntent $state
     if((Get-SCHashString ([string]$state.goal))-ne[string]$Compilation.readSet.projectGoalHash){$reasons+='project goal changed'}
     if([string]$state.activePlanId-ne[string]$Compilation.readSet.activePlanId){$reasons+='active plan changed'}
     if((Get-SCHashString (ConvertTo-SCJson $planIntent 8))-ne[string]$Compilation.readSet.planIntentHash){$reasons+='active plan intent changed'}
@@ -57,7 +63,8 @@ function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit') {
     if((Get-SCTaskControlRevision $task)-ne[int]$Compilation.readSet.taskControlRevision){$reasons+='human task control changed'}
     if((Get-SCTaskDefinitionHash $task)-ne[string]$Compilation.readSet.taskDefinitionHash){$reasons+='task definition changed'}
     foreach($depRead in @($Compilation.readSet.dependencies)){
-        try{$dep=Get-SCTask ([string]$depRead.id)}catch{$reasons+="dependency missing: $($depRead.id)";continue}
+        try{$dep=Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$depRead.id))}catch{$dep=$null}
+        if($null-eq$dep){$reasons+="dependency missing: $($depRead.id)";continue}
         if([string]$dep.status-ne[string]$depRead.status){$reasons+="dependency status changed: $($dep.id)"}
         if([string]$dep.latestRunId-ne[string]$depRead.latestRunId){$reasons+="dependency run changed: $($dep.id)"}
         if([string]$dep.latestValidationId-ne[string]$depRead.latestValidationId){$reasons+="dependency validation changed: $($dep.id)"}
