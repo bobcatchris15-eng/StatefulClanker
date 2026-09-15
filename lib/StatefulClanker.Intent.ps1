@@ -93,9 +93,10 @@ function Show-SCIntent([string]$Mode='show') {
     }
 }
 
-# Loaded after StatefulClanker.Execution.ps1. This deliberately overrides the
-# original context-only capture function so worker intent ambiguity uses the same
-# fail-closed, non-advancing path as a context miss.
+# Loaded after StatefulClanker.Execution.ps1. Intent ambiguity follows the same
+# fail-closed, non-advancing path as a context miss, but intent questions/conflicts
+# are persisted in their dedicated escalation log rather than mutating the live
+# provider receipt immediately before it is serialized.
 function Capture-SCContextRequests($Task,$Run,$Compilation) {
     $requests=@();$context=@();$questions=@();$conflicts=@()
     foreach($line in @(([string]$Run.stdout)-split"`r?`n")){
@@ -104,8 +105,6 @@ function Capture-SCContextRequests($Task,$Run,$Compilation) {
         if($line-match'^\s*INTENT_CONFLICT:\s*(.+?)\s*$'){$conflicts+=$Matches[1];$requests+="INTENT_CONFLICT: $($Matches[1])";continue}
     }
     Set-SCProperty $Run 'contextRequests' @($context)
-    Set-SCProperty $Run 'intentQuestions' @($questions)
-    Set-SCProperty $Run 'intentConflicts' @($conflicts)
     if($context.Count-gt 0){
         Ensure-SCTelemetryLayout
         foreach($request in $context){$record=[ordered]@{ts=(Get-Date).ToUniversalTime().ToString('o');taskId=$Task.id;runId=$Run.id;compilationId=$Compilation.id;inputFingerprint=$Compilation.inputFingerprint;request=$request};((ConvertTo-SCJson $record 8) -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'telemetry/context-faults.jsonl') -Encoding UTF8}
@@ -120,9 +119,6 @@ function Capture-SCContextRequests($Task,$Run,$Compilation) {
     return @($requests)
 }
 
-# Prompt construction uses the exact persisted compilation receipt instead of
-# serializing the live PowerShell object graph again. The persisted receipt is the
-# provenance-bearing snapshot that actually defines this invocation.
 function Get-SCPersistedCompilationText($Compilation) {
     $path=Get-SCPath ("compilations/{0}.json"-f$Compilation.id)
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Missing compilation receipt: $($Compilation.id)"}
@@ -135,6 +131,6 @@ function New-SCWorkerPrompt($Compilation) {
 function New-SCReviewPrompt($Task,$Run,$Compilation,[string]$Stage) {
     $rule=if($Stage-eq'critic'){'Check omissions, contradictions, risky assumptions, regressions, whether the worker addressed the bounded task, and especially whether it preserved the authoritative intent contract.'}else{'Judge acceptance criteria and intent-contract compliance from the compiled evidence and worker receipt. Do not trust the worker claim without evidence.'}
     $compiled=Get-SCPersistedCompilationText $Compilation
-    $worker=ConvertTo-SCJson ([ordered]@{runId=$Run.id;exitCode=$Run.exitCode;stdout=$Run.stdout;stderr=$Run.stderr;contextRequests=if($Run.PSObject.Properties['contextRequests']){@($Run.contextRequests)}else{@()};intentQuestions=if($Run.PSObject.Properties['intentQuestions']){@($Run.intentQuestions)}else{@()};intentConflicts=if($Run.PSObject.Properties['intentConflicts']){@($Run.intentConflicts)}else{@()}}) 12
+    $worker=ConvertTo-SCJson ([ordered]@{runId=$Run.id;exitCode=$Run.exitCode;stdout=$Run.stdout;stderr=$Run.stderr;contextRequests=if($Run.PSObject.Properties['contextRequests']){@($Run.contextRequests)}else{@()}}) 12
     return "You are the $Stage in StatefulClanker. You did not perform the work.`r`n$rule`r`n`r`nCOMPILED RECEIPT:`r`n$compiled`r`n`r`nWORKER RECEIPT:`r`n$worker`r`n`r`nFirst non-empty line MUST be exactly VERDICT: PASS or VERDICT: FAIL. Then explain evidence briefly."
 }
