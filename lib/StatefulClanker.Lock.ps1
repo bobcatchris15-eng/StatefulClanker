@@ -35,7 +35,7 @@ function Invoke-SCLocked([scriptblock]$Body, [int]$TimeoutSeconds = 3) {
             if([DateTime]::UtcNow-ge$deadline){throw "Timed out after ${TimeoutSeconds}s waiting for StatefulClanker state lock in $caller (thread $threadId, depth $($script:SCLockDepth))."}
             Start-Sleep -Milliseconds 25
         }catch [System.UnauthorizedAccessException]{
-            if([DateTime]::UtcNow-ge$deadline){throw "Timed out after ${TimeoutSeconds}s waiting for StatefulClanker state lock in $caller: $($_.Exception.Message)"}
+            if([DateTime]::UtcNow-ge$deadline){throw "Timed out after ${TimeoutSeconds}s waiting for StatefulClanker state lock in ${caller}: $($_.Exception.Message)"}
             Start-Sleep -Milliseconds 25
         }
     }
