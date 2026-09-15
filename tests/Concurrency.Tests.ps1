@@ -23,9 +23,6 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     return
 }
 
-<# Build a throwaway git project wired to the writing provider.
-   $TargetFile is what every worker writes to: give each task its own name for the
-   clean case, or one shared name to force a conflict. #>
 function New-TestProject([string]$Path, [string]$TargetFile, [int]$TaskCount, [int]$MaxConcurrent = 3) {
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
     Push-Location $Path
@@ -40,9 +37,6 @@ function New-TestProject([string]$Path, [string]$TargetFile, [int]$TaskCount, [i
         & $pwshPath -NoProfile -File $harness init | Out-Null
         $cfgPath = Join-Path $Path '.statefulclanker\config.json'
         $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
-        # Only the WORKER writes files. Reviewers are read-only by contract, and a
-        # reviewer that edits the tree would leave it dirty - which then blocks the
-        # next parallel run, since merging into uncommitted work is unsafe.
         $cfg.defaultProvider = 'w'; $cfg.criticProvider = 'ro'; $cfg.validatorProvider = 'ro'
         $cfg | Add-Member -NotePropertyName maxConcurrent -NotePropertyValue $MaxConcurrent -Force
         $cfg.providers | Add-Member -NotePropertyName w -NotePropertyValue ([pscustomobject]@{
@@ -65,7 +59,6 @@ function New-TestProject([string]$Path, [string]$TargetFile, [int]$TaskCount, [i
 $root = Join-Path ([IO.Path]::GetTempPath()) ('sc-conc-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 try {
-    # ---------------------------------------------------------------------------
     Write-Host '  CONC 1: three cycles run concurrently and all reach complete'
     $p1 = Join-Path $root 'clean'
     New-TestProject $p1 'out-{taskId}.txt' 3
@@ -78,9 +71,8 @@ try {
             ForEach-Object { Get-Content -Raw $_.FullName | ConvertFrom-Json })
         Assert-True ($tasks.Count -eq 3) "Expected 3 tasks, got $($tasks.Count)."
         Assert-True (@($tasks | Where-Object { $_.status -eq 'complete' }).Count -eq 3) `
-            "All 3 should be complete, got: $(($tasks | ForEach-Object { "$($_.id)=$($_.status)" }) -join ', ')"
+            "All 3 should be complete, got: $(($tasks | ForEach-Object { "$($_.id)=$($_.status)" }) -join ', '). Scheduler output:`n$out"
 
-        # Shared durable state must survive three processes writing at once.
         foreach ($t in $tasks) {
             Assert-True ([bool]$t.latestRunId) "$($t.id) has no worker receipt."
             Assert-True ([bool]$t.latestProposalId) "$($t.id) has no proposal."
@@ -102,7 +94,6 @@ try {
         Assert-True ($left.Count -eq 0) "Worktrees left behind: $(($left | ForEach-Object { $_.Name }) -join ', ')"
     } finally { Pop-Location }
 
-    # ---------------------------------------------------------------------------
     Write-Host '  CONC 4: colliding writes - one merges, the other is held, tree stays clean'
     $p2 = Join-Path $root 'conflict'
     New-TestProject $p2 'shared.txt' 2 2
@@ -112,14 +103,11 @@ try {
         Assert-True ($out -match 'MERGED') "One task should have merged. Output:`n$out"
         Assert-True ($out -match 'merge conflict') "The second should report a merge conflict. Output:`n$out"
 
-        # The critical property: a conflict must never leave the main checkout in a
-        # half-merged state with markers in the files.
         $shared = Get-Content -Raw -LiteralPath (Join-Path $p2 'shared.txt')
         Assert-True ($shared -notmatch '<<<<<<<') 'Conflict markers were left in the main tree.'
         $status = & git status --porcelain | Out-String
         Assert-True ([string]::IsNullOrWhiteSpace($status)) "Main tree must be clean after an aborted merge. Got:`n$status"
 
-        # The rejected work is evidence, not garbage: keep the branch and say so.
         $branches = (& git branch) -join ' '
         Assert-True ($branches -match 'sc/task/t2' -or $branches -match 'sc/task/t1') 'The conflicting work should be preserved on its branch.'
 
@@ -130,7 +118,6 @@ try {
         Assert-True ($held[0].blockReason -match 'onflict') 'The held task should say why it was held.'
     } finally { Pop-Location }
 
-    # ---------------------------------------------------------------------------
     Write-Host '  CONC 5: refuses to run parallel where it would be unsafe'
     $p3 = Join-Path $root 'notgit'
     New-Item -ItemType Directory -Force -Path $p3 | Out-Null
@@ -143,7 +130,6 @@ try {
 
     Push-Location $p1
     try {
-        # A dirty tree would make merging destructive.
         'uncommitted' | Set-Content -LiteralPath (Join-Path $p1 'dirty.txt') -Encoding UTF8
         & $pwshPath -NoProfile -File $harness task add -TaskId 'extra' -Title 'Extra' `
             -Instruction 'Do work.' -Accept 'passes' -Retrieval 'seed.txt' | Out-Null
@@ -154,7 +140,6 @@ try {
     Write-Host 'PASS: concurrency (parallel dispatch, shared state, merge, conflict hold, safety refusals)'
 } finally {
     Set-Location $repo
-    # Worktrees hold file handles; prune before deleting or removal fails.
     foreach ($proj in @('clean', 'conflict')) {
         $p = Join-Path $root $proj
         if (Test-Path -LiteralPath $p) { & git -C $p worktree prune 2>$null | Out-Null }
