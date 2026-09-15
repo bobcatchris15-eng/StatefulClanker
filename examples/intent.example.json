@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "revision": 0,
+  "updatedAt": "",
+  "objective": "Describe the terminal outcome the user actually wants.",
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "text": "A hard capability or behavior that must be present.",
+      "priority": "must"
+    }
+  ],
+  "constraints": [
+    {
+      "id": "CON-001",
+      "text": "A platform, architecture, compatibility, cost, safety, or operational constraint."
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-001",
+      "text": "A property that must remain true while implementation evolves."
+    }
+  ],
+  "nonGoals": [
+    {
+      "id": "NG-001",
+      "text": "A plausible interpretation that is explicitly outside the project."
+    }
+  ],
+  "decisions": [
+    {
+      "id": "DEC-001",
+      "text": "A user-approved decision workers should not reopen without escalation."
+    }
+  ],
+  "preferences": [
+    {
+      "id": "PREF-001",
+      "text": "A preference that may yield to hard requirements or constraints."
+    }
+  ],
+  "openQuestions": [],
+  "successDefinition": "Describe the observable state in which the user would consider the project complete.",
+  "authority": {
+    "owner": "orchestrator",
+    "workers": "read-only"
+  }
+}
