@@ -1,16 +1,9 @@
 <# Parallel execution: run several ready tasks at once, each in its own git worktree.
 
-   Why worktrees rather than one shared checkout:
-
    Tasks declare what they READ (retrieval, evidence) but never what they WRITE, so
-   the scheduler cannot know whether two ready tasks will edit the same file. On a
-   shared tree that is silent corruption - both workers report success and one
-   overwrites the other. A worktree gives each cycle its own checkout, which turns
-   collision from a silent data race into an explicit merge-time question.
-
-   Durable state is NOT isolated. Every cycle reads and writes the one canonical
-   .statefulclanker in the main tree, serialised by the state mutex in Core. That is
-   deliberate: the task graph, receipts and proposals are the shared record. #>
+   the scheduler cannot know whether two ready tasks will touch the same file. Each
+   cycle therefore gets an isolated worktree. Durable state remains canonical in the
+   main tree and is serialized across processes by the Core state mutex. #>
 
 function Test-SCGitAvailable {
     return [bool](Get-Command git -ErrorAction SilentlyContinue)
@@ -26,8 +19,6 @@ function Get-SCWorktreeRoot([string]$StateRoot) {
     Join-Path (Join-Path $StateRoot '.statefulclanker') 'worktrees'
 }
 
-<# Tasks eligible to start right now: ready, not human-gated, and not already
-   claimed by a running cycle. #>
 function Get-SCDispatchableTasks {
     Update-SCReadiness
     return @(Get-SCTasks |
@@ -44,6 +35,19 @@ function Get-SCMaxConcurrent([int]$Override = 0) {
     return 1
 }
 
+# Never call `git branch -D` speculatively under Windows PowerShell. A missing
+# branch writes stderr, which becomes a terminating NativeCommandError when the
+# harness runs with ErrorActionPreference=Stop. Cleanup is deliberately idempotent.
+function Test-SCBranchExists([string]$StateRoot,[string]$Branch) {
+    & git -C $StateRoot show-ref --verify --quiet "refs/heads/$Branch"
+    return ($LASTEXITCODE -eq 0)
+}
+function Remove-SCBranchIfExists([string]$StateRoot,[string]$Branch) {
+    if (-not (Test-SCBranchExists $StateRoot $Branch)) { return }
+    $output = & git -C $StateRoot branch -D $Branch 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "git branch cleanup failed for $Branch : $output" }
+}
+
 function New-SCWorktree([string]$StateRoot, [string]$TaskId) {
     $root = Get-SCWorktreeRoot $StateRoot
     if (-not (Test-Path -LiteralPath $root)) { New-Item -ItemType Directory -Force -Path $root | Out-Null }
@@ -52,8 +56,7 @@ function New-SCWorktree([string]$StateRoot, [string]$TaskId) {
     $branch = "sc/task/$slug"
 
     if (Test-Path -LiteralPath $path) { Remove-SCWorktree $StateRoot $TaskId }
-    # A branch left behind by a previous crashed run would block the add.
-    & git -C $StateRoot branch -D $branch 2>$null | Out-Null
+    Remove-SCBranchIfExists $StateRoot $branch
 
     $out = & git -C $StateRoot worktree add -b $branch $path HEAD 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) { throw "git worktree add failed for $TaskId : $out" }
@@ -63,20 +66,17 @@ function New-SCWorktree([string]$StateRoot, [string]$TaskId) {
 function Remove-SCWorktree([string]$StateRoot, [string]$TaskId, [switch]$KeepBranch) {
     $slug = ($TaskId -replace '[^A-Za-z0-9_.-]', '-')
     $path = Join-Path (Get-SCWorktreeRoot $StateRoot) $slug
+    $branch = "sc/task/$slug"
     if (Test-Path -LiteralPath $path) {
-        & git -C $StateRoot worktree remove --force $path 2>$null | Out-Null
-        if (Test-Path -LiteralPath $path) { Remove-Item -Recurse -Force -LiteralPath $path -ErrorAction SilentlyContinue }
+        $out = & git -C $StateRoot worktree remove --force $path 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -and (Test-Path -LiteralPath $path)) {
+            Remove-Item -Recurse -Force -LiteralPath $path -ErrorAction SilentlyContinue
+        }
     }
     & git -C $StateRoot worktree prune 2>$null | Out-Null
-    if (-not $KeepBranch) { & git -C $StateRoot branch -D "sc/task/$slug" 2>$null | Out-Null }
+    if (-not $KeepBranch) { Remove-SCBranchIfExists $StateRoot $branch }
 }
 
-<# Commit whatever the worker changed inside its worktree.
-
-   Returns $false when the worker produced no file changes at all, which is worth
-   distinguishing: a cycle whose critic and validator passed but which touched
-   nothing is usually a provider that could not write (a headless permission gate),
-   not a task that needed no work. #>
 function Save-SCWorktreeWork($Worktree, [string]$Message) {
     & git -C $Worktree.path add -A 2>$null | Out-Null
     $status = & git -C $Worktree.path status --porcelain 2>$null | Out-String
@@ -86,13 +86,6 @@ function Save-SCWorktreeWork($Worktree, [string]$Message) {
     return $true
 }
 
-<# Merge a passing task branch into the main checkout.
-
-   Merging cleanly is NOT the same as still being correct: two changes that each
-   passed alone can break together with no textual conflict - a renamed function one
-   worker updated only within its own files, two files now declaring the same thing,
-   a caller left pointing at a changed signature. Git resolves text; nothing checked
-   semantics. The caller must re-validate after the merges land. #>
 function Merge-SCWorktreeBranch([string]$StateRoot, $Worktree) {
     $out = & git -C $StateRoot merge --no-ff --no-edit $Worktree.branch 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) {
@@ -102,7 +95,6 @@ function Merge-SCWorktreeBranch([string]$StateRoot, $Worktree) {
     return [ordered]@{ merged = $true; reason = $null; detail = $out.Trim() }
 }
 
-<# Dispatch one task's full cycle as a detached process bound to its worktree. #>
 function Start-SCCycleProcess([string]$StateRoot, $Worktree, [string]$TaskId, [string]$Provider, [string]$HarnessPath) {
     $logDir = Join-Path (Join-Path $StateRoot '.statefulclanker') 'parallel'
     if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
@@ -115,8 +107,6 @@ function Start-SCCycleProcess([string]$StateRoot, $Worktree, [string]$TaskId, [s
 
     $pwshPath = (Get-Process -Id $PID).Path
     if ([string]::IsNullOrWhiteSpace($pwshPath)) { $pwshPath = 'pwsh' }
-    # Quote explicitly: Start-Process -ArgumentList joins an array WITHOUT quoting,
-    # so any path containing a space is split into separate arguments.
     $quoted = ((@('-NoProfile', '-NonInteractive', '-File', $HarnessPath) + $cli) |
         ForEach-Object { if ($_ -match '[ \t"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
 
@@ -166,7 +156,6 @@ function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$
     Write-Host 'Waiting for cycles to finish...'
     foreach ($r in $running) { $r.process.WaitForExit() }
 
-    # Commit and merge only the cycles whose task actually reached 'complete'.
     $results = @()
     foreach ($r in $running) {
         $task = Get-SCTask $r.taskId
@@ -200,7 +189,6 @@ function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$
         $merge = Merge-SCWorktreeBranch $stateRoot $r.worktree
         $entry.merged = $merge.merged
         if (-not $merge.merged) {
-            # Keep the branch: the work passed its own review and is recoverable.
             $entry.reason = "$($merge.reason) - work kept on branch $($r.worktree.branch)"
             $current = Get-SCTask $r.taskId
             $current.status = 'needs_rework'
@@ -228,8 +216,6 @@ function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$
         Write-Warning "$mergedCount branches were merged. Merging cleanly is not the same as still working: two changes that each passed alone can break together with no textual conflict."
     }
 
-    # A multi-branch merge is exactly where integration breakage comes from, so
-    # review immediately rather than waiting for the task counter to trip.
     $afterMerge = [bool](Get-SCProjectReviewSetting 'projectReviewAfterMultiMerge' $true)
     if ($mergedCount -gt 1 -and $afterMerge -and (Get-SCProjectReviewInterval) -gt 0) {
         Invoke-SCProjectReview 'multi-merge' | Out-Null
