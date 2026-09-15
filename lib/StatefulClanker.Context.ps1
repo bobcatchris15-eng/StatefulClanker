@@ -47,12 +47,12 @@ function New-SCCompilation($Task) {
     return $receipt
 }
 function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit') {
-    $reasons=@();$state=Get-SCState;$task=Get-SCTask ([string]$Compilation.taskId);$intent=Get-SCIntentContract;$planIntent=Get-SCActivePlanIntent $state
+    $reasons=@();$state=Get-SCState;$task=Get-SCTask ([string]$Compilation.taskId);$intent=Read-SCJson (Get-SCPath 'intent/contract.json');$planIntent=Get-SCActivePlanIntent $state
     if((Get-SCHashString ([string]$state.goal))-ne[string]$Compilation.readSet.projectGoalHash){$reasons+='project goal changed'}
     if([string]$state.activePlanId-ne[string]$Compilation.readSet.activePlanId){$reasons+='active plan changed'}
     if((Get-SCHashString (ConvertTo-SCJson $planIntent 8))-ne[string]$Compilation.readSet.planIntentHash){$reasons+='active plan intent changed'}
     if([int]$state.directionRevision-ne[int]$Compilation.readSet.directionRevision){$reasons+='human direction changed'}
-    if([int]$intent.revision-ne[int]$Compilation.readSet.intentRevision-or(Get-SCIntentHash $intent)-ne[string]$Compilation.readSet.intentHash){$reasons+='authoritative intent changed'}
+    if($null-eq$intent-or[int]$intent.revision-ne[int]$Compilation.readSet.intentRevision-or(Get-SCIntentHash $intent)-ne[string]$Compilation.readSet.intentHash){$reasons+='authoritative intent changed'}
     if((Get-SCExecutionPolicyHash)-ne[string]$Compilation.readSet.executionPolicyHash){$reasons+='execution policy/config changed'}
     if((Get-SCTaskControlRevision $task)-ne[int]$Compilation.readSet.taskControlRevision){$reasons+='human task control changed'}
     if((Get-SCTaskDefinitionHash $task)-ne[string]$Compilation.readSet.taskDefinitionHash){$reasons+='task definition changed'}
