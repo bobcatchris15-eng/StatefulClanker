@@ -4,6 +4,8 @@ function Ensure-SCIntentLayout {
     $history=Get-SCPath 'intent/history'
     if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
     if(-not(Test-Path -LiteralPath $history)){New-Item -ItemType Directory -Force -Path $history|Out-Null}
+    $escalations=Get-SCPath 'intent/escalations.jsonl'
+    if(-not(Test-Path -LiteralPath $escalations)){''|Set-Content -LiteralPath $escalations -Encoding UTF8}
 }
 function New-SCIntentContract {
     $state=Get-SCState
@@ -83,6 +85,37 @@ function Show-SCIntent([string]$Mode='show') {
             }|Format-Table -AutoSize
             break
         }
+        'escalations' {
+            Get-Content -LiteralPath (Get-SCPath 'intent/escalations.jsonl')|Where-Object{$_}|ForEach-Object{$_|ConvertFrom-Json}|Select-Object ts,type,taskId,message|Format-Table -AutoSize
+            break
+        }
         default { throw "Unknown intent subcommand: $Mode" }
     }
+}
+
+# Loaded after StatefulClanker.Execution.ps1. This deliberately overrides the
+# original context-only capture function so worker intent ambiguity uses the same
+# fail-closed, non-advancing path as a context miss.
+function Capture-SCContextRequests($Task,$Run,$Compilation) {
+    $requests=@();$context=@();$questions=@();$conflicts=@()
+    foreach($line in @(([string]$Run.stdout)-split"`r?`n")){
+        if($line-match'^\s*CONTEXT_(?:REQUEST|MISS):\s*(.+?)\s*$'){$context+=$Matches[1];$requests+="CONTEXT: $($Matches[1])";continue}
+        if($line-match'^\s*INTENT_QUESTION:\s*(.+?)\s*$'){$questions+=$Matches[1];$requests+="INTENT_QUESTION: $($Matches[1])";continue}
+        if($line-match'^\s*INTENT_CONFLICT:\s*(.+?)\s*$'){$conflicts+=$Matches[1];$requests+="INTENT_CONFLICT: $($Matches[1])";continue}
+    }
+    Set-SCProperty $Run 'contextRequests' @($context)
+    Set-SCProperty $Run 'intentQuestions' @($questions)
+    Set-SCProperty $Run 'intentConflicts' @($conflicts)
+    if($context.Count-gt 0){
+        Ensure-SCTelemetryLayout
+        foreach($request in $context){$record=[ordered]@{ts=(Get-Date).ToUniversalTime().ToString('o');taskId=$Task.id;runId=$Run.id;compilationId=$Compilation.id;inputFingerprint=$Compilation.inputFingerprint;request=$request};((ConvertTo-SCJson $record 8) -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'telemetry/context-faults.jsonl') -Encoding UTF8}
+        Add-SCEvent 'context.fault' 'Worker requested missing context.' @{taskId=$Task.id;runId=$Run.id;compilationId=$Compilation.id;requests=@($context)}
+    }
+    if($questions.Count-gt 0-or$conflicts.Count-gt 0){
+        Ensure-SCIntentLayout
+        foreach($q in $questions){$record=[ordered]@{ts=(Get-Date).ToUniversalTime().ToString('o');type='question';taskId=$Task.id;runId=$Run.id;compilationId=$Compilation.id;intentRevision=$Compilation.readSet.intentRevision;message=$q};((ConvertTo-SCJson $record 8)-replace"`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'intent/escalations.jsonl') -Encoding UTF8}
+        foreach($c in $conflicts){$record=[ordered]@{ts=(Get-Date).ToUniversalTime().ToString('o');type='conflict';taskId=$Task.id;runId=$Run.id;compilationId=$Compilation.id;intentRevision=$Compilation.readSet.intentRevision;message=$c};((ConvertTo-SCJson $record 8)-replace"`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'intent/escalations.jsonl') -Encoding UTF8}
+        Add-SCEvent 'intent.escalated' 'Worker escalated authoritative intent.' @{taskId=$Task.id;runId=$Run.id;compilationId=$Compilation.id;questions=@($questions);conflicts=@($conflicts)}
+    }
+    return @($requests)
 }
