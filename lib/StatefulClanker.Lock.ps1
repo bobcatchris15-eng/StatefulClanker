@@ -11,6 +11,11 @@
    the independent PowerShell processes used by parallel execution, and are not
    thread-owned kernel mutexes. Same-thread nesting is handled explicitly because
    Core intentionally nests locked helpers (Update-SCReadiness -> Get/Save task).
+
+   Important PowerShell detail: never `return (& $Body)` from inside the lock's
+   try/finally. PowerShell streams command output, so the caller can begin consuming
+   output before the finally has released the file handle. Materialize the body
+   result first, release the handle, then emit the result.
 #>
 $script:SCLockDepth = 0
 $script:SCLockOwnerThreadId = $null
@@ -19,11 +24,17 @@ $script:SCLockHandle = $null
 function Invoke-SCLocked([scriptblock]$Body, [int]$TimeoutSeconds = 120) {
     $threadId=[System.Threading.Thread]::CurrentThread.ManagedThreadId
 
-    # Reentrant call on the same PowerShell execution thread. The outer call owns
-    # the actual file handle; nested helpers only advance/decrement depth.
     if($script:SCLockDepth -gt 0 -and $script:SCLockOwnerThreadId -eq $threadId){
         $script:SCLockDepth++
-        try{return (& $Body)}finally{$script:SCLockDepth--}
+        $nestedResult=$null
+        try{
+            $nestedResult=@(& $Body)
+        }finally{
+            $script:SCLockDepth--
+        }
+        if($nestedResult.Count-eq 0){return}
+        if($nestedResult.Count-eq 1){return $nestedResult[0]}
+        return $nestedResult
     }
 
     $lockPath=Get-SCPath 'state.lock'
@@ -52,12 +63,17 @@ function Invoke-SCLocked([scriptblock]$Body, [int]$TimeoutSeconds = 120) {
     $script:SCLockHandle=$stream
     $script:SCLockOwnerThreadId=$threadId
     $script:SCLockDepth=1
+    $result=$null
     try{
-        return (& $Body)
+        $result=@(& $Body)
     }finally{
         $script:SCLockDepth=0
         $script:SCLockOwnerThreadId=$null
         $script:SCLockHandle=$null
         $stream.Dispose()
     }
+
+    if($result.Count-eq 0){return}
+    if($result.Count-eq 1){return $result[0]}
+    return $result
 }
