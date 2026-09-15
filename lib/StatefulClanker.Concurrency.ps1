@@ -155,6 +155,14 @@ function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$
 
     Write-Host 'Waiting for cycles to finish...'
     foreach ($r in $running) { $r.process.WaitForExit() }
+    foreach ($r in $running) {
+        if ($r.process.ExitCode -ne 0) {
+            $stdout = if (Test-Path -LiteralPath $r.logPath) { Get-Content -Raw -LiteralPath $r.logPath } else { '' }
+            $errPath = "$($r.logPath).err"
+            $stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -Raw -LiteralPath $errPath } else { '' }
+            Write-Warning "parallel child $($r.taskId) exited $($r.process.ExitCode). STDOUT: $stdout STDERR: $stderr"
+        }
+    }
 
     $results = @()
     foreach ($r in $running) {
