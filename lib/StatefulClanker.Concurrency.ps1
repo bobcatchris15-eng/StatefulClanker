@@ -35,14 +35,31 @@ function Get-SCMaxConcurrent([int]$Override = 0) {
     return 1
 }
 
+# Windows PowerShell turns native stderr into ErrorRecords and, with the harness-wide
+# ErrorActionPreference=Stop, may throw even when the native process exits 0. Git
+# uses stderr for normal progress (notably `worktree add`), so capture native output
+# under Continue and make the native exit code the authority.
+function Invoke-SCGitCapture([string]$WorkingPath,[string[]]$Arguments) {
+    $oldPreference=$ErrorActionPreference
+    $text='';$code=-1
+    try {
+        $ErrorActionPreference='Continue'
+        $text=(& git -C $WorkingPath @Arguments 2>&1 | Out-String)
+        $code=$LASTEXITCODE
+    } finally {
+        $ErrorActionPreference=$oldPreference
+    }
+    return [ordered]@{exitCode=[int]$code;output=[string]$text}
+}
+
 function Test-SCBranchExists([string]$StateRoot,[string]$Branch) {
     & git -C $StateRoot show-ref --verify --quiet "refs/heads/$Branch"
     return ($LASTEXITCODE -eq 0)
 }
 function Remove-SCBranchIfExists([string]$StateRoot,[string]$Branch) {
     if (-not (Test-SCBranchExists $StateRoot $Branch)) { return }
-    $output = & git -C $StateRoot branch -D $Branch 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { throw "git branch cleanup failed for $Branch : $output" }
+    $result=Invoke-SCGitCapture $StateRoot @('branch','-D',$Branch)
+    if ($result.exitCode -ne 0) { throw "git branch cleanup failed for $Branch : $($result.output)" }
 }
 
 function New-SCWorktree([string]$StateRoot, [string]$TaskId) {
@@ -55,8 +72,8 @@ function New-SCWorktree([string]$StateRoot, [string]$TaskId) {
     if (Test-Path -LiteralPath $path) { Remove-SCWorktree $StateRoot $TaskId }
     Remove-SCBranchIfExists $StateRoot $branch
 
-    $out = & git -C $StateRoot worktree add -b $branch $path HEAD 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { throw "git worktree add failed for $TaskId : $out" }
+    $result=Invoke-SCGitCapture $StateRoot @('worktree','add','-b',$branch,$path,'HEAD')
+    if ($result.exitCode -ne 0) { throw "git worktree add failed for $TaskId : $($result.output)" }
     return [ordered]@{ taskId = $TaskId; path = (Resolve-Path -LiteralPath $path).Path; branch = $branch }
 }
 
@@ -65,8 +82,8 @@ function Remove-SCWorktree([string]$StateRoot, [string]$TaskId, [switch]$KeepBra
     $path = Join-Path (Get-SCWorktreeRoot $StateRoot) $slug
     $branch = "sc/task/$slug"
     if (Test-Path -LiteralPath $path) {
-        $out = & git -C $StateRoot worktree remove --force $path 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -and (Test-Path -LiteralPath $path)) {
+        $result=Invoke-SCGitCapture $StateRoot @('worktree','remove','--force',$path)
+        if ($result.exitCode -ne 0 -and (Test-Path -LiteralPath $path)) {
             Remove-Item -Recurse -Force -LiteralPath $path -ErrorAction SilentlyContinue
         }
     }
@@ -78,18 +95,18 @@ function Save-SCWorktreeWork($Worktree, [string]$Message) {
     & git -C $Worktree.path add -A 2>$null | Out-Null
     $status = & git -C $Worktree.path status --porcelain 2>$null | Out-String
     if ([string]::IsNullOrWhiteSpace($status)) { return $false }
-    $out = & git -C $Worktree.path -c user.name='StatefulClanker' -c user.email='statefulclanker@localhost' commit -m $Message 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { throw "git commit failed in $($Worktree.path): $out" }
+    $result=Invoke-SCGitCapture $Worktree.path @('-c','user.name=StatefulClanker','-c','user.email=statefulclanker@localhost','commit','-m',$Message)
+    if ($result.exitCode -ne 0) { throw "git commit failed in $($Worktree.path): $($result.output)" }
     return $true
 }
 
 function Merge-SCWorktreeBranch([string]$StateRoot, $Worktree) {
-    $out = & git -C $StateRoot merge --no-ff --no-edit $Worktree.branch 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) {
+    $result=Invoke-SCGitCapture $StateRoot @('merge','--no-ff','--no-edit',[string]$Worktree.branch)
+    if ($result.exitCode -ne 0) {
         & git -C $StateRoot merge --abort 2>$null | Out-Null
-        return [ordered]@{ merged = $false; reason = 'merge conflict'; detail = $out.Trim() }
+        return [ordered]@{ merged = $false; reason = 'merge conflict'; detail = $result.output.Trim() }
     }
-    return [ordered]@{ merged = $true; reason = $null; detail = $out.Trim() }
+    return [ordered]@{ merged = $true; reason = $null; detail = $result.output.Trim() }
 }
 
 function Start-SCCycleProcess([string]$StateRoot, $Worktree, [string]$TaskId, [string]$Provider, [string]$HarnessPath) {
