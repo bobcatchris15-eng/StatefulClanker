@@ -134,3 +134,34 @@ function New-SCReviewPrompt($Task,$Run,$Compilation,[string]$Stage) {
     $worker=ConvertTo-SCJson ([ordered]@{runId=$Run.id;exitCode=$Run.exitCode;stdout=$Run.stdout;stderr=$Run.stderr;contextRequests=if($Run.PSObject.Properties['contextRequests']){@($Run.contextRequests)}else{@()}}) 12
     return "You are the $Stage in StatefulClanker. You did not perform the work.`r`n$rule`r`n`r`nCOMPILED RECEIPT:`r`n$compiled`r`n`r`nWORKER RECEIPT:`r`n$worker`r`n`r`nFirst non-empty line MUST be exactly VERDICT: PASS or VERDICT: FAIL. Then explain evidence briefly."
 }
+
+# PowerShell can attach adapter metadata to the live object returned from a native
+# provider pipeline. The provider result is deliberately normalized into a fresh
+# plain object before any caller mutates or persists it. This keeps durable receipts
+# restricted to explicit primitive fields and prevents ConvertTo-Json from walking
+# an accidental live object graph.
+$script:SCInvokeProviderBase=${function:Invoke-SCProvider}
+function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null) {
+    $raw=& $script:SCInvokeProviderBase $Task $Prompt $Stage $ProviderOverride $ParentAgentId $Compilation
+    $normalized=[ordered]@{
+        schemaVersion=[int]$raw.schemaVersion
+        id=[string]$raw.id
+        agentId=[string]$raw.agentId
+        taskId=[string]$raw.taskId
+        stage=[string]$raw.stage
+        provider=[string]$raw.provider
+        compilationId=if($null-eq$raw.compilationId){$null}else{[string]$raw.compilationId}
+        inputFingerprint=if($null-eq$raw.inputFingerprint){$null}else{[string]$raw.inputFingerprint}
+        command=[string]$raw.command
+        args=@($raw.args|ForEach-Object{[string]$_})
+        promptPath=[string]$raw.promptPath
+        startedAt=[string]$raw.startedAt
+        endedAt=[string]$raw.endedAt
+        durationSeconds=[double]$raw.durationSeconds
+        exitCode=[int]$raw.exitCode
+        stdout=[string]$raw.stdout
+        stderr=[string]$raw.stderr
+        verdict=$null
+    }
+    return [pscustomobject]$normalized
+}
