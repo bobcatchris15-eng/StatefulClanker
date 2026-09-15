@@ -12,8 +12,8 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
-$runtimeRef='87514bd25a6334f94ec8571d389362469653e698'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Context.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1')
+$runtimeRef='25db53f72d7cfb8ee3ec9c4ca90a7c684bfef7ac'
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Lock.ps1','StatefulClanker.Context.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -31,6 +31,7 @@ if($useCheckedOut){
     }
 }
 . (Join-Path $runtimeLib 'StatefulClanker.Core.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.Lock.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Context.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Execution.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Intent.ps1')
