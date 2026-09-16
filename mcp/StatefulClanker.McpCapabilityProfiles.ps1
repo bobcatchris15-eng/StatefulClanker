@@ -2,7 +2,14 @@
 $script:SCBaseNewExtendedToolsProfiles=(Get-Item Function:\New-SCExtendedTools).ScriptBlock
 $script:SCBaseInvokeExtendedToolProfiles=(Get-Item Function:\Invoke-SCExtendedTool).ScriptBlock
 $script:SCBaseControlInstructionsProfiles=(Get-Item Function:\Get-SCControlPlaneInstructions).ScriptBlock
+$script:SCBaseGetMcpWorkerCatalogProfiles=(Get-Item Function:\Get-McpWorkerCatalog).ScriptBlock
 
+function Get-McpWorkerCatalog {
+    $catalog=& $script:SCBaseGetMcpWorkerCatalogProfiles
+    if(-not$catalog.PSObject.Properties['profiles']){$catalog|Add-Member profiles ([pscustomobject]@{}) -Force}
+    if($catalog.PSObject.Properties['schemaVersion']){$catalog.schemaVersion=2}else{$catalog|Add-Member schemaVersion 2 -Force}
+    return $catalog
+}
 function Assert-McpProfileTightens($Profile,$Catalog) {
     if($null-eq$Profile){throw 'profile policy required'}
     if($Profile.PSObject.Properties['allow']-and$null-ne$Profile.allow){foreach($pattern in @($Profile.allow)){if(-not(Test-McpMachineCanGrantPattern ([string]$pattern) $Catalog)){throw "Capability profile cannot grant '$pattern'; machine policy does not allow it."}}}
@@ -17,7 +24,6 @@ function New-SCExtendedTools {
 function Invoke-SCExtendedTool([string]$Name,$Arguments) {
     if(@('worker_profile_set','worker_profile_remove')-notcontains$Name){return & $script:SCBaseInvokeExtendedToolProfiles $Name $Arguments}
     $project=Get-McpProject $Arguments;Assert-McpInitialized $project;$catalog=Get-McpWorkerCatalog
-    if(-not$catalog.PSObject.Properties['profiles']){$catalog|Add-Member profiles ([pscustomobject]@{}) -Force}
     switch($Name){
       'worker_profile_set' {
         $profileName=Get-McpArgRequired $Arguments 'name';if($profileName-notmatch'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Invalid capability profile name.'};if(-not$Arguments.PSObject.Properties['profile']){throw 'profile required'}
