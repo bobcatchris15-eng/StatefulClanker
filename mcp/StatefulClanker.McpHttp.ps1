@@ -20,8 +20,8 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpCore.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpExtensions.ps1')
-. (Join-Path $PSScriptRoot 'StatefulClanker.McpWorkerPolicy.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.BackendInstructions.ps1')
+. (Join-Path $PSScriptRoot 'StatefulClanker.McpWorkerPolicy.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpProtocol.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.SubscriptionPump.ps1')
 
