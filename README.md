@@ -2,18 +2,20 @@
 
 StatefulClanker is a **Windows-first resident orchestration application** for long-running agent work where **the project persists and model context does not**.
 
-The native tray app owns the running system. A conversational agent steers it through MCP. StatefulClanker persists intent, plans and receipts, compiles bounded worker context, launches whatever provider CLIs the user already has, and applies critic/validator gates before accepted state advances.
+The native tray app owns the running system. A conversational agent steers it through MCP. StatefulClanker persists current human directives, normalized intent, plans and receipts, compiles bounded worker context, routes work into either provider-owned CLI harnesses or direct inference endpoints, and applies critic/validator gates before accepted state advances.
 
 ```text
 human
   ↓
 conversational planner over MCP
   ↓
-Intent Contract + compact task graph
+Current Human Directives + reconciled Intent + compact task graph
   ↓
 StatefulClanker resident Windows app
   ↓
-provider CLI workers / critics / validators
+worker backends
+  ├─ provider CLI harnesses
+  └─ StatefulClanker minimal direct-inference harness
   ↓
 Git/worktrees + durable receipts + accepted project state
 ```
@@ -24,7 +26,8 @@ StatefulClanker does **not** ask one giant model session to remember an entire p
 
 It externalizes continuity into durable project artifacts and treats model sessions as replaceable compute:
 
-- authoritative Intent Contract
+- current human directives with superseded history kept audit-only
+- reconciled authoritative Intent Contract
 - verbatim human-source artifacts
 - compact semantic plans/tasks
 - task dependency graph and relations
@@ -32,7 +35,7 @@ It externalizes continuity into durable project artifacts and treats model sessi
 - worker/critic/validator run receipts
 - freshness and authority checks
 - context/intent escalations
-- project-scoped telemetry
+- project-scoped telemetry and resumable control events
 - Git worktree isolation for parallel tasks
 
 The central rule is:
@@ -52,7 +55,8 @@ It lives in the notification area and provides:
 - stdio MCP bridging into the same resident authority
 - active-project telemetry for workers, commits, critics and tasks
 - integration status/registration
-- configured provider CLI and semantic-size routing status
+- configured worker-backend and semantic-size routing status
+- machine-local **API Connections** setup for local/OpenAI-compatible inference endpoints and gateways
 
 Machine-local application state lives under:
 
@@ -73,12 +77,14 @@ MCP is the normal steering interface.
 The server's `initialize` instructions tell the conversational model to:
 
 - use structured questionnaire/question tools aggressively for material ambiguity
-- preserve important human wording as durable source evidence
-- maintain the Intent Contract as specification authority
+- treat the latest direct human word for a named scope as authoritative
+- keep current Human Directives separate from normalized Intent
+- reconcile contradictions before dispatching new work
+- preserve important direct wording/source evidence
 - semantically decompose work into bounded cold-start tasks
-- prefer small tasks where separation is natural
 - never invent task boundaries from regexes, line counts, file counts or token thresholds
-- leave implementation work to provider CLI worker sessions
+- report meaningful project-state changes back to the human
+- leave implementation work to configured worker backends
 
 The conversational agent is the planner/decomposer. StatefulClanker is the durable state machine, context compiler, dispatcher, observer and review coordinator.
 
@@ -109,31 +115,32 @@ It is deliberately easy to inspect with `Get-Content`, `Select-String`, `rg`, `f
 
 See [`docs/TASK_RECORD_FORMAT.md`](docs/TASK_RECORD_FORMAT.md).
 
-## Durable human input
+## Current directives and durable human input
 
-Execution-relevant human direction is stored verbatim under:
+Material direct human decisions are maintained as **current directives**. Updating the same directive id supersedes its earlier active wording for that scope. Superseded revisions remain available for audit/debugging but are filtered out of ordinary worker context.
+
+Execution-relevant human wording is stored under:
 
 ```text
 .statefulclanker\input\
 ```
 
-and receives a reference such as:
+and receives references such as:
 
 ```text
 human:h-20260916010203-ab12cd
-```
-
-Tasks may reference the whole source or a line range:
-
-```text
 human:h-20260916010203-ab12cd#L4-L11
 ```
 
-That gives later orchestrators a way to audit the normalized Intent Contract against what the human actually said.
+When a directive changes, new dispatch is blocked until the current directive set has been reconciled into a fresh Intent revision. Workers receive the current directive snapshot and reconciled Intent directly in their compiled truth packet.
 
-## Provider CLIs, not provider APIs
+## Worker backends
 
-Worker execution remains ordinary local command invocation. StatefulClanker can call consumer-subscription or local-model CLIs such as:
+StatefulClanker has two interchangeable execution paths above the same task/Intent/freshness/review machinery.
+
+### Provider CLI harnesses
+
+StatefulClanker can delegate the inner agent loop to installed tools such as:
 
 - Claude Code
 - Antigravity / `agy`
@@ -141,13 +148,33 @@ Worker execution remains ordinary local command invocation. StatefulClanker can 
 - OpenCode
 - Gemini CLI
 - Aider / Goose / other configured tools
-- local runners
+- local-model CLIs
 
 Prompts are written to files and delivered via stdin or a prompt-file argument according to provider configuration.
 
-StatefulClanker does not require direct provider API billing. This is intentional: the provider CLI is the compatibility layer.
+### Direct inference + minimal StatefulClanker harness
 
-Example configuration shape:
+A project backend may instead point at one of the machine-local API connections configured in the Windows app. StatefulClanker then owns a deliberately small coding loop with only:
+
+- file read/search
+- exact file write/replace
+- bounded PowerShell command execution
+- git status/diff
+- finish / intent-context escalation
+
+The initial direct transport is OpenAI-compatible `/chat/completions`, aimed particularly at:
+
+- Ollama
+- LM Studio
+- vLLM
+- OpenRouter
+- arbitrary compatible local/remote providers and gateways
+
+Connections support native tool calls or a strict text-JSON fallback for local models whose servers do not expose reliable function calling. API keys entered in the app are encrypted for the current Windows user; connections may instead name an environment variable. Project state contains only a connection id, never the secret.
+
+See [`docs/DIRECT_INFERENCE.md`](docs/DIRECT_INFERENCE.md).
+
+Example project backend/routing shape:
 
 ```json
 {
@@ -155,10 +182,22 @@ Example configuration shape:
   "criticProvider": "agy",
   "validatorProvider": "claude",
   "providerBySize": {
-    "tiny": "agy",
-    "small": "agy",
+    "tiny": "local-qwen",
+    "small": "local-qwen",
     "medium": "opencode",
     "large": "claude"
+  },
+  "providers": {
+    "opencode": {
+      "type": "cli",
+      "command": "opencode",
+      "args": ["run"],
+      "mode": "stdin"
+    },
+    "local-qwen": {
+      "type": "api",
+      "connection": "local-qwen"
+    }
   }
 }
 ```
@@ -171,9 +210,9 @@ A task cycle is:
 
 ```text
 retrieve
-  -> compile bounded packet
+  -> compile bounded truth packet
   -> freshness check
-  -> provider CLI worker
+  -> selected worker backend
   -> persist receipt
   -> critic
   -> validator
@@ -207,7 +246,7 @@ StatefulClankerSetup-0.6.0.exe
 
 It installs the self-contained native application plus the PowerShell orchestration runtime, MCP scripts, docs, skills and examples.
 
-PowerShell 7 is recommended because the orchestration/runtime layer is intentionally inspectable and scriptable.
+PowerShell 7 is recommended because the orchestration/runtime layer is intentionally inspectable and scriptable; the direct worker command shim remains compatible with Windows PowerShell 5.1.
 
 See [`docs/SETUP.md`](docs/SETUP.md).
 
@@ -241,21 +280,18 @@ pwsh -NoProfile -File .\mcp\StatefulClanker.McpHttp.ps1 `
   -Port 7337
 ```
 
-The stdio transport likewise supports `-ProjectPath` when running without the resident app.
-
 ## Documentation
 
 - [`docs/WINDOWS_FIRST_DESIGN.md`](docs/WINDOWS_FIRST_DESIGN.md) — product/application architecture
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — durable state and orchestration semantics
 - [`docs/MCP.md`](docs/MCP.md) — conversational control plane and tools
+- [`docs/DIRECT_INFERENCE.md`](docs/DIRECT_INFERENCE.md) — API connections and minimal worker harness
 - [`docs/TASK_RECORD_FORMAT.md`](docs/TASK_RECORD_FORMAT.md) — compact SCPLAN/task records
-- [`docs/INTENT_CONTRACT.md`](docs/INTENT_CONTRACT.md) — authoritative intent model
+- [`docs/INTENT_CONTRACT.md`](docs/INTENT_CONTRACT.md) — directive/Intent authority model
 - [`docs/SETUP.md`](docs/SETUP.md) — Windows setup and integration walkthrough
 
 ## Status
 
-StatefulClanker is an experimental personal tool. The architecture intentionally favors transparent files, local processes and recoverable state over a large hosted platform.
-
-The Windows-first native host, resident MCP control plane, compact plans, durable human-source references and semantic provider routing are implemented in the current codebase. Provider CLI flags can change independently, so verify configured commands with `provider_test` before relying on them for unattended work.
+StatefulClanker is an experimental personal tool. The architecture intentionally favors transparent files, local processes, replaceable inference backends and recoverable state over a large hosted platform.
 
 MIT licensed.

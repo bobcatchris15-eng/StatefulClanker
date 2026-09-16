@@ -20,6 +20,7 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpCore.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpExtensions.ps1')
+. (Join-Path $PSScriptRoot 'StatefulClanker.BackendInstructions.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpProtocol.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.SubscriptionPump.ps1')
 
@@ -90,7 +91,6 @@ try {
                     $headerError=Test-ModernSubscriptionHeaders $request
                     if($headerError){$err=[ordered]@{jsonrpc='2.0';id=$id;error=@{code=-32602;message=$headerError}};Write-HttpResponse $stream 400 ($err|ConvertTo-Json -Depth 10 -Compress);continue}
                     if(-not(Start-SCHttpControlSubscription $client $rpc)){$err=[ordered]@{jsonrpc='2.0';id=$id;error=@{code=-32602;message="StatefulClanker currently supports resourceSubscriptions for $script:SCControlEventsResource."}};Write-HttpResponse $stream 400 ($err|ConvertTo-Json -Depth 10 -Compress);continue}
-                    # The background pump owns client+stream from here. Do not close them in finally.
                     $detached=$true;$stream=$null;$client=$null;continue
                 }
                 $response = Invoke-McpRpc $rpc
@@ -99,8 +99,6 @@ try {
                 $err = [ordered]@{ jsonrpc = '2.0'; id = $id; error = [ordered]@{ code = -32700; message = "Parse error: $($_.Exception.Message)" } };Write-HttpResponse $stream 400 ($err | ConvertTo-Json -Depth 10 -Compress)
             }
         } catch { Write-Warning "Connection error: $($_.Exception.Message)" }
-        finally {
-            if(-not$detached){if ($stream) { try { $stream.Dispose() } catch { } };if($client){try { $client.Close() } catch { }}}
-        }
+        finally {if(-not$detached){if ($stream) { try { $stream.Dispose() } catch { } };if($client){try { $client.Close() } catch { }}}}
     }
 } finally {$listener.Stop();Remove-Item -LiteralPath $tokenPath -Force -ErrorAction SilentlyContinue}

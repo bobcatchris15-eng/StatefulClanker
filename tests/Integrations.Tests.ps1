@@ -87,8 +87,6 @@ try {
     Remove-Item -Recurse -Force -LiteralPath $temp -ErrorAction SilentlyContinue
 }
 
-# Keep these at the tail so tests/Smoke.ps1 automatically exercises the new
-# authority/event model without duplicating its top-level test runner plumbing.
 Write-Host '  INT 7: current directives + durable control inbox'
 & (Join-Path $PSScriptRoot 'DirectivesEventing.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Directive/event tests failed (exit $LASTEXITCODE)." }
@@ -96,3 +94,7 @@ if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Directive/event t
 Write-Host '  INT 8: modern MCP discovery/resources/control tools'
 & (Join-Path $PSScriptRoot 'McpModern.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Modern MCP tests failed (exit $LASTEXITCODE)." }
+
+Write-Host '  INT 9: direct API minimal worker harness'
+& (Join-Path $PSScriptRoot 'DirectApi.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Direct API tests failed (exit $LASTEXITCODE)." }
