@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>StatefulClanker</AssemblyName>
+    <RootNamespace>StatefulClanker.Tray</RootNamespace>
+    <ApplicationIcon>..\..\install\StatefulClanker.ico</ApplicationIcon>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\install\StatefulClanker.ico" LogicalName="StatefulClanker.ico" />
+  </ItemGroup>
+</Project>

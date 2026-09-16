@@ -1,318 +1,230 @@
-# Setup: from nothing to a running cycle
+# StatefulClanker Windows setup
 
-Installing StatefulClanker on a Windows machine and driving a project from a
-desktop chat app.
+StatefulClanker is a Windows-first resident orchestration application. The normal installation gives you a native tray app, a resident loopback MCP control plane, project-scoped telemetry, integration status, and configurable provider CLI workers.
 
-`docs/MCP.md` is the reference for the tool surface. This page is the walkthrough.
+The conversational agent plans and semantically decomposes work. StatefulClanker persists that plan, compiles bounded context, launches provider CLIs, records receipts, and applies review gates.
 
-**Time:** about 10 minutes. **You will need:** Windows, PowerShell 7, and at least
-one CLI coding agent that you are already signed in to.
+## Requirements
 
----
+For an installed release:
 
-## The quick path: the installer
+- Windows x64
+- PowerShell 7 recommended (`winget install Microsoft.PowerShell`)
+- at least one non-interactive coding/agent CLI already installed and signed in, for example Claude, Antigravity/`agy`, Codex, OpenCode, Gemini, or a local tool
+- Git for parallel worktree execution and commit telemetry
 
-Download `StatefulClankerSetup-<version>.exe` and run it. It is a **per-user**
-install, so there is no UAC prompt and no administrator rights are needed.
+The packaged Windows application is self-contained and does not require a separate .NET runtime.
 
-It offers to start StatefulClanker when you sign in. Either way you get a tray
-icon; the app lives there and the window closes back to it rather than exiting.
+Building an installer from source additionally requires the .NET 8 SDK and Inno Setup 6.
 
-Open it from the tray and work left to right through the tabs:
+## Install
 
-| Tab | What it does |
-|---|---|
-| **Projects** | Pick the folder holding your code, and initialize it |
-| **Providers** | Pick the agent CLI that does the work, save it, then **Test** it |
-| **Integrations** | Register the MCP server with your chat app in one click |
-| **Server** | Only if your app wants a URL rather than a local command |
+Run:
 
-The **Integrations** tab always shows the exact connection details for whichever
-app is selected — the stdio JSON block and the HTTP URL plus bearer token — so an
-app the installer cannot write to automatically can still be set up by pasting.
-
-Two buttons are worth calling out:
-
-- **Providers → Test provider** dispatches a real probe prompt. Use it. The two
-  failures you will actually hit are both quiet: an expired CLI login exits
-  nonzero, and a permission-gated headless CLI exits *zero having done nothing*,
-  which otherwise only shows up later as a critic rejecting an empty result.
-- **Integrations → Register** merges into the app's config and keeps a timestamped
-  backup. It refuses to touch a config file it cannot parse rather than
-  overwriting the other MCP servers you have configured there.
-
-Rows marked **UNVERIFIED** are best guesses — a preset command line, or a config
-path that was not confirmed on a real install. They are starting points, which is
-exactly why Test and Copy exist next to them.
-
-### Building the installer yourself
-
-```powershell
-winget install JRSoftware.InnoSetup
-.\install\Build-Installer.ps1 -Version 0.5.0
+```text
+StatefulClankerSetup-0.6.0.exe
 ```
 
-Output lands in `install\output\`.
+The installer is per-user and normally needs no administrator rights. It can create a startup shortcut so StatefulClanker starts when the user signs in.
 
----
+The native application remains in the Windows notification area. Closing its main window hides it; use **Exit** from the tray menu to stop the application and its resident MCP child process.
 
-The rest of this page is the manual path: what the installer automates, and what
-to do when something does not work.
+## Add a project
 
-## Step 1 — Prerequisites
+Open StatefulClanker and choose **+ Add / open project** in the left project pane.
 
-```powershell
-$PSVersionTable.PSVersion      # need 7.x
-git --version
+Select the actual project directory, not the StatefulClanker install directory. If the folder is not initialized, the app offers to create `.statefulclanker/` state there.
+
+The project becomes the active project and the resident MCP control plane follows it.
+
+StatefulClanker stores only machine/application state under:
+
+```text
+%LOCALAPPDATA%\StatefulClanker\
 ```
 
-If PowerShell 7 is missing: `winget install Microsoft.PowerShell`, then reopen the
-terminal. Windows PowerShell 5.1 runs the harness but the MCP servers are developed
-and tested against 7.
+That includes the saved project registry, last active project, and resident MCP connection details.
 
-### The part people skip: a worker CLI
+Project authority remains in:
 
-StatefulClanker does not talk to any model API itself. It **shells out to a CLI you
-already have**, and you must have at least one installed and *signed in*. Any
-non-interactive CLI works — `claude`, `opencode`, `agy`, or your own script.
-
-Verify yours actually works headlessly before going further:
-
-```powershell
-claude -p "say OK"
+```text
+<project>\.statefulclanker\
 ```
 
-If that prints an auth error, fix it now. It will otherwise fail later as a mystery
-worker failure at the point where you are least able to debug it.
+If the last-active project later disappears or moves, startup enters **No active project**. StatefulClanker does not pick a different saved project on its own.
 
----
+## Configure provider CLIs
 
-## Step 2 — Install (manual)
+The **Providers** tab reads the active project's `.statefulclanker/config.json` and shows:
 
-```powershell
-git clone https://github.com/bobcatchris15-eng/StatefulClanker.git C:\tools\StatefulClanker
-cd C:\tools\StatefulClanker
-.\tests\Smoke.ps1
-```
+- configured provider name
+- command/executable
+- whether the CLI is currently found
+- default / critic / validator roles
+- semantic `tiny`, `small`, `medium`, `large` routes
 
-The smoke test must end with two PASS lines. It uses a mock provider, so it proves
-the harness works without touching a real model.
+The shipped example demonstrates the configuration shape. Provider flags vary between CLI versions, so `provider_test` should be used after configuration rather than assuming a preset remains correct forever.
 
----
-
-## Step 3 — Create a project
-
-The project is **your code**, not this repo. StatefulClanker keeps its state in a
-`.statefulclanker` folder inside it.
-
-```powershell
-cd C:\work\myproject
-C:\tools\StatefulClanker\StatefulClanker.ps1 init
-```
-
-This creates `.statefulclanker\`. It is gitignored by default; delete that rule if
-you want the agent's durable state version-controlled with the project.
-
----
-
-## Step 4 — Configure a provider
-
-**This is the step with no defaults that work.** The shipped config points at
-`opencode` with a guessed command line. If you do not have that exact CLI, the
-first run fails.
-
-Edit `.statefulclanker\config.json`:
+Example routing shape:
 
 ```json
 {
-  "defaultProvider": "claude",
-  "criticProvider": "claude",
+  "defaultProvider": "opencode",
+  "criticProvider": "agy",
   "validatorProvider": "claude",
-  "providers": {
-    "claude": {
-      "command": "claude",
-      "args": ["-p"],
-      "mode": "stdin"
-    }
+  "providerBySize": {
+    "tiny": "agy",
+    "small": "agy",
+    "medium": "opencode",
+    "large": "claude"
   }
 }
 ```
 
-`args` holds **flags only**. The prompt is piped to the provider on stdin, so there
-is no `{prompt}` placeholder and no command-line length limit. Use `mode` of
-`prompt-file` with `{promptFile}` instead if your CLI wants a path.
-`{projectRoot}` and `{taskId}` are also substituted.
+The task's semantic size is assigned by the conversational planner. The runtime only uses that declared size as a routing hint.
 
-Do not put the prompt in `args`: a compiled context routinely exceeds the 8191-char
-`cmd.exe` command-line limit, and the failure reads like a broken provider.
+## Connect a conversational client
 
-Two things worth knowing, both learned the hard way:
+Open the **Integrations** tab.
 
-- **The worker needs permission to edit files.** A CLI in headless mode cannot
-  prompt, so it auto-denies its own tools and exits 0 having done nothing. Your
-  critic then correctly rejects an empty result. Use whatever that CLI's
-  non-interactive edit flag is (for example `--mode accept-edits`).
-- **Check the example config before copying it.** The `agy` entry in
-  `statefulclanker.example.json` uses `run --prompt-file`, which does not match the
-  `agy` CLI actually shipping today. Verify against `<your-cli> --help`.
+The top of the page shows the resident Streamable HTTP endpoint and the stdio bridge command. Below that, known MCP clients show whether they appear installed, whether StatefulClanker is already registered, and whether the config location is verified.
 
-Verify the provider works:
+For verified integration targets, **Register selected** writes/updates the MCP registration using the existing integration catalogue. StatefulClanker keeps backups where the integration helper already supports them.
 
-```powershell
-C:\tools\StatefulClanker\StatefulClanker.ps1 provider list
-```
+For an unverified client/config path, the app refuses to write a guessed location. Copy the stdio command or endpoint into that client's MCP settings instead.
 
-Once MCP is connected (Step 5) you can do better: `provider_set` writes this config
-for you with validation, and `provider_test` dispatches a real probe prompt and
-tells you whether the provider is genuinely usable — it distinguishes an expired
-login from a headless permission gate, which are the two failures you will actually
-hit.
+### stdio registration
 
----
-
-## Step 5 — Connect your app (manual)
-
-```powershell
-cd C:\tools\StatefulClanker
-.\Install-McpServer.ps1 -Client claude-desktop -ProjectPath C:\work\myproject -Write
-```
-
-`-Write` is the only thing that touches a config file, and it keeps a `.bak`.
-Without it you get the snippet printed to paste yourself.
-
-| App | Command |
-|---|---|
-| Claude Desktop | `-Client claude-desktop -Write` |
-| Claude Code | `-Client claude-code` (prints a `claude mcp add` line) |
-| VS Code | `-Client vscode` → `.vscode/mcp.json` |
-| Cursor | `-Client cursor` → `~/.cursor/mcp.json` |
-| Opencode | `-Client opencode` → `opencode.json` |
-| Antigravity / other | `-Client antigravity` (standard `mcpServers` shape) |
-| Anything else | `-Client generic` |
-
-Restart the app, then ask it to list its tools. You should see `project_status`,
-`task_add`, `run_start`, and about twenty more.
-
-`-ProjectPath` only sets the *default*. Every tool takes an optional `project`
-argument, and `project_use` switches the default — one registration handles all your
-projects.
-
-### Apps that want a URL instead
-
-```powershell
-pwsh -NoProfile -File .\mcp\StatefulClanker.McpHttp.ps1 -ProjectPath C:\work\myproject -Port 7337
-```
-
-It prints a bearer token. Point the app at `http://127.0.0.1:7337/mcp` with header
-`Authorization: Bearer <token>`.
-
-Check it is alive:
-
-```powershell
-curl http://127.0.0.1:7337/health
-```
-
-> **Before you wire up ChatGPT or Gemini connectors:** a loopback URL only works if
-> the app makes the request *from your machine*. Where a connector is fetched by the
-> vendor's own backend, it cannot reach `127.0.0.1` on your laptop, and no amount of
-> configuration will change that — you would need a tunnel you set up deliberately.
-> Test `/health` from the app first. For anything that launches a local command,
-> stdio is simpler and has no such problem.
-
----
-
-## Step 6 — Your first cycle
-
-In the chat app:
-
-```text
-Set the goal to "Add retry logic to the HTTP client", then add a task to
-implement it using src/http.ps1 as retrieval, and run it.
-```
-
-The session will call `goal_set`, `task_add`, and `run_start`. Then:
-
-```text
-Poll run_status until it finishes and tell me what happened.
-```
-
-A cycle takes tens of seconds. `run_start` returns immediately and the session polls
-`run_status`; only one cycle runs at a time per project.
-
-### Reading the result
-
-| Outcome | Meaning |
-|---|---|
-| `status: complete` | Worker, critic, and validator all passed; the proposal was committed. |
-| `needs_rework` + "Critic rejected" | The critic found a real problem. Read the critique. |
-| `needs_rework` + "requested missing context" | A context fault. Widen `retrieval` and retry. |
-| `failed` + "Worker exited N" | The provider itself failed. Run `provider_test`. |
-
-**A rejection is the system working.** In testing, the critic caught generated code
-that called a nonexistent cmdlet and silently returned empty. That is the whole
-point of the tool, and if you find yourself reaching for `task_complete` to force
-past it, re-read what the critic said first.
-
-Ask for `progress_history` to tell activity from progress: `advanced: false` with a
-repeating `inputFingerprint` means the cycle is spinning, and the task needs
-re-scoping rather than another attempt.
-
----
-
-## Troubleshooting
-
-**No tools appear in the app.** Restart it fully. Verify the path in the config
-exists and that `pwsh` in the `command` field is a real path — the installer writes
-an absolute one. Check the app's MCP log.
-
-**"Provider 'x' not configured".** Step 4. The name in `defaultProvider` must match a
-key under `providers`.
-
-**Worker exits 0 but nothing changed.** The permission gate described in Step 4. Run
-`provider_test` — it reports this case explicitly.
-
-**"Not a StatefulClanker project".** You never ran `init` in that directory, or the
-app is pointed at a different path. `project_status` prints the path it is using.
-
-**"A cycle is already in flight".** One cycle at a time per project. Poll
-`run_status`. If a process was killed, the lock is released on the next poll.
-
-**"Active plan requires approval".** You imported a plan.
-`requireHumanApprovalForPlan` is true, and `plan_approve` is gated from MCP on
-purpose. Approve from the CLI:
-
-```powershell
-C:\tools\StatefulClanker\StatefulClanker.ps1 plan approve
-```
-
-**Task stuck in `running` after a crash.** `task_retry` resets it.
-
----
-
-## What stays yours
-
-Two tools are disabled by default, and both bypass the validation gate:
-`task_complete` (marks a task done with no critic or validator) and `plan_approve`.
-An agent that can approve its own plan and then complete its own tasks has routed
-around every check the tool exists to provide.
-
-Both still work from the CLI, where they are recorded as human authority. To hand
-them to the agent anyway, in `.statefulclanker\config.json`:
+The normal stdio entry is conceptually:
 
 ```json
-{ "mcp": { "allowHumanAuthorityTools": true } }
+{
+  "command": "pwsh",
+  "args": [
+    "-NoProfile",
+    "-NonInteractive",
+    "-File",
+    "C:\\...\\StatefulClanker\\mcp\\StatefulClanker.Mcp.ps1"
+  ]
+}
 ```
 
-`project_status` reports the current setting as `humanAuthority`.
+Do **not** add `-ProjectPath` for the normal resident setup. The stdio shim bridges into the running app and follows its current active project.
 
----
+### Streamable HTTP
 
-## Known limits
+The resident application starts the loopback server automatically. Connection details are written to:
 
-- **The CLI has no locking.** The MCP layer serialises cycles with a lock file, but
-  two `StatefulClanker.ps1 run` invocations from two terminals will still interleave
-  writes to `state.json`. `maxConcurrent` in the config is dead — nothing reads it.
-- **Windows-first.** The MCP servers assume Windows path separators.
-- **The validator does not execute code.** It judges from the worker's evidence, so
-  it can pass code that does not run. In testing it approved a file containing
-  `Export-ModuleMember` outside a module. Keep your own tests in the loop.
+```text
+%LOCALAPPDATA%\StatefulClanker\mcp-http.json
+```
+
+The default endpoint is:
+
+```text
+http://127.0.0.1:7337/mcp
+```
+
+It requires the bearer token displayed/copied through the Integrations page. Because this is loopback-only, a cloud/server-side connector cannot reach it directly.
+
+## Start a conversational project
+
+Once a client is connected, the MCP `initialize` response instructs the conversational model to act as StatefulClanker's planner/orchestrator.
+
+For substantial work the expected sequence is:
+
+1. Read project status and existing Intent Contract.
+2. Use the host questionnaire/question tool to clear material ambiguity.
+3. Record new human direction with `direction_add`; retain the returned `human:<id>` source reference.
+4. Update the Intent Contract where clarified human meaning changes authority.
+5. Build a semantic task graph, preferably as compact `SCPLAN 1` text.
+6. Apply it with `plan_apply`.
+7. Dispatch ready tasks with `run_start` or `run_parallel`.
+8. Poll `run_status` and inspect project telemetry/review results.
+9. Resolve `CONTEXT_REQUEST`, `INTENT_QUESTION`, and `INTENT_CONFLICT` rather than asking a worker to guess.
+
+Example compact plan:
+
+```text
+SCPLAN 1
+plan sample-change
+summary Add the bounded behavior discussed with the human.
+source human:h-0012#L1-L8
+intent REQ-012
+
+task t-001
+size small
+title implement bounded behavior
+instruction Implement the requested behavior without changing adjacent interfaces.
+source human:h-0012#L1-L8
+intent REQ-012
+retrieve src/*
+accept the requested behavior is observable
+accept existing interface behavior remains unchanged
+end
+```
+
+See `docs/TASK_RECORD_FORMAT.md` for the format and `docs/MCP.md` for the full control-plane reference.
+
+## What worker execution looks like
+
+StatefulClanker does not require direct provider API credentials or API-rate billing. A task packet is written to a prompt file and the configured provider command is launched locally.
+
+Depending on the CLI, that can mean a prompt-file argument or stdin, for example the equivalent of:
+
+```text
+provider-cli <non-interactive flags> <prompt-file>
+```
+
+or:
+
+```text
+type prompt-file | provider-cli <non-interactive flags>
+```
+
+The exact command remains provider configuration data. This preserves compatibility with consumer-subscription CLIs and local model runners.
+
+## Build from source
+
+From a checkout on Windows:
+
+```powershell
+winget install Microsoft.DotNet.SDK.8
+winget install JRSoftware.InnoSetup
+.\install\Build-Installer.ps1 -Version 0.6.0
+```
+
+The build script:
+
+1. generates the multi-resolution application icon
+2. publishes `src\StatefulClanker.Tray` as a self-contained `win-x64` executable
+3. packages the app, PowerShell runtime, MCP scripts, docs, examples, skills, and local tests with Inno Setup
+
+Output is placed under:
+
+```text
+install\output\
+```
+
+## Headless compatibility
+
+The Windows application is the normal product surface, but the CLI/runtime remains usable directly.
+
+Initialize a project:
+
+```powershell
+cd C:\work\my-project
+C:\path\to\StatefulClanker\StatefulClanker.ps1 init
+```
+
+Run a fixed-project HTTP control plane without the desktop app:
+
+```powershell
+pwsh -NoProfile -File C:\path\to\StatefulClanker\mcp\StatefulClanker.McpHttp.ps1 `
+  -ProjectPath C:\work\my-project `
+  -Port 7337
+```
+
+A stdio client may likewise launch `StatefulClanker.Mcp.ps1 -ProjectPath <path>` when deliberately operating headless.
+
+That compatibility path is useful for scripting and unusual environments, but it is not the default Windows application model.

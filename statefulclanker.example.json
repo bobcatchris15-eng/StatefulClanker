@@ -2,7 +2,20 @@
   "defaultProvider": "opencode",
   "criticProvider": null,
   "validatorProvider": null,
+  "providerBySize": {
+    "tiny": null,
+    "small": null,
+    "medium": null,
+    "large": null
+  },
   "providers": {
+    "codex": {
+      "command": "codex",
+      "args": [
+        "exec"
+      ],
+      "mode": "stdin"
+    },
     "claude": {
       "command": "claude",
       "args": [
