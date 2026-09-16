@@ -40,3 +40,11 @@ function Invoke-SCBoundedCommand([string]$Command,[int]$TimeoutSeconds=120) {
         return [ordered]@{exitCode=$p.ExitCode;stdout=$stdoutTask.Result;stderr=$stderrTask.Result}
     } finally {$p.Dispose()}
 }
+function Show-SCProviders {
+    $cfg=Get-SCConfig;$rows=@()
+    foreach($property in $cfg.providers.PSObject.Properties){
+        $c=$property.Value;$type=if($c.PSObject.Properties['type']){[string]$c.type}else{'cli'}
+        $rows+=[pscustomobject]@{name=$property.Name;type=$type;target=if($type-eq'api'){[string]$c.connection}else{[string]$c.command};mode=if($type-eq'api'){'minimal-harness'}else{[string]$c.mode}}
+    }
+    $rows|Format-Table -AutoSize
+}
