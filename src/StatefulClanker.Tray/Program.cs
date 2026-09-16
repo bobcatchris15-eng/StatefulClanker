@@ -182,6 +182,20 @@ sealed class IntegrationStatus
     public string note { get; set; } = "";
 }
 
+sealed class ProviderStatus
+{
+    public string Name = "", Backend = "", Target = "", Roles = "";
+}
+
+sealed class UiSnapshot
+{
+    public McpDetails? Mcp;
+    public ProjectMetrics Project = new();
+    public List<IntegrationStatus> Integrations = new();
+    public List<ProviderStatus> Providers = new();
+    public bool HasProject;
+}
+
 static class Inspector
 {
     static IEnumerable<string> JsonFiles(string dir) => Directory.Exists(dir) ? Directory.EnumerateFiles(dir, "*.json") : Array.Empty<string>();
@@ -262,6 +276,7 @@ sealed class MainForm : Form
     readonly TextBox _overviewActivity = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new();
     readonly DataGridView _integrations = new(), _providers = new();
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
+    int _refreshing;
     readonly McpHost _mcp;
     readonly NotifyIcon _notify;
     bool _reallyExit;
@@ -273,8 +288,8 @@ sealed class MainForm : Form
         _mcp = new McpHost(_root, _settings.HttpPort); _mcp.EnsureStarted();
         var menu = new ContextMenuStrip(); menu.Items.Add("Open StatefulClanker", null, (_, _) => ShowFromTray()); menu.Items.Add("Exit", null, (_, _) => { _reallyExit = true; Close(); });
         _notify = new NotifyIcon { Text = "StatefulClanker", Icon = Icon ?? SystemIcons.Application, Visible = true, ContextMenuStrip = menu }; _notify.DoubleClick += (_, _) => ShowFromTray();
-        BuildUi(); RestoreProjects(); RefreshAll(); Theme.Apply(this);
-        _timer.Tick += (_, _) => RefreshAll(); _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
+        BuildUi(); RestoreProjects(); Theme.Apply(this); _ = RefreshAllAsync();
+        _timer.Tick += async (_, _) => await RefreshAllAsync(); _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
     }
 
     static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 32, Margin = new Padding(0, 4, 8, 0) };
@@ -283,19 +298,20 @@ sealed class MainForm : Form
 
     void BuildUi()
     {
-        var split = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1, SplitterDistance = 250, BackColor = Theme.Border }; Controls.Add(split);
-        var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, Padding = new Padding(12) };
+        var shell = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Theme.Back };
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270)); shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); Controls.Add(shell);
+        var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0) };
         left.RowStyles.Add(new RowStyle(SizeType.Absolute, 38)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); for (var i = 0; i < 3; i++) left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         left.Controls.Add(new Label { Text = "STATEFULCLANKER", Dock = DockStyle.Fill, Font = new Font("Segoe UI Semibold", 12, FontStyle.Bold), ForeColor = Theme.Accent, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
         _projects.Dock = DockStyle.Fill; _projects.HideSelection = false; _projects.AfterSelect += (_, _) => SelectProject(); left.Controls.Add(_projects, 0, 1);
         var add = Btn("+ Add / open project", 210); add.Dock = DockStyle.Fill; add.Click += (_, _) => AddProject(); left.Controls.Add(add, 0, 2);
         var remove = Btn("Remove from list", 210); remove.Dock = DockStyle.Fill; remove.Click += (_, _) => RemoveProject(); left.Controls.Add(remove, 0, 3);
-        var explorer = Btn("Open in Explorer", 210); explorer.Dock = DockStyle.Fill; explorer.Click += (_, _) => OpenExplorer(); left.Controls.Add(explorer, 0, 4); split.Panel1.Controls.Add(left);
+        var explorer = Btn("Open in Explorer", 210); explorer.Dock = DockStyle.Fill; explorer.Click += (_, _) => OpenExplorer(); left.Controls.Add(explorer, 0, 4); shell.Controls.Add(left, 0, 0);
 
         var right = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(14) }; right.RowStyles.Add(new RowStyle(SizeType.Absolute, 52)); right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 }; top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); top.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
         _header.Dock = DockStyle.Fill; _header.Font = new Font("Segoe UI Semibold", 15, FontStyle.Bold); _header.TextAlign = ContentAlignment.MiddleLeft; _mcpState.Dock = DockStyle.Fill; _mcpState.TextAlign = ContentAlignment.MiddleCenter; _mcpState.Font = new Font("Segoe UI Semibold", 9, FontStyle.Bold); top.Controls.Add(_header, 0, 0); top.Controls.Add(_mcpState, 1, 0); right.Controls.Add(top, 0, 0);
-        _tabs.Dock = DockStyle.Fill; _tabs.TabPages.Add(BuildOverview()); _tabs.TabPages.Add(BuildActivity()); _tabs.TabPages.Add(BuildIntegrations()); _tabs.TabPages.Add(BuildProviders()); right.Controls.Add(_tabs, 0, 1); split.Panel2.Controls.Add(right);
+        _tabs.Dock = DockStyle.Fill; _tabs.TabPages.Add(BuildOverview()); _tabs.TabPages.Add(BuildActivity()); _tabs.TabPages.Add(BuildIntegrations()); _tabs.TabPages.Add(BuildProviders()); right.Controls.Add(_tabs, 0, 1); right.Margin = new Padding(0); shell.Controls.Add(right, 1, 0);
     }
 
     TabPage BuildOverview()
@@ -326,7 +342,7 @@ sealed class MainForm : Form
     TabPage BuildProviders()
     {
         var p = Page("Providers"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1 }; rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill }; var open = Btn("Open config"); open.Click += (_, _) => OpenConfig(); var refresh = Btn("Refresh"); refresh.Click += (_, _) => RefreshProviders(); bar.Controls.Add(open); bar.Controls.Add(refresh); rows.Controls.Add(bar, 0, 0); rows.Controls.Add(Section("WORKER BACKEND STATUS AND SEMANTIC SIZE ROUTING"), 0, 1);
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill }; var open = Btn("Open config"); open.Click += (_, _) => OpenConfig(); var refresh = Btn("Refresh"); refresh.Click += async (_, _) => await RefreshAllAsync(); bar.Controls.Add(open); bar.Controls.Add(refresh); rows.Controls.Add(bar, 0, 0); rows.Controls.Add(Section("WORKER BACKEND STATUS AND SEMANTIC SIZE ROUTING"), 0, 1);
         _providers.Dock = DockStyle.Fill; _providers.ReadOnly = true; _providers.AllowUserToAddRows = false; _providers.RowHeadersVisible = false; _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _providers.Columns.Add("name", "Provider"); _providers.Columns.Add("backend", "Backend"); _providers.Columns.Add("target", "Target"); _providers.Columns.Add("roles", "Routing / roles"); rows.Controls.Add(_providers, 0, 2); p.Controls.Add(rows); return p;
     }
 
@@ -351,7 +367,7 @@ sealed class MainForm : Form
 
     void SetActiveProject(string? path)
     {
-        _settings.ActiveProjectPath = path; AppStore.Save(_settings); AppStore.SetActiveProject(path); _header.Text = path is null ? "No active project" : (SelectedProject?.Name ?? new DirectoryInfo(path).Name); Text = path is null ? "StatefulClanker" : $"StatefulClanker — {_header.Text}"; RefreshProject();
+        _settings.ActiveProjectPath = path; AppStore.Save(_settings); AppStore.SetActiveProject(path); _header.Text = path is null ? "No active project" : (SelectedProject?.Name ?? new DirectoryInfo(path).Name); Text = path is null ? "StatefulClanker" : $"StatefulClanker — {_header.Text}"; _ = RefreshAllAsync();
     }
 
     void AddProject()
@@ -374,16 +390,65 @@ sealed class MainForm : Form
 
     void OpenExplorer() { var path = _settings.ActiveProjectPath; if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return; try { Process.Start(new ProcessStartInfo("explorer.exe") { UseShellExecute = true, ArgumentList = { path } }); } catch { } }
 
-    void RefreshAll()
+    async Task RefreshAllAsync()
     {
-        _mcp.EnsureStarted(); var d = _mcp.Details(); _mcpState.Text = d is null ? "MCP  STOPPED" : "MCP  RUNNING"; _mcpState.ForeColor = d is null ? Theme.Warn : Theme.Good; _mcpState.BackColor = Theme.Surface; _endpoint.Text = d?.url ?? $"http://127.0.0.1:{_settings.HttpPort}/mcp (starting...)";
-        var stdioScript = System.IO.Path.Combine(_root, "mcp", "StatefulClanker.Mcp.ps1"); _stdio.Text = $"{Runtime.FindPowerShell()} -NoProfile -File \"{stdioScript}\""; RefreshProject(); RefreshIntegrations(); RefreshProviders();
+        if (Interlocked.Exchange(ref _refreshing, 1) != 0) return;
+        var projectPath = _settings.ActiveProjectPath;
+        try
+        {
+            var snapshot = await Task.Run(() => BuildSnapshot(projectPath));
+            if (IsDisposed || Disposing) return;
+            ApplySnapshot(snapshot);
+        }
+        catch { }
+        finally { Interlocked.Exchange(ref _refreshing, 0); }
     }
 
-    void RefreshProject()
+    UiSnapshot BuildSnapshot(string? projectPath)
     {
-        var path = _settings.ActiveProjectPath; if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) { SetMetrics(new()); _overviewActivity.Text = _allActivity.Text = "Select a project at left. StatefulClanker does not silently substitute a default project."; return; }
-        var m = Inspector.Project(path); SetMetrics(m); _overviewActivity.Text = _allActivity.Text = m.Activity;
+        _mcp.EnsureStarted();
+        var snapshot = new UiSnapshot { Mcp = _mcp.Details(), HasProject = !string.IsNullOrWhiteSpace(projectPath) && Directory.Exists(projectPath) };
+        if (snapshot.HasProject)
+        {
+            snapshot.Project = Inspector.Project(projectPath!);
+            snapshot.Providers = ReadProviderStatus(projectPath!);
+        }
+        snapshot.Integrations = ReadIntegrationStatus();
+        return snapshot;
+    }
+
+    void ApplySnapshot(UiSnapshot snapshot)
+    {
+        var d = snapshot.Mcp;
+        _mcpState.Text = d is null ? "MCP  STOPPED" : "MCP  RUNNING";
+        _mcpState.ForeColor = d is null ? Theme.Warn : Theme.Good; _mcpState.BackColor = Theme.Surface;
+        _endpoint.Text = d?.url ?? $"http://127.0.0.1:{_settings.HttpPort}/mcp (starting...)";
+        var stdioScript = System.IO.Path.Combine(_root, "mcp", "StatefulClanker.Mcp.ps1");
+        _stdio.Text = $"{Runtime.FindPowerShell()} -NoProfile -File \"{stdioScript}\"";
+        if (snapshot.HasProject)
+        {
+            SetMetrics(snapshot.Project);
+            _overviewActivity.Text = _allActivity.Text = snapshot.Project.Activity;
+        }
+        else
+        {
+            SetMetrics(new());
+            _overviewActivity.Text = _allActivity.Text = "Select a project at left. StatefulClanker does not silently substitute a default project.";
+        }
+        _integrations.SuspendLayout();
+        try
+        {
+            _integrations.Rows.Clear();
+            foreach (var item in snapshot.Integrations) { var i = _integrations.Rows.Add(item.name, item.installed ? "yes" : "no", item.registered ? "yes" : "no", item.verified ? "yes" : "no", item.note); _integrations.Rows[i].Tag = item; }
+        }
+        finally { _integrations.ResumeLayout(); }
+        _providers.SuspendLayout();
+        try
+        {
+            _providers.Rows.Clear();
+            foreach (var item in snapshot.Providers) _providers.Rows.Add(item.Name, item.Backend, item.Target, item.Roles);
+        }
+        finally { _providers.ResumeLayout(); }
     }
 
     void SetMetrics(ProjectMetrics m)
@@ -397,11 +462,6 @@ sealed class MainForm : Form
         var command = $". '{escaped}'; @(Get-SCIntegrationTargets | ForEach-Object {{ [pscustomobject]@{{ id=$_.id; name=$_.name; installed=[bool](Test-SCIntegrationInstalled $_); registered=[bool](Test-SCIntegrationRegistered $_); verified=[bool]$_.verified; note=$_.note }} }}) | ConvertTo-Json -Depth 6 -Compress";
         var r = Runtime.RunPowerShell(_root, "-Command", command); if (r.code != 0 || string.IsNullOrWhiteSpace(r.stdout)) return new();
         try { return JsonSerializer.Deserialize<List<IntegrationStatus>>(r.stdout, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new(); } catch { return new(); }
-    }
-
-    void RefreshIntegrations()
-    {
-        _integrations.Rows.Clear(); foreach (var s in ReadIntegrationStatus()) { var i = _integrations.Rows.Add(s.name, s.installed ? "yes" : "no", s.registered ? "yes" : "no", s.verified ? "yes" : "no", s.note); _integrations.Rows[i].Tag = s; }
     }
 
     IntegrationStatus? SelectedIntegration => _integrations.SelectedRows.Count > 0 ? _integrations.SelectedRows[0].Tag as IntegrationStatus : null;
@@ -419,23 +479,24 @@ sealed class MainForm : Form
         var module = System.IO.Path.Combine(_root, "lib", "StatefulClanker.Integrations.ps1").Replace("'", "''"); var safeId = id.Replace("'", "''");
         var action = register ? "Register-SCIntegration $t $null (Get-SCInstallRoot) | ConvertTo-Json -Depth 6 -Compress" : "Unregister-SCIntegration $t | ConvertTo-Json -Compress";
         var cmd = $". '{module}'; $t=@(Get-SCIntegrationTargets | Where-Object {{ $_.id -eq '{safeId}' }})[0]; if($null -eq $t){{throw 'Integration not found'}}; {action}";
-        var r = Runtime.RunPowerShell(_root, "-Command", cmd); if (r.code != 0) MessageBox.Show(this, (r.stdout + Environment.NewLine + r.stderr).Trim(), "Integration update failed", MessageBoxButtons.OK, MessageBoxIcon.Error); RefreshIntegrations();
+        var r = Runtime.RunPowerShell(_root, "-Command", cmd); if (r.code != 0) MessageBox.Show(this, (r.stdout + Environment.NewLine + r.stderr).Trim(), "Integration update failed", MessageBoxButtons.OK, MessageBoxIcon.Error); _ = RefreshAllAsync();
     }
 
-    void RefreshProviders()
+    List<ProviderStatus> ReadProviderStatus(string path)
     {
-        _providers.Rows.Clear(); var path = _settings.ActiveProjectPath; if (string.IsNullOrWhiteSpace(path)) return; var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json"); if (!File.Exists(cfg)) return;
+        var result = new List<ProviderStatus>(); var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json"); if (!File.Exists(cfg)) return result;
         try
         {
             using var d = JsonDocument.Parse(File.ReadAllText(cfg)); var root = d.RootElement; var def = root.TryGetProperty("defaultProvider", out var dv) ? dv.GetString() : null; var critic = root.TryGetProperty("criticProvider", out var cv) ? cv.GetString() : null; var validator = root.TryGetProperty("validatorProvider", out var vv) ? vv.GetString() : null; var routes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (root.TryGetProperty("providerBySize", out var map) && map.ValueKind == JsonValueKind.Object) foreach (var x in map.EnumerateObject()) if (x.Value.ValueKind == JsonValueKind.String) routes[x.Name] = x.Value.GetString() ?? "";
-            if (!root.TryGetProperty("providers", out var providers) || providers.ValueKind != JsonValueKind.Object) return;
+            if (!root.TryGetProperty("providers", out var providers) || providers.ValueKind != JsonValueKind.Object) return result;
             foreach (var p in providers.EnumerateObject())
             {
-                var type = p.Value.TryGetProperty("type", out var tv) && tv.ValueKind == JsonValueKind.String ? tv.GetString() ?? "cli" : "cli"; var cmd = p.Value.TryGetProperty("command", out var c) ? c.GetString() ?? "" : ""; var connection = p.Value.TryGetProperty("connection", out var cn) ? cn.GetString() ?? "" : ""; var target = type.Equals("api", StringComparison.OrdinalIgnoreCase) ? connection : cmd; var status = type.Equals("api", StringComparison.OrdinalIgnoreCase) ? (string.IsNullOrWhiteSpace(connection) ? "missing" : "api") : (Runtime.CommandExists(cmd) ? "cli" : "missing"); var tags = new List<string>(); if (p.Name == def) tags.Add("default"); if (p.Name == critic) tags.Add("critic"); if (p.Name == validator) tags.Add("validator"); foreach (var route in routes.Where(x => x.Value == p.Name)) tags.Add(route.Key); _providers.Rows.Add(p.Name, status, target, string.Join(", ", tags));
+                var type = p.Value.TryGetProperty("type", out var tv) && tv.ValueKind == JsonValueKind.String ? tv.GetString() ?? "cli" : "cli"; var cmd = p.Value.TryGetProperty("command", out var c) ? c.GetString() ?? "" : ""; var connection = p.Value.TryGetProperty("connection", out var cn) ? cn.GetString() ?? "" : ""; var target = type.Equals("api", StringComparison.OrdinalIgnoreCase) ? connection : cmd; var status = type.Equals("api", StringComparison.OrdinalIgnoreCase) ? (string.IsNullOrWhiteSpace(connection) ? "missing" : "api") : (Runtime.CommandExists(cmd) ? "cli" : "missing"); var tags = new List<string>(); if (p.Name == def) tags.Add("default"); if (p.Name == critic) tags.Add("critic"); if (p.Name == validator) tags.Add("validator"); foreach (var route in routes.Where(x => x.Value == p.Name)) tags.Add(route.Key); result.Add(new ProviderStatus { Name = p.Name, Backend = status, Target = target, Roles = string.Join(", ", tags) });
             }
         }
         catch { }
+        return result;
     }
 
     void OpenConfig() { var path = _settings.ActiveProjectPath; if (string.IsNullOrWhiteSpace(path)) return; var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json"); if (File.Exists(cfg)) try { Process.Start(new ProcessStartInfo("notepad.exe") { UseShellExecute = true, ArgumentList = { cfg } }); } catch { } }
