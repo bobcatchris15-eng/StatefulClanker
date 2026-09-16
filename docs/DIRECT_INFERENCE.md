@@ -1,6 +1,6 @@
 # Direct inference and the minimal worker harness
 
-StatefulClanker supports two interchangeable worker backend types above the same task, Intent, freshness, critic, validator, and event machinery.
+StatefulClanker supports two interchangeable worker backend types above the same task, current Human Directives, reconciled Intent, freshness, critic, validator, and event machinery.
 
 ## CLI harness backend
 
@@ -36,9 +36,15 @@ Connection profiles are machine state, not project state, and live at:
 
 The Windows application exposes an **API Connections** tab for adding, editing, removing, testing, and attaching profiles to the active project. API keys entered there are encrypted with Windows DPAPI for the current user. A profile may instead name an environment variable so the key never enters the connection file.
 
-## Intended endpoints
+## Protocol adapters and intended endpoints
 
-The first direct transport is OpenAI-compatible `/chat/completions`. That covers the main intended cases without coupling StatefulClanker to one vendor:
+The first implemented direct protocol is named:
+
+```text
+openai-chat
+```
+
+It uses OpenAI-compatible `/chat/completions`. That covers the main intended cases without coupling StatefulClanker to one vendor:
 
 - Ollama (`http://127.0.0.1:11434/v1`)
 - LM Studio (`http://127.0.0.1:1234/v1`)
@@ -47,6 +53,10 @@ The first direct transport is OpenAI-compatible `/chat/completions`. That covers
 - custom OpenAI-compatible gateways and providers
 
 The profile can override the chat path, add arbitrary HTTP headers, and merge extra request-body fields. This is useful for gateways and provider-specific routing options without adding brand-specific runtime code.
+
+The protocol field is explicit so another native API dialect can be added later as a small transport adapter without redesigning routing, task state, the worker harness, or review/freshness semantics. A currently unsupported protocol fails closed rather than silently sending the wrong request shape.
+
+OpenCode itself can remain a `cli` backend and use its provider catalogue. If a provider used with OpenCode also exposes an OpenAI-compatible endpoint, that endpoint may instead be configured here directly.
 
 ## Minimal harness
 
@@ -66,7 +76,7 @@ File operations are confined to the worker checkout. Command execution is bounde
 
 ## Tool protocols
 
-A connection chooses one of two tool protocols:
+A connection chooses one of two model/tool interaction modes inside the `openai-chat` adapter:
 
 ### `native`
 
@@ -98,6 +108,7 @@ Representative `connections.json`:
   "connections": {
     "local-qwen": {
       "name": "local-qwen",
+      "protocol": "openai-chat",
       "baseUrl": "http://127.0.0.1:8000/v1",
       "model": "qwen3-coder",
       "toolMode": "native",
@@ -108,6 +119,7 @@ Representative `connections.json`:
     },
     "openrouter-coder": {
       "name": "openrouter-coder",
+      "protocol": "openai-chat",
       "baseUrl": "https://openrouter.ai/api/v1",
       "model": "provider/model-id",
       "toolMode": "native",
@@ -136,6 +148,6 @@ The task does not need to know whether `local-qwen` is local, remote, API-backed
 
 ## Security boundary
 
-Direct API connections do not change project authority. API workers receive the same CURRENT human directives, reconciled Intent, task acceptance boundary, and source references as CLI workers. They cannot commit a stale result merely because the inference transport is different.
+Direct API connections do not change project authority. API workers receive the same CURRENT Human Directives, reconciled Intent, task acceptance boundary, and source references as CLI workers. They cannot commit a stale result merely because the inference transport is different.
 
 Project files may safely name a connection by ID, but secrets remain machine/user state and should never be written into `.statefulclanker` or committed to the repository.
