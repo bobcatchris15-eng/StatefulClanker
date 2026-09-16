@@ -26,6 +26,16 @@ function Unprotect-SCApiKey([string]$Protected) {
     if([string]::IsNullOrWhiteSpace($Protected)){return $null}
     try{return [Text.Encoding]::UTF8.GetString([StatefulClanker.Win32Dpapi]::Unprotect([Convert]::FromBase64String($Protected)))}catch{throw 'Could not decrypt API credential for the current Windows user.'}
 }
+
+# The profile protocol is an adapter boundary, not decoration. Missing protocol is
+# accepted as openai-chat for compatibility with the first connection schema.
+$script:SCOpenAiChatInvokeBase=${function:Invoke-SCApiChat}
+function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
+    $protocol=if($Connection.PSObject.Properties['protocol']-and-not[string]::IsNullOrWhiteSpace([string]$Connection.protocol)){[string]$Connection.protocol}else{'openai-chat'}
+    if($protocol-ne'openai-chat'){throw "Direct inference protocol '$protocol' is not supported by this runtime. Add/select a matching protocol adapter rather than sending an incompatible request shape."}
+    return (& $script:SCOpenAiChatInvokeBase $Connection $Messages $Tools $ToolMode)
+}
+
 function Invoke-SCBoundedCommand([string]$Command,[int]$TimeoutSeconds=120) {
     if([string]::IsNullOrWhiteSpace($Command)){throw 'command required'}
     $shell=if(Get-Command pwsh.exe -ErrorAction SilentlyContinue){'pwsh.exe'}else{'powershell.exe'}
