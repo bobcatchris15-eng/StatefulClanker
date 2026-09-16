@@ -1,22 +1,14 @@
-<# StatefulClanker MCP server, HTTP transport (MCP Streamable HTTP).
+<# StatefulClanker MCP server, Streamable HTTP transport.
 
-   For MCP clients that accept a URL rather than launching a local command.
-   Binds to the loopback interface only and requires a bearer token.
+   Intended to be owned by the Windows tray application. It binds loopback only,
+   requires a bearer token, and follows the app's machine-local active project when
+   a tool call does not explicitly name another project.
 
-   Deliberately built on TcpListener rather than System.Net.HttpListener:
-   HttpListener needs Administrator rights or a `netsh http add urlacl`
-   reservation on Windows, which is a hostile install step for a local dev tool.
-   A raw socket needs neither.
-
-   Usage:
-     pwsh -File .\mcp\StatefulClanker.McpHttp.ps1 -ProjectPath C:\path\to\project
-     pwsh -File .\mcp\StatefulClanker.McpHttp.ps1 -Port 7337 -Token my-secret
-
-   The endpoint is  http://127.0.0.1:<port>/mcp
-   with header      Authorization: Bearer <token>
+   Deliberately built on TcpListener rather than System.Net.HttpListener so a normal
+   per-user install does not need elevation or a netsh URL reservation.
 #>
 param(
-    [string]$ProjectPath = (Get-Location).Path,
+    [string]$ProjectPath,
     [int]$Port = 7337,
     [string]$Token,
     [switch]$NoAuth
@@ -26,6 +18,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpCore.ps1')
+. (Join-Path $PSScriptRoot 'StatefulClanker.McpExtensions.ps1')
 
 if ($ProjectPath -and (Test-Path -LiteralPath $ProjectPath -PathType Container)) {
     Set-McpDefaultProject $ProjectPath
@@ -58,11 +51,9 @@ function Write-HttpResponse($Stream, [int]$Status, [string]$Body, [string]$Conte
 }
 
 function Read-HttpRequest($Stream) {
-    # Read headers bytewise. Do not use StreamReader: it buffers past the header
-    # boundary and eats the start of the body.
     $headerBytes = New-Object Collections.Generic.List[byte]
     $matched = 0
-    $terminator = @(13, 10, 13, 10)   # CRLF CRLF
+    $terminator = @(13, 10, 13, 10)
     while ($matched -lt 4) {
         $b = $Stream.ReadByte()
         if ($b -lt 0) { return $null }
@@ -72,8 +63,7 @@ function Read-HttpRequest($Stream) {
     }
     $headerText = [Text.Encoding]::ASCII.GetString($headerBytes.ToArray())
     $lines = $headerText -split "`r`n"
-    $requestLine = $lines[0]
-    $parts = $requestLine -split ' '
+    $parts = $lines[0] -split ' '
     if ($parts.Count -lt 2) { return $null }
 
     $headers = @{}
@@ -108,7 +98,6 @@ function Test-McpAuth($Request) {
     $value = [string]$Request.headers['authorization']
     if (-not $value.StartsWith('Bearer ', [StringComparison]::OrdinalIgnoreCase)) { return $false }
     $presented = $value.Substring(7).Trim()
-    # Length-independent compare is overkill on loopback, but cheap.
     if ($presented.Length -ne $Token.Length) { return $false }
     $diff = 0
     for ($i = 0; $i -lt $Token.Length; $i++) { $diff = $diff -bor ([int][char]$presented[$i] -bxor [int][char]$Token[$i]) }
@@ -119,19 +108,15 @@ $listener = New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback, $Port
 $listener.Start()
 $actualPort = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
 $url = "http://127.0.0.1:$actualPort/mcp"
+$activeProject = if($script:McpDefaultProject){$script:McpDefaultProject}else{Get-McpResidentActiveProject}
 
-@{ url = $url; token = $Token; project = $script:McpDefaultProject; pid = $PID; startedAt = (Get-Date).ToUniversalTime().ToString('o') } |
+@{ url = $url; token = $Token; project = $activeProject; pid = $PID; startedAt = (Get-Date).ToUniversalTime().ToString('o') } |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $tokenPath -Encoding UTF8
 
 Write-Host "StatefulClanker MCP (HTTP) listening on $url"
-Write-Host "Project: $script:McpDefaultProject"
-if ($NoAuth) {
-    Write-Host 'Auth:    DISABLED (-NoAuth). Any local process can drive this project.'
-} else {
-    Write-Host "Token:   $Token"
-}
+if ($activeProject) { Write-Host "Active project: $activeProject" } else { Write-Host 'Active project: none (select one in the app or pass project per tool call)' }
+if ($NoAuth) { Write-Host 'Auth: DISABLED (-NoAuth). Any local process can drive the selected project.' } else { Write-Host "Token: $Token" }
 Write-Host "Details written to $tokenPath"
-Write-Host 'Press Ctrl+C to stop.'
 
 try {
     while ($true) {
@@ -143,46 +128,25 @@ try {
             $stream = $client.GetStream()
             $request = Read-HttpRequest $stream
             if ($null -eq $request) { continue }
-
             $path = ([string]$request.path -split '\?')[0]
 
-            if ($request.method -eq 'OPTIONS') {
-                Write-HttpResponse $stream 200 ''
-                continue
-            }
+            if ($request.method -eq 'OPTIONS') { Write-HttpResponse $stream 200 ''; continue }
             if ($path -eq '/health') {
-                Write-HttpResponse $stream 200 (@{ ok = $true; server = 'statefulclanker'; version = $script:McpVersion } | ConvertTo-Json -Compress)
+                Write-HttpResponse $stream 200 (@{ ok = $true; server = 'statefulclanker'; version = $script:McpVersion; activeProject = (Get-McpResidentActiveProject) } | ConvertTo-Json -Compress)
                 continue
             }
-            if ($path -ne '/mcp') {
-                Write-HttpResponse $stream 404 (@{ error = 'Not found. The MCP endpoint is /mcp' } | ConvertTo-Json -Compress)
-                continue
-            }
-            if (-not (Test-McpAuth $request)) {
-                Write-HttpResponse $stream 401 (@{ error = 'Missing or invalid bearer token.' } | ConvertTo-Json -Compress)
-                continue
-            }
-            if ($request.tooLarge) {
-                Write-HttpResponse $stream 413 (@{ error = 'Request body too large.' } | ConvertTo-Json -Compress)
-                continue
-            }
-            if ($request.method -ne 'POST') {
-                # No server-initiated stream is needed: every tool here is
-                # request/response, and long cycles are polled via run_status.
-                Write-HttpResponse $stream 405 (@{ error = 'Use POST for JSON-RPC.' } | ConvertTo-Json -Compress)
-                continue
-            }
+            if ($path -ne '/mcp') { Write-HttpResponse $stream 404 (@{ error = 'Not found. The MCP endpoint is /mcp' } | ConvertTo-Json -Compress); continue }
+            if (-not (Test-McpAuth $request)) { Write-HttpResponse $stream 401 (@{ error = 'Missing or invalid bearer token.' } | ConvertTo-Json -Compress); continue }
+            if ($request.tooLarge) { Write-HttpResponse $stream 413 (@{ error = 'Request body too large.' } | ConvertTo-Json -Compress); continue }
+            if ($request.method -ne 'POST') { Write-HttpResponse $stream 405 (@{ error = 'Use POST for JSON-RPC.' } | ConvertTo-Json -Compress); continue }
 
             $id = $null
             try {
                 $rpc = $request.body | ConvertFrom-Json
                 if ($rpc.PSObject.Properties['id']) { $id = $rpc.id }
                 $response = Invoke-McpRpc $rpc
-                if ($null -eq $response) {
-                    Write-HttpResponse $stream 202 ''
-                } else {
-                    Write-HttpResponse $stream 200 ($response | ConvertTo-Json -Depth 30 -Compress)
-                }
+                if ($null -eq $response) { Write-HttpResponse $stream 202 '' }
+                else { Write-HttpResponse $stream 200 ($response | ConvertTo-Json -Depth 30 -Compress) }
             } catch {
                 $err = [ordered]@{ jsonrpc = '2.0'; id = $id; error = [ordered]@{ code = -32700; message = "Parse error: $($_.Exception.Message)" } }
                 Write-HttpResponse $stream 400 ($err | ConvertTo-Json -Depth 10 -Compress)
