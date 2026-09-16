@@ -1,20 +1,30 @@
-<# Direct API worker harness tests. Uses a local mock OpenAI-compatible endpoint; no model, key, or network required. #>
+<# Direct API worker harness tests. Uses a local mock OpenAI-compatible endpoint; no model, key, network, or URL ACL required. #>
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent $PSScriptRoot
 function Assert-True([bool]$Condition,[string]$Message){if(-not$Condition){throw "DIRECT API TEST FAILED: $Message"}}
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('statefulclanker-api-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp|Out-Null
-$port=22000+(Get-Random -Minimum 0 -Maximum 10000);$prefix="http://127.0.0.1:$port/"
-$job=Start-Job -ArgumentList $prefix -ScriptBlock {
-    param($Prefix)
-    $listener=New-Object Net.HttpListener;$listener.Prefixes.Add($Prefix);$listener.Start()
+$port=22000+(Get-Random -Minimum 0 -Maximum 10000)
+$job=Start-Job -ArgumentList $port -ScriptBlock {
+    param($Port)
+    $listener=New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback),$Port;$listener.Start()
     try {
         $responses=@(
             '{"choices":[{"message":{"role":"assistant","content":"{\"tool\":\"write_file\",\"arguments\":{\"path\":\"api-worker.txt\",\"content\":\"hello from direct worker\"}}"}}]}',
             '{"choices":[{"message":{"role":"assistant","content":"{\"final\":\"done\"}"}}]}'
         )
-        foreach($json in $responses){$ctx=$listener.GetContext();$reader=New-Object IO.StreamReader($ctx.Request.InputStream);[void]$reader.ReadToEnd();$reader.Dispose();$bytes=[Text.Encoding]::UTF8.GetBytes($json);$ctx.Response.StatusCode=200;$ctx.Response.ContentType='application/json';$ctx.Response.ContentLength64=$bytes.Length;$ctx.Response.OutputStream.Write($bytes,0,$bytes.Length);$ctx.Response.Close()}
-    } finally {$listener.Stop();$listener.Close()}
+        foreach($json in $responses){
+            $client=$listener.AcceptTcpClient();$stream=$client.GetStream()
+            try {
+                $header=New-Object Collections.Generic.List[byte];$match=0;$term=@(13,10,13,10)
+                while($match-lt4){$b=$stream.ReadByte();if($b-lt0){break};$header.Add([byte]$b);if($b-eq$term[$match]){$match++}elseif($b-eq13){$match=1}else{$match=0}}
+                $text=[Text.Encoding]::ASCII.GetString($header.ToArray());$len=0
+                foreach($line in ($text-split"`r`n")){if($line-match'(?i)^Content-Length:\s*(\d+)'){$len=[int]$Matches[1]}}
+                if($len-gt0){$buf=New-Object byte[] $len;$read=0;while($read-lt$len){$n=$stream.Read($buf,$read,$len-$read);if($n-le0){break};$read+=$n}}
+                $bytes=[Text.Encoding]::UTF8.GetBytes($json);$head=[Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nContent-Length: $($bytes.Length)`r`nConnection: close`r`n`r`n");$stream.Write($head,0,$head.Length);$stream.Write($bytes,0,$bytes.Length);$stream.Flush()
+            } finally {$stream.Dispose();$client.Close()}
+        }
+    } finally {$listener.Stop()}
 }
 try {
     Start-Sleep -Milliseconds 400
