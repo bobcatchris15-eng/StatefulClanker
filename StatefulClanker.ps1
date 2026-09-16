@@ -15,7 +15,7 @@ $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
 $runtimeRef='68b75f13e5982674f085cee6893c2abe59364090'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1')
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerRuntime.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -44,15 +44,10 @@ if($useCheckedOut){
 . (Join-Path $runtimeLib 'StatefulClanker.Concurrency.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.ProjectReview.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.DispatchGuard.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.WorkerRuntime.ps1')
 
-# -StateRoot lets a cycle run inside a git worktree while reading and writing the
-# one canonical .statefulclanker in the main tree. Without it the cycle would look
-# for durable state inside the worktree, where it does not exist.
-# A -StateRoot cycle is a worktree child managed by the parallel scheduler. It must
-# not run its own project review: the scheduler runs one for the whole batch.
 $script:SCManagedChild=$false
 if($StateRoot){Set-SCRoots (Get-Location).Path $StateRoot;$script:SCManagedChild=$true}
-
 if($Command.ToLowerInvariant()-ne'init'-and(Test-Path (Get-SCPath 'state.json'))){Upgrade-SCStateLayout;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout}
 
 switch($Command.ToLowerInvariant()){
