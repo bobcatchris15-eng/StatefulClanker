@@ -12,8 +12,9 @@ function Get-McpResidentActiveProject {
     return (Resolve-Path -LiteralPath $value).Path
 }
 
-# Explicit project argument wins. A session-local project_use wins next. Otherwise
-# follow the active project selected in the resident Windows application.
+# Explicit project argument wins. An explicit -ProjectPath/session default is next
+# for headless compatibility. Otherwise follow the active project selected by the
+# resident Windows application.
 function Get-McpProject($Arguments) {
     $candidate=$null
     if($Arguments-and$Arguments.PSObject.Properties['project']-and$Arguments.project){
@@ -23,7 +24,7 @@ function Get-McpProject($Arguments) {
     } else {
         $candidate=Get-McpResidentActiveProject
     }
-    if([string]::IsNullOrWhiteSpace($candidate)){throw 'No active project. Select one in StatefulClanker, call project_use, or pass "project" explicitly.'}
+    if([string]::IsNullOrWhiteSpace($candidate)){throw 'No active project. Select one in StatefulClanker or pass "project" explicitly.'}
     if(-not(Test-Path -LiteralPath $candidate -PathType Container)){throw "Project path does not exist: $candidate"}
     return (Resolve-Path -LiteralPath $candidate).Path
 }
@@ -72,7 +73,8 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
         'source_add' {
             $text=Get-McpArgRequired $Arguments 'text'
             $result=Invoke-McpHarness $project @('source','add','-Message',$text)
-            return New-McpTextResult ([ordered]@{sourceRef=$result.stdout.Trim();output=$result.stdout})
+            $sourceRef=([string]$result.stdout).Trim()
+            return New-McpTextResult ([ordered]@{sourceRef=$sourceRef;output=$result.stdout})
         }
         'source_get' {
             $ref=Get-McpArgRequired $Arguments 'sourceRef'
@@ -87,6 +89,15 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
     }
 }
 
+function Invoke-SCDirectionAdd($Arguments) {
+    $project=Get-McpProject $Arguments;Assert-McpInitialized $project
+    $message=Get-McpArgRequired $Arguments 'message'
+    $result=Invoke-McpHarness $project @('event','-Message',$message)
+    $sourceRef=$null
+    if(([string]$result.stdout)-match '(human:[A-Za-z0-9_.-]+)'){$sourceRef=$Matches[1]}
+    return New-McpTextResult ([ordered]@{recorded=$true;sourceRef=$sourceRef;invalidatesOlderCompilations=$true;output=$result.stdout})
+}
+
 function Invoke-SCSemanticTaskAdd($Arguments) {
     $project=Get-McpProject $Arguments;Assert-McpInitialized $project
     $title=Get-McpArgRequired $Arguments 'title';$instruction=Get-McpArgRequired $Arguments 'instruction'
@@ -99,7 +110,7 @@ function Invoke-SCSemanticTaskAdd($Arguments) {
     }
     if($Arguments-and$Arguments.PSObject.Properties['humanGate']-and[bool]$Arguments.humanGate){$cli+='-HumanGate'}
     $result=Invoke-McpHarness $project $cli
-    return New-McpTextResult ([ordered]@{taskId=$result.stdout.Trim();output=$result.stdout})
+    return New-McpTextResult ([ordered]@{taskId=([string]$result.stdout).Trim();output=$result.stdout})
 }
 
 function Invoke-McpRpc($Request) {
@@ -122,6 +133,8 @@ function Invoke-McpRpc($Request) {
             }
             $plan=@($tools|Where-Object{[string]$_.name-eq'plan_import'}|Select-Object -First 1)
             if($plan.Count-gt 0){$plan[0].description='Import a JSON or compact SCPLAN 1 task graph from a local file path.'}
+            $direction=@($tools|Where-Object{[string]$_.name-eq'direction_add'}|Select-Object -First 1)
+            if($direction.Count-gt 0){$direction[0].description='Record human direction verbatim as a durable human:<id> source, advance direction revision, and return the source reference.'}
             $response.result.tools=@($tools + (New-SCExtendedTools))
         }
         return $response
@@ -130,6 +143,9 @@ function Invoke-McpRpc($Request) {
         $name=[string]$Request.params.name;$args=$null;if($Request.params.PSObject.Properties['arguments']){$args=$Request.params.arguments}
         if(@('plan_apply','source_add','source_get','source_list') -contains $name) {
             try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCExtendedTool $name $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool '{0}' failed: {1}"-f$name,$_.Exception.Message)})}}}
+        }
+        if($name-eq'direction_add') {
+            try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCDirectionAdd $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool 'direction_add' failed: {0}"-f$_.Exception.Message)})}}}
         }
         if($name-eq'task_add'-and$args-and($args.PSObject.Properties['size']-or$args.PSObject.Properties['source']-or$args.PSObject.Properties['intentRef'])) {
             try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCSemanticTaskAdd $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool 'task_add' failed: {0}"-f$_.Exception.Message)})}}}
