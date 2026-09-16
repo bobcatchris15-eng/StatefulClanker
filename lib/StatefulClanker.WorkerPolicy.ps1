@@ -1,5 +1,5 @@
 # Central capability policy for StatefulClanker-owned workers.
-# Machine catalog declares what can exist. Project/role/stage policy can only tighten.
+# Machine catalog declares what can exist. Named profiles/project/role/stage/task policy only tighten.
 
 $script:SCWorkerMcpSessions=@{}
 
@@ -10,7 +10,7 @@ function Get-SCWorkerPolicyMachinePath {
 }
 function Get-SCWorkerPolicyProjectPath { return Get-SCPath 'worker-policy.json' }
 function Get-SCDefaultWorkerCapabilityCatalog {
-    return [ordered]@{schemaVersion=1;allow=@('builtin.*','intent.human.read','intent.normalized.read');deny=@();sources=[ordered]@{}}
+    return [ordered]@{schemaVersion=2;allow=@('builtin.*','intent.human.read','intent.normalized.read');deny=@();profiles=[ordered]@{};sources=[ordered]@{}}
 }
 function Read-SCWorkerPolicyJson([string]$Path,$Default=$null) {
     if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){return $Default}
@@ -21,10 +21,14 @@ function Get-SCWorkerCapabilityCatalog {
     if($null-eq$catalog){return [pscustomobject](Get-SCDefaultWorkerCapabilityCatalog)}
     if(-not$catalog.PSObject.Properties['allow']){Set-SCProperty $catalog 'allow' @('builtin.*','intent.human.read','intent.normalized.read')}
     if(-not$catalog.PSObject.Properties['deny']){Set-SCProperty $catalog 'deny' @()}
+    if(-not$catalog.PSObject.Properties['profiles']){Set-SCProperty $catalog 'profiles' ([pscustomobject]@{})}
     if(-not$catalog.PSObject.Properties['sources']){Set-SCProperty $catalog 'sources' ([pscustomobject]@{})}
+    Set-SCProperty $catalog 'schemaVersion' 2
     return $catalog
 }
 function Save-SCWorkerCapabilityCatalog($Catalog) {
+    Set-SCProperty $Catalog 'schemaVersion' 2
+    if(-not$Catalog.PSObject.Properties['profiles']){Set-SCProperty $Catalog 'profiles' ([pscustomobject]@{})}
     $path=Get-SCWorkerPolicyMachinePath;$tmp=$path+'.tmp';$Catalog|ConvertTo-Json -Depth 40|Set-Content -LiteralPath $tmp -Encoding UTF8;Move-Item -LiteralPath $tmp -Destination $path -Force
 }
 function Get-SCProjectWorkerPolicy {
@@ -45,8 +49,16 @@ function Test-SCCapabilityPattern([string]$Capability,[string]$Pattern) {
 function Test-SCCapabilityMatchesAny([string]$Capability,$Patterns) {foreach($p in @($Patterns)){if(Test-SCCapabilityPattern $Capability ([string]$p)){return $true}};return $false}
 function Test-SCCapabilityAllowedByLayer([string]$Capability,$Allow,$Deny,[bool]$HasExplicitAllow) {if(Test-SCCapabilityMatchesAny $Capability $Deny){return $false};if($HasExplicitAllow -and-not(Test-SCCapabilityMatchesAny $Capability $Allow)){return $false};return $true}
 function Get-SCPolicySubrecord($Container,[string]$Name) {if($null-eq$Container-or-not$Container.PSObject.Properties[$Name]){return $null};return $Container.$Name}
+function Get-SCTaskCapabilityProfile($Catalog,$Task) {
+    if($null-eq$Task-or-not$Task.PSObject.Properties['capabilityProfile']-or[string]::IsNullOrWhiteSpace([string]$Task.capabilityProfile)){return $null}
+    $name=[string]$Task.capabilityProfile;$profile=Get-SCPolicySubrecord $Catalog.profiles $name
+    if($null-eq$profile){throw "Unknown worker capability profile '$name'. Define it in $(Get-SCWorkerPolicyMachinePath) before dispatch."}
+    return [ordered]@{name=$name;policy=$profile}
+}
 function Test-SCWorkerCapabilityAllowed([string]$Capability,$Task,[string]$Stage='worker') {
     $catalog=Get-SCWorkerCapabilityCatalog;if(-not(Test-SCCapabilityMatchesAny $Capability @($catalog.allow))){return $false};if(Test-SCCapabilityMatchesAny $Capability @($catalog.deny)){return $false}
+    $profile=Get-SCTaskCapabilityProfile $catalog $Task
+    if($profile){$pp=$profile.policy;$has=$pp.PSObject.Properties['allow'] -and $null-ne$pp.allow;if(-not(Test-SCCapabilityAllowedByLayer $Capability @($pp.allow) @($pp.deny) $has)){return $false}}
     $policy=Get-SCProjectWorkerPolicy;$hasProjectAllow=$policy.PSObject.Properties['allow'] -and $null-ne$policy.allow
     if(-not(Test-SCCapabilityAllowedByLayer $Capability @($policy.allow) @($policy.deny) $hasProjectAllow)){return $false}
     $role=if($Task-and$Task.PSObject.Properties['role']-and$Task.role){[string]$Task.role}else{'worker'};$rolePolicy=Get-SCPolicySubrecord $policy.roles $role
@@ -55,7 +67,11 @@ function Test-SCWorkerCapabilityAllowed([string]$Capability,$Task,[string]$Stage
     if($Task-and$Task.PSObject.Properties['toolPolicy']-and$Task.toolPolicy){$tp=$Task.toolPolicy;$has=$tp.PSObject.Properties['allow'] -and $null-ne$tp.allow;if(-not(Test-SCCapabilityAllowedByLayer $Capability @($tp.allow) @($tp.deny) $has)){return $false}}
     return $true
 }
-function Get-SCWorkerPolicySnapshot($Task=$null,[string]$Stage='worker') {$catalog=Get-SCWorkerCapabilityCatalog;$project=Get-SCProjectWorkerPolicy;return [ordered]@{machinePath=Get-SCWorkerPolicyMachinePath;projectPath=Get-SCWorkerPolicyProjectPath;machine=$catalog;project=$project;stage=$Stage;role=if($Task){$Task.role}else{$null}}}
+function Get-SCWorkerPolicySnapshot($Task=$null,[string]$Stage='worker') {
+    $catalog=Get-SCWorkerCapabilityCatalog;$project=Get-SCProjectWorkerPolicy;$profile=$null
+    if($Task){$profile=Get-SCTaskCapabilityProfile $catalog $Task}
+    return [ordered]@{machinePath=Get-SCWorkerPolicyMachinePath;projectPath=Get-SCWorkerPolicyProjectPath;machine=$catalog;project=$project;capabilityProfile=if($profile){$profile.name}else{$null};taskPolicy=if($Task-and$Task.PSObject.Properties['toolPolicy']){$Task.toolPolicy}else{$null};stage=$Stage;role=if($Task){$Task.role}else{$null}}
+}
 
 function Resolve-SCHumanIntentArtifact([string]$SourceRef) {
     if([string]::IsNullOrWhiteSpace($SourceRef)){throw 'sourceRef required'};$resolved=Resolve-SCSourceReference $SourceRef;if($null-eq$resolved){throw "Human source not found: $SourceRef"};return [ordered]@{sourceRef=$SourceRef;content=[string]$resolved.content;authority='direct human/source evidence; read-only'}
@@ -83,7 +99,7 @@ function Invoke-SCMcpHttpJsonRpc([string]$SourceName,$Source,[string]$Method,$Pa
 function Initialize-SCMcpHttpSource([string]$SourceName,$Source) {
     if($script:SCWorkerMcpSessions.ContainsKey($SourceName)){return}
     $params=[ordered]@{protocolVersion='2025-06-18';capabilities=[ordered]@{};clientInfo=[ordered]@{name='StatefulClanker-worker';version='1'}}
-    try{[void](Invoke-SCMcpHttpJsonRpc $SourceName $Source 'initialize' $params)}catch{return}
+    try{[void](Invoke-SCMcpHttpJsonRpc $SourceName $Source 'initialize' $params);if(-not$script:SCWorkerMcpSessions.ContainsKey($SourceName)){$script:SCWorkerMcpSessions[$SourceName]='stateless-legacy'}}catch{return}
 }
 function Get-SCMcpSourceTools([string]$SourceName) {
     $catalog=Get-SCWorkerCapabilityCatalog;$p=$catalog.sources.PSObject.Properties[$SourceName];if($null-eq$p){throw "Unknown worker MCP source '$SourceName'."};$source=$p.Value;$transport=if($source.PSObject.Properties['transport']){[string]$source.transport}else{'http'}
