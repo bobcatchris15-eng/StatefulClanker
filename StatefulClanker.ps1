@@ -15,36 +15,16 @@ $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
 $runtimeRef='68b75f13e5982674f085cee6893c2abe59364090'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerRuntime.ps1')
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerRuntime.ps1','StatefulClanker.WorkerRuntime.Windows.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
-if($useCheckedOut){
-    $runtimeLib=$checkedOutLib
-}else{
+if($useCheckedOut){$runtimeLib=$checkedOutLib}else{
     $runtimeLib=Join-Path (Join-Path (Join-Path (Get-Location).Path '.statefulclanker') 'runtime') $runtimeRef
     if(-not(Test-Path -LiteralPath $runtimeLib)){New-Item -ItemType Directory -Force -Path $runtimeLib|Out-Null}
-    foreach($name in $runtimeNames){
-        $target=Join-Path $runtimeLib $name
-        if(-not(Test-Path -LiteralPath $target -PathType Leaf)){
-            $uri="https://raw.githubusercontent.com/bobcatchris15-eng/StatefulClanker/$runtimeRef/lib/$name"
-            try{Invoke-WebRequest -Uri $uri -UseBasicParsing -OutFile $target}catch{throw "StatefulClanker runtime module '$name' is missing and could not be fetched from pinned ref $runtimeRef. Use a full repository checkout or restore network access. $($_.Exception.Message)"}
-        }
-    }
+    foreach($name in $runtimeNames){$target=Join-Path $runtimeLib $name;if(-not(Test-Path -LiteralPath $target -PathType Leaf)){$uri="https://raw.githubusercontent.com/bobcatchris15-eng/StatefulClanker/$runtimeRef/lib/$name";try{Invoke-WebRequest -Uri $uri -UseBasicParsing -OutFile $target}catch{throw "StatefulClanker runtime module '$name' is missing and could not be fetched from pinned ref $runtimeRef. Use a full repository checkout or restore network access. $($_.Exception.Message)"}}}
 }
-. (Join-Path $runtimeLib 'StatefulClanker.Core.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.Eventing.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.Context.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.Plan.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.Directives.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.Semantics.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.Execution.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.Routing.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.Intent.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.Concurrency.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.ProjectReview.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.DispatchGuard.ps1')
-. (Join-Path $runtimeLib 'StatefulClanker.WorkerRuntime.ps1')
+foreach($name in $runtimeNames){. (Join-Path $runtimeLib $name)}
 
 $script:SCManagedChild=$false
 if($StateRoot){Set-SCRoots (Get-Location).Path $StateRoot;$script:SCManagedChild=$true}
