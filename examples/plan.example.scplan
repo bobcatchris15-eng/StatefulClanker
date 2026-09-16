@@ -1,0 +1,69 @@
+SCPLAN 1
+plan windows-first-host
+summary Make the resident Windows app the machine-local orchestration authority while retaining provider CLI execution.
+source human:h-0001
+intent REQ-WINDOWS-FIRST
+intent REQ-MCP-CONTROL-PLANE
+
+task app-project-registry
+size small
+title add machine-local project registry
+instruction Persist known project roots and the last active project in machine-local application state; do not move project authority out of .statefulclanker.
+source human:h-0001
+intent REQ-ACTIVE-PROJECT
+retrieve desktop/*
+retrieve lib/StatefulClanker.Integrations.ps1
+accept project registry survives application restart
+accept project-local durable state remains under the project root
+accept missing project paths remain explicit
+end
+
+task app-active-project
+size small
+title restore and expose the active project
+depends app-project-registry
+instruction Restore the last active project on startup and make project switching explicit to the UI/control plane.
+source human:h-0001
+intent REQ-ACTIVE-PROJECT
+accept existing last active project is restored
+accept missing last active project produces a no-active-project state
+accept no other project is silently substituted
+end
+
+task mcp-resident-http
+size medium
+title move Streamable HTTP MCP ownership into resident host
+depends app-active-project
+instruction Make the running Windows host own the loopback MCP endpoint without tying listener lifetime to one project process.
+source human:h-0001
+intent REQ-MCP-CONTROL-PLANE
+retrieve mcp/*
+accept MCP listener remains running while active project changes
+accept requests are visibly scoped to the selected or explicitly requested project
+accept endpoint remains loopback/local by default
+end
+
+task mcp-stdio-bridge
+size medium
+title make stdio transport a bridge to the resident host
+depends mcp-resident-http
+instruction Preserve stdio compatibility while removing independent orchestration authority from the stdio process; bridge requests to the resident app over local IPC.
+source human:h-0001
+intent REQ-MCP-CONTROL-PLANE
+accept stdio and HTTP expose the same semantic MCP tools
+accept stdio process does not maintain divergent active-project state
+end
+
+task ui-project-telemetry
+size medium
+title build active-project overview telemetry
+depends app-active-project
+instruction Present active project health and execution telemetry in the Windows UI using the Toaster-style status/metric presentation and provider-GUI-style project navigation.
+source human:h-0001
+intent REQ-WINDOWS-FIRST
+accept overview shows worker sessions spawned
+accept overview shows critic and validator activity
+accept overview shows commits and task state counts
+accept overview shows outstanding context and intent escalations
+accept telemetry is scoped to the selected project
+end
