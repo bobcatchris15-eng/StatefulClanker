@@ -80,12 +80,19 @@ function Invalidate-SCTasksForIntentRefs([string[]]$IntentRefs,[string]$Directiv
 
 function Set-SCHumanDirective([string]$Id,[string]$Text,[string]$Scope=$null,[string]$SourceRef=$null,[string[]]$IntentRefs=@(),[string]$Reason=$null) {
     Assert-SCInitialized;Ensure-SCDirectiveLayout;Assert-SCDirectiveId $Id;if([string]::IsNullOrWhiteSpace($Text)){throw 'Directive text required.'}
+    $resolvedScope=if($Scope){[string]$Scope}else{$Id}
+    foreach($other in @(Get-SCCurrentDirectives)) {
+        if([string]$other.id-ne$Id-and[string]$other.scope-eq$resolvedScope){throw "Directive scope '$resolvedScope' is already current under id '$($other.id)'. Update that same directive id, or clarify whether this is a distinct/narrower scope before creating another authority record."}
+    }
     if([string]::IsNullOrWhiteSpace($SourceRef)) {$source=New-SCHumanSource $Text 'directive' $Id;$SourceRef=[string]$source.ref}
-    else {$resolved=Resolve-SCSourceReference $SourceRef;if($null-eq$resolved){throw "Directive source not found: $SourceRef"}}
+    else {
+        $resolved=Resolve-SCSourceReference $SourceRef;if($null-eq$resolved){throw "Directive source not found: $SourceRef"}
+        if(([string]$resolved.content).TrimEnd() -ne $Text.TrimEnd()){throw 'Directive text does not match the supplied sourceRef verbatim. A current human directive must preserve the direct human wording; omit sourceRef to capture this text as a new durable source.'}
+    }
 
     $path=Get-SCDirectivePath $Id;$previous=Read-SCJson $path;$next=1
     if($previous) {$next=[int]$previous.revision+1;$historyDir=Get-SCPath ("directives/history/{0}"-f$Id);if(-not(Test-Path -LiteralPath $historyDir)){New-Item -ItemType Directory -Force -Path $historyDir|Out-Null};Write-SCJson (Join-Path $historyDir ("revision-{0:d4}.json"-f[int]$previous.revision)) $previous}
-    $record=[ordered]@{schemaVersion=1;id=$Id;scope=if($Scope){$Scope}else{$Id};revision=$next;text=$Text;sourceRef=$SourceRef;intentRefs=@($IntentRefs|Where-Object{$_}|ForEach-Object{[string]$_});updatedAt=(Get-Date).ToUniversalTime().ToString('o');reason=$Reason;authority='latest direct human word for this directive scope'}
+    $record=[ordered]@{schemaVersion=1;id=$Id;scope=$resolvedScope;revision=$next;text=$Text;sourceRef=$SourceRef;intentRefs=@($IntentRefs|Where-Object{$_}|ForEach-Object{[string]$_});updatedAt=(Get-Date).ToUniversalTime().ToString('o');reason=$Reason;authority='latest direct human word for this directive scope'}
     Write-SCJson $path $record;$globalRevision=Set-SCDirectiveReconciliationPending $Id
     $why=if($Reason){$Reason}else{'latest direct human wording changed'};$invalidated=@(Invalidate-SCTasksForIntentRefs $record.intentRefs $Id $why)
     Add-SCEvent 'directive.revised' "Human directive '$Id' revised to $next." @{directiveId=$Id;directiveRevision=$next;globalDirectiveRevision=$globalRevision;scope=$record.scope;sourceRef=$SourceRef;intentRefs=@($record.intentRefs);invalidatedTasks=$invalidated;reason=$Reason}
