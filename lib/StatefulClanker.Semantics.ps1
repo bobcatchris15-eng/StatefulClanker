@@ -7,9 +7,12 @@ $script:SCBaseNewCompilation = (Get-Item Function:\New-SCCompilation).ScriptBloc
 function New-SCCompilation($Task) {
     $receipt = & $script:SCBaseNewCompilation $Task
     if($null-eq$receipt-or$null-eq$receipt.ir-or$null-eq$receipt.ir.task){return $receipt}
-    Set-SCProperty $receipt.ir.task 'size' (if($Task.PSObject.Properties['size']-and$Task.size){[string]$Task.size}else{'small'})
-    Set-SCProperty $receipt.ir.task 'sources' (if($Task.PSObject.Properties['sources']){@($Task.sources)}else{@()})
-    Set-SCProperty $receipt.ir.task 'intentRefs' (if($Task.PSObject.Properties['intentRefs']){@($Task.intentRefs)}else{@()})
+    $sizeValue='small';if($Task.PSObject.Properties['size']-and$Task.size){$sizeValue=[string]$Task.size}
+    $sources=@();if($Task.PSObject.Properties['sources']){$sources=@($Task.sources)}
+    $intentRefs=@();if($Task.PSObject.Properties['intentRefs']){$intentRefs=@($Task.intentRefs)}
+    Set-SCProperty $receipt.ir.task 'size' $sizeValue
+    Set-SCProperty $receipt.ir.task 'sources' $sources
+    Set-SCProperty $receipt.ir.task 'intentRefs' $intentRefs
     $receipt.contextFingerprint=Get-SCHashString (ConvertTo-SCJson $receipt.ir 24)
     Write-SCJson (Get-SCPath ("compilations/{0}.json"-f$receipt.id)) $receipt
     return $receipt
