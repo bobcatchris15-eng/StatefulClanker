@@ -117,7 +117,8 @@ procedure StopTrayApp();
 var
   ResultCode: Integer;
 begin
-  Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM StatefulClanker.exe >nul 2>&1', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  ; /T terminates the resident MCP PowerShell child as well as the native host.
+  Exec(ExpandConstant('{cmd}'), '/C taskkill /F /T /IM StatefulClanker.exe >nul 2>&1', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
