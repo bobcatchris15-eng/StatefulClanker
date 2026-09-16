@@ -5,6 +5,7 @@ $temp=Join-Path ([IO.Path]::GetTempPath()) ('sc-worker-policy-'+[Guid]::NewGuid(
 $oldLocal=$env:LOCALAPPDATA;$env:LOCALAPPDATA=Join-Path $temp 'local';New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA|Out-Null
 try {
     . (Join-Path $repo 'lib\StatefulClanker.Core.ps1');Set-SCRoots $temp $temp
+    New-Item -ItemType Directory -Force -Path (Join-Path $temp '.statefulclanker') | Out-Null
     function Add-SCEvent { param($Type,$Message,$Data) }
     function Resolve-SCSourceReference { param([string]$SourceRef); if($SourceRef-eq'human:h-test'){return [pscustomobject]@{content='verbatim human intent'}}; return $null }
     function Get-SCIntentContract { return [pscustomobject]@{revision=7;objective='normalized objective';requirements=@('r1');constraints=@();invariants=@();nonGoals=@();decisions=@();preferences=@();openQuestions=@();successDefinition='done'} }
@@ -50,7 +51,7 @@ try {
     $external=@(Get-SCExternalWorkerToolRecords $worker 'worker');Assert-True ($external.Count-eq2) 'Only the two machine-authorized Toaster tools should be advertised.';Assert-True (@($external.capability)-contains'mcp.toaster.search') 'Toaster search missing from advertised records.';Assert-True (@($external.capability)-notcontains'mcp.toaster.write_lesson') 'Unauthorized write_lesson was advertised.'
     $profileExternal=@(Get-SCExternalWorkerToolRecords $profiled 'worker');Assert-True ($profileExternal.Count-eq1-and$profileExternal[0].capability-eq'mcp.toaster.search') 'Profile did not narrow advertised external tools.'
 
-    $registry=@(Get-SCWorkerToolRecords $worker 'worker');$human=$registry|Where-Object wireName -eq'read_human_intent';$normalized=$registry|Where-Object wireName -eq'read_normalized_intent';Assert-True ($null-ne$human) 'Human intent reader was not advertised.';Assert-True ($null-ne$normalized) 'Normalized intent reader was not advertised.'
+    $registry=@(Get-SCWorkerToolRecords $worker 'worker');$human=$registry|Where-Object { $_.wireName -eq 'read_human_intent' };$normalized=$registry|Where-Object { $_.wireName -eq 'read_normalized_intent' };Assert-True ($null-ne$human) 'Human intent reader was not advertised.';Assert-True ($null-ne$normalized) 'Normalized intent reader was not advertised.'
     $humanResult=Invoke-SCWorkerTool 'read_human_intent' ([pscustomobject]@{sourceRef='human:h-test'}) $worker 'worker' $registry;Assert-True ($humanResult -match 'verbatim human intent') 'Human reader did not return direct source evidence.'
     $normalizedResult=Invoke-SCWorkerTool 'read_normalized_intent' ([pscustomobject]@{}) $worker 'worker' $registry;Assert-True ($normalizedResult -match 'normalized objective' -and $normalizedResult -match 'use bounded workers') 'Normalized reader did not return Intent plus current directives.'
     Write-Host 'PASS: worker capability policy, profiles, and task-local narrowing are tighten-only.'

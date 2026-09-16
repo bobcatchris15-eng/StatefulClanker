@@ -274,7 +274,7 @@ sealed class MainForm : Form
         var menu = new ContextMenuStrip(); menu.Items.Add("Open StatefulClanker", null, (_, _) => ShowFromTray()); menu.Items.Add("Exit", null, (_, _) => { _reallyExit = true; Close(); });
         _notify = new NotifyIcon { Text = "StatefulClanker", Icon = Icon ?? SystemIcons.Application, Visible = true, ContextMenuStrip = menu }; _notify.DoubleClick += (_, _) => ShowFromTray();
         BuildUi(); RestoreProjects(); RefreshAll(); Theme.Apply(this);
-        _timer.Tick += (_, _) => RefreshAll(); _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += Closing;
+        _timer.Tick += (_, _) => RefreshAll(); _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
     }
 
     static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 32, Margin = new Padding(0, 4, 8, 0) };
@@ -326,8 +326,8 @@ sealed class MainForm : Form
     TabPage BuildProviders()
     {
         var p = Page("Providers"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1 }; rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill }; var open = Btn("Open config"); open.Click += (_, _) => OpenConfig(); var refresh = Btn("Refresh"); refresh.Click += (_, _) => RefreshProviders(); bar.Controls.Add(open); bar.Controls.Add(refresh); rows.Controls.Add(bar, 0, 0); rows.Controls.Add(Section("PROVIDER CLI STATUS AND SEMANTIC SIZE ROUTING"), 0, 1);
-        _providers.Dock = DockStyle.Fill; _providers.ReadOnly = true; _providers.AllowUserToAddRows = false; _providers.RowHeadersVisible = false; _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _providers.Columns.Add("name", "Provider"); _providers.Columns.Add("cli", "CLI"); _providers.Columns.Add("command", "Command"); _providers.Columns.Add("roles", "Routing / roles"); rows.Controls.Add(_providers, 0, 2); p.Controls.Add(rows); return p;
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill }; var open = Btn("Open config"); open.Click += (_, _) => OpenConfig(); var refresh = Btn("Refresh"); refresh.Click += (_, _) => RefreshProviders(); bar.Controls.Add(open); bar.Controls.Add(refresh); rows.Controls.Add(bar, 0, 0); rows.Controls.Add(Section("WORKER BACKEND STATUS AND SEMANTIC SIZE ROUTING"), 0, 1);
+        _providers.Dock = DockStyle.Fill; _providers.ReadOnly = true; _providers.AllowUserToAddRows = false; _providers.RowHeadersVisible = false; _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _providers.Columns.Add("name", "Provider"); _providers.Columns.Add("backend", "Backend"); _providers.Columns.Add("target", "Target"); _providers.Columns.Add("roles", "Routing / roles"); rows.Controls.Add(_providers, 0, 2); p.Controls.Add(rows); return p;
     }
 
     void RestoreProjects()
@@ -432,7 +432,7 @@ sealed class MainForm : Form
             if (!root.TryGetProperty("providers", out var providers) || providers.ValueKind != JsonValueKind.Object) return;
             foreach (var p in providers.EnumerateObject())
             {
-                var cmd = p.Value.TryGetProperty("command", out var c) ? c.GetString() ?? "" : ""; var tags = new List<string>(); if (p.Name == def) tags.Add("default"); if (p.Name == critic) tags.Add("critic"); if (p.Name == validator) tags.Add("validator"); foreach (var route in routes.Where(x => x.Value == p.Name)) tags.Add(route.Key); _providers.Rows.Add(p.Name, Runtime.CommandExists(cmd) ? "found" : "missing", cmd, string.Join(", ", tags));
+                var type = p.Value.TryGetProperty("type", out var tv) && tv.ValueKind == JsonValueKind.String ? tv.GetString() ?? "cli" : "cli"; var cmd = p.Value.TryGetProperty("command", out var c) ? c.GetString() ?? "" : ""; var connection = p.Value.TryGetProperty("connection", out var cn) ? cn.GetString() ?? "" : ""; var target = type.Equals("api", StringComparison.OrdinalIgnoreCase) ? connection : cmd; var status = type.Equals("api", StringComparison.OrdinalIgnoreCase) ? (string.IsNullOrWhiteSpace(connection) ? "missing" : "api") : (Runtime.CommandExists(cmd) ? "cli" : "missing"); var tags = new List<string>(); if (p.Name == def) tags.Add("default"); if (p.Name == critic) tags.Add("critic"); if (p.Name == validator) tags.Add("validator"); foreach (var route in routes.Where(x => x.Value == p.Name)) tags.Add(route.Key); _providers.Rows.Add(p.Name, status, target, string.Join(", ", tags));
             }
         }
         catch { }
@@ -441,5 +441,5 @@ sealed class MainForm : Form
     void OpenConfig() { var path = _settings.ActiveProjectPath; if (string.IsNullOrWhiteSpace(path)) return; var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json"); if (File.Exists(cfg)) try { Process.Start(new ProcessStartInfo("notepad.exe") { UseShellExecute = true, ArgumentList = { cfg } }); } catch { } }
     static void Copy(string text) { if (!string.IsNullOrWhiteSpace(text)) Clipboard.SetText(text); }
     void ShowFromTray() { Show(); WindowState = FormWindowState.Normal; Activate(); }
-    void Closing(object? sender, FormClosingEventArgs e) { if (!_reallyExit) { e.Cancel = true; Hide(); return; } _timer.Stop(); _mcp.Dispose(); _notify.Visible = false; _notify.Dispose(); }
+    void HandleFormClosing(object? sender, FormClosingEventArgs e) { if (!_reallyExit) { e.Cancel = true; Hide(); return; } _timer.Stop(); _mcp.Dispose(); _notify.Visible = false; _notify.Dispose(); }
 }

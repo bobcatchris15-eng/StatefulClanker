@@ -96,7 +96,7 @@ try {
     Assert-True ($held -match 'HELD') "hold status should report the hold. Got:`n$held"
     & $pwshPath -NoProfile -File $harness task add -TaskId r3 -Title 'Task 3' `
         -Instruction 'Return a successful bounded result.' -Accept 'mock passes' -Retrieval 'seed.txt' | Out-Null
-    $blocked = & $pwshPath -NoProfile -File $harness run -TaskId r3 2>&1 | Out-String
+    $oldPref=$ErrorActionPreference; try{$ErrorActionPreference='Continue'; $blocked = & $pwshPath -NoProfile -File $harness run -TaskId r3 2>&1 | Out-String}finally{$ErrorActionPreference=$oldPref}
     Assert-True ($blocked -match 'on hold') "Dispatch must be refused while held. Got:`n$blocked"
     Assert-True ($blocked -match 'hold clear') 'The refusal should say how to release it.'
 

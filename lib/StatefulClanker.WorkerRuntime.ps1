@@ -53,7 +53,7 @@ function New-SCApiHeaders($Connection) {
 }
 function Resolve-SCWorkerPath([string]$Path,[switch]$AllowMissing) {
     if([string]::IsNullOrWhiteSpace($Path)){throw 'path required'}
-    $root=[IO.Path]::GetFullPath((Get-SCRoot)).TrimEnd('\\','/')
+    $root=[IO.Path]::GetFullPath((Get-SCRoot)).TrimEnd([char[]]'\/')
     $candidate=if([IO.Path]::IsPathRooted($Path)){[IO.Path]::GetFullPath($Path)}else{[IO.Path]::GetFullPath((Join-Path $root $Path))}
     if(-not($candidate.Equals($root,[StringComparison]::OrdinalIgnoreCase)-or$candidate.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase))){throw "Path escapes worker root: $Path"}
     if(-not$AllowMissing-and-not(Test-Path -LiteralPath $candidate)){throw "Path not found: $Path"}
@@ -91,22 +91,22 @@ function Get-SCWorkerToolRecords($Task,[string]$Stage='worker') {
     }
     return @($records)
 }
-function Get-SCArgValue($Args,[string]$Name,$Default=$null){if($Args-and$Args.PSObject.Properties[$Name]){return $Args.$Name};return $Default}
-function Invoke-SCWorkerTool([string]$Name,$Args,$Task,[string]$Stage,$Registry) {
+function Get-SCArgValue($ToolArgs,[string]$Name,$Default=$null){if($ToolArgs-and$ToolArgs.PSObject.Properties[$Name]){return $ToolArgs.$Name};return $Default}
+function Invoke-SCWorkerTool([string]$Name,$ToolArgs,$Task,[string]$Stage,$Registry) {
     $record=@($Registry|Where-Object{[string]$_.wireName-eq$Name}|Select-Object -First 1)
     if($record.Count-eq0){throw "Tool '$Name' is not authorized for this worker."}
     $record=$record[0];if(-not(Test-SCWorkerCapabilityAllowed ([string]$record.capability) $Task $Stage)){throw "Capability '$($record.capability)' is no longer authorized."}
-    if([string]$record.kind-eq'mcp'){return Invoke-SCMcpSourceTool ([string]$record.source) ([string]$record.externalTool) $Args}
+    if([string]$record.kind-eq'mcp'){return Invoke-SCMcpSourceTool ([string]$record.source) ([string]$record.externalTool) $ToolArgs}
     switch($Name){
-      'read_file' { $path=Resolve-SCWorkerPath ([string](Get-SCArgValue $Args 'path'));$start=[Math]::Max(1,[int](Get-SCArgValue $Args 'startLine' 1));$max=[Math]::Min(2000,[Math]::Max(1,[int](Get-SCArgValue $Args 'maxLines' 400)));$lines=@(Get-Content -LiteralPath $path -Encoding UTF8);$slice=@($lines|Select-Object -Skip ($start-1) -First $max);return (($slice|ForEach-Object -Begin{$n=$start} -Process{"{0,5}: {1}"-f$n,$_ ;$n++})-join"`n") }
-      'search_text' { $pattern=[string](Get-SCArgValue $Args 'pattern');$rel=[string](Get-SCArgValue $Args 'path' '.');$root=Resolve-SCWorkerPath $rel;$max=[Math]::Min(500,[Math]::Max(1,[int](Get-SCArgValue $Args 'maxResults' 100)));$files=if(Test-Path -LiteralPath $root -PathType Leaf){@((Get-Item -LiteralPath $root))}else{@(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue|Where-Object{$_.FullName -notmatch '[\\/]\.git[\\/]|[\\/]\.statefulclanker[\\/]'} )};$hits=@();foreach($f in $files){try{foreach($m in @(Select-String -LiteralPath $f.FullName -Pattern $pattern -SimpleMatch -ErrorAction Stop)){ $hits+=("{0}:{1}: {2}"-f($f.FullName.Substring((Get-SCRoot).Length).TrimStart('\\','/')),$m.LineNumber,$m.Line.Trim());if($hits.Count-ge$max){break}}}catch{};if($hits.Count-ge$max){break}};return ($hits-join"`n") }
-      'write_file' { $path=Resolve-SCWorkerPath ([string](Get-SCArgValue $Args 'path')) -AllowMissing;$parent=Split-Path -Parent $path;if($parent-and-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null};[IO.File]::WriteAllText($path,[string](Get-SCArgValue $Args 'content'),(New-Object Text.UTF8Encoding($false)));return 'written' }
-      'replace_text' { $path=Resolve-SCWorkerPath ([string](Get-SCArgValue $Args 'path'));$old=[string](Get-SCArgValue $Args 'old');$new=[string](Get-SCArgValue $Args 'new');$text=[IO.File]::ReadAllText($path);$first=$text.IndexOf($old,[StringComparison]::Ordinal);if($first-lt0){throw 'old text not found'};$second=$text.IndexOf($old,$first+$old.Length,[StringComparison]::Ordinal);if($second-ge0){throw 'old text occurs more than once'};$updated=$text.Substring(0,$first)+$new+$text.Substring($first+$old.Length);[IO.File]::WriteAllText($path,$updated,(New-Object Text.UTF8Encoding($false)));return 'replaced' }
-      'run_command' { $timeout=[int](Get-SCArgValue $Args 'timeoutSeconds' 120);return ConvertTo-SCJson (Invoke-SCBoundedCommand ([string](Get-SCArgValue $Args 'command')) $timeout) 6 }
+      'read_file' { $path=Resolve-SCWorkerPath ([string](Get-SCArgValue $ToolArgs 'path'));$start=[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'startLine' 1));$max=[Math]::Min(2000,[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'maxLines' 400)));$lines=@(Get-Content -LiteralPath $path -Encoding UTF8);$slice=@($lines|Select-Object -Skip ($start-1) -First $max);return (($slice|ForEach-Object -Begin{$n=$start} -Process{"{0,5}: {1}"-f$n,$_ ;$n++})-join"`n") }
+      'search_text' { $pattern=[string](Get-SCArgValue $ToolArgs 'pattern');$rel=[string](Get-SCArgValue $ToolArgs 'path' '.');$root=Resolve-SCWorkerPath $rel;$max=[Math]::Min(500,[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'maxResults' 100)));$files=if(Test-Path -LiteralPath $root -PathType Leaf){@((Get-Item -LiteralPath $root))}else{@(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue|Where-Object{$_.FullName -notmatch '[\\/]\.git[\\/]|[\\/]\.statefulclanker[\\/]'} )};$hits=@();foreach($f in $files){try{foreach($m in @(Select-String -LiteralPath $f.FullName -Pattern $pattern -SimpleMatch -ErrorAction Stop)){ $hits+=("{0}:{1}: {2}"-f($f.FullName.Substring((Get-SCRoot).Length).TrimStart([char[]]'\/')),$m.LineNumber,$m.Line.Trim());if($hits.Count-ge$max){break}}}catch{};if($hits.Count-ge$max){break}};return ($hits-join"`n") }
+      'write_file' { $path=Resolve-SCWorkerPath ([string](Get-SCArgValue $ToolArgs 'path')) -AllowMissing;$parent=Split-Path -Parent $path;if($parent-and-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null};[IO.File]::WriteAllText($path,[string](Get-SCArgValue $ToolArgs 'content'),(New-Object Text.UTF8Encoding($false)));return 'written' }
+      'replace_text' { $path=Resolve-SCWorkerPath ([string](Get-SCArgValue $ToolArgs 'path'));$old=[string](Get-SCArgValue $ToolArgs 'old');$new=[string](Get-SCArgValue $ToolArgs 'new');$text=[IO.File]::ReadAllText($path);$first=$text.IndexOf($old,[StringComparison]::Ordinal);if($first-lt0){throw 'old text not found'};$second=$text.IndexOf($old,$first+$old.Length,[StringComparison]::Ordinal);if($second-ge0){throw 'old text occurs more than once'};$updated=$text.Substring(0,$first)+$new+$text.Substring($first+$old.Length);[IO.File]::WriteAllText($path,$updated,(New-Object Text.UTF8Encoding($false)));return 'replaced' }
+      'run_command' { $timeout=[int](Get-SCArgValue $ToolArgs 'timeoutSeconds' 120);return ConvertTo-SCJson (Invoke-SCBoundedCommand ([string](Get-SCArgValue $ToolArgs 'command')) $timeout) 6 }
       'git_diff' { return ConvertTo-SCJson ([ordered]@{status=(Invoke-SCBoundedCommand 'git status --short' 30).stdout;diff=(Invoke-SCBoundedCommand 'git diff --no-ext-diff' 60).stdout}) 6 }
-      'read_human_intent' { return ConvertTo-SCJson (Resolve-SCHumanIntentArtifact ([string](Get-SCArgValue $Args 'sourceRef'))) 20 }
+      'read_human_intent' { return ConvertTo-SCJson (Resolve-SCHumanIntentArtifact ([string](Get-SCArgValue $ToolArgs 'sourceRef'))) 20 }
       'read_normalized_intent' { return ConvertTo-SCJson (Get-SCNormalizedIntentView) 30 }
-      'finish' { return [string](Get-SCArgValue $Args 'summary') }
+      'finish' { return [string](Get-SCArgValue $ToolArgs 'summary') }
       default { throw "Unknown worker tool: $Name" }
     }
 }
@@ -137,7 +137,7 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
     for($step=1;$step-le$maxSteps;$step++){
         $response=Invoke-SCApiChat $Connection $messages $tools $toolMode;$m=Get-SCAssistantMessage $response
         if($toolMode-eq'text'){
-            $raw=[string]$m.content;try{$cmd=$raw|ConvertFrom-Json}catch{throw "Text-tool model returned invalid JSON at step $step: $raw"}
+            $raw=[string]$m.content;try{$cmd=$raw|ConvertFrom-Json}catch{throw "Text-tool model returned invalid JSON at step ${step}: $raw"}
             if($cmd.PSObject.Properties['final']){return [string]$cmd.final}
             if(-not$cmd.PSObject.Properties['tool']){throw "Text-tool model returned neither tool nor final at step $step."}
             $result=try{Invoke-SCWorkerTool ([string]$cmd.tool) $cmd.arguments $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}

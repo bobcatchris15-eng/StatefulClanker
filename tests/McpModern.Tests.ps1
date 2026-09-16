@@ -30,7 +30,7 @@ try {
     $tools=Invoke-McpRpc ([pscustomobject]@{jsonrpc='2.0';id=2;method='tools/list';params=[pscustomobject]@{_meta=New-ModernMeta}});$names=@($tools.result.tools|ForEach-Object{[string]$_.name})
     foreach($required in @('directive_set','directive_list','intent_apply','control_events_since','control_snapshot','worker_policy_get','worker_profile_set')){Assert-True ($names-contains$required) "Missing tool $required."}
     Assert-True ($null-ne$tools.result._meta.'io.modelcontextprotocol/serverInfo') 'Modern tools/list lacks serverInfo response metadata.'
-    $task=@($tools.result.tools|Where-Object name -eq'task_add'|Select-Object -First 1)[0];Assert-True ($null-ne$task.inputSchema.properties.capabilityProfile) 'task_add lacks capabilityProfile.';Assert-True ($null-ne$task.inputSchema.properties.toolAllow) 'task_add lacks toolAllow.'
+    $task=@($tools.result.tools|Where-Object { $_.name -eq 'task_add' }|Select-Object -First 1)[0];Assert-True ($null-ne$task.inputSchema.properties.capabilityProfile) 'task_add lacks capabilityProfile.';Assert-True ($null-ne$task.inputSchema.properties.toolAllow) 'task_add lacks toolAllow.'
     $resources=Invoke-McpRpc ([pscustomobject]@{jsonrpc='2.0';id=3;method='resources/list';params=[pscustomobject]@{_meta=New-ModernMeta}});$uris=@($resources.result.resources|ForEach-Object{[string]$_.uri});Assert-True ($uris-contains'statefulclanker://project/current/control-events') 'Missing control-events resource.'
 
     Write-Host '  MCP MODERN 4: current directive change blocks until intent_apply reconciles'

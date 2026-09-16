@@ -823,7 +823,7 @@ function Invoke-McpTool([string]$Name, $Arguments) {
             $rows = @()
             if ($cfg -and $cfg.PSObject.Properties['providers'] -and $cfg.providers) {
                 foreach ($p in $cfg.providers.PSObject.Properties) {
-                    $rows += [ordered]@{ name = $p.Name; command = $p.Value.command; mode = $p.Value.mode }
+                    $entry=$p.Value; $type=if($entry.PSObject.Properties['type']-and$entry.type){[string]$entry.type}else{'cli'}; $rows += [ordered]@{ name=$p.Name; type=$type; command=if($entry.PSObject.Properties['command']){$entry.command}else{$null}; connection=if($entry.PSObject.Properties['connection']){$entry.connection}else{$null}; mode=if($entry.PSObject.Properties['mode']){$entry.mode}else{$null} }
                 }
             }
             return New-McpTextResult ([ordered]@{ defaultProvider = $cfg.defaultProvider; criticProvider = $cfg.criticProvider; validatorProvider = $cfg.validatorProvider; providers = @($rows) })

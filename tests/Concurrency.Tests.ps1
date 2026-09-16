@@ -99,7 +99,7 @@ try {
     New-TestProject $p2 'shared.txt' 2 2
     Push-Location $p2
     try {
-        $out = & $pwshPath -NoProfile -File $harness run -Parallel 2 2>&1 | Out-String
+        $oldPref=$ErrorActionPreference; try{$ErrorActionPreference='Continue'; $out = & $pwshPath -NoProfile -File $harness run -Parallel 2 2>&1 | Out-String}finally{$ErrorActionPreference=$oldPref}
         Assert-True ($out -match 'MERGED') "One task should have merged. Output:`n$out"
         Assert-True ($out -match 'merge conflict') "The second should report a merge conflict. Output:`n$out"
 
@@ -124,7 +124,7 @@ try {
     Push-Location $p3
     try {
         & $pwshPath -NoProfile -File $harness init | Out-Null
-        $out = & $pwshPath -NoProfile -File $harness run -Parallel 2 2>&1 | Out-String
+        $oldPref=$ErrorActionPreference; try{$ErrorActionPreference='Continue'; $out = & $pwshPath -NoProfile -File $harness run -Parallel 2 2>&1 | Out-String}finally{$ErrorActionPreference=$oldPref}
         Assert-True ($out -match 'git repository') "A non-git project must be refused with a clear reason. Got:`n$out"
     } finally { Pop-Location }
 
@@ -133,7 +133,7 @@ try {
         'uncommitted' | Set-Content -LiteralPath (Join-Path $p1 'dirty.txt') -Encoding UTF8
         & $pwshPath -NoProfile -File $harness task add -TaskId 'extra' -Title 'Extra' `
             -Instruction 'Do work.' -Accept 'passes' -Retrieval 'seed.txt' | Out-Null
-        $out = & $pwshPath -NoProfile -File $harness run -Parallel 2 2>&1 | Out-String
+        $oldPref=$ErrorActionPreference; try{$ErrorActionPreference='Continue'; $out = & $pwshPath -NoProfile -File $harness run -Parallel 2 2>&1 | Out-String}finally{$ErrorActionPreference=$oldPref}
         Assert-True ($out -match 'uncommitted changes') "A dirty tree must be refused. Got:`n$out"
     } finally { Pop-Location }
 

@@ -4,6 +4,25 @@
    One source of truth, consumed by Install-McpServer.ps1, the tray app, and the
    MCP tools. Everything here is data plus small pure helpers; no UI. #>
 
+function ConvertTo-SCMutableMap($Value) {
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $h = @{}; foreach ($k in $Value.Keys) { $h[[string]$k] = ConvertTo-SCMutableMap $Value[$k] }; return $h
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        $a = @(); foreach ($item in $Value) { $a += ,(ConvertTo-SCMutableMap $item) }; return $a
+    }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $h = @{}; foreach ($prop in $Value.PSObject.Properties) { $h[$prop.Name] = ConvertTo-SCMutableMap $prop.Value }; return $h
+    }
+    return $Value
+}
+
+function ConvertFrom-SCJsonMap([string]$Json) {
+    if ($PSVersionTable.PSVersion.Major -ge 6) { return ($Json | ConvertFrom-Json -AsHashtable) }
+    return ConvertTo-SCMutableMap ($Json | ConvertFrom-Json)
+}
+
 function Get-SCPwshPath {
     $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
@@ -159,7 +178,7 @@ function Register-SCIntegration($Target, [string]$ProjectPath, [string]$InstallR
         $raw = Get-Content -Raw -LiteralPath $Target.path
         if (-not [string]::IsNullOrWhiteSpace($raw)) {
             try {
-                $existing = $raw | ConvertFrom-Json -AsHashtable
+                $existing = ConvertFrom-SCJsonMap $raw
             } catch {
                 throw "$($Target.path) is not valid JSON. Fix or move it first; refusing to overwrite a file that cannot be parsed."
             }
@@ -192,7 +211,7 @@ function Unregister-SCIntegration($Target, [string]$ServerName = 'statefulclanke
     if (-not $Target.path -or -not (Test-Path -LiteralPath $Target.path)) { return $false }
     $raw = Get-Content -Raw -LiteralPath $Target.path
     if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
-    $cfg = $raw | ConvertFrom-Json -AsHashtable
+    $cfg = ConvertFrom-SCJsonMap $raw
     $root = switch ($Target.configFormat) { 'servers' { 'servers' } 'opencode' { 'mcp' } default { 'mcpServers' } }
     if (-not $cfg.ContainsKey($root) -or -not $cfg[$root].ContainsKey($ServerName)) { return $false }
     Copy-Item -LiteralPath $Target.path -Destination "$($Target.path).$((Get-Date).ToString('yyyyMMddHHmmss')).bak" -Force

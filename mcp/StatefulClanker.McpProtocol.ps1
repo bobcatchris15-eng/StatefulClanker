@@ -30,11 +30,26 @@ function Test-SCModernEnvelope($Request) {
     return $null
 }
 function Add-SCModernServerInfo($Response) {
-    if($null-eq$Response-or-not$Response.PSObject.Properties['result']-or$null-eq$Response.result){return $Response}
-    $result=$Response.result;$meta=$null
-    if($result.PSObject.Properties['_meta']-and$result._meta){$meta=$result._meta}else{$meta=[ordered]@{};if($result-is[System.Collections.IDictionary]){$result['_meta']=$meta}else{$result|Add-Member -NotePropertyName '_meta' -NotePropertyValue $meta -Force}}
-    if($meta-is[System.Collections.IDictionary]){$meta['io.modelcontextprotocol/serverInfo']=$script:SCServerInfo}else{$meta|Add-Member -NotePropertyName 'io.modelcontextprotocol/serverInfo' -NotePropertyValue $script:SCServerInfo -Force}
-    return $Response
+    if($null-eq$Response){return $Response}
+    $result=$null
+    if($Response-is[System.Collections.IDictionary]){if($Response.Contains('result')){$result=$Response['result']}}
+    elseif($Response.PSObject.Properties['result']){$result=$Response.result}
+    if($null-eq$result){return $Response}
+    $resultCopy=[ordered]@{}
+    if($result-is[System.Collections.IDictionary]){foreach($key in $result.Keys){if([string]$key-ne'_meta'){$resultCopy[[string]$key]=$result[$key]}}}
+    else{foreach($prop in $result.PSObject.Properties){if($prop.Name-ne'_meta'){$resultCopy[$prop.Name]=$prop.Value}}}
+    $existingMeta=$null
+    if($result-is[System.Collections.IDictionary]){if($result.Contains('_meta')){$existingMeta=$result['_meta']}}
+    elseif($result.PSObject.Properties['_meta']){$existingMeta=$result._meta}
+    $metaCopy=[ordered]@{}
+    if($existingMeta-is[System.Collections.IDictionary]){foreach($key in $existingMeta.Keys){$metaCopy[[string]$key]=$existingMeta[$key]}}
+    elseif($existingMeta){foreach($prop in $existingMeta.PSObject.Properties){$metaCopy[$prop.Name]=$prop.Value}}
+    $metaCopy['io.modelcontextprotocol/serverInfo']=$script:SCServerInfo
+    $resultCopy['_meta']=$metaCopy
+    $responseCopy=[ordered]@{}
+    if($Response-is[System.Collections.IDictionary]){foreach($key in $Response.Keys){if([string]$key-eq'result'){$responseCopy[[string]$key]=$resultCopy}else{$responseCopy[[string]$key]=$Response[$key]}}}
+    else{foreach($prop in $Response.PSObject.Properties){if($prop.Name-eq'result'){$responseCopy[$prop.Name]=$resultCopy}else{$responseCopy[$prop.Name]=$prop.Value}}}
+    return $responseCopy
 }
 function New-SCModernDiscoverResponse($Request) {
     return [ordered]@{jsonrpc='2.0';id=$Request.id;result=[ordered]@{

@@ -66,8 +66,11 @@ if(-not(Test-Path -LiteralPath $appExe)){throw "Publish succeeded but $appExe wa
 Write-Host "  Native host: $([math]::Round((Get-Item $appExe).Length/1MB,1)) MB"
 
 function Find-Iscc {
-    $candidates=@((Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),(Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),(Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'))
-    foreach($c in $candidates){if($c-and(Test-Path -LiteralPath $c)){return $c}}
+    $candidates=@()
+    if($env:LOCALAPPDATA){$candidates+=,(Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')}
+    $pf86=[Environment]::GetEnvironmentVariable('ProgramFiles(x86)');if($pf86){$candidates+=,(Join-Path $pf86 'Inno Setup 6\ISCC.exe')}
+    if($env:ProgramFiles){$candidates+=,(Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')}
+    foreach($c in $candidates){if(Test-Path -LiteralPath $c){return $c}}
     $cmd=Get-Command ISCC.exe -ErrorAction SilentlyContinue;if($cmd){return $cmd.Source}
     throw 'Inno Setup 6 not found. Install: winget install JRSoftware.InnoSetup'
 }

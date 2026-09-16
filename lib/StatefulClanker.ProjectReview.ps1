@@ -169,13 +169,19 @@ function Get-SCRecentCompletedTasks([int]$Limit = 12) {
 function Get-SCProjectDiffStat {
     $root = Get-SCStateRoot
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return 'git is not available.' }
-    & git -C $root rev-parse --is-inside-work-tree 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) { return 'Not a git repository.' }
-    $stat = & git -C $root log --oneline -15 2>$null | Out-String
-    $files = & git -C $root diff --stat HEAD~5 HEAD 2>$null | Out-String
-    return "Recent commits:`r`n$stat`r`nChanged files (last 5 commits):`r`n$files"
+    $oldPreference=$ErrorActionPreference
+    try {
+        $ErrorActionPreference='Continue'
+        & git -C $root rev-parse --is-inside-work-tree 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { return 'Not a git repository.' }
+        $stat = & git -C $root log --oneline -15 2>$null | Out-String
+        $recent=@(& git -C $root rev-list --max-count=6 HEAD 2>$null)
+        if($recent.Count -gt 1){$base=$recent[-1];$files=& git -C $root diff --stat $base HEAD 2>$null | Out-String}
+        elseif($recent.Count -eq 1){$files=& git -C $root show --stat --oneline --format='' HEAD 2>$null | Out-String}
+        else{$files=''}
+        return "Recent commits:`r`n$stat`r`nChanged files (recent history):`r`n$files"
+    } finally { $ErrorActionPreference=$oldPreference }
 }
-
 function New-SCProjectReviewPacket([string]$Trigger, $ValidateResult) {
     $state = Get-SCState
     $tasks = @(Get-SCTasks)
