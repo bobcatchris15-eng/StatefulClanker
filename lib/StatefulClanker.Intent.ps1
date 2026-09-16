@@ -9,8 +9,9 @@ function Ensure-SCIntentLayout {
 }
 function New-SCIntentContract {
     $state=Get-SCState
+    $directives=Get-SCCurrentDirectiveSnapshot
     return [ordered]@{
-        schemaVersion=1
+        schemaVersion=2
         revision=0
         updatedAt=(Get-Date).ToUniversalTime().ToString('o')
         objective=[string]$state.goal
@@ -22,7 +23,9 @@ function New-SCIntentContract {
         preferences=@()
         openQuestions=@()
         successDefinition=''
-        authority=[ordered]@{owner='orchestrator';workers='read-only'}
+        directiveRevision=[int]$directives.revision
+        directiveHash=[string]$directives.hash
+        authority=[ordered]@{owner='orchestrator';workers='read-only';humanDirectives='latest direct human word wins within each directive scope'}
     }
 }
 function Get-SCIntentContract {
@@ -33,7 +36,14 @@ function Get-SCIntentContract {
         $contract=New-SCIntentContract
         Write-SCJson $path $contract
         Write-SCJson (Get-SCPath 'intent/history/revision-0000.json') $contract
-        Add-SCEvent 'intent.initialized' 'Initialized authoritative intent contract.' @{revision=0}
+        Add-SCEvent 'intent.initialized' 'Initialized authoritative intent contract.' @{revision=0;directiveRevision=$contract.directiveRevision;directiveHash=$contract.directiveHash}
+    } else {
+        # Migration metadata only: old contracts predate current-directive separation.
+        # Do not create a semantic intent revision merely to add these fields.
+        $changed=$false;$snapshot=Get-SCCurrentDirectiveSnapshot
+        if(-not$contract.PSObject.Properties['directiveRevision']){Set-SCProperty $contract 'directiveRevision' 0;$changed=$true}
+        if(-not$contract.PSObject.Properties['directiveHash']){Set-SCProperty $contract 'directiveHash' (Get-SCDirectiveHash @());$changed=$true}
+        if($changed){Set-SCProperty $contract 'schemaVersion' 2;Write-SCJson $path $contract}
     }
     return $contract
 }
@@ -51,11 +61,14 @@ function Save-SCIntentRevision($Contract,[string]$Reason) {
     Assert-SCIntentShape $Contract
     Ensure-SCIntentLayout
     $current=Get-SCIntentContract
+    $directives=Get-SCCurrentDirectiveSnapshot
     $next=[int]$current.revision+1
-    Set-SCProperty $Contract 'schemaVersion' 1
+    Set-SCProperty $Contract 'schemaVersion' 2
     Set-SCProperty $Contract 'revision' $next
     Set-SCProperty $Contract 'updatedAt' ((Get-Date).ToUniversalTime().ToString('o'))
-    Set-SCProperty $Contract 'authority' ([ordered]@{owner='orchestrator';workers='read-only'})
+    Set-SCProperty $Contract 'directiveRevision' ([int]$directives.revision)
+    Set-SCProperty $Contract 'directiveHash' ([string]$directives.hash)
+    Set-SCProperty $Contract 'authority' ([ordered]@{owner='orchestrator';workers='read-only';humanDirectives='latest direct human word wins within each directive scope'})
     $historyPath=Get-SCPath ("intent/history/revision-{0:d4}.json"-f$next)
     Write-SCJson $historyPath $Contract
     Write-SCJson (Get-SCPath 'intent/contract.json') $Contract
@@ -63,8 +76,11 @@ function Save-SCIntentRevision($Contract,[string]$Reason) {
     $direction=if($state.PSObject.Properties['directionRevision']){[int]$state.directionRevision}else{0}
     Set-SCProperty $state 'directionRevision' ($direction+1)
     Set-SCProperty $state 'intentRevision' $next
+    Set-SCProperty $state 'directiveReconciledRevision' ([int]$directives.revision)
+    Set-SCProperty $state 'directiveReconciliationRequired' $false
+    Set-SCProperty $state 'pendingDirectiveIds' @()
     Save-SCState $state
-    Add-SCEvent 'intent.revised' "Intent contract revised to $next." @{revision=$next;reason=$Reason;hash=(Get-SCIntentHash $Contract)}
+    Add-SCEvent 'intent.revised' "Intent contract revised to $next and reconciled with human directives." @{revision=$next;reason=$Reason;hash=(Get-SCIntentHash $Contract);directiveRevision=$directives.revision;directiveHash=$directives.hash}
     return $Contract
 }
 function Replace-SCIntentContract([string]$Path,[string]$Reason) {
@@ -72,7 +88,7 @@ function Replace-SCIntentContract([string]$Path,[string]$Reason) {
     if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){throw "Intent file not found: $Path"}
     $contract=Read-SCJson (Resolve-Path -LiteralPath $Path).Path
     $saved=Save-SCIntentRevision $contract $Reason
-    Write-Host "Intent revision $($saved.revision) committed."
+    Write-Host "Intent revision $($saved.revision) committed; reconciled directive revision $($saved.directiveRevision)."
 }
 function Show-SCIntent([string]$Mode='show') {
     $contract=Get-SCIntentContract
@@ -81,7 +97,7 @@ function Show-SCIntent([string]$Mode='show') {
         'history' {
             Get-ChildItem -LiteralPath (Get-SCPath 'intent/history') -Filter 'revision-*.json' -File|Sort-Object Name|ForEach-Object {
                 $c=Read-SCJson $_.FullName
-                [pscustomobject]@{revision=$c.revision;updatedAt=$c.updatedAt;objective=$c.objective;path=$_.Name}
+                [pscustomobject]@{revision=$c.revision;updatedAt=$c.updatedAt;directiveRevision=if($c.PSObject.Properties['directiveRevision']){$c.directiveRevision}else{$null};objective=$c.objective;path=$_.Name}
             }|Format-Table -AutoSize
             break
         }
@@ -126,10 +142,10 @@ function Get-SCPersistedCompilationText($Compilation) {
 }
 function New-SCWorkerPrompt($Compilation) {
     $compiled=Get-SCPersistedCompilationText $Compilation
-    return "You are a cold-start StatefulClanker worker. The compiled receipt below is the exact temporary projection for this invocation. The project intent contract inside it is orchestrator-owned and READ-ONLY: never modify, weaken, or reinterpret it. Raise INTENT_QUESTION or INTENT_CONFLICT instead of guessing or changing intent.`r`n`r`nSTATEFULCLANKER COMPILED RECEIPT`r`n=================================`r`n$compiled`r`n`r`nComplete only this bounded task."
+    return "You are a cold-start StatefulClanker worker. The compiled receipt below is the exact temporary projection for this invocation. CURRENT HUMAN DIRECTIVES are the latest direct human authority and supersede historical wording in their scopes. The normalized intent contract is orchestrator-owned and READ-ONLY: never modify, weaken, or silently reinterpret it. If a directive and intent clause appear inconsistent, emit INTENT_CONFLICT. If either remains materially ambiguous after inspecting the current directive/source, emit INTENT_QUESTION rather than guessing.`r`n`r`nSTATEFULCLANKER COMPILED RECEIPT`r`n=================================`r`n$compiled`r`n`r`nComplete only this bounded task."
 }
 function New-SCReviewPrompt($Task,$Run,$Compilation,[string]$Stage) {
-    $rule=if($Stage-eq'critic'){'Check omissions, contradictions, risky assumptions, regressions, whether the worker addressed the bounded task, and especially whether it preserved the authoritative intent contract.'}else{'Judge acceptance criteria and intent-contract compliance from the compiled evidence and worker receipt. Do not trust the worker claim without evidence.'}
+    $rule=if($Stage-eq'critic'){'Check omissions, contradictions, risky assumptions, regressions, whether the worker addressed the bounded task, and especially whether it preserved current human directives plus the reconciled intent contract.'}else{'Judge acceptance criteria and compliance with current human directives plus reconciled intent from the compiled evidence and worker receipt. Do not trust the worker claim without evidence.'}
     $compiled=Get-SCPersistedCompilationText $Compilation
     $worker=ConvertTo-SCJson ([ordered]@{runId=$Run.id;exitCode=$Run.exitCode;stdout=$Run.stdout;stderr=$Run.stderr;contextRequests=if($Run.PSObject.Properties['contextRequests']){@($Run.contextRequests)}else{@()}}) 12
     return "You are the $Stage in StatefulClanker. You did not perform the work.`r`n$rule`r`n`r`nCOMPILED RECEIPT:`r`n$compiled`r`n`r`nWORKER RECEIPT:`r`n$worker`r`n`r`nFirst non-empty line MUST be exactly VERDICT: PASS or VERDICT: FAIL. Then explain evidence briefly."
