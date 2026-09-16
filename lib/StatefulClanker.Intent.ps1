@@ -40,9 +40,9 @@ function Get-SCIntentContract {
     } else {
         # Migration metadata only: old contracts predate current-directive separation.
         # Do not create a semantic intent revision merely to add these fields.
-        $changed=$false;$snapshot=Get-SCCurrentDirectiveSnapshot
+        $changed=$false
         if(-not$contract.PSObject.Properties['directiveRevision']){Set-SCProperty $contract 'directiveRevision' 0;$changed=$true}
-        if(-not$contract.PSObject.Properties['directiveHash']){Set-SCProperty $contract 'directiveHash' (Get-SCDirectiveHash @());$changed=$true}
+        if(-not$contract.PSObject.Properties['directiveHash']){Set-SCProperty $contract 'directiveHash' (Get-SCHashString (ConvertTo-SCJson @() 16));$changed=$true}
         if($changed){Set-SCProperty $contract 'schemaVersion' 2;Write-SCJson $path $contract}
     }
     return $contract
@@ -109,10 +109,6 @@ function Show-SCIntent([string]$Mode='show') {
     }
 }
 
-# Loaded after StatefulClanker.Execution.ps1. Intent ambiguity follows the same
-# fail-closed, non-advancing path as a context miss, but intent questions/conflicts
-# are persisted in their dedicated escalation log rather than mutating the live
-# provider receipt immediately before it is serialized.
 function Capture-SCContextRequests($Task,$Run,$Compilation) {
     $requests=@();$context=@();$questions=@();$conflicts=@()
     foreach($line in @(([string]$Run.stdout)-split"`r?`n")){
@@ -151,11 +147,6 @@ function New-SCReviewPrompt($Task,$Run,$Compilation,[string]$Stage) {
     return "You are the $Stage in StatefulClanker. You did not perform the work.`r`n$rule`r`n`r`nCOMPILED RECEIPT:`r`n$compiled`r`n`r`nWORKER RECEIPT:`r`n$worker`r`n`r`nFirst non-empty line MUST be exactly VERDICT: PASS or VERDICT: FAIL. Then explain evidence briefly."
 }
 
-# PowerShell can attach adapter metadata to the live object returned from a native
-# provider pipeline. The provider result is deliberately normalized into a fresh
-# plain object before any caller mutates or persists it. This keeps durable receipts
-# restricted to explicit primitive fields and prevents ConvertTo-Json from walking
-# an accidental live object graph.
 $script:SCInvokeProviderBase=${function:Invoke-SCProvider}
 function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null) {
     $raw=& $script:SCInvokeProviderBase $Task $Prompt $Stage $ProviderOverride $ParentAgentId $Compilation
