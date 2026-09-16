@@ -82,37 +82,63 @@ StatefulClanker supports interchangeable worker backends above the same directiv
 
 ### CLI harness backend
 
-A `cli` backend delegates the inner coding-agent loop to an installed provider/local harness such as Codex, Antigravity, Claude, OpenCode, Gemini, or another CLI.
+A `cli` backend delegates the inner coding-agent loop to an installed provider/local harness such as Codex, Antigravity, Claude, OpenCode, Gemini, or another CLI. Provider-owned tool permissions remain the provider harness's responsibility.
 
 ### Direct API backend
 
 An `api` backend points at a machine-local inference connection and uses StatefulClanker's deliberately minimal coding harness. This is intended especially for local OpenAI-compatible endpoints, OpenRouter, and other compatible gateways/providers.
 
-The built-in direct harness exposes only bounded repository operations: read/search/write/replace, bounded command execution, git diff, and finish/escalation. It does not duplicate the planner, memory, or project-authority layers already owned by StatefulClanker.
-
 Machine-local connection profiles may target Ollama, LM Studio, vLLM, OpenRouter, or arbitrary OpenAI-compatible endpoints. Secrets remain machine/user state, never project state.
 
 Routing may freely mix CLI and API backends by semantic task size/role. The task itself should not care which transport executes it.
+
+## Inherent-worker capabilities
+
+The StatefulClanker-owned direct-model loop has a central runtime capability policy. Treat capability policy as deployment/tool authority, not project specification.
+
+Effective access narrows through:
+
+```text
+machine catalog -> project policy -> role -> stage -> optional task toolPolicy
+```
+
+Lower layers may only tighten. A project cannot grant a capability that the machine catalog does not allow.
+
+Before changing inherent-worker tool exposure, inspect it with `worker_policy_get`. Use `worker_policy_apply` to narrow project access. Register Toaster/MemPalace-style MCP services with `worker_source_set`; inspect them with `worker_source_tools`; explicitly grant only the needed `mcp.<source>.<tool>` capabilities. Prefer read/search access for ordinary workers and keep mutation tools denied unless the role genuinely needs them.
+
+The inherent loop exposes direct human evidence and the orchestrator interpretation separately when authorized:
+
+- `intent.human.read` / `read_human_intent` — read a preserved `human:<id>` source artifact.
+- `intent.normalized.read` / `read_normalized_intent` — read reconciled Intent plus current directive snapshot.
+
+Both are read-only. This separation lets a worker compare interpretation against direct evidence without changing either authority source.
+
+Denied tools should be absent from the model's advertised tool definitions and are checked again at invocation time. Direct-worker receipts record the resolved capability IDs.
+
+When tool access itself is a meaningful trust/risk choice, ask the human. Do not ask merely to discover technical tool metadata that can be inspected directly.
+
+See `docs/WORKER_CAPABILITIES.md`.
 
 ## Operating loop
 
 1. Establish/select the intended active project.
 2. Read current directives, reconciled Intent, active plan, task graph, project snapshot, and unconsumed control events.
-3. Aggressively clarify material ambiguity with the human.
-4. Update/reconcile current directives and Intent when human meaning changes.
-5. Build/revise the semantic plan and decompose it into cold-start tasks.
-6. Select ready work from the dependency graph.
-7. Compile a bounded truth packet with goal, current directives, reconciled Intent revision/hash, task, acceptance criteria, relevant source references, dependencies, and evidence.
-8. Verify the compilation is fresh.
-9. Dispatch the configured worker backend (CLI harness or direct API minimal harness).
-10. Persist the complete run receipt.
-11. Stop and escalate `CONTEXT_REQUEST`, `INTENT_QUESTION`, or `INTENT_CONFLICT` rather than guessing through them.
-12. Treat successful worker output as candidate evidence, not canonical truth.
-13. Route through critic/validator/human gates as configured.
-14. Revalidate directive/Intent/task/dependency freshness before commit.
-15. Commit/merge accepted work or reject it.
-16. Record whether the project actually advanced and surface meaningful state changes to the human.
-17. Replan when repeated failures show that decomposition, context, backend, or assumptions were wrong.
+3. Inspect worker capability policy when tool access matters to the planned work.
+4. Aggressively clarify material ambiguity with the human.
+5. Update/reconcile current directives and Intent when human meaning changes.
+6. Build/revise the semantic plan and decompose it into cold-start tasks.
+7. Select ready work from the dependency graph.
+8. Compile a bounded truth packet with goal, current directives, reconciled Intent revision/hash, task, acceptance criteria, relevant source references, dependencies, and evidence.
+9. Verify the compilation is fresh.
+10. Dispatch the configured worker backend (CLI harness or direct API inherent harness).
+11. Persist the complete run receipt, including inherent-worker capabilities when applicable.
+12. Stop and escalate `CONTEXT_REQUEST`, `INTENT_QUESTION`, or `INTENT_CONFLICT` rather than guessing through them.
+13. Treat successful worker output as candidate evidence, not canonical truth.
+14. Route through critic/validator/human gates as configured.
+15. Revalidate directive/Intent/task/dependency freshness before commit.
+16. Commit/merge accepted work or reject it.
+17. Record whether the project actually advanced and surface meaningful state changes to the human.
+18. Replan when repeated failures show that decomposition, context, backend, tools, or assumptions were wrong.
 
 ## Compiled-context rules
 
@@ -130,7 +156,7 @@ Workers should emit:
 - `INTENT_CONFLICT: <specific contradiction>`
 - `CONTEXT_REQUEST: <specific missing state>`
 
-These are successful detection of uncertainty and are non-advancing outcomes. Resolve intent questions through current authority/human clarification. Resolve context faults by improving retrieval, decomposition, prerequisites, persisted design artifacts, or backend/tool choice.
+These are successful detection of uncertainty and are non-advancing outcomes. Resolve intent questions through current authority/human clarification. Resolve context faults by improving retrieval, decomposition, prerequisites, persisted design artifacts, backend/tool choice, or authorized knowledge access.
 
 Never tell a worker to use its best judgment for a material unresolved product choice merely to keep the run moving.
 
@@ -145,11 +171,11 @@ Both inspect the same current authority packet. Neither may rewrite current Huma
 
 ## Desktop application expectations
 
-The Windows application is the normal resident observation/configuration plane. It owns the active project, MCP server lifetime, project telemetry, client integrations, worker backend visibility, and machine-local API connection profiles.
+The Windows application is the normal resident observation/configuration plane. It owns the active project, MCP server lifetime, project telemetry, client integrations, worker backend visibility, machine-local API connection profiles, and should surface machine worker-tool sources/policy as that UI evolves.
 
-API keys entered through the application must remain machine/user-local and never be copied into `.statefulclanker` or committed project config. Project backends reference connection ids only.
+API keys and external-tool secrets must remain machine/user-local and never be copied into `.statefulclanker` or committed project config. Project policy references capability IDs only.
 
-See `docs/WINDOWS_FIRST_DESIGN.md` and `docs/DIRECT_INFERENCE.md`.
+See `docs/WINDOWS_FIRST_DESIGN.md`, `docs/DIRECT_INFERENCE.md`, and `docs/WORKER_CAPABILITIES.md`.
 
 ## Completion
 
