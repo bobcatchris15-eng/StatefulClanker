@@ -111,6 +111,8 @@ Profiles and project/task policy are narrowing layers only. `run_command` and ex
 
 The **API Connections** page stores multiple machine-level inference profiles. Secrets are DPAPI-encrypted for the current Windows user or referenced via environment variables. Project backend configuration stores only the connection id.
 
+OpenRouter is exposed as a first-class machine setup: one **OpenRouter API Key** field populates the managed free-model profiles, all sharing the same DPAPI-protected credential and fixed OpenRouter base URL. The generic custom-connection editor remains for other OpenAI-compatible endpoints.
+
 ## MCP host
 
 The resident app starts the loopback bearer-protected HTTP server and writes details to `%LOCALAPPDATA%\StatefulClanker\mcp-http.json`.

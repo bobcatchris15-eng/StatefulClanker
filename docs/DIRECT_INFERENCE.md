@@ -18,6 +18,8 @@ Machine connection profiles live at:
 
 The Windows **API Connections** page can add/edit/remove/test connections and attach them to the active project. Secrets are DPAPI-encrypted for the current Windows user or referenced by environment variable. Project state stores only a connection id.
 
+For OpenRouter, the app provides a single **OpenRouter API Key** field. Saving it generates the built-in free-model connection catalog with the official OpenRouter base URL; the same protected credential is reused across those managed profiles, so model selection does not require repeated key or endpoint setup.
+
 ## Protocol adapter
 
 The implemented direct protocol is `openai-chat`, using OpenAI-compatible `/chat/completions`.

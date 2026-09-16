@@ -87,6 +87,8 @@ Points at a machine-local API connection and uses StatefulClanker's deliberately
 
 Connections support native function calling or a strict text-JSON fallback. Secrets remain machine/user state via DPAPI or environment variables.
 
+OpenRouter has a dedicated one-field setup: paste an **OpenRouter API Key** once and StatefulClanker generates the current built-in free-model connection catalog against `https://openrouter.ai/api/v1`. The managed catalog is machine-local; each model can be attached to a project backend without re-entering endpoint/model/key details. Models without advertised native tool calling may use the same bounded text-tool fallback.
+
 The inherent harness's actual tools are **policy-driven**, not hardcoded. Built-ins include read/search/write/replace, bounded PowerShell, git diff/status, and finish/escalation. Authorized workers may also receive separate read-only human/normalized Intent tools and external MCP tools such as Toaster or MemPalace.
 
 See [`docs/DIRECT_INFERENCE.md`](docs/DIRECT_INFERENCE.md) and [`docs/WORKER_CAPABILITIES.md`](docs/WORKER_CAPABILITIES.md).
