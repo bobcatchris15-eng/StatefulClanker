@@ -1,6 +1,6 @@
 SCPLAN 1
 plan windows-first-host
-summary Make the resident Windows app the machine-local orchestration authority while retaining provider CLI execution.
+summary Make the resident Windows app the machine-local orchestration authority while keeping worker backends replaceable.
 source human:h-0001
 intent REQ-WINDOWS-FIRST
 intent REQ-MCP-CONTROL-PLANE
@@ -11,7 +11,9 @@ title add machine-local project registry
 instruction Persist known project roots and the last active project in machine-local application state; do not move project authority out of .statefulclanker.
 source human:h-0001
 intent REQ-ACTIVE-PROJECT
-retrieve desktop/*
+capability-profile coding
+tool-deny mcp.*
+retrieve src/StatefulClanker.Tray/*
 retrieve lib/StatefulClanker.Integrations.ps1
 accept project registry survives application restart
 accept project-local durable state remains under the project root
@@ -25,45 +27,38 @@ depends app-project-registry
 instruction Restore the last active project on startup and make project switching explicit to the UI/control plane.
 source human:h-0001
 intent REQ-ACTIVE-PROJECT
+capability-profile coding
 accept existing last active project is restored
 accept missing last active project produces a no-active-project state
 accept no other project is silently substituted
 end
 
-task mcp-resident-http
+task mcp-dual-era
 size medium
-title move Streamable HTTP MCP ownership into resident host
+title serve legacy and modern MCP from one resident authority
 depends app-active-project
-instruction Make the running Windows host own the loopback MCP endpoint without tying listener lifetime to one project process.
+instruction Keep legacy initialize-era compatibility while serving stateless MCP 2026-07-28 requests and modern subscription wakeups from the same resident endpoint.
 source human:h-0001
 intent REQ-MCP-CONTROL-PLANE
+capability-profile coding
 retrieve mcp/*
-accept MCP listener remains running while active project changes
-accept requests are visibly scoped to the selected or explicitly requested project
-accept endpoint remains loopback/local by default
+accept legacy clients retain initialize-era behavior
+accept modern requests require per-request protocol/capability metadata
+accept modern HTTP routing headers are validated
+accept stdio forwarding preserves the incoming protocol era
 end
 
-task mcp-stdio-bridge
+task worker-capabilities-ui
 size medium
-title make stdio transport a bridge to the resident host
-depends mcp-resident-http
-instruction Preserve stdio compatibility while removing independent orchestration authority from the stdio process; bridge requests to the resident app over local IPC.
-source human:h-0001
-intent REQ-MCP-CONTROL-PLANE
-accept stdio and HTTP expose the same semantic MCP tools
-accept stdio process does not maintain divergent active-project state
-end
-
-task ui-project-telemetry
-size medium
-title build active-project overview telemetry
+title expose machine worker capabilities in the Windows app
 depends app-active-project
-instruction Present active project health and execution telemetry in the Windows UI using the Toaster-style status/metric presentation and provider-GUI-style project navigation.
+instruction Expose machine allow/deny policy, reusable capability profiles, external MCP worker sources, and active-project policy access without creating a second authorization authority.
 source human:h-0001
 intent REQ-WINDOWS-FIRST
-accept overview shows worker sessions spawned
-accept overview shows critic and validator activity
-accept overview shows commits and task state counts
-accept overview shows outstanding context and intent escalations
-accept telemetry is scoped to the selected project
+capability-profile coding
+retrieve src/StatefulClanker.Tray/*
+retrieve lib/StatefulClanker.WorkerPolicy.ps1
+accept app edits the same worker-capabilities.json consumed by runtime
+accept source-specific grants cannot broaden unrelated capability namespaces
+accept project policy remains tighten-only
 end
