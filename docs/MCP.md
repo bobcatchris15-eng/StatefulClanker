@@ -1,14 +1,14 @@
 # StatefulClanker MCP control plane
 
-StatefulClanker is designed to be steered by a conversational agent through MCP while the resident Windows application owns project selection, telemetry, provider configuration, and the long-lived orchestration state.
+StatefulClanker is steered by a conversational agent through MCP while the resident Windows application owns project selection, telemetry, provider configuration, and durable orchestration state.
 
-The division of responsibility is deliberate:
+The priorities are deliberately ordered:
 
-- **Human + conversational agent:** clarify intent, use structured questionnaires, build the plan, semantically decompose it into cold-start worker tasks, respond to ambiguity and project-level decisions.
-- **StatefulClanker:** persist authority, compile bounded task context, launch provider CLIs, record receipts, run critic/validator gates, isolate parallel work, and expose telemetry.
-- **Provider CLIs:** disposable implementation/review processes such as Codex, Antigravity/`agy`, Claude, OpenCode, Gemini, or local tools configured by the user.
+1. **Intent fidelity:** clarify the human's meaning and transmit it faithfully into durable authority.
+2. **Human awareness:** surface meaningful project-state changes back to the human.
+3. **Execution:** semantically decompose work and delegate implementation/review to provider CLI sessions.
 
-The conversational model is the planner. StatefulClanker does not pretend that file counts, regexes, line counts, or token thresholds can semantically decompose work.
+The conversational model is the planner and human-facing reasoning plane. StatefulClanker does not use file counts, regexes, line counts, or token thresholds as substitutes for semantic decomposition.
 
 ## Resident transports
 
@@ -28,9 +28,7 @@ The default endpoint is:
 http://127.0.0.1:7337/mcp
 ```
 
-It is loopback-only and bearer-token protected. The Integrations tab exposes the live endpoint/token status.
-
-The HTTP server is intentionally started without a fixed project. Calls that omit `project` follow the project currently selected in the StatefulClanker application.
+It is loopback-only and bearer-token protected. Calls that omit `project` follow the project currently selected in the StatefulClanker application.
 
 ### stdio
 
@@ -40,17 +38,11 @@ Clients that launch MCP commands use:
 pwsh -NoProfile -File <install>\mcp\StatefulClanker.Mcp.ps1
 ```
 
-While the Windows app is running this process is a thin stdio bridge to the resident HTTP authority, so stdio and HTTP clients see the same active project and state. If no resident server exists it falls back to an in-process MCP server for headless use.
+While the Windows app is running ordinary stdio RPC calls bridge to the resident HTTP authority. The stdio bridge handles project update subscriptions locally against the same durable event cursor, so it does not create a second state authority.
 
-`Install-McpServer.ps1` emits or writes client registration without pinning a project by default:
+If no resident server exists it falls back to an in-process MCP server for headless use.
 
-```powershell
-.\Install-McpServer.ps1 -Client claude-desktop -Write
-.\Install-McpServer.ps1 -Client claude-code
-.\Install-McpServer.ps1 -Client vscode
-```
-
-Use `-ProjectPath` only when deliberately creating a fixed-project/headless registration.
+`Install-McpServer.ps1` emits or writes client registration without pinning a project by default.
 
 ## Active project
 
@@ -60,51 +52,164 @@ The Windows app stores its machine-local project registry and active project und
 %LOCALAPPDATA%\StatefulClanker\
 ```
 
-The selected project is also written to `active-project.txt` for the resident MCP process.
+The selected project is written to `active-project.txt` for MCP. An explicit `project` argument wins; a deliberately headless server may use `-ProjectPath`; otherwise the app selection is authoritative.
 
-An explicit `project` argument on a tool call always wins. A headless MCP process may also be started with `-ProjectPath`. Otherwise the resident app selection is the authority.
+If the last-active project is missing, StatefulClanker enters a no-active-project state. It never silently substitutes another saved project.
 
-If the last-active project is missing at startup, StatefulClanker enters a no-active-project state. It does not silently substitute another saved project.
+## Control-plane instructions
 
-## Initialization instructions
+The MCP server instructions explicitly tell the conversational model that its primary job is to prevent semantic loss between the human and disposable workers.
 
-The MCP `initialize` response tells the conversational agent to:
+It is instructed to:
 
-- use the host questionnaire/question tool aggressively for material ambiguity
-- ask contrastive questions where multiple reasonable implementations exist
-- capture execution-relevant human wording durably
-- preserve source and intent references through planning
-- decompose semantically into bounded cold-start tasks
-- prefer small tasks where natural, without arbitrary micro-tasking
-- use `SCPLAN 1` for substantial plans
-- leave implementation to provider CLI worker sessions
-- treat `INTENT_QUESTION`, `INTENT_CONFLICT`, and `CONTEXT_REQUEST` as non-advancing escalations
+- **aggressively clarify material ambiguity with the human**
+- prefer the host's structured question/questionnaire/quiz mechanism when available
+- ask contrastive questions when two reasonable interpretations differ materially
+- avoid optimizing for fewer human turns
+- maintain current direct human decisions as named directives
+- treat the latest direct human word within a directive scope as authoritative
+- ask when a newer statement might be a replacement, narrowing, exception, or separate rule
+- reconcile current directives into a contradiction-free Intent Contract before dispatch
+- semantically decompose work into bounded cold-start tasks
+- treat worker `INTENT_QUESTION` / `INTENT_CONFLICT` as successful uncertainty detection
+- subscribe to or poll the durable control-event inbox and keep the human informed about meaningful changes
 
-This behavior is part of the control-plane contract rather than optional prose in a README.
+This is part of the connector contract rather than advisory README prose.
 
-## Durable human sources
+## Current human directives versus Intent
 
-`direction_add` now stores the human wording verbatim under the project's `.statefulclanker/input/` directory and returns a source reference such as:
+Material current human direction should use `directive_set`, not merely `direction_add`.
+
+Example:
+
+```text
+directive_set(
+  id="ui-project-selection",
+  scope="desktop.project-selection",
+  text="Restore the exact last active project; never silently substitute another.",
+  intentRefs=["REQ-PROJECT-RESTORE"]
+)
+```
+
+Reusing the same directive id replaces its current value. The previous revision remains audit history but is excluded from ordinary worker context.
+
+Directive tools:
+
+- `directive_set` — set/replace latest direct human wording for a named scope
+- `directive_list` — current authority only
+- `directive_get` — one current directive
+- `directive_history` — audit/debug only; never current specification
+- `directive_retire` — remove a rule/decision from current authority
+
+Every directive mutation sets a reconciliation gate. New worker compilation is blocked until the control plane reconciles the **entire current directive set** into the normalized Intent Contract with:
+
+- `intent_apply` over MCP, or
+- `intent replace` from the CLI
+
+The resulting Intent revision records the exact directive revision/hash it reconciled.
+
+The durable working authority chain is:
+
+```text
+current direct human directive/source
+  -> normalized reconciled Intent
+  -> plan
+  -> task
+  -> compiled worker truth packet
+```
+
+See `docs/INTENT_CONTRACT.md`.
+
+## Durable human source artifacts
+
+Current directive wording is persisted verbatim under `.statefulclanker/input/` and referenced as:
 
 ```text
 human:h-20260916010203-ab12cd
-```
-
-Line ranges can be referenced explicitly:
-
-```text
 human:h-20260916010203-ab12cd#L4-L11
 ```
 
-`source_add`, `source_get`, and `source_list` expose the same source store for other material input.
+Workers receive current directives directly. The compiled packet also exposes `stateRoot` and tells workers how to inspect a directive's source artifact when exact wording needs verification.
 
-The intended provenance chain is:
+A task may still physically contain an old source reference created under a superseded directive. StatefulClanker filters such directive-origin sources from ordinary retrieval and compiled task metadata. Generic provenance sources remain available.
+
+`source_add`, `source_get`, and `source_list` remain available for background/provenance material. Source history itself is not authority; `directive_list` determines which direct human wording is current.
+
+## Event-driven human awareness
+
+StatefulClanker maintains two logs for different purposes:
 
 ```text
-human wording -> durable source -> intent contract -> plan/task -> compiled worker packet
+.statefulclanker/events.jsonl          complete low-level audit log
+.statefulclanker/control/events.jsonl  sequenced control-plane inbox
+.statefulclanker/control/state.json    latest control-event sequence
 ```
 
-The Intent Contract remains normalized specification authority; a source reference preserves what the human actually said so later orchestrators can audit that normalization.
+Control events are classified:
+
+- `fyi` — routine detail that may be batched
+- `attention` — meaningful progress/failure/change normally worth summarizing
+- `human_required` — ambiguity, directive reconciliation, or a hold that should return to the human instead of being guessed through
+
+Every event has a monotonically increasing `sequence`.
+
+### Pull/resume path
+
+The correctness path is:
+
+```text
+control_events_since(since=<last cursor>)
+```
+
+The response returns both the new cursor and all matching durable events after the previous cursor. A restarted session can therefore resume without losing updates.
+
+`control_snapshot` returns the current project-facing state in one call:
+
+- project goal/revision
+- current human directives
+- directive reconciliation gate and pending directive ids
+- reconciled Intent
+- active plan/approval state
+- project hold
+- task counts
+- active workers
+- latest event cursor
+
+### MCP resources
+
+The current project exposes:
+
+```text
+statefulclanker://project/current/control-events
+statefulclanker://project/current/directives
+statefulclanker://project/current/snapshot
+```
+
+`resources/list` and `resources/read` work over both transports.
+
+### Push path: MCP 2026-07-28
+
+For clients supporting modern subscriptions, open `subscriptions/listen` with a resource subscription for:
+
+```text
+statefulclanker://project/current/control-events
+```
+
+For Streamable HTTP the request uses MCP 2026-07-28 headers and the response remains open as Server-Sent Events. The first stream message acknowledges the subscription. When the durable control sequence advances, StatefulClanker emits:
+
+```text
+notifications/resources/updated
+```
+
+The notification is intentionally only a **wake-up signal**. The client then reads the resource or calls `control_events_since` from its saved cursor. Events never exist only in the network stream.
+
+The stdio transport emits the same subscription acknowledgement/update messages while reading the same durable cursor.
+
+Legacy `initialize` remains supported for existing clients, but does not falsely advertise the older `resources/subscribe` mechanism. Modern capability discovery is exposed through `server/discover` with MCP `2026-07-28` support.
+
+A host may or may not choose to wake/re-enter its language-model loop when it receives a server notification. StatefulClanker therefore treats push as a latency improvement and the durable cursor as the correctness mechanism.
+
+See `docs/CONTROL_PLANE_DATA_FLOW.md`.
 
 ## Compact plans
 
@@ -114,85 +219,86 @@ The Intent Contract remains normalized specification authority; a source referen
 SCPLAN 1
 plan active-project
 summary Make the selected Windows project the resident MCP authority.
-source human:h-0012#L3-L18
 intent REQ-ACTIVE-PROJECT
 
 task t-021
 size small
 title persist active project
 instruction Persist the exact selected project as machine-local application state.
-source human:h-0012#L3-L18
 intent REQ-ACTIVE-PROJECT
 accept the same project is selected after application restart
 accept a missing project produces no-active-project state
-a ccept no other project is silently substituted
+accept no other project is silently substituted
 end
 ```
 
-The canonical format is documented in `docs/TASK_RECORD_FORMAT.md`. It is line-oriented so agents and operators can cheaply inspect it with `Get-Content`, `Select-String`, `rg`, or `findstr`.
+The canonical format is documented in `docs/TASK_RECORD_FORMAT.md`. `.json` plan import remains supported for compatibility.
 
-`.json` plan import remains supported for compatibility. `plan_import` accepts either JSON or `.scplan` files.
+## Semantic task size and provider CLIs
 
-## Semantic task size
+Tasks may declare `tiny`, `small`, `medium`, or `large`. The conversational planner assigns this semantically.
 
-Tasks may declare:
+Provider routing precedence is:
 
-```text
-size tiny
-size small
-size medium
-size large
-```
-
-The conversational planner assigns this semantically. StatefulClanker never derives it from file count, line count, diff size, regexes, or token count.
-
-Machine/project provider configuration may map those classes to provider CLI names through `providerBySize`. Routing precedence is:
-
-1. explicit provider override for the run
-2. critic/validator provider when applicable
+1. explicit run override
+2. critic/validator provider
 3. task-specific provider
 4. `providerBySize.<task size>`
 5. `defaultProvider`
 
-This makes it practical to aim routine bounded tasks at consumer-subscription models/CLIs while retaining stronger workers for work that genuinely needs them.
+Execution remains ordinary configured CLI invocation (`codex`, `agy`, `claude`, `opencode`, Gemini, local tools, etc.), preserving compatibility with consumer-subscription and local-model tooling rather than requiring direct provider API billing.
 
 ## Main tool surface
 
-### Project and intent
+### Project/current authority
 
 - `project_init`
-- `project_use` (primarily useful in headless/fixed-project operation)
+- `project_use`
 - `project_status`
 - `goal_set`
-- `direction_add`
-- intent inspection/replacement remains available through the StatefulClanker runtime and operator skill
+- `directive_set`
+- `directive_list`
+- `directive_get`
+- `directive_history`
+- `directive_retire`
+- `intent_apply`
+- `direction_add` — legacy unstructured compatibility note/source capture
 
 ### Planning/tasks
 
-- `plan_apply` — preferred conversational SCPLAN import
-- `plan_import` — JSON or SCPLAN file
+- `plan_apply`
+- `plan_import`
 - `task_list`
 - `task_show`
-- `task_add` — supports `size`, `source`, `intentRef`
+- `task_add`
 - `task_retry`
 - `task_block`
 
-### Execution
+### Execution/review
 
-- `run_start` — detached single task cycle
-- `run_parallel` — detached worktree-isolated ready-task batch
-- `run_status` — poll active work/log tail
+- `run_start`
+- `run_parallel`
+- `run_status`
+- `project_review`
+- `review_history`
+- `review_get`
+- `hold_status`
 
 A normal task cycle is:
 
 ```text
-compile -> worker CLI -> critic CLI -> validator CLI -> freshness check -> commit/reject
+compile truth packet
+  -> provider CLI worker
+  -> critic CLI
+  -> validator CLI
+  -> freshness check
+  -> commit or reject
 ```
-
-Provider execution is intentionally ordinary command-line invocation. Prompts are written to files and may be supplied by `{promptFile}` or piped through stdin depending on provider configuration. StatefulClanker does not require direct provider API billing.
 
 ### Observation
 
+- `control_snapshot`
+- `control_events_since`
 - `telemetry_active`
 - `telemetry_history`
 - `telemetry_run`
@@ -204,19 +310,7 @@ Provider execution is intentionally ordinary command-line invocation. Prompts ar
 - `source_list`
 - `source_get`
 
-### Provider configuration
-
-- `provider_list`
-- `provider_set`
-- `provider_test`
-
-The Windows Providers tab presents the configured command, whether that CLI is currently found, special critic/validator/default roles, and semantic size routes.
-
-## Review and authority gates
-
-Worker output remains a proposal, not authority. Critic and validator stages inspect the same compiled context receipt used for the worker.
-
-`task_complete`, `plan_approve`, and `hold_clear` represent human-authority shortcuts/gates and remain disabled over MCP unless `mcp.allowHumanAuthorityTools` is explicitly enabled for the project.
+## Worker ambiguity
 
 Workers may emit:
 
@@ -226,16 +320,20 @@ INTENT_QUESTION: <specific ambiguity>
 INTENT_CONFLICT: <specific contradiction>
 ```
 
-These stop advancement. The conversational orchestrator should resolve the cause, revise intent/plan/retrieval if necessary, then recompile rather than telling the worker to guess.
+Intent questions/conflicts become durable escalations and `human_required` control events. The conversational control plane should use current state first and then return to the human for unresolved intent rather than instructing the worker to guess.
+
+## Authority gates
+
+Worker output remains a proposal, not authority. Critic and validator stages inspect the same truth packet.
+
+`task_complete`, `plan_approve`, and `hold_clear` are human-authority shortcuts/gates and remain disabled over MCP unless `mcp.allowHumanAuthorityTools` is explicitly enabled.
 
 ## Headless operation
 
-The native Windows application is the normal product surface, but the runtime remains scriptable.
-
-A fixed-project HTTP server can still be started explicitly:
+The native Windows application is the normal product surface, but a fixed-project server can still be run directly:
 
 ```powershell
 pwsh -NoProfile -File .\mcp\StatefulClanker.McpHttp.ps1 -ProjectPath C:\work\project -Port 7337
 ```
 
-Likewise a stdio server may be launched with `-ProjectPath` if there is no resident app. This compatibility path is intentional; it does not change the Windows-first application model.
+Likewise stdio may use `-ProjectPath` without the app. This compatibility path does not change the Windows-first product model.

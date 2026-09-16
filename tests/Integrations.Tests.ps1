@@ -27,14 +27,10 @@ try {
     Assert-True ($presets.Count -ge 6) 'Expected several provider presets.'
     foreach ($p in $presets) {
         if ($p.id -eq 'custom') { continue }
-        # The prompt must reach the worker out of band. {prompt} on the command
-        # line fails outright once retrieval grows: cmd.exe caps at 8191 chars.
         $joinedArgs = (@($p.args) -join ' ')
         Assert-True ($joinedArgs -notmatch '\{prompt\}') "Preset $($p.id) passes {prompt} on the command line."
         Assert-True (@('stdin', 'prompt-file') -contains $p.mode) "Preset $($p.id) has mode '$($p.mode)'."
-        if ($p.mode -eq 'prompt-file') {
-            Assert-True ($joinedArgs -match '\{promptFile\}') "Preset $($p.id) is prompt-file mode but has no {promptFile}."
-        }
+        if ($p.mode -eq 'prompt-file') { Assert-True ($joinedArgs -match '\{promptFile\}') "Preset $($p.id) is prompt-file mode but has no {promptFile}." }
         Assert-True ([bool]$p.command) "Preset $($p.id) has no command."
     }
 
@@ -42,8 +38,6 @@ try {
     foreach ($case in @(@('claude-desktop', 'mcpServers'), @('vscode', 'servers'), @('opencode', 'mcp'))) {
         $t = $targets | Where-Object { $_.id -eq $case[0] }
         $snippet = New-SCIntegrationSnippet $t $proj $repo
-        # The snippet is an OrderedDictionary, so probe keys with Contains, not
-        # PSObject.Properties (which only sees members on a PSCustomObject).
         Assert-True ($snippet.Contains($case[1])) "$($case[0]) should emit a '$($case[1])' root."
         $inner = $snippet[$case[1]]
         Assert-True ($inner.Contains('statefulclanker')) "$($case[0]) should register under the 'statefulclanker' name."
@@ -54,8 +48,7 @@ try {
 
     Write-Host '  INT 3: registering preserves unrelated config and keeps a backup'
     $cfgPath = Join-Path $temp 'app_config.json'
-    '{"mcpServers":{"other":{"command":"node","args":["x.js"]}},"userSetting":{"keep":true}}' |
-        Set-Content -LiteralPath $cfgPath -Encoding UTF8
+    '{"mcpServers":{"other":{"command":"node","args":["x.js"]}},"userSetting":{"keep":true}}' | Set-Content -LiteralPath $cfgPath -Encoding UTF8
     $fake = [ordered]@{ id = 'fake'; name = 'Fake App'; configFormat = 'mcpServers'; verified = $true; path = $cfgPath; detect = @(); note = '' }
 
     Assert-True (-not (Test-SCIntegrationRegistered $fake)) 'Should not report registered before registering.'
@@ -76,8 +69,6 @@ try {
     Assert-True ($null -ne $after2.mcpServers.'other') 'Unregister destroyed an unrelated server.'
 
     Write-Host '  INT 5: refuses to overwrite a config it cannot parse'
-    # Silently replacing a malformed config would destroy every other MCP server
-    # the user has configured in that app.
     $broken = '{ not valid json at all'
     $broken | Set-Content -LiteralPath $cfgPath -Encoding UTF8
     $threw = $false
@@ -95,3 +86,13 @@ try {
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $temp -ErrorAction SilentlyContinue
 }
+
+# Keep these at the tail so tests/Smoke.ps1 automatically exercises the new
+# authority/event model without duplicating its top-level test runner plumbing.
+Write-Host '  INT 7: current directives + durable control inbox'
+& (Join-Path $PSScriptRoot 'DirectivesEventing.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Directive/event tests failed (exit $LASTEXITCODE)." }
+
+Write-Host '  INT 8: modern MCP discovery/resources/control tools'
+& (Join-Path $PSScriptRoot 'McpModern.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Modern MCP tests failed (exit $LASTEXITCODE)." }

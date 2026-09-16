@@ -6,6 +6,7 @@ param(
     [string]$Title,[string]$Instruction,[string[]]$Accept,[string[]]$DependsOn,
     [string[]]$Retrieval,[string[]]$Evidence,[string[]]$Relation,[string]$Provider,[string]$Role='worker',
     [string]$Size='small',[string[]]$Source,[string[]]$IntentRef,[string]$SourceRef,
+    [string]$DirectiveId,[string]$Scope,[long]$Since=0,[int]$Limit=100,[string]$MinimumLevel,
     [switch]$HumanGate,[string]$TaskId,[string]$Path,[string]$Reason,[string]$Message,[string]$RunId,[string]$CompilationId,
     [int]$Parallel,[string]$StateRoot,[switch]$NoMerge
 )
@@ -13,8 +14,8 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
-$runtimeRef='5368d094cad76aaac6e39cf237d876e12c7eb84f'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1')
+$runtimeRef='68b75f13e5982674f085cee6893c2abe59364090'
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -32,14 +33,17 @@ if($useCheckedOut){
     }
 }
 . (Join-Path $runtimeLib 'StatefulClanker.Core.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.Eventing.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Context.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Plan.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.Directives.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Semantics.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Execution.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Routing.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Intent.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Concurrency.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.ProjectReview.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.DispatchGuard.ps1')
 
 # -StateRoot lets a cycle run inside a git worktree while reading and writing the
 # one canonical .statefulclanker in the main tree. Without it the cycle would look
@@ -49,15 +53,17 @@ if($useCheckedOut){
 $script:SCManagedChild=$false
 if($StateRoot){Set-SCRoots (Get-Location).Path $StateRoot;$script:SCManagedChild=$true}
 
-if($Command.ToLowerInvariant()-ne'init'-and(Test-Path (Get-SCPath 'state.json'))){Upgrade-SCStateLayout;Ensure-SCInputLayout}
+if($Command.ToLowerInvariant()-ne'init'-and(Test-Path (Get-SCPath 'state.json'))){Upgrade-SCStateLayout;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout}
 
 switch($Command.ToLowerInvariant()){
-'init'{Initialize-SC;Ensure-SCInputLayout;break}
+'init'{Initialize-SC;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout;break}
 'goal'{$text=if($Message){$Message}elseif($Subcommand){$Subcommand}else{$Title};Set-SCGoal $text;break}
 'status'{Show-SCStatus;break}
 'task'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};switch($Subcommand.ToLowerInvariant()){'add'{Add-SCTask;break};'list'{Update-SCReadiness;Get-SCTasks|Sort-Object createdAt|Select-Object id,status,size,attemptCount,role,humanGate,title|Format-Table -AutoSize;break};'show'{if(-not$TaskId){throw '-TaskId required.'};Get-SCTask $TaskId|ConvertTo-SCJson -Depth 16|Write-Host;break};'retry'{Retry-SCTask $TaskId;break};default{throw "Unknown task subcommand: $Subcommand"}};break}
 'plan'{if($null-eq$Subcommand){$Subcommand=''};switch($Subcommand.ToLowerInvariant()){'import'{if(-not$Path){throw '-Path required.'};Import-SCPlan $Path;break};'approve'{Approve-SCPlan;break};default{throw "Unknown plan subcommand: $Subcommand"}};break}
 'source'{Show-SCSources $Subcommand $SourceRef $Message;break}
+'directive'{Show-SCDirectives $Subcommand $DirectiveId $Message $Scope $IntentRef $SourceRef $Reason;break}
+'events'{Get-SCControlEventsSince $Since $Limit $MinimumLevel|ConvertTo-SCJson -Depth 16|Write-Host;break}
 'intent'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='show'};switch($Subcommand.ToLowerInvariant()){'show'{Show-SCIntent 'show';break};'history'{Show-SCIntent 'history';break};'escalations'{Show-SCIntent 'escalations';break};'replace'{Replace-SCIntentContract $Path $Reason;break};default{throw "Unknown intent subcommand: $Subcommand"}};break}
 'run'{if($Parallel -gt 0 -or $Subcommand -eq 'parallel'){Invoke-SCParallel $Parallel $Provider $PSCommandPath -NoMerge:$NoMerge}else{Invoke-SCTask $TaskId $Provider};break}
 'complete'{Complete-SCTask $TaskId;break}

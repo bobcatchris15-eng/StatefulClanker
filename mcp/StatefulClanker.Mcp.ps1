@@ -1,11 +1,12 @@
 <# StatefulClanker MCP stdio transport.
 
-   When the Windows app is running, this is a thin stdio bridge to its resident
-   loopback MCP server. That gives stdio clients and Streamable-HTTP clients one
-   orchestration authority and one active-project selection.
+   When the Windows app is running, ordinary RPC calls bridge to its resident
+   loopback MCP server. subscriptions/listen is handled locally against the same
+   durable control-event bus so stdio clients can receive project updates without
+   creating a second orchestration authority.
 
-   If no resident server is available, it falls back to the in-process transport so
-   CLI/headless use remains supported. #>
+   If no resident server is available, ordinary calls fall back to the in-process
+   transport so CLI/headless use remains supported. #>
 param([string]$ProjectPath)
 
 Set-StrictMode -Version 2.0
@@ -13,10 +14,10 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpCore.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpExtensions.ps1')
+. (Join-Path $PSScriptRoot 'StatefulClanker.McpProtocol.ps1')
+. (Join-Path $PSScriptRoot 'StatefulClanker.SubscriptionPump.ps1')
 
-if ($ProjectPath -and (Test-Path -LiteralPath $ProjectPath -PathType Container)) {
-    Set-McpDefaultProject $ProjectPath
-}
+if ($ProjectPath -and (Test-Path -LiteralPath $ProjectPath -PathType Container)) { Set-McpDefaultProject $ProjectPath }
 
 function Get-ResidentDetails {
     $detailsPath=Join-Path (Join-Path $env:LOCALAPPDATA 'StatefulClanker') 'mcp-http.json'
@@ -43,28 +44,37 @@ function Invoke-ResidentRpc($Details,[string]$JsonLine) {
     } finally {$client.Dispose()}
 }
 
-while ($null -ne ($line = [Console]::In.ReadLine())) {
-    if ([string]::IsNullOrWhiteSpace($line)) { continue }
-    $id = $null
-    try {
-        $request = $line | ConvertFrom-Json
-        if ($request.PSObject.Properties['id']) { $id = $request.id }
-        $resident=Get-ResidentDetails
-        if($resident) {
-            $body=Invoke-ResidentRpc $resident $line
-            if(-not[string]::IsNullOrWhiteSpace([string]$body)){[Console]::Out.WriteLine($body);[Console]::Out.Flush()}
-            continue
+try {
+    while ($null -ne ($line = [Console]::In.ReadLine())) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $id = $null
+        try {
+            $request = $line | ConvertFrom-Json
+            if ($request.PSObject.Properties['id']) { $id = $request.id }
+
+            if([string]$request.method-eq'subscriptions/listen') {
+                if(-not(Start-SCStdioControlSubscription $request)) {
+                    [Console]::Out.WriteLine(([ordered]@{jsonrpc='2.0';id=$id;error=@{code=-32602;message="StatefulClanker currently supports subscriptions/listen for $script:SCControlEventsResource."}}|ConvertTo-Json -Depth 10 -Compress));[Console]::Out.Flush()
+                }
+                continue
+            }
+            if([string]$request.method-eq'notifications/cancelled') {
+                $requestId=$null;if($request.PSObject.Properties['params']-and$request.params-and$request.params.PSObject.Properties['requestId']){$requestId=[string]$request.params.requestId}
+                if($requestId){Stop-SCStdioSubscription $requestId};continue
+            }
+
+            $resident=Get-ResidentDetails
+            if($resident) {
+                $body=Invoke-ResidentRpc $resident $line
+                if(-not[string]::IsNullOrWhiteSpace([string]$body)){[Console]::Out.WriteLine($body);[Console]::Out.Flush()}
+                continue
+            }
+            $response = Invoke-McpRpc $request
+            if ($null -ne $response) {[Console]::Out.WriteLine(($response | ConvertTo-Json -Depth 30 -Compress));[Console]::Out.Flush()}
+        } catch {
+            if ($null -ne $id) {[Console]::Out.WriteLine(([ordered]@{ jsonrpc = '2.0'; id = $id; error = [ordered]@{ code = -32603; message = $_.Exception.Message } } | ConvertTo-Json -Depth 10 -Compress))}
+            else {[Console]::Out.WriteLine(([ordered]@{ jsonrpc = '2.0'; id = $null; error = [ordered]@{ code = -32700; message = "Parse error: $($_.Exception.Message)" } } | ConvertTo-Json -Depth 10 -Compress))}
+            [Console]::Out.Flush()
         }
-        $response = Invoke-McpRpc $request
-        if ($null -ne $response) {
-            [Console]::Out.WriteLine(($response | ConvertTo-Json -Depth 30 -Compress));[Console]::Out.Flush()
-        }
-    } catch {
-        if ($null -ne $id) {
-            [Console]::Out.WriteLine(([ordered]@{ jsonrpc = '2.0'; id = $id; error = [ordered]@{ code = -32603; message = $_.Exception.Message } } | ConvertTo-Json -Depth 10 -Compress))
-        } else {
-            [Console]::Out.WriteLine(([ordered]@{ jsonrpc = '2.0'; id = $null; error = [ordered]@{ code = -32700; message = "Parse error: $($_.Exception.Message)" } } | ConvertTo-Json -Depth 10 -Compress))
-        }
-        [Console]::Out.Flush()
     }
-}
+} finally { Stop-SCAllStdioSubscriptions }

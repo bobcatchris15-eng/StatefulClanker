@@ -1,158 +1,241 @@
-# Authoritative Intent Contract
+# Current Human Directives and the Intent Contract
 
-StatefulClanker treats user intent as a separate authority layer rather than relying on task prose, chat history, or a rolling event window to preserve project meaning.
+StatefulClanker separates **what the human most recently said about a decision** from the control plane's **normalized interpretation of the project**.
 
-## Why this exists
+That separation exists to prevent two opposite failure modes:
 
-Cold-start workers are intentionally disposable. That only works if the specification they inherit is durable too.
+- losing the human's direct wording through repeated model paraphrase
+- continually showing workers old instructions that the human later replaced
 
-Without an explicit intent layer, a project can remain mechanically consistent while drifting semantically:
+The working authority chain is:
 
-`user request -> planner interpretation -> task wording -> worker interpretation -> downstream worker interpretation`
-
-Each step may be locally reasonable while the assembled result moves away from what the user actually asked for.
-
-The Intent Contract provides a common, revisioned semantic anchor for every worker generation.
-
-## Authority model
-
-The current contract lives at:
-
-`.statefulclanker/intent/contract.json`
-
-Revision snapshots live at:
-
-`.statefulclanker/intent/history/revision-NNNN.json`
-
-Worker escalations live at:
-
-`.statefulclanker/intent/escalations.jsonl`
-
-The contract declares:
-
-```json
-{
-  "authority": {
-    "owner": "orchestrator",
-    "workers": "read-only"
-  }
-}
+```text
+human conversation
+    -> current human directives
+    -> reconciled Intent Contract
+    -> plan
+    -> task
+    -> compiled worker truth packet
 ```
 
-Only the human-facing orchestrator is authorized to commit a replacement/revision. Workers, critics, validators, planners, and external memory systems may read or challenge the contract, but they do not acquire specification authority.
+## Current human directives
 
-Implementation difficulty is not authority to change intent.
+Current directives live under:
 
-## Contract contents
+```text
+.statefulclanker/directives/current/<directive-id>.json
+```
 
-The initial schema contains:
+A directive is one named human decision/scope, for example:
 
-- `objective` — terminal outcome the user wants
-- `requirements` — hard capabilities/behaviors
-- `constraints` — platform, compatibility, architecture, cost, safety, or operational limits
-- `invariants` — properties that must remain true while implementation evolves
-- `nonGoals` — plausible interpretations explicitly outside scope
-- `decisions` — choices already made and not to be casually reopened
-- `preferences` — softer guidance that may yield to harder constraints
-- `openQuestions` — unresolved user-intent questions
-- `successDefinition` — observable state in which the project is complete
+```text
+ui-project-selection
+provider-routing
+launcher-types
+windows-install-boundary
+```
 
-See `examples/intent.example.json` for a starter shape.
+The important rule is:
 
-## Orchestrator interrogation
+> Within one directive scope, the latest direct human word is authoritative.
 
-The orchestrator should establish the contract before approving substantial implementation work.
+When the human changes a decision, the conversational control plane updates the **same directive id**. The prior revision is removed from current authority and archived under:
 
-It should not merely paraphrase the user's opening request. It should actively search for ambiguities capable of producing materially different implementations.
+```text
+.statefulclanker/directives/history/<directive-id>/
+```
 
-When the host exposes a structured question, quiz, interview, or "grill me" tool, the orchestrator should prefer it for intent elicitation. Useful probes include:
+History is audit/debugging evidence only. It is not normal worker specification.
 
-- hard requirement vs preference
-- intended terminal state
-- platform and deployment boundaries
-- explicit non-goals
-- architectural choices already decided
-- tradeoff priorities
-- examples of plausible-but-wrong interpretations
-- conditions that would make the user say the project missed the point
+Each current directive stores:
 
-Contrastive questions are particularly useful: present multiple reasonable interpretations and ask which is intended. Rejected interpretations can become `nonGoals`, `constraints`, or `invariants`.
+- stable directive id
+- optional semantic scope
+- revision
+- current direct human wording
+- durable `human:<id>` source reference
+- governing Intent ids where known
+- timestamp/reason metadata
 
-The goal is not a giant requirements ceremony. The goal is to remove ambiguity before it becomes semantic drift across model sessions.
+The referenced verbatim human source remains under:
+
+```text
+.statefulclanker/input/<source-id>.txt
+```
+
+Workers receive the current directive snapshot directly and can inspect the referenced source artifact when they need to verify wording or surrounding source context.
+
+### Superseded source protection
+
+A task created under an older directive may still contain that revision's `human:<id>` reference. StatefulClanker detects directive-origin source artifacts and excludes superseded/retired directive sources from ordinary worker retrieval.
+
+Generic provenance sources are unaffected.
+
+If a directive identifies governing Intent ids, tasks carrying those ids are marked stale when the directive changes. In-flight work is not trusted to commit: directive revision/hash freshness checks reject a result compiled against older authority.
+
+## Directive reconciliation gate
+
+Changing or retiring a current directive does **not** immediately rewrite normalized Intent automatically. Semantic reconciliation belongs to the human-facing reasoning plane.
+
+A directive mutation therefore sets:
+
+```text
+directiveReconciliationRequired = true
+```
+
+and records the pending directive ids.
+
+New worker compilation fails closed until the conversational control plane:
+
+1. compares the changed directive with all other current directives
+2. checks the normalized Intent Contract for contradictions or stale implications
+3. asks the human when replacement/narrowing/exception/precedence is unclear
+4. commits a complete contradiction-free Intent Contract with `intent_apply` / `intent replace`
+
+The committed Intent revision records the exact current:
+
+- `directiveRevision`
+- `directiveHash`
+
+and clears the reconciliation gate.
+
+This makes it mechanically impossible to silently accept new human direction while continuing to compile workers against an older normalized interpretation.
+
+## Intent Contract
+
+The current normalized contract lives at:
+
+```text
+.statefulclanker/intent/contract.json
+```
+
+Revision history lives at:
+
+```text
+.statefulclanker/intent/history/revision-NNNN.json
+```
+
+The contract contains:
+
+- `objective`
+- `requirements`
+- `constraints`
+- `invariants`
+- `nonGoals`
+- `decisions`
+- `preferences`
+- `openQuestions`
+- `successDefinition`
+- `directiveRevision`
+- `directiveHash`
+
+Intent is orchestrator-owned and worker-read-only. Implementation difficulty is not authority to change it.
+
+## Human-facing orchestrator behavior
+
+The conversational control plane's primary responsibility is **intent fidelity**, not rapid implementation.
+
+It should aggressively identify ambiguity capable of producing materially different implementations. When the host offers a structured question/questionnaire/quiz tool, prefer it.
+
+Useful behavior includes:
+
+- ask contrastive questions when two interpretations are plausible
+- do not optimize for fewer human turns
+- do not silently choose conventional/easy interpretations just to keep execution moving
+- reuse a stable directive id when the human changes an existing decision
+- ask whether a newer statement is a replacement, narrowing, exception, or new rule when scope is unclear
+- treat `INTENT_QUESTION` / `INTENT_CONFLICT` from workers as successful detection of uncertainty
+
+The control plane should preserve traceability:
+
+```text
+current directive / human source -> Intent clause -> plan -> task
+```
+
+## Worker truth packet
+
+Every new worker compilation contains directly:
+
+- project goal
+- project/state revisions
+- **all current human directives** with directive revision/hash
+- normalized Intent Contract with revision/hash
+- current task and acceptance boundary
+- relevant task source/Intent references
+- dependency/retrieval evidence
+
+Superseded directive history is not included.
+
+The packet also exposes the canonical `stateRoot`, so a worker can resolve a current directive source reference:
+
+```text
+human:h-... -> <stateRoot>\.statefulclanker\input\h-....txt
+```
+
+If current direct wording and normalized Intent appear inconsistent, the worker must emit:
+
+```text
+INTENT_CONFLICT: <specific conflict>
+```
+
+If a material choice remains ambiguous after inspecting the current directive/source:
+
+```text
+INTENT_QUESTION: <specific question>
+```
+
+The worker does not decide which human intent should win.
 
 ## CLI
 
-Inspect the current contract:
+Current directives:
+
+```powershell
+.\StatefulClanker.ps1 directive list
+.\StatefulClanker.ps1 directive show -DirectiveId ui-project-selection
+```
+
+Set/replace current direct human wording:
+
+```powershell
+.\StatefulClanker.ps1 directive set `
+  -DirectiveId ui-project-selection `
+  -Message "Restore the exact last active project; never silently substitute another." `
+  -Scope desktop.project-selection `
+  -IntentRef REQ-PROJECT-RESTORE
+```
+
+Audit superseded revisions:
+
+```powershell
+.\StatefulClanker.ps1 directive history -DirectiveId ui-project-selection
+```
+
+Retire a human rule:
+
+```powershell
+.\StatefulClanker.ps1 directive retire `
+  -DirectiveId ui-project-selection `
+  -Reason "Human removed this behavior"
+```
+
+Normalized Intent:
 
 ```powershell
 .\StatefulClanker.ps1 intent show
-```
-
-Inspect revision history:
-
-```powershell
 .\StatefulClanker.ps1 intent history
-```
-
-Inspect unresolved worker escalations:
-
-```powershell
 .\StatefulClanker.ps1 intent escalations
+.\StatefulClanker.ps1 intent replace -Path .\intent.next.json -Reason "Reconciled current directives"
 ```
-
-Commit an orchestrator-authored replacement:
-
-```powershell
-.\StatefulClanker.ps1 intent replace -Path .\intent.next.json -Reason "User clarified deployment boundary"
-```
-
-Every committed revision advances human direction and changes the intent revision/hash used by compilation freshness checks.
-
-## Worker behavior
-
-Every worker compilation receives the same authoritative contract, its revision, and its hash.
-
-Workers must not silently weaken or reinterpret it. If implementation exposes a specification problem, they emit one of:
-
-```text
-INTENT_QUESTION: <specific ambiguity requiring authoritative resolution>
-```
-
-```text
-INTENT_CONFLICT: <specific contradiction between task/evidence and authoritative intent>
-```
-
-Either signal is non-advancing. StatefulClanker records the escalation and stops the cycle before a completion proposal can be accepted.
-
-The orchestrator then resolves the issue from existing state or asks the user. If user intent changes, the orchestrator commits a new Intent Contract revision and updates/invalidate affected planning state.
-
-## Freshness
-
-A compilation records:
-
-- Intent Contract revision
-- Intent Contract content hash
-- active plan identity and plan-summary hash
-- project goal hash
-- human-direction revision
-- task definition/control revisions
-- dependency state
-- retrieval file hashes
-
-If authoritative intent changes while a worker is in flight, the old compilation becomes stale and cannot commit normally.
 
 ## Events are not specification memory
 
-The event log remains an audit trail and useful recent context, but durable execution-relevant intent must not survive only as a `user.note` that can fall out of the recent-event projection.
+The event stream records that directives and Intent changed, but the event stream itself is not current specification.
 
-When new human direction changes what the project means, the orchestrator should update the Intent Contract, plan, or task graph as appropriate.
+Current specification comes from:
 
-## Relationship to plans and tasks
+```text
+current human directives + their reconciled Intent Contract
+```
 
-The hierarchy is:
-
-`Goal -> Intent Contract -> Plan -> Task -> Compilation -> Model output -> Accepted state`
-
-Plans operationalize the contract. Tasks decompose the plan. Neither layer outranks the contract.
-
-A task can pass its local acceptance checks and still fail overall if it violates the current Intent Contract.
+That distinction lets StatefulClanker retain a complete audit trail without forcing every future worker to reason through obsolete decisions.
