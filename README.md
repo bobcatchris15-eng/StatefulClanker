@@ -1,407 +1,261 @@
 # StatefulClanker
 
-StatefulClanker is a Windows-first PowerShell harness for long-running agentic work where **the project persists and model context does not**.
+StatefulClanker is a **Windows-first resident orchestration application** for long-running agent work where **the project persists and model context does not**.
 
-The canonical loop is now:
+The native tray app owns the running system. A conversational agent steers it through MCP. StatefulClanker persists intent, plans and receipts, compiles bounded worker context, launches whatever provider CLIs the user already has, and applies critic/validator gates before accepted state advances.
 
-`observe -> retrieve -> compile -> freshness check -> one-shot inference -> persist -> propose -> critique -> validate -> commit -> repeat`
-
-Durable project state lives on disk. Models are replaceable workers. Every worker gets a bounded, cold-start projection of the current task rather than a reconstructed conversation.
-
-## Why
-
-Long tasks become brittle when project continuity exists mainly inside a model's active context. StatefulClanker externalizes continuity into explicit objects:
-
-- task graph and typed task relationships
-- append-only project events
-- versioned plans and approvals
-- compiled context receipts and read sets
-- worker run receipts
-- candidate state-transition proposals
-- critiques and validations
-- progress / stagnation records
-- context-fault telemetry
-- provider configuration
-- retrieved evidence and bounded file excerpts
-
-This lets work resume across sessions, models, providers, context resets, or machines without pretending that an LLM has durable working memory.
-
-## Requirements
-
-- Windows PowerShell 5.1+ or PowerShell 7+
-- Git recommended
-- At least one CLI model/tool to dispatch to, such as `opencode`, `claude`, `agy`, or another executable
-
-StatefulClanker does not require or embed a particular model API. Provider support is ordinary command configuration.
-
-## Install (Windows)
-
-Run `StatefulClankerSetup-<version>.exe` — a per-user install, no administrator
-rights, no UAC prompt. You get a tray app with four tabs: pick a **project**,
-choose and **test** the agent CLI that does the work, **register** the MCP server
-with your chat app in one click, and optionally host the loopback **HTTP**
-endpoint for clients that want a URL.
-
-The Integrations tab always shows the exact connection details for the selected
-app — stdio JSON block, and HTTP URL plus bearer token — so apps it cannot
-configure automatically can still be set up by pasting.
-
-Build it yourself with `winget install JRSoftware.InnoSetup` then
-`.\install\Build-Installer.ps1`. See `docs/SETUP.md`.
-
-## Quick start
-
-```powershell
-irm https://raw.githubusercontent.com/bobcatchris15-eng/StatefulClanker/main/StatefulClanker.ps1 -OutFile .\StatefulClanker.ps1
-
-.\StatefulClanker.ps1 init
-.\StatefulClanker.ps1 goal "Add a local-first semantic cache"
-.\StatefulClanker.ps1 status
+```text
+human
+  ↓
+conversational planner over MCP
+  ↓
+Intent Contract + compact task graph
+  ↓
+StatefulClanker resident Windows app
+  ↓
+provider CLI workers / critics / validators
+  ↓
+Git/worktrees + durable receipts + accepted project state
 ```
 
-`init` creates `.statefulclanker` and copies `statefulclanker.example.json` into `.statefulclanker\config.json` when that file is present beside the entry script. A standalone downloaded entry script uses the same built-in defaults and fetches its SHA-pinned runtime modules into `.statefulclanker\runtime`. Running `init` again on an older project upgrades the durable layout in place while preserving prior receipts.
+## What makes it different
 
-Add a task manually:
+StatefulClanker does **not** ask one giant model session to remember an entire project.
 
-```powershell
-.\StatefulClanker.ps1 task add `
-  -Title "Implement cache index" `
-  -Instruction "Implement the cache index described in docs/cache.md" `
-  -Accept "Tests pass; existing behavior remains compatible" `
-  -Retrieval "docs/cache.md","src/*.ps1" `
-  -Relation "discovered_from:cache-design"
+It externalizes continuity into durable project artifacts and treats model sessions as replaceable compute:
+
+- authoritative Intent Contract
+- verbatim human-source artifacts
+- compact semantic plans/tasks
+- task dependency graph and relations
+- bounded compiled context receipts
+- worker/critic/validator run receipts
+- freshness and authority checks
+- context/intent escalations
+- project-scoped telemetry
+- Git worktree isolation for parallel tasks
+
+The central rule is:
+
+> The project persists. Individual model contexts do not.
+
+## Windows application
+
+The normal product surface is a native `.NET 8` WinForms application installed per-user.
+
+It lives in the notification area and provides:
+
+- a provider-app-style project tree on the left
+- restoration of the exact last active project
+- no silent replacement when that project is missing
+- resident Streamable HTTP MCP
+- stdio MCP bridging into the same resident authority
+- active-project telemetry for workers, commits, critics and tasks
+- integration status/registration
+- configured provider CLI and semantic-size routing status
+
+Machine-local application state lives under:
+
+```text
+%LOCALAPPDATA%\StatefulClanker\
 ```
 
-Then execute the next ready task:
+Project authority lives under:
 
-```powershell
-.\StatefulClanker.ps1 run
+```text
+<project>\.statefulclanker\
 ```
 
-Or force a worker provider:
+## Conversational control plane
 
-```powershell
-.\StatefulClanker.ps1 run -Provider claude
+MCP is the normal steering interface.
+
+The server's `initialize` instructions tell the conversational model to:
+
+- use structured questionnaire/question tools aggressively for material ambiguity
+- preserve important human wording as durable source evidence
+- maintain the Intent Contract as specification authority
+- semantically decompose work into bounded cold-start tasks
+- prefer small tasks where separation is natural
+- never invent task boundaries from regexes, line counts, file counts or token thresholds
+- leave implementation work to provider CLI worker sessions
+
+The conversational agent is the planner/decomposer. StatefulClanker is the durable state machine, context compiler, dispatcher, observer and review coordinator.
+
+## Compact plans
+
+Substantial plans can be applied directly over MCP with `plan_apply` using the line-oriented `SCPLAN 1` format:
+
+```text
+SCPLAN 1
+plan active-project
+summary Restore the exact last active Windows project.
+source human:h-0012#L3-L18
+intent REQ-ACTIVE-PROJECT
+
+task t-021
+size small
+title persist active project
+instruction Persist the selected project as machine-local application state.
+source human:h-0012#L3-L18
+intent REQ-ACTIVE-PROJECT
+accept the same project is selected after restart
+accept a missing project produces no-active-project state
+accept no other project is silently substituted
+end
 ```
 
-## How the prompt reaches the worker
+It is deliberately easy to inspect with `Get-Content`, `Select-String`, `rg`, `findstr`, or any ordinary text tool.
 
-A one-shot prompt is a compiled context, not a sentence. It is **always** written to
-`prompts/<receiptId>.txt` and delivered out of band:
+See [`docs/TASK_RECORD_FORMAT.md`](docs/TASK_RECORD_FORMAT.md).
+
+## Durable human input
+
+Execution-relevant human direction is stored verbatim under:
+
+```text
+.statefulclanker\input\
+```
+
+and receives a reference such as:
+
+```text
+human:h-20260916010203-ab12cd
+```
+
+Tasks may reference the whole source or a line range:
+
+```text
+human:h-20260916010203-ab12cd#L4-L11
+```
+
+That gives later orchestrators a way to audit the normalized Intent Contract against what the human actually said.
+
+## Provider CLIs, not provider APIs
+
+Worker execution remains ordinary local command invocation. StatefulClanker can call consumer-subscription or local-model CLIs such as:
+
+- Claude Code
+- Antigravity / `agy`
+- Codex CLI
+- OpenCode
+- Gemini CLI
+- Aider / Goose / other configured tools
+- local runners
+
+Prompts are written to files and delivered via stdin or a prompt-file argument according to provider configuration.
+
+StatefulClanker does not require direct provider API billing. This is intentional: the provider CLI is the compatibility layer.
+
+Example configuration shape:
 
 ```json
-{ "command": "claude", "args": ["-p"], "mode": "stdin" }
+{
+  "defaultProvider": "opencode",
+  "criticProvider": "agy",
+  "validatorProvider": "claude",
+  "providerBySize": {
+    "tiny": "agy",
+    "small": "agy",
+    "medium": "opencode",
+    "large": "claude"
+  }
+}
 ```
 
-| mode | delivery |
-|---|---|
-| `stdin` | prompt piped to the provider's stdin. **Default and recommended.** |
-| `prompt-file` | args carry `{promptFile}`, the path to the prompt |
-| `inline` | args carry `{prompt}`. Supported, but see below. |
-
-**Do not use `inline`.** Passing the prompt as a command-line argument is a latent
-failure: `cmd.exe` caps a command line at 8191 characters and `CreateProcess` at
-32767, while the shipped retrieval budgets alone total 36000. Measured on a small
-project, an 11k-character prompt already fails with `The command line is too long`
-and exit 1 — which reads like a broken provider rather than a prompt that did not
-fit. The harness now refuses an oversized inline command line itself and tells you
-how to fix it, rather than letting the OS produce that error.
-
-Note that `stdin` means **no prompt flag with a value**. `claude -p` reads stdin;
-`agy` reads stdin only when `-p` is absent, since a bare `-p` errors with "flag
-needs an argument". `provider_test` will tell you which shape your CLI wants.
+Task size is assigned semantically by the planner. The runtime only uses it as a routing hint.
 
 ## Execution pipeline
 
-A run is a state-transition cycle, not a chat continuation:
-
-1. Resolve one ready task.
-2. Retrieve only task-declared files/evidence and dependency receipts.
-3. **Compile** them into a typed, durable context receipt with provenance, file hashes, dependency state, human-direction/task-control revisions, and an input fingerprint.
-4. Check that the compiled read set is still fresh immediately before dispatch.
-5. Dispatch one cold-start worker.
-6. Persist its complete receipt.
-7. Convert missing-context requests into explicit context-fault telemetry. A context fault is non-advancing: the task returns to `needs_rework` and no completion proposal is created.
-8. If the worker completed without a context fault and the compiled read set is still fresh, create a **candidate completion proposal**. Worker success alone does not mutate canonical task completion.
-9. If enabled, run critic and validator against the same compiled context and worker receipt.
-10. Revalidate goal/plan/direction, task control/definition, and logical dependencies at stage and commit boundaries.
-11. Commit the proposal only if the required review stages pass and its read set is still valid.
-12. Record whether the cycle actually advanced the project.
-
-This makes the model's reasoning ephemeral while preserving the inputs, evidence, state transitions, and verification boundary needed to reproduce or challenge the result.
-
-## Compiled context
-
-`retrieve -> compile` is intentionally literal.
-
-Each compilation stores:
-
-- project goal and active plan identity
-- human-direction revision
-- task definition, task-control revision, and acceptance criteria
-- typed task relationships
-- dependency status and receipt identities
-- retrieved context/evidence with hashes and authority labels
-- bounded recent events
-- working-set usage and truncation/unmatched-selector statistics
-- a read set and deterministic input fingerprint
-- the exact model-visible intermediate representation and its context fingerprint
-
-Inspect it with:
-
-```powershell
-.\StatefulClanker.ps1 context show -CompilationId <id>
-```
-
-The worker sees only this temporary projection. The projection is not authoritative; the durable project objects are.
-
-## Context faults
-
-A worker that cannot safely proceed because required state is absent should emit:
+A task cycle is:
 
 ```text
-CONTEXT_REQUEST: exact description of the missing state or evidence
+retrieve
+  -> compile bounded packet
+  -> freshness check
+  -> provider CLI worker
+  -> persist receipt
+  -> critic
+  -> validator
+  -> freshness/authority check
+  -> commit or reject
 ```
 
-StatefulClanker records these as semantic/context page faults instead of forcing the worker to guess. A reported context fault prevents that cycle from proposing completion and moves the task to `needs_rework` so retrieval or decomposition can change before retry. Inspect recent faults with:
-
-```powershell
-.\StatefulClanker.ps1 telemetry faults
-# or
-.\StatefulClanker.ps1 context faults
-```
-
-This gives retrieval policy something measurable to improve: misses, repeated requests, budget pressure, unmatched selectors, and truncated sources.
-
-## Candidate state and commit
-
-A successful worker produces evidence for a transition; it does not certify the transition itself.
-
-For normal automated completion StatefulClanker persists a proposal under `proposals/`, attaches critic/validator outcomes, checks that the task/goal/plan/human-direction/dependency read set has not become stale, checks that explicit human task control has not changed, and only then marks the task complete.
-
-Manual `complete` remains an explicit human-authority commit and is recorded as such. Human `block`, `retry`, and manual `complete` advance a task-control revision, so an in-flight worker/reviewer cycle compiled before that decision cannot later overwrite it.
-
-## Dependency invalidation
-
-Scheduling dependencies remain in `dependsOn`. Non-scheduling semantic relationships live in `relations`.
-
-Useful relation types include:
-
-- `discovered_from`
-- `derived_from`
-- `evidence_for`
-- `supersedes`
-- `invalidated_by`
-- `conflicts_with`
-- `related`
-
-When a previously completed upstream dependency is retried or blocked, StatefulClanker invalidates downstream work rather than silently treating the old completion as current truth. Completed dependents become `stale`; unresolved descendants return to dependency-gated states.
-
-## Progress and stagnation
-
-A receipt proves that compute happened. It does not prove the project moved.
-
-Each terminal cycle therefore writes a progress record stating whether the task advanced, the outcome, attempt number, and compiled-input fingerprint. Repeated non-advancing attempts against the same fingerprint generate a stagnation warning once `stagnationWarningThreshold` is reached.
-
-```powershell
-.\StatefulClanker.ps1 progress history
-```
-
-The intent is to make "spin" observable before adding more elaborate replanning policies.
-
-## Retrieval
-
-`-Retrieval` and `-Evidence` accept files, directories, or glob selectors relative to the project root.
-
-- `workingSetBudgetChars` caps the total retrieved text in one worker compilation.
-- `maxFileChars` caps one file's contribution.
-- `dependencyResultBudgetChars` caps dependency-result text carried into a compilation.
-- `recentEventBudgetChars` bounds the recent-event projection independently of event count.
-- evidence and ordinary context are tagged separately in the compiled packet.
-- runtime files under `.statefulclanker` are never pulled in through normal selectors.
-
-Unmatched selectors and truncation are persisted in the compilation receipt rather than disappearing as prompt-construction details.
-
-## State layout
+Workers can explicitly stop advancement with:
 
 ```text
-.statefulclanker/
-  config.json
-  state.json
-  events.jsonl
-  tasks/
-  plans/
-  compilations/
-  proposals/
-  runs/
-  critiques/
-  validations/
-  progress/
-  prompts/
-  runtime/                 # standalone bootstrap only
-  telemetry/
-    events.jsonl
-    context-faults.jsonl
-    active/
-    runs/
+CONTEXT_REQUEST: <missing state>
+INTENT_QUESTION: <ambiguity>
+INTENT_CONFLICT: <contradiction>
 ```
 
-`.statefulclanker/` is local runtime state by default and is ignored by this repository's `.gitignore`. Remove that ignore rule in a target project if the project's durable agent state should itself be version-controlled.
+The conversational orchestrator resolves those and recompiles; workers are not told to guess through missing authority.
 
-## Commands
+## Parallel execution
+
+`run_parallel` places ready tasks in separate Git worktrees. Passing tasks are committed and merged back; conflicting or failed tasks remain explicit rather than silently overwriting one another.
+
+Git is therefore both an implementation-isolation mechanism and a useful source of project telemetry.
+
+## Install
+
+Use the Windows installer release:
 
 ```text
-init                                  Initialize or migrate durable state
-goal <text>                           Set or replace the project goal
-status                                Show project/task status
-task add ...                          Add a task
-task list                             List tasks
-task show -TaskId <id>                Show one task
-task retry -TaskId <id>               Retry and invalidate affected dependents when needed
-plan import -Path <file>              Import a JSON plan/task graph
-plan approve                          Approve the active plan
-run [-TaskId id]                      Run compile -> worker -> review -> commit
-complete -TaskId id                   Explicit human completion commit
-block -TaskId id -Reason ...          Block a task
-event -Message ...                    Append human direction and advance direction revision
-provider list                         Show providers
-telemetry active|history|faults       Inspect agent and context telemetry
-telemetry show -RunId <agentId>       Inspect one telemetry run
-context show -CompilationId <id>      Inspect one compiled context receipt
-context faults                        Inspect context misses
-progress history                      Inspect progress/stagnation records
+StatefulClankerSetup-0.6.0.exe
 ```
 
-## Driving it from a conversational agent (MCP)
+It installs the self-contained native application plus the PowerShell orchestration runtime, MCP scripts, docs, skills and examples.
 
-StatefulClanker ships an MCP server so a chat session can act as the planner while
-the harness keeps owning dispatch, review, and state.
+PowerShell 7 is recommended because the orchestration/runtime layer is intentionally inspectable and scriptable.
 
-**New here? Follow `docs/SETUP.md`** — a start-to-finish walkthrough from a clean
-machine to a first completed cycle, including the step with no working default:
-configuring a worker CLI. `docs/MCP.md` is the tool reference.
+See [`docs/SETUP.md`](docs/SETUP.md).
+
+## Build from source
+
+On Windows:
 
 ```powershell
-.\Install-McpServer.ps1 -Client claude-desktop -ProjectPath C:\work\myproject -Write
-.\Install-McpServer.ps1 -Client claude-code    -ProjectPath C:\work\myproject
+winget install Microsoft.DotNet.SDK.8
+winget install JRSoftware.InnoSetup
+.\install\Build-Installer.ps1 -Version 0.6.0
 ```
 
-For clients that take a URL rather than launching a command, run the HTTP transport
-(loopback only, bearer token, no Administrator rights needed):
+The build publishes a self-contained `win-x64` WinForms executable and packages it with Inno Setup.
+
+## Headless compatibility
+
+The Windows application is the normal mode, but the CLI remains first-class.
 
 ```powershell
-pwsh -NoProfile -File .\mcp\StatefulClanker.McpHttp.ps1 -ProjectPath C:\work\myproject -Port 7337
+cd C:\work\my-project
+C:\tools\StatefulClanker\StatefulClanker.ps1 init
+C:\tools\StatefulClanker\StatefulClanker.ps1 status
 ```
 
-The session can set the goal, add and import tasks, start cycles, and read every
-receipt. Two things are deliberately not handed over:
-
-- **`run_start` is asynchronous.** A cycle is worker + critic + validator and cannot
-  block a tool call. It returns a handle; poll `run_status`.
-- **`run_parallel` runs several tasks at once**, each in its own git worktree,
-  merging back the ones that pass. Needs a git repo with a clean tree. One batch at
-  a time per project, enforced with an atomic lock.
-- **`task_complete` and `plan_approve` are disabled by default.** Both bypass the
-  validation gate, and an agent that can approve its own plan and complete its own
-  tasks has routed around the entire point of the harness. Enable with
-  `mcp.allowHumanAuthorityTools` if you want that anyway.
-
-See `docs/MCP.md` for the full tool surface and a worked session.
-
-## Periodic project review
-
-The per-task critic and validator each judge **one** task against one compiled
-context. Nothing looked at the project as a whole, so N tasks that each passed their
-own review could still leave the project broken — most obviously after a parallel
-batch, where two changes that merged cleanly can break together.
-
-Every `projectReviewEveryTasks` completed tasks (default 5), and immediately after
-any multi-branch merge, StatefulClanker runs a **project critic** and a **project
-validator** over the whole project:
+A fixed-project MCP server can also be launched deliberately:
 
 ```powershell
-.\StatefulClanker.ps1 review run          # force one now
-.\StatefulClanker.ps1 review history      # trigger, verdict, validate exit code
-.\StatefulClanker.ps1 review show -RunId <id>
+pwsh -NoProfile -File .\mcp\StatefulClanker.McpHttp.ps1 `
+  -ProjectPath C:\work\my-project `
+  -Port 7337
 ```
 
-Configure `projectValidateCommand` — this is the single most valuable setting here.
-Its exit code and output go into the review packet as evidence. Without it the
-project validator is an LLM reading a diff, and it is told to say so rather than
-infer success from the absence of failure.
+The stdio transport likewise supports `-ProjectPath` when running without the resident app.
 
-On **FAIL** the harness:
+## Documentation
 
-1. records a durable review receipt under `reviews/`,
-2. queues a **human-gated** remediation task carrying the findings,
-3. **holds dispatch** — further `run` and `run -Parallel` are refused.
+- [`docs/WINDOWS_FIRST_DESIGN.md`](docs/WINDOWS_FIRST_DESIGN.md) — product/application architecture
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — durable state and orchestration semantics
+- [`docs/MCP.md`](docs/MCP.md) — conversational control plane and tools
+- [`docs/TASK_RECORD_FORMAT.md`](docs/TASK_RECORD_FORMAT.md) — compact SCPLAN/task records
+- [`docs/INTENT_CONTRACT.md`](docs/INTENT_CONTRACT.md) — authoritative intent model
+- [`docs/SETUP.md`](docs/SETUP.md) — Windows setup and integration walkthrough
 
-```powershell
-.\StatefulClanker.ps1 hold status
-.\StatefulClanker.ps1 hold clear          # explicit human release
-```
+## Status
 
-Holding is the point: it stops the queue piling more work onto a broken base. The
-remediation task is human-gated because the harness generated it — read the review
-before releasing it. Set `projectReviewEveryTasks` to `0` to disable the whole
-mechanism.
+StatefulClanker is an experimental personal tool. The architecture intentionally favors transparent files, local processes and recoverable state over a large hosted platform.
 
-Reviewers must be **read-only**. A reviewer provider that edits files leaves the
-tree dirty, which then blocks the next parallel run.
+The Windows-first native host, resident MCP control plane, compact plans, durable human-source references and semantic provider routing are implemented in the current codebase. Provider CLI flags can change independently, so verify configured commands with `provider_test` before relying on them for unattended work.
 
-## Worker, critic, and validator contracts
-
-The **worker** performs only one bounded task from a cold-start packet. It should report changed files, commands, failures, and unresolved risks. If needed state was omitted, it requests that state instead of fabricating continuity.
-
-The **critic** checks omissions, contradictions, risky assumptions, regressions, and task fit.
-
-The **validator** independently judges acceptance criteria from available evidence. It is explicitly told not to trust the worker merely because the worker says something passed.
-
-Reviewer output remains deliberately machine-simple. A verdict must appear on a line of its own as `VERDICT: PASS` or `VERDICT: FAIL`; surrounding explanation is fine, and markdown decoration, indentation and trailing punctuation are tolerated. Three rules govern the rest:
-
-- A nonzero provider exit is always `FAIL`.
-- A verdict mentioned inside prose is not a vote — it must be its own line.
-- If any `FAIL` line appears, the result is `FAIL`, and no verdict line at all is `FAIL`.
-
-Ambiguity therefore fails closed, and a reviewer that votes `FAIL` and then discusses a `PASS` cannot flip the gate open.
-
-## What StatefulClanker deliberately does not own
-
-StatefulClanker is the **project-state and execution-control plane**, not a universal memory product.
-
-It deliberately does not yet try to own:
-
-- cross-project experiential/skill memory
-- autonomous mutation of its own harness policy
-- learned retrieval policy
-- general semantic/vector knowledge storage
-- exactly-once guarantees for arbitrary external side effects
-- distributed multi-writer consistency for shared project state
-
-Those concerns can integrate with StatefulClanker later, but folding them into the core now would blur the most valuable boundary: deterministic durable project state versus disposable probabilistic reasoning.
-
-See `docs/ARCHITECTURE.md` and `docs/STATE_CONTROL.md` for the detailed model.
-
-## Design principles
-
-- The project persists; model context does not.
-- Durable state beats conversational continuity.
-- Workers get the smallest sufficient context.
-- Context construction is a compilation step with a receipt.
-- Plans are graphs, not prose checklists.
-- Semantic relations preserve why work exists, not just what blocks it.
-- Every model call produces a durable receipt.
-- Worker output proposes state; it does not certify state.
-- A validated commit boundary advances canonical state.
-- Human control and new direction invalidate older compiled assumptions.
-- Stale dependencies invalidate downstream assumptions.
-- A failed or rejected run is evidence, not lost context.
-- Activity and progress are different things.
-- Providers are interchangeable.
-- Human approval is a first-class state transition.
-- The orchestrator must not secretly do the worker's job.
-- Reusable expertise belongs in a separate memory layer.
-
-## License
-
-MIT. See `LICENSE`.
+MIT licensed.
