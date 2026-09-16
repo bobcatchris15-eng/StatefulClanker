@@ -1,8 +1,8 @@
 # StatefulClanker Windows setup
 
-StatefulClanker is a Windows-first resident orchestration application. The normal installation gives you a native tray app, a resident loopback MCP control plane, project-scoped telemetry, integration status, and configurable provider CLI workers.
+StatefulClanker is a Windows-first resident orchestration application. The normal installation gives you a native tray app, a resident loopback MCP control plane, project-scoped telemetry, integration status, configurable CLI worker backends, and machine-local direct-inference connections.
 
-The conversational agent plans and semantically decomposes work. StatefulClanker persists that plan, compiles bounded context, launches provider CLIs, records receipts, and applies review gates.
+The conversational agent clarifies intent, plans, and semantically decomposes work. StatefulClanker persists current Human Directives and reconciled Intent, compiles bounded context, dispatches the selected worker backend, records receipts, and applies review/freshness gates.
 
 ## Requirements
 
@@ -10,8 +10,10 @@ For an installed release:
 
 - Windows x64
 - PowerShell 7 recommended (`winget install Microsoft.PowerShell`)
-- at least one non-interactive coding/agent CLI already installed and signed in, for example Claude, Antigravity/`agy`, Codex, OpenCode, Gemini, or a local tool
 - Git for parallel worktree execution and commit telemetry
+- at least one worker backend:
+  - a non-interactive coding/agent CLI already installed and signed in, such as Claude, Antigravity/`agy`, Codex, OpenCode, Gemini, or another local tool; **or**
+  - an OpenAI-compatible inference endpoint such as Ollama, LM Studio, vLLM, OpenRouter, or another compatible provider/gateway
 
 The packaged Windows application is self-contained and does not require a separate .NET runtime.
 
@@ -37,13 +39,13 @@ Select the actual project directory, not the StatefulClanker install directory. 
 
 The project becomes the active project and the resident MCP control plane follows it.
 
-StatefulClanker stores only machine/application state under:
+StatefulClanker stores machine/application state under:
 
 ```text
 %LOCALAPPDATA%\StatefulClanker\
 ```
 
-That includes the saved project registry, last active project, and resident MCP connection details.
+That includes the saved project registry, last active project, resident MCP connection details, and machine-local API connection profiles.
 
 Project authority remains in:
 
@@ -53,35 +55,84 @@ Project authority remains in:
 
 If the last-active project later disappears or moves, startup enters **No active project**. StatefulClanker does not pick a different saved project on its own.
 
-## Configure provider CLIs
+## Configure worker backends
 
-The **Providers** tab reads the active project's `.statefulclanker/config.json` and shows:
+Project backend/routing configuration still lives in the active project's `.statefulclanker/config.json`.
 
-- configured provider name
-- command/executable
-- whether the CLI is currently found
-- default / critic / validator roles
-- semantic `tiny`, `small`, `medium`, `large` routes
+A backend can be one of two types.
 
-The shipped example demonstrates the configuration shape. Provider flags vary between CLI versions, so `provider_test` should be used after configuration rather than assuming a preset remains correct forever.
+### CLI harness backend
 
-Example routing shape:
+```json
+"opencode": {
+  "type": "cli",
+  "command": "opencode",
+  "args": ["run"],
+  "mode": "stdin"
+}
+```
+
+Older project configs that omit `type` remain compatible and are treated as `cli`.
+
+### Direct API backend
+
+```json
+"local-qwen": {
+  "type": "api",
+  "connection": "local-qwen"
+}
+```
+
+The `connection` name points to a machine-local API profile configured through the app. Project files never contain the secret itself.
+
+Example routing:
 
 ```json
 {
   "defaultProvider": "opencode",
-  "criticProvider": "agy",
+  "criticProvider": "local-qwen",
   "validatorProvider": "claude",
   "providerBySize": {
-    "tiny": "agy",
-    "small": "agy",
+    "tiny": "local-qwen",
+    "small": "local-qwen",
     "medium": "opencode",
     "large": "claude"
   }
 }
 ```
 
-The task's semantic size is assigned by the conversational planner. The runtime only uses that declared size as a routing hint.
+The task's semantic size is assigned by the conversational planner. The runtime only uses that declared size as a routing hint. CLI and API backends can be mixed freely for workers, critics, and validators.
+
+## Configure API connections
+
+Open the **API Connections** tab in the Windows app.
+
+A connection profile contains:
+
+- connection id
+- base URL
+- model id
+- tool protocol (`native` or `text`)
+- optional API key or API-key environment variable
+- optional extra HTTP headers
+- maximum worker loop steps
+
+Built-in presets fill the usual base URLs for:
+
+```text
+Ollama     http://127.0.0.1:11434/v1
+LM Studio  http://127.0.0.1:1234/v1
+vLLM       http://127.0.0.1:8000/v1
+OpenRouter https://openrouter.ai/api/v1
+```
+
+Use **Custom OpenAI-compatible** for any other compatible provider or gateway. OpenCode can remain a CLI harness using its own provider catalogue; direct endpoints behind that ecosystem can also be entered here when they expose an OpenAI-compatible API.
+
+API keys typed into the app are encrypted with Windows DPAPI for the current Windows user. Alternatively specify an environment variable such as `OPENROUTER_API_KEY` and leave the key field empty.
+
+**Test** probes the connection's `/models` endpoint. **Add backend to active project** adds a project backend that references the selected machine connection by id.
+
+See `docs/DIRECT_INFERENCE.md` for the direct worker protocol and security boundary.
 
 ## Connect a conversational client
 
@@ -89,9 +140,7 @@ Open the **Integrations** tab.
 
 The top of the page shows the resident Streamable HTTP endpoint and the stdio bridge command. Below that, known MCP clients show whether they appear installed, whether StatefulClanker is already registered, and whether the config location is verified.
 
-For verified integration targets, **Register selected** writes/updates the MCP registration using the existing integration catalogue. StatefulClanker keeps backups where the integration helper already supports them.
-
-For an unverified client/config path, the app refuses to write a guessed location. Copy the stdio command or endpoint into that client's MCP settings instead.
+For verified integration targets, **Register selected** writes/updates the MCP registration using the existing integration catalogue. For an unverified client/config path, the app refuses to write a guessed location; copy the stdio command or endpoint into that client's MCP settings instead.
 
 ### stdio registration
 
@@ -129,60 +178,35 @@ It requires the bearer token displayed/copied through the Integrations page. Bec
 
 ## Start a conversational project
 
-Once a client is connected, the MCP `initialize` response instructs the conversational model to act as StatefulClanker's planner/orchestrator.
+Once a client is connected, the MCP `initialize` response instructs the conversational model to act as StatefulClanker's control plane.
 
 For substantial work the expected sequence is:
 
-1. Read project status and existing Intent Contract.
-2. Use the host questionnaire/question tool to clear material ambiguity.
-3. Record new human direction with `direction_add`; retain the returned `human:<id>` source reference.
-4. Update the Intent Contract where clarified human meaning changes authority.
+1. Read the project snapshot, current Human Directives, reconciled Intent, task graph, and unconsumed control events.
+2. Use the host questionnaire/question tool aggressively to clear material ambiguity.
+3. Update the stable directive id for material human direction rather than leaving competing current rules.
+4. Reconcile the full current directive set into a contradiction-free Intent revision.
 5. Build a semantic task graph, preferably as compact `SCPLAN 1` text.
 6. Apply it with `plan_apply`.
 7. Dispatch ready tasks with `run_start` or `run_parallel`.
-8. Poll `run_status` and inspect project telemetry/review results.
+8. Consume live event notifications when supported and resume from the durable control-event cursor when needed.
 9. Resolve `CONTEXT_REQUEST`, `INTENT_QUESTION`, and `INTENT_CONFLICT` rather than asking a worker to guess.
 
-Example compact plan:
-
-```text
-SCPLAN 1
-plan sample-change
-summary Add the bounded behavior discussed with the human.
-source human:h-0012#L1-L8
-intent REQ-012
-
-task t-001
-size small
-title implement bounded behavior
-instruction Implement the requested behavior without changing adjacent interfaces.
-source human:h-0012#L1-L8
-intent REQ-012
-retrieve src/*
-accept the requested behavior is observable
-accept existing interface behavior remains unchanged
-end
-```
-
-See `docs/TASK_RECORD_FORMAT.md` for the format and `docs/MCP.md` for the full control-plane reference.
+StatefulClanker deliberately blocks dispatch while current directives are awaiting Intent reconciliation.
 
 ## What worker execution looks like
 
-StatefulClanker does not require direct provider API credentials or API-rate billing. A task packet is written to a prompt file and the configured provider command is launched locally.
+### CLI backend
 
-Depending on the CLI, that can mean a prompt-file argument or stdin, for example the equivalent of:
+The compiled packet is delivered to the configured CLI by stdin or prompt-file argument. The provider's harness owns the inner coding/tool loop.
 
-```text
-provider-cli <non-interactive flags> <prompt-file>
-```
+### API backend
 
-or:
+StatefulClanker sends the compiled packet directly to the configured inference endpoint with one small bounded-worker system instruction. StatefulClanker itself owns the inner loop and exposes only read/search/write/replace, bounded PowerShell command execution, git diff, and finish/escalation tools.
 
-```text
-type prompt-file | provider-cli <non-interactive flags>
-```
+`native` tool mode uses OpenAI-compatible function/tool calls. `text` mode uses one strict JSON tool command per model turn and exists primarily for local models/servers without reliable native function calling.
 
-The exact command remains provider configuration data. This preserves compatibility with consumer-subscription CLIs and local model runners.
+Both execution paths produce the same outer run receipts and flow through the same critic/validator/freshness/commit machinery.
 
 ## Build from source
 
@@ -194,11 +218,7 @@ winget install JRSoftware.InnoSetup
 .\install\Build-Installer.ps1 -Version 0.6.0
 ```
 
-The build script:
-
-1. generates the multi-resolution application icon
-2. publishes `src\StatefulClanker.Tray` as a self-contained `win-x64` executable
-3. packages the app, PowerShell runtime, MCP scripts, docs, examples, skills, and local tests with Inno Setup
+The build script publishes `src\StatefulClanker.Tray` as a self-contained `win-x64` executable and packages the app, PowerShell runtime, MCP scripts, docs, examples, skills, and local tests with Inno Setup.
 
 Output is placed under:
 
@@ -210,14 +230,12 @@ install\output\
 
 The Windows application is the normal product surface, but the CLI/runtime remains usable directly.
 
-Initialize a project:
-
 ```powershell
 cd C:\work\my-project
 C:\path\to\StatefulClanker\StatefulClanker.ps1 init
 ```
 
-Run a fixed-project HTTP control plane without the desktop app:
+A fixed-project HTTP control plane can be launched without the desktop app:
 
 ```powershell
 pwsh -NoProfile -File C:\path\to\StatefulClanker\mcp\StatefulClanker.McpHttp.ps1 `
@@ -226,5 +244,3 @@ pwsh -NoProfile -File C:\path\to\StatefulClanker\mcp\StatefulClanker.McpHttp.ps1
 ```
 
 A stdio client may likewise launch `StatefulClanker.Mcp.ps1 -ProjectPath <path>` when deliberately operating headless.
-
-That compatibility path is useful for scripting and unusual environments, but it is not the default Windows application model.
