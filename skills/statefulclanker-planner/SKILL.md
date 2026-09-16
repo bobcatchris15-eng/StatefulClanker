@@ -1,101 +1,81 @@
 # StatefulClanker planner skill
 
-Use this skill to turn the authoritative Intent Contract and durable human-source evidence into a task graph designed for disposable cold-start workers.
+Use this skill to turn **Current Human Directives**, the reconciled Intent Contract, and durable source evidence into a task graph designed for disposable cold-start workers.
 
 ## Role
 
-The planner is part of the **conversational plane**. Semantic decomposition is model work.
+The planner is part of the conversational control plane. Semantic decomposition is model work.
 
-Do not delegate task decomposition to regexes, file counts, line counts, arbitrary token thresholds, or repository partitioning heuristics. Those mechanisms may help retrieve context; they do not decide what constitutes a coherent unit of work.
+Do not delegate task decomposition to regexes, file counts, line counts, arbitrary token thresholds, or repository partitioning heuristics. Those mechanisms may help retrieval; they do not decide coherent work boundaries.
 
-The authoritative Intent Contract outranks the plan. Human-source artifacts preserve the original evidence behind that contract.
+Authority order is:
+
+```text
+Current Human Directives -> reconciled Intent -> plan -> task
+```
+
+Verbatim human-source artifacts remain recoverable evidence behind current directives and Intent.
 
 ## Before planning
 
 Read:
 
-- current project goal
-- authoritative Intent Contract
-- material human-source references
-- accepted decisions/non-goals
-- current task graph and accepted dependency outcomes
+- current project goal;
+- Current Human Directives and reconciliation status;
+- reconciled Intent Contract;
+- material human-source references;
+- accepted decisions/non-goals;
+- current task graph and accepted dependency outcomes;
+- worker capability policy/profiles when tool access affects decomposition.
 
-If two competent implementations could satisfy the visible request in materially different ways, return the ambiguity to the human-facing orchestrator for clarification rather than choosing silently.
-
-When the host exposes a questionnaire/structured-question facility, the orchestrator should use it aggressively for material ambiguity.
+If two competent implementations could satisfy the visible request in materially different ways, return the ambiguity to the human-facing control plane rather than choosing silently. Use structured questionnaire tools aggressively when available.
 
 ## Planning objective
 
 Produce a graph that remains executable after the current conversation disappears.
 
-Optimize for:
-
-- preservation of human intent
-- small coherent cold-start tasks
-- explicit dependencies
-- objective acceptance boundaries
-- bounded retrieval
-- recoverability after failed workers
-- selective invalidation
-- provider portability
-- cheap worker context
+Optimize for preservation of human intent, coherent cold-start tasks, explicit dependencies, observable acceptance criteria, bounded retrieval, selective invalidation, backend portability, and only the worker capabilities actually needed.
 
 A plan is durable execution structure, not prose a future worker is expected to remember.
 
 ## Semantic decomposition
 
-Start from the desired end state and derive independently verifiable outcomes.
-
 For each candidate task ask:
 
-1. Can a fresh worker understand this without chat history?
+1. Can a fresh worker understand it without chat history?
 2. Is there one primary outcome?
 3. Can success/failure be evaluated independently?
-4. Which intent requirements/constraints/invariants govern it?
-5. Which direct human-source artifact(s) materially justify it?
-6. What must already be accepted before it starts?
-7. What evidence/context is actually needed?
-8. Does it require a materially different specialist perspective?
-9. Does it contain several outcomes that could be validated separately?
-10. Would splitting it force each worker to reconstruct the same tightly coupled state?
+4. Which Intent requirements/constraints/invariants govern it?
+5. Which current directive/source evidence materially justifies it?
+6. What accepted work must precede it?
+7. What context/evidence is actually needed?
+8. Does it need a materially different specialist perspective or tool boundary?
+9. Could it be completed safely by a smaller/read-only worker?
+10. Would splitting force workers to reconstruct the same tightly coupled state?
 
-Split when separation creates independently understandable and independently verifiable work.
+Split when separation creates independently understandable and independently verifiable work. Do not split merely because a file/diff/repository/context is large.
 
-Do **not** split solely because:
-
-- a file is long
-- a directory is large
-- the diff may exceed N lines
-- a token budget was crossed
-- a regex found several sections
-
-Those are context-management signals, not semantic task boundaries.
-
-## Task size classes
-
-Assign a semantic size hint:
+## Semantic size classes
 
 - `tiny` — mechanical/local change or bounded inspection
 - `small` — one bounded concern suitable for fast/cheap disposable workers
-- `medium` — coherent multi-file feature/debugging task with nontrivial reasoning
+- `medium` — coherent multi-file or nontrivial reasoning task
 - `large` — tightly coupled work that resisted useful decomposition
 
-Prefer `tiny`/`small` when the boundaries are natural. Do not create dozens of microscopic tasks whose workers all have to rediscover the same coupled context.
-
-Size is a routing hint, not a deterministic measurement and not a provider name. Machine-local configuration may map `small` to a Flash/Haiku/Luna-class CLI today and something entirely different tomorrow.
+Size is a routing hint, not a deterministic measurement or provider name. Machine/project configuration may route one class to a local API model and another to a provider CLI harness.
 
 ## Human-source provenance
 
-Execution-critical user meaning must not survive only as planner paraphrase.
+Execution-critical human meaning must not survive only as planner paraphrase.
 
 For material direction:
 
-1. ensure the conversational orchestrator persisted the relevant direct input or durable document
-2. cite that source in the plan/task
-3. cite governing intent ids where available
-4. keep the task instruction focused on the bounded outcome
+1. ensure the control plane recorded/updated the correct current directive;
+2. preserve the direct source reference;
+3. cite governing Intent ids;
+4. keep the task instruction focused on the bounded outcome.
 
-Example provenance:
+Example:
 
 ```text
 source human:h-0017#L4-L13
@@ -103,15 +83,46 @@ intent REQ-ACTIVE-PROJECT
 intent INV-NO-SILENT-FALLBACK
 ```
 
-If a long explanation is necessary to make a task intelligible, persist that explanation as an artifact and reference it rather than bloating every task.
+## Capability-aware task design
 
-## Compact plan format
+StatefulClanker's inherent/direct-model worker permissions narrow through:
 
-The target worker-facing authoring format is `SCPLAN 1`, documented in `docs/TASK_RECORD_FORMAT.md`.
+```text
+machine grants -> optional capability profile -> project -> role -> stage -> task-local policy
+```
 
-When the connected StatefulClanker runtime advertises compact-plan support, prefer it to JSON.
+Do not use task policy to attempt to grant new machine authority.
 
-Example:
+Prefer a reusable named profile when several tasks need the same environment:
+
+```text
+capability-profile research-readonly
+```
+
+Use task-local narrowing for exceptional restrictions:
+
+```text
+tool-allow builtin.read_file
+tool-allow builtin.search_text
+tool-allow intent.*
+tool-allow mcp.toaster.search
+tool-deny builtin.run_command
+```
+
+Examples of useful boundaries:
+
+- inspection/research task: read/search + intent + read-only knowledge tools;
+- coding task: repo edit/test tools, perhaps no external memory mutation;
+- critic: read/search + intent, no writes;
+- lesson-writing/specialist task: explicitly authorized knowledge-store mutation where intended.
+
+Capability profile and task-local policy are task semantics: changing them invalidates prior compilation/results through the task-definition hash.
+
+Provider-owned CLI harnesses retain their own internal permission model; capability profiles govern StatefulClanker's inherent worker loop.
+
+## SCPLAN 1
+
+Prefer the compact `SCPLAN 1` format supported by the runtime.
 
 ```text
 SCPLAN 1
@@ -122,125 +133,70 @@ intent REQ-ACTIVE-PROJECT
 
 task t-021
 size small
-title persist project registry
-instruction Store known projects in machine-local app state and expose stable lookup by project id/root.
+title inspect project persistence behavior
+instruction Inspect the current persistence path and identify the bounded changes needed.
 source human:h-0017#L4-L20
 intent REQ-ACTIVE-PROJECT
-retrieve desktop/*
-accept registry survives application restart
-accept project-local state is not used for machine integration settings
+capability-profile research-readonly
+tool-deny builtin.run_command
+retrieve src/StatefulClanker.Tray/*
+accept findings identify the exact current persistence path
 end
 
 task t-022
 size small
 title restore last active project
 depends t-021
-instruction Resolve and open the last active project on app startup; show no-active-project when it is missing.
+instruction Implement restoration of the exact last active project with explicit missing-project behavior.
 source human:h-0017#L4-L20
 intent REQ-ACTIVE-PROJECT
+capability-profile coding
 accept existing last active project is restored
 accept missing project never causes silent substitution
 end
 ```
 
-Until compact-plan parsing is implemented in the runtime being driven, emit the existing JSON importer schema instead. Do not claim compact format support that the runtime does not have.
+Dedicated task fields include `size`, `source`, `intent`, `capability-profile`, `tool-allow`, and `tool-deny`. JSON import remains a compatibility path, not the preferred planner output.
 
-## JSON compatibility schema
+## Dependencies versus semantic relations
 
-For older/current runtimes, use:
-
-```json
-{
-  "name": "short plan name",
-  "summary": "human-readable plan intent",
-  "tasks": [
-    {
-      "id": "stable-id",
-      "title": "bounded outcome",
-      "instruction": "cold-start instruction",
-      "acceptance": ["observable condition"],
-      "dependsOn": [],
-      "relations": [],
-      "retrieval": [],
-      "evidence": [],
-      "provider": null,
-      "role": "worker",
-      "humanGate": false
-    }
-  ]
-}
-```
-
-Keep equivalent semantic source/intent references in the instruction or a referenced artifact until the runtime exposes dedicated fields.
-
-## Scheduling dependencies versus semantic relations
-
-Use `dependsOn` / `depends` only when another task must be accepted before this task can run.
-
-Use semantic relations for provenance and causality that should survive without serializing execution:
-
-- `discovered_from`
-- `derived_from`
-- `evidence_for`
-- `supersedes`
-- `invalidated_by`
-- `conflicts_with`
-- `related`
-
-Do not make every relationship a scheduling blocker.
+Use `depends` only when another task must be accepted first. Use typed semantic relations such as `derived_from`, `evidence_for`, `supersedes`, `invalidated_by`, `conflicts_with`, or `related` when the relationship should not serialize execution.
 
 ## Retrieval
 
 Retrieval declarations say what a task needs; they are not a disguised repository dump.
 
-Prefer exact files/globs/artifacts when known. When a semantic investigation is needed, consider an inspection task that materializes a small durable artifact, then make implementation depend on that result.
+Prefer exact files/globs/artifacts when known. When discovery is required, create a bounded inspection/research task that materializes durable findings, then make implementation depend on those findings where appropriate.
 
-Mechanical chunking is appropriate inside retrieval/document processing. It is not how the plan decides task boundaries.
+Mechanical chunking belongs inside retrieval/document processing, never in semantic task decomposition.
 
 ## Acceptance criteria
 
-Good criteria are observable:
+Good criteria are observable: a command/test passes, an interface exists, a reproduction stops failing, output matches a schema, specified behavior changes, or an invariant/non-goal remains demonstrably preserved.
 
-- a command exits successfully
-- a defined test/probe passes
-- a file exposes a specified interface
-- a reproduction no longer fails
-- generated output matches a schema
-- a behavior changes as specified
-- an invariant/non-goal remains demonstrably preserved
+Avoid `looks good`, `be robust`, `finish it`, or `understand the code`.
 
-Avoid vague criteria such as `looks good`, `be robust`, `finish it`, or `understand the code`.
+Passing local criteria is insufficient if the result violates Current Human Directives or reconciled Intent.
 
-Passing local criteria is insufficient when the result violates the Intent Contract.
+## Backend routing
 
-## Provider routing
-
-Do not design tasks around a particular vendor model unless the human explicitly requires that provider.
+Do not design tasks around a vendor/model unless the human explicitly requires it.
 
 Normally:
 
-- planner assigns a semantic `size` class
-- machine-local StatefulClanker configuration maps size/role to configured provider CLIs
-- task-specific `provider` is an exception/override
+- planner assigns semantic `size` and optional capability profile;
+- machine/project StatefulClanker configuration maps size/role to a worker backend;
+- a backend may be a provider-owned CLI harness or StatefulClanker's direct API harness;
+- task-specific `provider` is an explicit override/exception.
 
-The execution path remains ordinary provider-owned command lines accepting a prompt file or stdin.
+The same task semantics should remain valid if routing changes between local inference and a provider CLI.
 
 ## Context faults and replanning
 
-Repeated `CONTEXT_REQUEST` results are feedback about retrieval or decomposition.
+Repeated `CONTEXT_REQUEST` means retrieval or decomposition is wrong. Add missing evidence, improve the task boundary, create prerequisite inspection work, persist missing design state, or clarify intent rather than indefinitely growing prompts.
 
-Choose among:
-
-- add missing evidence
-- improve the task boundary
-- create a prerequisite inspection task
-- persist a missing design artifact
-- clarify intent
-
-Do not merely grow every prompt indefinitely.
-
-`INTENT_QUESTION` and `INTENT_CONFLICT` go back to the orchestrator/human authority. The planner must not invent a resolution.
+`INTENT_QUESTION` and `INTENT_CONFLICT` return to current authority/human clarification. The planner must not invent the resolution.
 
 ## Completion discipline
 
-A task graph is good when disposable workers can advance it without reconstructing the original conversation and when later orchestrators can trace important work back through intent to human-source evidence.
+A task graph is good when disposable workers can advance it without reconstructing the original conversation and later orchestrators can trace important work through task -> Intent -> current directive -> human source evidence.
