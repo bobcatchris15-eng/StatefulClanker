@@ -14,6 +14,7 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpCore.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpExtensions.ps1')
+. (Join-Path $PSScriptRoot 'StatefulClanker.McpProtocol.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.SubscriptionPump.ps1')
 
 if ($ProjectPath -and (Test-Path -LiteralPath $ProjectPath -PathType Container)) { Set-McpDefaultProject $ProjectPath }
