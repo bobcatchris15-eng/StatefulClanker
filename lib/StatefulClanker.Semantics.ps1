@@ -31,7 +31,7 @@ function New-SCCompilation($Task) {
     $receipt = & $script:SCBaseNewCompilation $Task
     if($null-eq$receipt-or$null-eq$receipt.ir-or$null-eq$receipt.ir.task){return $receipt}
     $sizeValue='small';if($Task.PSObject.Properties['size']-and$Task.size){$sizeValue=[string]$Task.size}
-    $sources=@();if($Task.PSObject.Properties['sources']){$sources=@($Task.sources)}
+    $sources=@(Get-SCCurrentTaskSourceRefs $Task)
     $intentRefs=@();if($Task.PSObject.Properties['intentRefs']){$intentRefs=@($Task.intentRefs)}
     $directives=Get-SCCurrentDirectiveSnapshot
 
