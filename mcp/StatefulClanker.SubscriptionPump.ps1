@@ -32,16 +32,21 @@ namespace StatefulClanker {
         static string Updated(string id, string uri) {
             return "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/resources/updated\",\"params\":{\"uri\":\""+E(uri)+"\",\"_meta\":{\"io.modelcontextprotocol/subscriptionId\":\""+E(id)+"\"}}}";
         }
-        static long Cursor(string activeProjectFile) {
+        static string Project(string activeProjectFile, string projectOverride) {
             try {
-                if (!File.Exists(activeProjectFile)) return 0;
+                if (!String.IsNullOrWhiteSpace(projectOverride) && Directory.Exists(projectOverride)) return projectOverride;
+                if (!File.Exists(activeProjectFile)) return "";
                 var project = File.ReadAllText(activeProjectFile).Trim();
-                if (project.Length == 0 || !Directory.Exists(project)) return 0;
+                return Directory.Exists(project) ? project : "";
+            } catch { return ""; }
+        }
+        static long Cursor(string activeProjectFile, string projectOverride) {
+            try {
+                var project=Project(activeProjectFile,projectOverride); if(project.Length==0) return 0;
                 var state = Path.Combine(project, ".statefulclanker", "control", "state.json");
                 if (!File.Exists(state)) return 0;
                 var m = SeqRx.Match(File.ReadAllText(state));
-                long n;
-                return m.Success && long.TryParse(m.Groups[1].Value, out n) ? n : 0;
+                long n; return m.Success && long.TryParse(m.Groups[1].Value, out n) ? n : 0;
             } catch { return 0; }
         }
         static void Sse(NetworkStream stream, string json) {
@@ -53,17 +58,17 @@ namespace StatefulClanker {
             stream.Write(bytes,0,bytes.Length); stream.Flush();
         }
 
-        public static void StartHttp(TcpClient client, string activeProjectFile, string id, string uri) {
+        public static void StartHttp(TcpClient client, string activeProjectFile, string projectOverride, string id, string uri) {
             var thread=new Thread(()=>{
                 try {
                     using(client) using(var stream=client.GetStream()) {
                         var head="HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-store\r\nConnection: keep-alive\r\n\r\n";
                         var hb=Encoding.ASCII.GetBytes(head); stream.Write(hb,0,hb.Length); stream.Flush();
                         Sse(stream,Ack(id,uri));
-                        var last=Cursor(activeProjectFile); var keep=DateTime.UtcNow;
+                        var last=Cursor(activeProjectFile,projectOverride); var keep=DateTime.UtcNow;
                         while(true) {
                             Thread.Sleep(500);
-                            var now=Cursor(activeProjectFile);
+                            var now=Cursor(activeProjectFile,projectOverride);
                             if(now!=last) { last=now; Sse(stream,Updated(id,uri)); keep=DateTime.UtcNow; }
                             else if((DateTime.UtcNow-keep).TotalSeconds>=15) { KeepAlive(stream); keep=DateTime.UtcNow; }
                         }
@@ -73,16 +78,15 @@ namespace StatefulClanker {
             thread.IsBackground=true; thread.Name="StatefulClanker MCP HTTP subscription"; thread.Start();
         }
 
-        public static void StartStdio(string activeProjectFile, string id, string uri) {
-            CancellationTokenSource old;
-            if(Stdio.TryRemove(id,out old)) old.Cancel();
+        public static void StartStdio(string activeProjectFile, string projectOverride, string id, string uri) {
+            CancellationTokenSource old; if(Stdio.TryRemove(id,out old)) old.Cancel();
             var cts=new CancellationTokenSource(); Stdio[id]=cts;
             var thread=new Thread(()=>{
                 try {
                     Console.Out.WriteLine(Ack(id,uri)); Console.Out.Flush();
-                    var last=Cursor(activeProjectFile);
+                    var last=Cursor(activeProjectFile,projectOverride);
                     while(!cts.IsCancellationRequested) {
-                        Thread.Sleep(500); var now=Cursor(activeProjectFile);
+                        Thread.Sleep(500); var now=Cursor(activeProjectFile,projectOverride);
                         if(now!=last) { last=now; Console.Out.WriteLine(Updated(id,uri)); Console.Out.Flush(); }
                     }
                 } catch { }
@@ -91,12 +95,8 @@ namespace StatefulClanker {
             thread.IsBackground=true; thread.Name="StatefulClanker MCP stdio subscription"; thread.Start();
         }
 
-        public static void Stop(string id) {
-            CancellationTokenSource cts; if(Stdio.TryRemove(id,out cts)) cts.Cancel();
-        }
-        public static void StopAll() {
-            foreach(var kv in Stdio.ToArray()) { CancellationTokenSource cts; if(Stdio.TryRemove(kv.Key,out cts)) cts.Cancel(); }
-        }
+        public static void Stop(string id) { CancellationTokenSource cts; if(Stdio.TryRemove(id,out cts)) cts.Cancel(); }
+        public static void StopAll() { foreach(var kv in Stdio.ToArray()) { CancellationTokenSource cts; if(Stdio.TryRemove(kv.Key,out cts)) cts.Cancel(); } }
     }
 }
 '@
@@ -109,23 +109,19 @@ function Get-SCSubscriptionResource($Rpc) {
     if($null-eq$Rpc-or-not$Rpc.PSObject.Properties['params']-or$null-eq$Rpc.params){return $null}
     if(-not$Rpc.params.PSObject.Properties['notifications']-or$null-eq$Rpc.params.notifications){return $null}
     if(-not$Rpc.params.notifications.PSObject.Properties['resourceSubscriptions']){return $null}
-    foreach($uri in @($Rpc.params.notifications.resourceSubscriptions)){
-        if([string]$uri-eq$script:SCControlEventsResource){return $script:SCControlEventsResource}
-    }
+    foreach($uri in @($Rpc.params.notifications.resourceSubscriptions)){if([string]$uri-eq$script:SCControlEventsResource){return $script:SCControlEventsResource}}
     return $null
 }
 
 function Start-SCHttpControlSubscription($Client,$Rpc) {
-    $uri=Get-SCSubscriptionResource $Rpc
-    if(-not$uri){return $false}
-    [StatefulClanker.SubscriptionPump]::StartHttp($Client,$script:SCActiveProjectFile,[string]$Rpc.id,$uri)
-    return $true
+    $uri=Get-SCSubscriptionResource $Rpc;if(-not$uri){return $false}
+    $override=if($script:McpDefaultProject){[string]$script:McpDefaultProject}else{''}
+    [StatefulClanker.SubscriptionPump]::StartHttp($Client,$script:SCActiveProjectFile,$override,[string]$Rpc.id,$uri);return $true
 }
 function Start-SCStdioControlSubscription($Rpc) {
-    $uri=Get-SCSubscriptionResource $Rpc
-    if(-not$uri){return $false}
-    [StatefulClanker.SubscriptionPump]::StartStdio($script:SCActiveProjectFile,[string]$Rpc.id,$uri)
-    return $true
+    $uri=Get-SCSubscriptionResource $Rpc;if(-not$uri){return $false}
+    $override=if($script:McpDefaultProject){[string]$script:McpDefaultProject}else{''}
+    [StatefulClanker.SubscriptionPump]::StartStdio($script:SCActiveProjectFile,$override,[string]$Rpc.id,$uri);return $true
 }
 function Stop-SCStdioSubscription([string]$RequestId) { [StatefulClanker.SubscriptionPump]::Stop($RequestId) }
 function Stop-SCAllStdioSubscriptions { [StatefulClanker.SubscriptionPump]::StopAll() }
