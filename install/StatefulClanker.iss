@@ -117,7 +117,7 @@ procedure StopTrayApp();
 var
   ResultCode: Integer;
 begin
-  ; /T terminates the resident MCP PowerShell child as well as the native host.
+  // /T terminates the resident MCP PowerShell child as well as the native host.
   Exec(ExpandConstant('{cmd}'), '/C taskkill /F /T /IM StatefulClanker.exe >nul 2>&1', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
