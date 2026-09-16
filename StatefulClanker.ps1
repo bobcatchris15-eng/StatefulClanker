@@ -15,7 +15,7 @@ $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
 $runtimeRef='5368d094cad76aaac6e39cf237d876e12c7eb84f'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1')
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -43,6 +43,7 @@ if($useCheckedOut){
 . (Join-Path $runtimeLib 'StatefulClanker.Intent.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Concurrency.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.ProjectReview.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.DispatchGuard.ps1')
 
 # -StateRoot lets a cycle run inside a git worktree while reading and writing the
 # one canonical .statefulclanker in the main tree. Without it the cycle would look
