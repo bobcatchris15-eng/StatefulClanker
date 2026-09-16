@@ -1,14 +1,9 @@
-<# Emit MCP client registration for this StatefulClanker checkout.
+<# Emit MCP client registration for this StatefulClanker install.
 
-   Prints the config snippet for a given client, and with -Write will patch the
-   client's config file in place (creating a .bak first). Nothing is written
-   without -Write.
-
-   Examples:
-     .\Install-McpServer.ps1                       # show the generic stdio snippet
-     .\Install-McpServer.ps1 -Client claude-code
-     .\Install-McpServer.ps1 -Client claude-desktop -ProjectPath C:\work\myproj -Write
-     .\Install-McpServer.ps1 -Transport http -Port 7337
+   The normal Windows-first registration does NOT pin a project. While the desktop
+   app is running, the stdio bridge forwards into its resident MCP host and follows
+   whichever project is active in the app. -ProjectPath remains available for
+   headless/legacy use when an explicit fixed default is desired.
 #>
 [CmdletBinding()]
 param(
@@ -27,39 +22,42 @@ $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
 $stdioServer = Join-Path $repo 'mcp\StatefulClanker.Mcp.ps1'
 $httpServer = Join-Path $repo 'mcp\StatefulClanker.McpHttp.ps1'
-
 foreach ($required in @($stdioServer, $httpServer)) {
-    if (-not (Test-Path -LiteralPath $required)) { throw "Missing $required. Run this from a full checkout." }
+    if (-not (Test-Path -LiteralPath $required)) { throw "Missing $required. Run this from a full install/checkout." }
 }
 
 $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue)
 if ($pwshPath) { $pwshPath = $pwshPath.Source } else { $pwshPath = 'powershell' }
 
-if ([string]::IsNullOrWhiteSpace($ProjectPath)) { $ProjectPath = (Get-Location).Path }
-$ProjectPath = (Resolve-Path -LiteralPath $ProjectPath).Path
+$resolvedProject = $null
+if (-not [string]::IsNullOrWhiteSpace($ProjectPath)) {
+    $resolvedProject = (Resolve-Path -LiteralPath $ProjectPath).Path
+}
 
 if ($Transport -eq 'http') {
     Write-Host ''
-    Write-Host 'HTTP transport is started manually, not launched by the client:' -ForegroundColor Cyan
+    Write-Host 'Resident Streamable HTTP transport:' -ForegroundColor Cyan
     Write-Host ''
-    Write-Host "  pwsh -NoProfile -File `"$httpServer`" -ProjectPath `"$ProjectPath`" -Port $Port"
+    if($resolvedProject) {
+        Write-Host "  pwsh -NoProfile -File `"$httpServer`" -ProjectPath `"$resolvedProject`" -Port $Port"
+        Write-Host 'This pins a default project for headless use.'
+    } else {
+        Write-Host "  pwsh -NoProfile -File `"$httpServer`" -Port $Port"
+        Write-Host 'With the Windows app running, project selection follows its active project.'
+    }
     Write-Host ''
-    Write-Host 'It prints a bearer token on startup and writes it to'
-    Write-Host "  $(Join-Path $env:LOCALAPPDATA 'StatefulClanker\mcp-http.json')"
-    Write-Host ''
+    Write-Host "Connection details: $(Join-Path $env:LOCALAPPDATA 'StatefulClanker\mcp-http.json')"
     Write-Host "Endpoint: http://127.0.0.1:$Port/mcp"
     Write-Host 'Header:   Authorization: Bearer <token>'
     Write-Host ''
-    Write-Host 'Note: the listener binds to loopback only. A connector that is fetched by a' -ForegroundColor Yellow
-    Write-Host 'remote/server-side backend cannot reach 127.0.0.1 on your machine; that needs' -ForegroundColor Yellow
-    Write-Host 'a client that fetches locally, or a tunnel you set up yourself.' -ForegroundColor Yellow
+    Write-Host 'The listener is loopback-only. Remote/server-side connectors cannot reach it' -ForegroundColor Yellow
+    Write-Host 'unless you deliberately provide a tunnel.' -ForegroundColor Yellow
     return
 }
 
-$serverEntry = [ordered]@{
-    command = $pwshPath
-    args    = @('-NoProfile', '-NonInteractive', '-File', $stdioServer, '-ProjectPath', $ProjectPath)
-}
+$stdioArgs = @('-NoProfile', '-NonInteractive', '-File', $stdioServer)
+if($resolvedProject){$stdioArgs += @('-ProjectPath',$resolvedProject)}
+$serverEntry = [ordered]@{ command = $pwshPath; args = $stdioArgs }
 
 function Show-Snippet($Object, [string]$Label) {
     Write-Host ''
@@ -74,15 +72,15 @@ switch ($Client) {
         Write-Host ''
         Write-Host 'Register with Claude Code:' -ForegroundColor Cyan
         Write-Host ''
-        Write-Host "  claude mcp add statefulclanker --scope user -- `"$pwshPath`" -NoProfile -NonInteractive -File `"$stdioServer`" -ProjectPath `"$ProjectPath`""
+        $tail=($stdioArgs|ForEach-Object{"`"$_`""}) -join ' '
+        Write-Host "  claude mcp add statefulclanker --scope user -- `"$pwshPath`" $tail"
         Write-Host ''
+        if(-not$resolvedProject){Write-Host 'This registration follows the active project selected in the StatefulClanker app.'}
         return
     }
     'opencode' {
         Show-Snippet ([ordered]@{ mcp = [ordered]@{ statefulclanker = [ordered]@{
-            type    = 'local'
-            command = @($pwshPath) + $serverEntry.args
-            enabled = $true
+            type='local'; command=@($pwshPath)+$stdioArgs; enabled=$true
         } } }) 'Add to opencode.json:'
         return
     }
@@ -97,15 +95,12 @@ switch ($Client) {
     'antigravity' {
         Show-Snippet ([ordered]@{ mcpServers = [ordered]@{ statefulclanker = $serverEntry } }) 'Antigravity / other mcpServers-style clients:'
         Write-Host 'NOTE: the exact config file location for this client is not verified here.' -ForegroundColor Yellow
-        Write-Host 'Look for an "MCP servers" setting in the app and paste the block above.' -ForegroundColor Yellow
-        Write-Host 'Most desktop harnesses use this same mcpServers shape.' -ForegroundColor Yellow
-        Write-Host ''
+        Write-Host 'Use the app integration surface or the client MCP settings to paste the block.' -ForegroundColor Yellow
         return
     }
 }
 
 $config = [ordered]@{ mcpServers = [ordered]@{ statefulclanker = $serverEntry } }
-
 if ($Client -eq 'claude-desktop') {
     $target = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
     Show-Snippet $config "Claude Desktop config ($target):"
@@ -120,9 +115,14 @@ if ($Client -eq 'claude-desktop') {
         Copy-Item -LiteralPath $target -Destination "$target.bak" -Force
         Write-Host "Backed up existing config to $target.bak"
         $raw = Get-Content -Raw -LiteralPath $target
-        if (-not [string]::IsNullOrWhiteSpace($raw)) { $existing = $raw | ConvertFrom-Json -AsHashtable }
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            if($PSVersionTable.PSVersion.Major-ge 7){$existing = $raw | ConvertFrom-Json -AsHashtable}
+            else {
+                $obj=$raw|ConvertFrom-Json;$existing=[ordered]@{};foreach($p in $obj.PSObject.Properties){$existing[$p.Name]=$p.Value}
+            }
+        }
     }
-    if (-not $existing.ContainsKey('mcpServers') -or $null -eq $existing['mcpServers']) { $existing['mcpServers'] = @{} }
+    if (-not $existing.Contains('mcpServers') -or $null -eq $existing['mcpServers']) { $existing['mcpServers'] = @{} }
     $existing['mcpServers']['statefulclanker'] = $serverEntry
     ($existing | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath $target -Encoding UTF8
     Write-Host "Wrote $target" -ForegroundColor Green
@@ -131,5 +131,9 @@ if ($Client -eq 'claude-desktop') {
 }
 
 Show-Snippet $config 'Generic MCP stdio server entry:'
-Write-Host 'Every tool also accepts a "project" argument, so one registration can drive'
-Write-Host 'many projects; -ProjectPath only sets the default.'
+if($resolvedProject){
+    Write-Host "This registration pins the default project to: $resolvedProject"
+} else {
+    Write-Host 'When the StatefulClanker app is running, this stdio bridge follows its active project.'
+    Write-Host 'Every tool can still pass an explicit "project" argument when needed.'
+}
