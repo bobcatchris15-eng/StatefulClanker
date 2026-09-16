@@ -12,9 +12,9 @@
     "codex": {
       "command": "codex",
       "args": [
-        "-p",
-        "{promptFile}"
-      ]
+        "exec"
+      ],
+      "mode": "stdin"
     },
     "claude": {
       "command": "claude",
@@ -26,9 +26,10 @@
     "agy": {
       "command": "agy",
       "args": [
-        "-p",
-        "{promptFile}"
-      ]
+        "--mode",
+        "accept-edits"
+      ],
+      "mode": "stdin"
     },
     "opencode": {
       "command": "opencode",
