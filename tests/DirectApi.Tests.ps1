@@ -11,8 +11,8 @@ $job=Start-Job -ArgumentList $port -ScriptBlock {
     $listener=New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback),$Port;$listener.Start()
     try {
         $responses=@(
-            '{"choices":[{"message":{"role":"assistant","content":"{\"tool\":\"write_file\",\"arguments\":{\"path\":\"api-worker.txt\",\"content\":\"hello from direct worker\"}}"}}]}',
-            '{"choices":[{"message":{"role":"assistant","content":"{\"final\":\"done\"}"}}]}'
+            '{"model":"openrouter/mock-routed","usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120},"choices":[{"message":{"role":"assistant","content":"{\"tool\":\"write_file\",\"arguments\":{\"path\":\"api-worker.txt\",\"content\":\"hello from direct worker\"}}"}}]}',
+            '{"model":"openrouter/mock-routed","usage":{"input_tokens":140,"output_tokens":10,"total_tokens":150},"choices":[{"message":{"role":"assistant","content":"{\"final\":\"done\"}"}}]}'
         )
         foreach($json in $responses){
             $client=$listener.AcceptTcpClient();$stream=$client.GetStream()
@@ -36,8 +36,12 @@ try {
     . (Join-Path $repo 'lib\StatefulClanker.WorkerRuntime.ps1')
     . (Join-Path $repo 'lib\StatefulClanker.WorkerRuntime.Windows.ps1')
     $connection=[pscustomobject]@{baseUrl="http://127.0.0.1:$port/v1";model='mock-model';toolMode='text';maxSteps=4;headers=[pscustomobject]@{}}
-    $result=Invoke-SCDirectWorkerLoop $connection 'write the requested file' ([pscustomobject]@{id='mock';role='worker'}) 'worker'
+    $usage=@{fallbackModel='mock-model';apiRequests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L;modelUsage=@{}}
+    $result=Invoke-SCDirectWorkerLoop $connection 'write the requested file' ([pscustomobject]@{id='mock';role='worker'}) 'worker' $usage
     Assert-True ($result -eq 'done') "Expected final output 'done', got '$result'."
+    Assert-True ($usage.apiRequests -eq 2 -and $usage.usageReports -eq 2) 'Expected two API requests with reported usage.'
+    Assert-True ($usage.promptTokens -eq 240 -and $usage.completionTokens -eq 30 -and $usage.totalTokens -eq 270) "Usage totals were wrong: $($usage|ConvertTo-Json -Depth 5 -Compress)"
+    Assert-True ($usage.modelUsage.ContainsKey('openrouter/mock-routed') -and $usage.modelUsage['openrouter/mock-routed'].totalTokens -eq 270) 'Actual routed model usage was not accumulated.'
     $path=Join-Path $temp 'api-worker.txt';Assert-True (Test-Path -LiteralPath $path) 'write_file tool did not create the file.'
     Assert-True ((Get-Content -Raw -LiteralPath $path) -eq 'hello from direct worker') 'write_file content was wrong.'
     Write-Host 'PASS: direct API text-tool loop writes through the capability-filtered StatefulClanker harness.'

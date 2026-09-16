@@ -233,6 +233,8 @@ sealed class AutofillHost : IDisposable
 sealed class ProjectMetrics
 {
     public int ActiveAgents, Sessions, Commits, Critics, CompleteTasks, TotalTasks;
+    public long UsageReports, PromptTokens, CompletionTokens, TotalTokens;
+    public Dictionary<string,long> ModelTokens = new(StringComparer.OrdinalIgnoreCase);
     public string IntentRevision = "—", Goal = "", Activity = "";
 }
 
@@ -267,11 +269,12 @@ static class Inspector
     public static ProjectMetrics Project(string project)
     {
         var m = new ProjectMetrics(); var state = System.IO.Path.Combine(project, ".statefulclanker"); if (!Directory.Exists(state)) return m;
-        m.ActiveAgents = JsonFiles(System.IO.Path.Combine(state, "telemetry", "active")).Count();
+        var active = JsonFiles(System.IO.Path.Combine(state, "telemetry", "active")).ToArray(); m.ActiveAgents = active.Length;
+        foreach (var file in active) { try { using var d = JsonDocument.Parse(File.ReadAllText(file)); AddModels(m, d.RootElement); } catch { } }
         var runs = JsonFiles(System.IO.Path.Combine(state, "telemetry", "runs")).ToArray(); m.Sessions = runs.Length;
         foreach (var file in runs)
         {
-            try { using var d = JsonDocument.Parse(File.ReadAllText(file)); if (d.RootElement.TryGetProperty("stage", out var s) && s.GetString() == "critic") m.Critics++; } catch { }
+            try { using var d = JsonDocument.Parse(File.ReadAllText(file)); var r=d.RootElement; if (r.TryGetProperty("stage", out var s) && s.GetString() == "critic") m.Critics++; AddUsage(m,r); } catch { }
         }
         foreach (var file in JsonFiles(System.IO.Path.Combine(state, "tasks")))
         {
@@ -280,6 +283,20 @@ static class Inspector
         try { m.Goal = JsonNode.Parse(File.ReadAllText(System.IO.Path.Combine(state, "state.json")))?["goal"]?.GetValue<string>() ?? ""; } catch { }
         try { m.IntentRevision = JsonNode.Parse(File.ReadAllText(System.IO.Path.Combine(state, "intent", "contract.json")))?["revision"]?.ToString() ?? "—"; } catch { }
         m.Commits = CommitCount(project); m.Activity = Activity(System.IO.Path.Combine(state, "events.jsonl")); return m;
+    }
+
+    static long Number(JsonElement r,string name) => r.TryGetProperty(name,out var n) && n.ValueKind==JsonValueKind.Number && n.TryGetInt64(out var v) ? v : 0;
+    static void PutModel(ProjectMetrics m,string? model,long tokens=0) { if(string.IsNullOrWhiteSpace(model)) return; m.ModelTokens[model]=m.ModelTokens.TryGetValue(model,out var old)?old+tokens:tokens; }
+    static void AddModels(ProjectMetrics m,JsonElement r)
+    {
+        if(r.TryGetProperty("actualModels",out var actual) && actual.ValueKind==JsonValueKind.Array){foreach(var x in actual.EnumerateArray()) if(x.ValueKind==JsonValueKind.String) PutModel(m,x.GetString());return;}
+        if(r.TryGetProperty("model",out var model) && model.ValueKind==JsonValueKind.String) PutModel(m,model.GetString());
+    }
+    static void AddUsage(ProjectMetrics m,JsonElement r)
+    {
+        m.UsageReports+=Number(r,"usageReports");m.PromptTokens+=Number(r,"promptTokens");m.CompletionTokens+=Number(r,"completionTokens");m.TotalTokens+=Number(r,"totalTokens");
+        if(r.TryGetProperty("modelUsage",out var usage) && usage.ValueKind==JsonValueKind.Array){foreach(var row in usage.EnumerateArray()){var model=row.TryGetProperty("model",out var x)&&x.ValueKind==JsonValueKind.String?x.GetString():null;PutModel(m,model,Number(row,"totalTokens"));}return;}
+        AddModels(m,r);
     }
 
     static int CommitCount(string project)
@@ -329,6 +346,19 @@ static class Theme
     }
 }
 
+sealed class BlinkenLightsPanel : Control
+{
+    readonly System.Windows.Forms.Timer _pulse = new() { Interval = 220 };
+    readonly Random _rng = new(); readonly bool[] _lamps = new bool[20];
+    readonly Font _caption = new("Cascadia Mono", 7f, FontStyle.Bold); bool _active;
+    public bool Active { get => _active; set { if(_active==value)return; _active=value; if(value){_pulse.Start();Step();}else{_pulse.Stop();Array.Clear(_lamps);Invalidate();} } }
+    public BlinkenLightsPanel(){DoubleBuffered=true;MinimumSize=new Size(220,72);_pulse.Tick+=(_,_)=>Step();}
+    void Step(){for(var i=0;i<_lamps.Length;i++)if(_rng.NextDouble()<.55)_lamps[i]=_rng.NextDouble()<.38;Invalidate();}
+    protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);e.Graphics.Clear(Color.FromArgb(12,16,15));var gap=7;var w=Math.Max(80,(Width-gap*3)/2);DrawBank(e.Graphics,new Rectangle(gap,gap,w,Height-gap*2),"WORKER BUS",0);DrawBank(e.Graphics,new Rectangle(gap*2+w,gap,w,Height-gap*2),"REVIEW / I-O",10);}
+    void DrawBank(Graphics g,Rectangle r,string title,int offset){using var panel=new SolidBrush(Color.FromArgb(22,28,25));using var edge=new Pen(Color.FromArgb(73,83,72));g.FillRectangle(panel,r);g.DrawRectangle(edge,r);g.DrawString(title,_caption,Brushes.DarkSeaGreen,r.X+6,r.Y+4);var y=r.Y+23;var spacing=Math.Max(14,(r.Width-18)/5);for(var i=0;i<10;i++){var col=i%5;var row=i/5;var x=r.X+8+col*spacing;var ly=y+row*17;var on=Active&&_lamps[offset+i];var baseColor=i%5==0?Color.IndianRed:i%3==0?Color.Goldenrod:Color.LimeGreen;using var b=new SolidBrush(on?baseColor:Color.FromArgb(36,baseColor));g.FillRectangle(b,x,ly,8,8);g.DrawRectangle(Pens.DimGray,x,ly,8,8);}using var screw=new SolidBrush(Color.FromArgb(95,100,91));g.FillEllipse(screw,r.Left+3,r.Bottom-7,3,3);g.FillEllipse(screw,r.Right-6,r.Bottom-7,3,3);}
+    protected override void Dispose(bool disposing){if(disposing){_pulse.Dispose();_caption.Dispose();}base.Dispose(disposing);}
+}
+
 sealed class MainForm : Form
 {
     readonly string _root = Runtime.FindRoot();
@@ -337,7 +367,8 @@ sealed class MainForm : Form
     readonly TabControl _tabs = new();
     readonly Label _header = new(), _mcpState = new(), _intent = new(), _goal = new();
     readonly Label[] _metrics = Enumerable.Range(0, 5).Select(_ => new Label()).ToArray();
-    readonly TextBox _overviewActivity = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new();
+    readonly TextBox _usage = new(), _overviewActivity = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new();
+    readonly BlinkenLightsPanel _blinken = new();
     readonly DataGridView _integrations = new(), _providers = new();
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
     int _refreshing;
@@ -381,12 +412,15 @@ sealed class MainForm : Form
 
     TabPage BuildOverview()
     {
-        var p = Page("Overview"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1 }; rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 108)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 90)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var p = Page("Overview"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 8, ColumnCount = 1 };
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 96)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 76)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 86)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 84)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var metricNames = new[] { "ACTIVE AGENTS", "WORKER SESSIONS", "COMMITS", "CRITIC RUNS", "TASKS COMPLETE" }; var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1 };
         for (var i = 0; i < 5; i++) { metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20)); _metrics[i].Dock = DockStyle.Fill; _metrics[i].Margin = new Padding(5); _metrics[i].TextAlign = ContentAlignment.MiddleCenter; _metrics[i].Font = new Font("Cascadia Mono", 12, FontStyle.Bold); _metrics[i].Text = metricNames[i] + "\r\n—"; metrics.Controls.Add(_metrics[i], i, 0); }
+        _blinken.Dock = DockStyle.Fill; _blinken.Margin = new Padding(5,2,5,2);
+        _usage.Dock = DockStyle.Fill; _usage.Multiline = true; _usage.ReadOnly = true; _usage.ScrollBars = ScrollBars.Vertical; _usage.WordWrap = false; _usage.Font = new Font("Cascadia Mono", 8.5f);
         var authority = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12), BackColor = Theme.Surface }; _intent.Dock = DockStyle.Top; _intent.Height = 26; _intent.ForeColor = Theme.Accent; _intent.Font = new Font("Cascadia Mono", 9, FontStyle.Bold); _goal.Dock = DockStyle.Fill; authority.Controls.Add(_goal); authority.Controls.Add(_intent);
         _overviewActivity.Dock = DockStyle.Fill; _overviewActivity.Multiline = true; _overviewActivity.ReadOnly = true; _overviewActivity.ScrollBars = ScrollBars.Vertical; _overviewActivity.Font = new Font("Cascadia Mono", 8.5f);
-        rows.Controls.Add(metrics, 0, 0); rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 1); rows.Controls.Add(authority, 0, 2); rows.Controls.Add(Section("RECENT ACTIVITY"), 0, 3); rows.Controls.Add(_overviewActivity, 0, 4); p.Controls.Add(rows); return p;
+        rows.Controls.Add(metrics, 0, 0); rows.Controls.Add(_blinken, 0, 1); rows.Controls.Add(Section("MODEL / TOKEN USAGE"), 0, 2); rows.Controls.Add(_usage, 0, 3); rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 4); rows.Controls.Add(authority, 0, 5); rows.Controls.Add(Section("RECENT ACTIVITY"), 0, 6); rows.Controls.Add(_overviewActivity, 0, 7); p.Controls.Add(rows); return p;
     }
 
     TabPage BuildActivity()
@@ -516,9 +550,21 @@ sealed class MainForm : Form
         finally { _providers.ResumeLayout(); }
     }
 
+    static string TokenText(long value) => value >= 1_000_000 ? $"{value / 1_000_000d:0.00}M" : value >= 1_000 ? $"{value / 1_000d:0.0}K" : value.ToString("N0");
+    static string UsageText(ProjectMetrics m)
+    {
+        var sb = new StringBuilder();
+        sb.Append("TOTAL ").Append(TokenText(m.TotalTokens)).Append("   INPUT ").Append(TokenText(m.PromptTokens)).Append("   OUTPUT ").Append(TokenText(m.CompletionTokens));
+        if (m.UsageReports == 0) sb.Append("   [provider token telemetry unavailable]");
+        foreach (var row in m.ModelTokens.OrderByDescending(x => x.Value).ThenBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+            sb.AppendLine().Append(row.Key).Append("   ").Append(row.Value > 0 ? TokenText(row.Value) + " tokens" : "usage not reported");
+        return m.ModelTokens.Count == 0 ? sb.AppendLine().Append("No model telemetry recorded yet.").ToString() : sb.ToString();
+    }
+
     void SetMetrics(ProjectMetrics m)
     {
         _metrics[0].Text = $"ACTIVE AGENTS\r\n{m.ActiveAgents}"; _metrics[1].Text = $"WORKER SESSIONS\r\n{m.Sessions}"; _metrics[2].Text = $"COMMITS\r\n{m.Commits}"; _metrics[3].Text = $"CRITIC RUNS\r\n{m.Critics}"; _metrics[4].Text = $"TASKS COMPLETE\r\n{m.CompleteTasks}/{m.TotalTasks}"; _intent.Text = $"INTENT REVISION  {m.IntentRevision}"; _goal.Text = string.IsNullOrWhiteSpace(m.Goal) ? "No project goal recorded." : m.Goal;
+        _usage.Text = UsageText(m); _blinken.Active = m.ActiveAgents > 0;
     }
 
     List<IntegrationStatus> ReadIntegrationStatus()
