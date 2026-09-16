@@ -1,4 +1,4 @@
-<# StatefulClanker: durable-state orchestration for cold-start CLI workers. #>
+<# StatefulClanker: durable-state orchestration for cold-start workers. #>
 [CmdletBinding(PositionalBinding=$false)]
 param(
     [Parameter(Position=0)][string]$Command='status',
@@ -6,6 +6,7 @@ param(
     [string]$Title,[string]$Instruction,[string[]]$Accept,[string[]]$DependsOn,
     [string[]]$Retrieval,[string[]]$Evidence,[string[]]$Relation,[string]$Provider,[string]$Role='worker',
     [string]$Size='small',[string[]]$Source,[string[]]$IntentRef,[string]$SourceRef,
+    [string]$CapabilityProfile,[string[]]$ToolAllow,[string[]]$ToolDeny,
     [string]$DirectiveId,[string]$Scope,[long]$Since=0,[int]$Limit=100,[string]$MinimumLevel,
     [switch]$HumanGate,[string]$TaskId,[string]$Path,[string]$Reason,[string]$Message,[string]$RunId,[string]$CompilationId,
     [int]$Parallel,[string]$StateRoot,[switch]$NoMerge
@@ -14,8 +15,8 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
-$runtimeRef='3f0d3abd5f165e4fdf18abbe827573b908c3f977'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerPolicy.ps1','StatefulClanker.WorkerRuntime.ps1','StatefulClanker.WorkerRuntime.Windows.ps1')
+$runtimeRef='ece54f994225500f4a9b3773ff08eb43ca67a270'
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.CapabilityTasks.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerPolicy.ps1','StatefulClanker.WorkerRuntime.ps1','StatefulClanker.WorkerRuntime.Windows.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -34,7 +35,7 @@ switch($Command.ToLowerInvariant()){
 'init'{Initialize-SC;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout;break}
 'goal'{$text=if($Message){$Message}elseif($Subcommand){$Subcommand}else{$Title};Set-SCGoal $text;break}
 'status'{Show-SCStatus;break}
-'task'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};switch($Subcommand.ToLowerInvariant()){'add'{Add-SCTask;break};'list'{Update-SCReadiness;Get-SCTasks|Sort-Object createdAt|Select-Object id,status,size,attemptCount,role,humanGate,title|Format-Table -AutoSize;break};'show'{if(-not$TaskId){throw '-TaskId required.'};Get-SCTask $TaskId|ConvertTo-SCJson -Depth 16|Write-Host;break};'retry'{Retry-SCTask $TaskId;break};default{throw "Unknown task subcommand: $Subcommand"}};break}
+'task'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};switch($Subcommand.ToLowerInvariant()){'add'{Add-SCTask;break};'list'{Update-SCReadiness;Get-SCTasks|Sort-Object createdAt|Select-Object id,status,size,capabilityProfile,attemptCount,role,humanGate,title|Format-Table -AutoSize;break};'show'{if(-not$TaskId){throw '-TaskId required.'};Get-SCTask $TaskId|ConvertTo-SCJson -Depth 18|Write-Host;break};'retry'{Retry-SCTask $TaskId;break};default{throw "Unknown task subcommand: $Subcommand"}};break}
 'plan'{if($null-eq$Subcommand){$Subcommand=''};switch($Subcommand.ToLowerInvariant()){'import'{if(-not$Path){throw '-Path required.'};Import-SCPlan $Path;break};'approve'{Approve-SCPlan;break};default{throw "Unknown plan subcommand: $Subcommand"}};break}
 'source'{Show-SCSources $Subcommand $SourceRef $Message;break}
 'directive'{Show-SCDirectives $Subcommand $DirectiveId $Message $Scope $IntentRef $SourceRef $Reason;break}

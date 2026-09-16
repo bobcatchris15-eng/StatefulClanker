@@ -2,484 +2,265 @@
 
 ## Purpose
 
-StatefulClanker externalizes the pieces of long-running agentic work that are usually trapped inside one model session.
+StatefulClanker is a **Windows-first durable orchestration runtime** for long-running agentic projects where project truth must survive disposable model contexts.
 
-The project persists. Model reasoning is temporary compute.
+The central rule is:
 
-The intended product is a **Windows-resident orchestration application** with a persistent system-tray presence, project navigation, MCP control plane, provider CLI execution, durable state, and project-scoped telemetry.
+> The project persists. Model contexts are replaceable compute.
 
-The conversational-plane model is the human-facing orchestrator. StatefulClanker owns durable authority, dispatch, context compilation, review gates, and observability.
+The native Windows application is the normal resident host. A conversational model is the human-facing control plane. StatefulClanker owns durable project authority, compilation, dispatch, review gates, event persistence, backend routing, and worker capability policy.
 
-See `docs/WINDOWS_FIRST_DESIGN.md` for the product/UI/control-plane contract and `docs/TASK_RECORD_FORMAT.md` for the target compact plan/task authoring format.
-
-## Top-level architecture
+## Implemented system
 
 ```text
 human
-  |
-  v
-conversational-plane orchestrator
-  |  MCP: stdio bridge or Streamable HTTP
-  v
-StatefulClanker Windows host
-  |
-  +-- active project + project registry
-  +-- human-source evidence
-  +-- Intent Contract
-  +-- plan / task graph
-  +-- context compiler
-  +-- provider routing
-  +-- run/review/progress receipts
-  +-- telemetry
-  |
-  v
-Provider CLI Adapters
-  |
-  +-- codex / agy / claude / opencode / gemini / local CLIs / others
+  ↓
+conversational control plane over MCP
+  ├─ aggressively clarifies ambiguous human intent
+  ├─ maintains Current Human Directives
+  ├─ reconciles normalized Intent
+  ├─ semantically plans/decomposes
+  └─ reports meaningful project changes
+  ↓
+StatefulClanker durable authority
+  ├─ human source artifacts
+  ├─ Current Human Directives
+  ├─ reconciled Intent Contract
+  ├─ plan/task graph
+  ├─ context compiler + freshness read set
+  ├─ durable control-event inbox
+  ├─ backend routing
+  └─ worker capability policy
+  ↓
+worker backend
+  ├─ provider-owned CLI harness
+  └─ StatefulClanker-owned direct inference harness
+        ├─ bounded repo/shell/git tools
+        ├─ read-only human/normalized intent tools
+        └─ authorized external MCP tools
+  ↓
+worker receipt → critic → validator → freshness/authority gate
+  ↓
+accepted project state / commit
 ```
 
-The normal execution boundary is an ordinary command line that accepts a prompt file or stdin. Direct provider API integration is optional, not required by the architecture.
-
-## Windows application authority
-
-The installed application is the machine-local host.
-
-It owns:
-
-- notification-area lifecycle
-- active-project selection and restoration
-- machine-local project registry
-- provider CLI definitions and class/role routing
-- integration registration/status
-- long-lived Streamable HTTP MCP listener
-- local IPC endpoint used by stdio bridges
-- project-scoped telemetry presentation
-
-PowerShell remains a first-class automation/troubleshooting interface. It should not become a second independent semantic authority when the resident app is running.
-
-### Active project
-
-The application has an **active project**, not an implicit default project.
-
-- selecting a project makes it active
-- the last active project is restored on startup
-- missing paths are shown explicitly
-- another project is never silently substituted
-- the UI always makes project scope visible
-- MCP conversations initially attach to the active project unless they explicitly select another project
-
-## Machine state vs project state
-
-Machine-local state belongs in a Windows application-data location such as `%LOCALAPPDATA%\StatefulClanker`:
-
-```text
-project registry
-last active project
-provider CLI definitions
-provider class/role routing
-integration registrations
-MCP endpoint/token/IPC information
-window/UI state
-```
-
-Project state belongs under `<project>\.statefulclanker`:
-
-```text
-input/
-intent/
-plans/
-tasks/
-compilations/
-prompts/
-runs/
-critiques/
-validations/
-proposals/
-progress/
-reviews/
-telemetry/
-events.jsonl
-state.json
-config.json
-```
-
-Executable paths and app integrations are properties of one PC. Intent, plan history, task history, and execution evidence are properties of the project and should travel with it.
+No worker response becomes canonical merely because it exists.
 
 ## Authority chain
 
-StatefulClanker distinguishes source evidence, normalized specification, execution state, compiled context, and model proposals.
+StatefulClanker separates direct human authority from model interpretation:
 
 ```text
-human source
-    -> Intent Contract
-    -> plan
-    -> task
-    -> compiled worker packet
-    -> model evidence
-    -> critic / validator evidence
-    -> accepted state transition
+verbatim human source evidence
+       ↓
+Current Human Directives
+(latest direct human word per named scope)
+       ↓
+reconciled Intent Contract
+(control-plane interpretation)
+       ↓
+plan
+       ↓
+task
+       ↓
+compiled truth packet
+       ↓
+worker / critic / validator evidence
+       ↓
+accepted state transition
 ```
 
-A model response never becomes canonical simply because it exists.
+### Human source artifacts
 
-### Human-source evidence
+Material human wording is persisted under `.statefulclanker/input/` and addressed by stable `human:<id>` references, optionally with line ranges. Source evidence is read-only historical provenance; it is not automatically current authority.
 
-The Intent Contract is an interpretation of user direction. Material direct human wording should remain recoverable as durable evidence.
+### Current Human Directives
 
-Examples:
+A directive is the current direct human position for one stable decision/scope. Updating the same directive id supersedes its prior active value. Superseded revisions remain available for audit but are excluded from normal worker context.
 
-- session-chat excerpt
-- uploaded plan/spec document
-- questionnaire answer
-- later clarification
-- explicit rejection of another plausible interpretation
+When a directive changes, dispatch is blocked until the control plane reconciles the full current directive set into a fresh Intent revision.
 
-A task should carry or resolve a stable source reference and governing intent references when material. Later orchestrators should be able to audit the chain instead of trusting several generations of paraphrase.
+### Intent Contract
 
-## Conversational plane
+The orchestrator-owned Intent Contract normalizes objective, requirements, constraints, invariants, non-goals, decisions, preferences, open questions, and success definition. Each revision records the exact directive revision/hash it reconciled.
 
-The conversational model is responsible for semantic work that actually requires understanding:
+Workers may inspect and challenge Intent with `INTENT_QUESTION` / `INTENT_CONFLICT`, but never rewrite it.
 
-- intent elicitation
-- ambiguity detection
-- maintaining the Intent Contract
-- semantic planning
-- task decomposition
-- choosing prerequisite research/inspection work
-- replanning after failures/context faults
-- escalating genuine human decisions
+## Conversational control plane
 
-When a host exposes a structured questionnaire/question tool, use it aggressively when two competent implementations could diverge materially.
+The conversational model owns semantic reasoning about the human request:
 
-StatefulClanker may detect suspiciously broad tasks and warn, but must not pretend that file counts, regexes, line counts, or token thresholds are semantic decomposition.
+1. clarify materially ambiguous human intent;
+2. preserve relevant direct wording as source/directive authority;
+3. keep the current directive set internally non-conflicting;
+4. reconcile directives into normalized Intent;
+5. plan and semantically decompose work;
+6. assign semantic task size and capability profile where useful;
+7. react to worker/context/review failures;
+8. keep the human informed through the durable control inbox.
 
-## Semantic task decomposition
+If two competent implementers could make materially different product choices, the control plane should ask the human rather than silently selecting one. Mechanical file/line/token splitting is retrieval tooling, not semantic decomposition.
 
-A useful task boundary is an independently understandable and independently verifiable outcome.
+## Plans and tasks
 
-Recommended semantic size hints:
+`SCPLAN 1` is the preferred repeatedly-consumed authoring format. JSON remains valid for RPC, settings, receipts, and compatibility imports.
 
-- `tiny`
-- `small`
-- `medium`
-- `large`
+A task may carry:
 
-Prefer smaller work when boundaries are natural, but do not fragment tightly coupled behavior merely to hit an arbitrary size target.
+- id/title/instruction;
+- semantic size (`tiny|small|medium|large`);
+- durable source references;
+- governing Intent references;
+- dependencies and typed relations;
+- retrieval/evidence selectors;
+- acceptance criteria;
+- backend/provider override;
+- role and human gate;
+- optional `capability-profile`;
+- task-local `tool-allow` / `tool-deny` narrowing.
 
-Task size is assigned by the conversational planner and used as a routing hint. It is not inferred mechanically by the runtime.
+Capability policy participates in the task definition hash. Changing a task's capability profile or local tool policy makes prior work stale.
 
-## Plans and task records
+## Context compiler and freshness
 
-Plans are durable execution structure.
+Every dispatched worker receives a cold-start truth packet containing enough authority to understand the bounded task without conversational memory:
 
-The target authoring/import representation is the compact line-oriented `SCPLAN 1` format described in `docs/TASK_RECORD_FORMAT.md`. It is optimized for repeated model consumption and simple Windows shell inspection.
+- project goal;
+- current Human Directives and directive revision/hash;
+- reconciled Intent revision/hash;
+- task semantics, acceptance criteria, source and Intent references;
+- dependency outcomes;
+- bounded retrieved project evidence;
+- capability profile/task-local policy metadata.
 
-JSON remains valid for APIs, RPC, settings, internal receipts, and compatibility imports.
+Each compilation records a read set and fingerprints. Dispatch/commit freshness checks prevent older work from overwriting newer goal, directive, Intent, task, dependency, or retrieved-file authority.
 
-During migration, internal task storage may remain JSON while the compact plan format becomes the preferred planner output.
+## Worker backends
 
-A task should preserve:
+Task semantics are backend-neutral. Routing chooses a configured **worker backend**.
 
-- id and bounded title
-- cold-start instruction
-- semantic size hint
-- source references
-- intent references
-- scheduling dependencies
-- semantic relations
-- retrieval/evidence selectors
-- acceptance criteria
-- optional provider override
-- role/specialist hint
-- human-gate requirement
-- lifecycle state/revisions
-- latest execution/review pointers
+### CLI harness backend
 
-## Canonical project state
+A `cli` backend delegates the inner coding-agent loop to a provider/local harness such as Codex, Claude Code, OpenCode, Antigravity, Gemini CLI, or another configured command. StatefulClanker supplies the compiled truth packet and captures the receipt; the external harness owns its own internal tools.
 
-`state.json` contains compact current project state: identity, goal, active plan, approval state, project revision, direction revision, and timestamps.
+### Direct inference backend
 
-Historical detail belongs in append-only events and receipts rather than making current state a transcript.
+An `api` backend points to a machine-local inference connection. StatefulClanker owns a deliberately small tool loop and talks directly to an OpenAI-compatible endpoint such as Ollama, LM Studio, vLLM, OpenRouter, or another compatible gateway.
 
-## Events
+Both paths converge on the same critic, validator, freshness, event, and commit machinery.
 
-`events.jsonl` is append-only. Observations, decisions, failures, user direction, discoveries, invalidations, context faults, and commits are events.
+## Worker capability policy
 
-Direct human material that must survive as specification evidence should also be persisted as an explicit human-source artifact rather than only as an event message.
-
-## Intent Contract
-
-The orchestrator owns the authoritative Intent Contract. Workers, critics, and validators may read and challenge it but never silently rewrite it.
-
-The contract carries objective, requirements, constraints, invariants, non-goals, decisions, preferences, open questions, and success definition.
-
-An intent revision invalidates older compilations by revision/hash. Affected task branches should be selectively replanned or invalidated.
-
-## Context compiler
-
-Prompt construction is a compiler pipeline:
+The central runtime authorization hierarchy for StatefulClanker-owned workers is tighten-only:
 
 ```text
-canonical state
-+ task
-+ relevant human-source evidence
-+ Intent Contract
-+ dependencies
-+ project evidence
-+ bounded recent events
-        |
-        v
-normalize / classify sources
-        |
-        v
-build read set + provenance + authority labels
-        |
-        v
-apply working-set budget
-        |
-        v
-compiled context IR
-        |
-        v
-cold-start worker prompt + compilation receipt
+machine grants
+  ↓
+optional named capability profile
+  ↓
+project policy
+  ↓
+role policy
+  ↓
+stage policy
+  ↓
+task-local allow/deny
 ```
 
-Mechanical slicing/chunking belongs here when needed for retrieval. It does not define the plan's semantic task boundaries.
+Deny wins. No lower layer can grant a capability absent from the machine allow-list.
 
-## Retrieval
+Built-in capability classes include repository tools and separate read-only authority readers:
 
-Retrieval is driven by declared task intent rather than repository dumping.
+- `intent.human.read` — inspect preserved direct human source evidence;
+- `intent.normalized.read` — inspect reconciled Intent plus current directives.
 
-Useful selectors include exact files, directories, globs, generated artifacts, dependency outcomes, durable human-source excerpts, specialist notes, and explicitly named evidence.
+External MCP services such as Toaster or MemPalace are registered machine-locally and exposed as capabilities like `mcp.toaster.search`. Merely registering a source does not grant its tools.
 
-A future smarter retrieval layer can evolve without changing task authority semantics.
+Provider-owned CLI harnesses retain their own internal permission systems; StatefulClanker does not pretend to revoke hidden tools inside another harness.
 
-## Read sets and freshness
+## Event-driven control plane
 
-Every compilation records what it relied upon.
-
-Freshness checks include, as appropriate:
-
-- project goal identity
-- active plan identity/intent
-- direction revision
-- Intent Contract revision/hash
-- task definition/control revision
-- dependency state/receipt identity
-- retrieved file hashes before dispatch
-
-Human redirection or task control must invalidate older work before it becomes canonical.
-
-## Provider CLI adapters
-
-Providers remain ordinary command lines.
-
-An adapter defines:
-
-- name
-- command
-- argument template
-- prompt delivery mode: prompt file, stdin, or inline when genuinely small
-- optional capability/size classes
-- roles it may serve: worker / critic / validator
-
-Common placeholders may include:
-
-- `{prompt}`
-- `{promptFile}`
-- `{projectRoot}`
-- `{taskId}`
-
-The preferred flow is to write the complete compiled prompt to a file and invoke a configured CLI with that path or pipe it on stdin, avoiding Windows command-line length limits.
-
-Examples such as Codex, agy, Claude, OpenCode, Gemini, or local-model runners are configuration choices rather than hard-coded architectural dependencies.
-
-### Provider routing
-
-Machine-local configuration may map semantic task size and stage/role to providers.
-
-Example concept:
+Low-level audit events remain in `.statefulclanker/events.jsonl`. Human-facing project changes also enter a durable sequenced control inbox:
 
 ```text
-worker tiny   -> provider A
-worker small  -> provider B
-worker medium -> provider C
-critic        -> provider B
-validator     -> provider C
+.statefulclanker/control/events.jsonl
+.statefulclanker/control/state.json
 ```
 
-A task-specific provider override remains possible. The task graph should normally remain vendor-agnostic.
+Control events are `fyi`, `attention`, or `human_required`. The durable cursor is the correctness mechanism; MCP push notifications are wake-up signals only.
 
-## Runs
+## MCP protocol eras
 
-A run receipt records exactly what was dispatched and what came back:
+StatefulClanker serves both MCP behavior families from the same endpoint:
 
-- task/provider/agent id
-- semantic stage
-- compilation id/fingerprint
-- command/arguments/prompt path
-- timing/exit code
-- stdout/stderr
-- context or intent escalations
+### Legacy era (through 2025-11-25 behavior)
 
-A failed worker call should improve future execution rather than disappear into chat scrollback.
+- `initialize` handshake;
+- existing JSON-RPC tool/resource behavior;
+- no false advertisement of legacy `resources/subscribe` because StatefulClanker does not implement that legacy event stream.
 
-## Worker escalations
+### Modern era (`2026-07-28`)
 
-Workers should emit:
+- stateless requests;
+- no `initialize` handshake;
+- optional `server/discover` capability probe;
+- protocol/client capability metadata carried per request;
+- Streamable HTTP validates `MCP-Protocol-Version`, `Mcp-Method`, and applicable `Mcp-Name` headers;
+- `Mcp-Session-Id` is rejected on modern requests;
+- `subscriptions/listen` carries level-triggered control-resource updates.
 
-- `CONTEXT_REQUEST: <specific missing state>`
-- `INTENT_QUESTION: <specific ambiguity>`
-- `INTENT_CONFLICT: <specific contradiction>`
+The stdio bridge preserves the request's protocol era when forwarding into the resident HTTP host.
 
-Each is non-advancing.
+## Windows application authority
 
-Context faults feed retrieval/decomposition improvements. Intent questions/conflicts return to the orchestrator/human authority.
+The installed WinForms application owns machine-local runtime concerns:
 
-## Proposals and transactional completion
+- tray lifecycle;
+- saved projects and explicit active project;
+- resident MCP endpoint;
+- integration status;
+- API connections;
+- worker backend visibility;
+- worker capability grants/profiles;
+- external MCP worker tool sources;
+- project telemetry.
 
-Successful worker output is evidence for a candidate transition, not accepted completion.
+There is no hidden default project. If the last active path is unavailable, the app enters a no-active-project state rather than substituting another project.
 
-```text
-state N
-  -> compile against N
-  -> provider CLI worker result
-  -> freshness/context/intent gate
-  -> candidate proposal
-  -> critic / validator evidence
-  -> authority revalidation
-  -> COMMIT -> state N+1
-       or
-     REJECT/STOP
-```
+Machine-local state lives under `%LOCALAPPDATA%\StatefulClanker`. Project authority travels under `<project>\.statefulclanker`.
 
-Manual completion remains explicit human authority.
+## Parallelism and state ownership
 
-## Critic and validator
+Parallel tasks use git worktrees. `WorkRoot` is the isolated checkout a worker edits; `StateRoot` remains the canonical project state directory. Cross-process state mutations use a named mutex and atomic file replacement.
 
-These answer different questions.
+Distributed multi-writer authority is not claimed. StatefulClanker currently assumes one canonical state authority per project.
 
-Critic: **What looks wrong, incomplete, risky, contradictory, or poorly reasoned?**
+## Review and acceptance
 
-Validator: **Do the observable acceptance conditions pass from the available evidence?**
+Worker output is candidate evidence. Critic and validator answer different questions:
 
-Neither rewrites worker output or the Intent Contract.
+- critic: what is wrong, incomplete, contradictory, risky, or based on a bad assumption?
+- validator: do the stated acceptance conditions pass from available evidence?
 
-Both should judge against the same compiled context snapshot that drove the work plus the worker receipt.
+Required gates fail closed. Human-authority shortcuts are explicit and disabled over MCP unless deliberately enabled.
 
-## Dependencies and invalidation
+## External memory boundary
 
-`dependsOn` has scheduling semantics. Typed relations preserve other causal structure without serializing unrelated work.
-
-If accepted upstream work loses authority, dependent completion must be invalidated or marked stale while preserving old receipts as historical evidence.
-
-## Concurrency
-
-Ready tasks with independent dependency closures may run concurrently in isolated git worktrees.
-
-The main checkout retains canonical durable state. Worktrees isolate code changes; accepted work is committed and merged back. Textual merge success is not semantic validation, so project-level review/validation remains important after multi-branch integration.
-
-Cross-process access to canonical state must remain serialized. Distributed multi-writer authority is not claimed yet.
-
-## Specialists
-
-A specialist is primarily a reusable project context profile:
-
-- specialist name/role
-- durable notes
-- preferred retrieval selectors
-- preferred provider size/class
-- suitable task categories
-
-A provider-specific persistent session may be reused as an optimization when helpful, but specialist semantics must not depend on that session existing.
-
-## Progress vs activity
-
-A run means compute happened. A progress record says whether accepted project state advanced.
-
-Track both.
-
-Repeated non-advancing attempts against the same effective input should trigger stagnation/replanning rather than blind retries.
-
-## Desktop telemetry
-
-The Windows application should expose project-scoped telemetry for the currently selected project, including:
-
-- active worker/critic/validator processes
-- worker sessions spawned
-- critic/validator sessions
-- commits/merges
-- task counts by state
-- retries/non-advancing attempts
-- latest review verdicts
-- context faults
-- intent questions/conflicts
-- provider failures
-
-The app is primarily an observation/configuration surface. Planning/direction normally stays conversational through MCP.
-
-## MCP transports
-
-The target architecture has one resident semantic authority.
-
-### Streamable HTTP
-
-The running Windows app owns the loopback Streamable HTTP endpoint.
-
-### stdio
-
-Clients that require stdio launch a thin bridge/shim that talks to the resident host through local IPC, preferably a named pipe.
-
-The stdio process must not become an independent project authority with divergent active-project state.
-
-During migration, the current independent PowerShell MCP hosts remain compatibility implementations.
-
-## External effects
-
-StatefulClanker does not yet claim exactly-once semantics for arbitrary external effects such as email, cloud provisioning, purchases, or deployments.
-
-Git-backed coding work is comparatively recoverable. Irreversible/costly effects require a future effect ledger with idempotency, authorization, reconciliation, and compensation semantics.
-
-## Experiential memory boundary
-
-Reusable cross-project expertise is not canonical project state.
-
-External memory such as Toaster may provide candidate lessons to the compiler, but those lessons must be checked against current project state and never become authority merely because they were retrieved.
-
-## Migration strategy
-
-Do not require a flag-day rewrite.
-
-1. keep the working PowerShell execution engine
-2. make Windows-first/control-plane documents and planner behavior authoritative
-3. add human-source capture
-4. add compact plan import while preserving JSON compatibility
-5. add machine-local project registry and active-project semantics
-6. build the native Windows host taking structural/UI cues from Toaster
-7. move the long-lived MCP HTTP endpoint into the host
-8. make stdio a bridge to the host
-9. move machine-local provider/integration config into the host
-10. retire duplicated orchestration authority from independent processes
+Cross-project memory such as Toaster/MemPalace is non-authoritative candidate knowledge. Workers may query it when policy permits, but retrieved lessons never outrank current project directives, reconciled Intent, or inspected project state.
 
 ## Invariants
 
-1. Durable project state is authoritative over model recollection.
-2. Material human wording remains recoverable as source evidence.
-3. The Intent Contract is orchestrator-owned and read-only to workers.
-4. Semantic planning/decomposition belongs to the conversational plane.
-5. Mechanical chunking is retrieval tooling, not task planning.
-6. Model-visible context is a compiled projection, not canonical state.
-7. Every worker packet stands alone and is traceable to a compilation receipt.
-8. Workers cannot self-certify task completion.
-9. Required review stages fail closed.
-10. Older compiled work cannot overwrite newer human/intent/task authority.
-11. Invalidated upstream authority invalidates dependent completion.
-12. Provider execution remains CLI-based and provider-agnostic by default.
-13. Consumer/provider CLI compatibility is a first-class feature.
-14. The Windows app has an explicit active project; no silent default-project substitution.
-15. Desktop telemetry is scoped to the selected project.
-16. Persistent provider sessions are optional optimizations, not authority.
-17. JSON may remain for APIs/internal receipts; repeatedly consumed task/plan artifacts optimize for compact retrieval/model context.
-18. Activity and progress remain separately observable.
-19. Cross-project memory is not canonical project state.
-20. Exactly-once external-effect safety is not claimed until explicitly implemented.
+1. Durable project state outranks model recollection.
+2. Latest direct human wording per directive scope is current human authority.
+3. Superseded wording is audit history, not worker specification.
+4. Intent is reconciled against current directives before dispatch.
+5. Semantic planning/decomposition belongs to the conversational plane.
+6. Workers receive standalone compiled truth packets.
+7. Worker results are proposals, not self-certified completion.
+8. Freshness prevents older authority from overwriting newer authority.
+9. Backend transport does not change task semantics.
+10. Worker capability inheritance is tighten-only.
+11. External memory/tool services are not project authority.
+12. Human-relevant state changes are durably resumable through the control inbox.
+13. The Windows app has an explicit active project and machine-local configuration authority.
+14. Activity and accepted progress remain separately observable.
