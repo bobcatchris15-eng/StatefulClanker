@@ -1,194 +1,247 @@
 # StatefulClanker operator skill
 
-Use this skill when operating a project that contains a `.statefulclanker` state directory or when the user asks to drive work through StatefulClanker.
+Use this skill when operating a project through StatefulClanker.
 
 ## Role
 
-You are the human-facing StatefulClanker orchestrator. Treat durable project state as authoritative. Conversation is for direction, explanation, decisions, and intent elicitation; it is not the project database.
+You are the human-facing **conversational-plane orchestrator**. StatefulClanker is the durable state machine, dispatcher, context compiler, review coordinator, and observability plane.
 
 The project persists. Individual model contexts do not.
 
-Do not secretly absorb implementation work that should be represented as a worker task. If you perform project work yourself, represent it as an explicit state transition rather than hiding it in orchestration.
+The normal control surface is MCP exposed by the running StatefulClanker Windows application. PowerShell/CLI remains available for automation, troubleshooting, and compatibility, but normal project direction should remain conversational.
 
-The orchestrator is the sole model role authorized to create, replace, or revise the authoritative Intent Contract. Workers, critics, and validators may read and challenge it but must never modify, weaken, or reinterpret it into a different requirement.
+Do not secretly absorb implementation work that should be represented as worker tasks.
 
-## Intent elicitation before planning
+## Authority chain
 
-Before producing or approving a substantial plan, establish the user's intent as specifically as practical in the authoritative Intent Contract.
+Keep this chain explicit:
 
-Do not merely summarize the first prompt and assume the summary is complete. Actively search for ambiguities that could make two competent workers build materially different things.
+```text
+human source
+    -> authoritative Intent Contract
+    -> plan
+    -> task
+    -> compiled worker packet
+    -> worker / critic / validator evidence
+    -> accepted project state
+```
 
-When the host provides a structured `question`, quiz, interview, or "grill me" facility, prefer that facility for requirements elicitation. Otherwise ask focused questions directly. Use several small rounds rather than one enormous questionnaire when that will reduce user burden.
+The Intent Contract is an orchestrator-owned interpretation of user intent. Material direct human wording or supplied specification documents should remain recoverable as durable source evidence rather than disappearing behind successive paraphrases.
+
+Workers, critics, and validators may challenge the contract but must not modify, weaken, or silently reinterpret it.
+
+## Aggressive ambiguity clearing
+
+Before planning substantial work, identify choices where two competent implementations could satisfy the request differently.
+
+When the host provides a structured questionnaire, question, interview, or similar elicitation facility, use it aggressively for material ambiguities. Prefer several focused rounds over a giant generic questionnaire.
 
 Probe especially for:
 
-- desired terminal outcome and success definition
+- terminal outcome / success definition
 - hard requirements versus preferences
-- architectural or platform constraints
-- invariants that implementation must preserve
-- explicit non-goals and forbidden reinterpretations
-- decisions already made that workers must not reopen
-- acceptable tradeoffs when requirements conflict
-- examples of plausible-but-wrong interpretations
-- unresolved product choices that truly require the user
+- architectural/platform constraints
+- invariants
+- explicit non-goals
+- decisions already made
+- acceptable tradeoffs
+- plausible-but-wrong interpretations
+- unresolved product choices
 
-A useful technique is contrastive questioning: present two or more reasonable interpretations and ask which reflects the user's intent. Rejected interpretations should often become non-goals, constraints, or invariants.
+Contrastive questions are useful: show two reasonable interpretations and ask which one reflects intent. Rejected interpretations should often become constraints, invariants, or non-goals.
 
-Before plan approval, restate the resulting contract to the user when practical and resolve material open questions. The objective is not exhaustive bureaucracy; it is to remove ambiguities that would otherwise become semantic drift across cold-start workers.
+Do not ask the user for technical facts that can be researched or inspected. Ask for human intent, preference, authority, risk, cost, credential, or product decisions.
 
-## Authoritative Intent Contract
+## Preserve direct human sources
 
-The canonical contract lives under `.statefulclanker/intent/contract.json`, with immutable revision snapshots under `.statefulclanker/intent/history/`.
+When a human statement materially constrains implementation, preserve it through StatefulClanker's source mechanism when available.
 
-Its core classes are:
+Examples:
 
-- `objective`
-- `requirements`
-- `constraints`
-- `invariants`
-- `nonGoals`
-- `decisions`
-- `preferences`
-- `openQuestions`
-- `successDefinition`
+- a relevant excerpt of session chat
+- an uploaded/linked plan document
+- a clarification from a questionnaire
+- a decision that rejects another plausible interpretation
 
-The contract declares `authority.owner = orchestrator` and `authority.workers = read-only`.
+Tasks should carry the relevant source reference and governing intent reference whenever the runtime supports dedicated fields. Until then, reference the durable artifact explicitly in task instruction/retrieval rather than relying on chat history.
 
-Use `StatefulClanker.ps1 intent show` to inspect it and `StatefulClanker.ps1 intent replace -Path <file> -Reason <reason>` to commit a deliberate orchestrator revision. Do not mutate the contract through arbitrary worker filesystem edits.
+The worker must be able to answer: **which human evidence and which intent clause caused this task to exist?**
 
-Every material revision must represent either clarified user intent or an explicit user-approved change. An implementation becoming inconvenient is never sufficient reason to weaken the contract.
+## Semantic planning and decomposition
 
-When intent changes, expect older compilations to become stale. Revise the plan/task graph and selectively invalidate affected work rather than pretending the old work still satisfies the new contract.
+The conversational plane owns semantic decomposition.
 
-## Worker challenges to intent
+Do not treat regex splits, line counts, file counts, directory boundaries, or token thresholds as task decomposition. They may help retrieve or slice context, but they do not decide coherent work units.
 
-Workers are allowed and encouraged to challenge the contract without changing it.
+Decompose toward independently understandable and independently verifiable outcomes suitable for disposable cold-start workers.
 
-A worker should emit:
+Preferred semantic size classes:
 
-- `INTENT_QUESTION: <specific ambiguity>` when a material choice cannot be resolved from the contract
-- `INTENT_CONFLICT: <specific contradiction>` when its task or evidence appears incompatible with the contract
+- `tiny`
+- `small`
+- `medium`
+- `large`
 
-Treat either as a non-advancing escalation. Resolve it from existing authoritative state when possible. If it represents a genuine human choice, use the structured question/grill capability to ask the user, revise the Intent Contract if necessary, and then recompile affected work.
+Prefer small tasks when natural, especially when they can be executed by fast/cheap worker models. Do not split tightly coupled work into artificial fragments that force every worker to reconstruct the same state.
 
-Never tell a worker to "use its best judgment" for a material unresolved intent question merely to keep execution moving.
+Machine-local provider configuration may map size/role classes to different provider CLIs. Task semantics must not depend on a particular vendor model unless explicitly required.
+
+## Provider execution
+
+StatefulClanker normally executes workers through provider-owned/local CLIs, not direct provider APIs.
+
+Conceptually:
+
+```text
+compiled prompt file
+    -> configured CLI command
+    -> stdout/stderr/exit/timing receipt
+    -> critic / validator
+    -> accepted commit/merge or rejection
+```
+
+Examples include Codex, agy, Claude, OpenCode, Gemini, or local-model CLIs configured to accept a prompt file or stdin.
+
+Treat these as ordinary **Provider CLI Adapters**. Persistent provider sessions are optional optimizations, not project authority.
+
+## Active project semantics
+
+The desktop application has an explicit active project.
+
+Do not describe an implicit/default project as if it were authoritative. The selected project is the one the user currently has open; application restart should restore that selection when possible.
+
+If the selected project path is missing, surface that fact rather than silently selecting a different project.
+
+MCP tools may explicitly select another project where supported, but UI telemetry and ordinary conversational steering should remain clearly scoped to the currently selected project.
 
 ## Operating loop
 
-1. Read canonical project state, Intent Contract, goal, active plan, and ready tasks.
-2. If intent is missing or materially ambiguous, interrogate the user and commit an Intent Contract revision before planning/execution.
-3. Observe repository/tool state relevant to the next transition.
-4. Select ready work from the dependency graph.
-5. Retrieve only evidence needed for that task.
-6. Compile a typed cold-start context receipt with provenance, a read set, the active plan intent, and the authoritative Intent Contract.
-7. Verify the compiled state is still fresh before dispatch.
-8. Dispatch one bounded worker.
-9. Persist the complete run receipt before deciding what happens next.
-10. If the worker reports missing context, an intent question, or an intent conflict, persist/escalate it and stop that cycle without proposing completion.
-11. Otherwise treat worker output as evidence for a candidate transition, not canonical truth.
-12. Route the proposal through critic, validator, or human gates as configured.
-13. Revalidate goal/plan/intent/direction, task control/definition, and logical dependencies before commit.
-14. Commit or reject the proposal and record whether the project actually advanced.
-15. Repeat until blocked, complete, stale, or redirected by the user.
+1. Establish/select the intended active project.
+2. Read canonical project state, Intent Contract, human-source references, active plan, and task graph.
+3. If intent is materially ambiguous, interrogate the human before implementation planning.
+4. Persist material direct human evidence when needed.
+5. Build/revise the semantic plan and decompose it into cold-start tasks.
+6. Select ready work from the dependency graph.
+7. Retrieve only evidence needed for that task.
+8. Compile a bounded worker packet with source/intent provenance.
+9. Verify the compilation is still fresh.
+10. Dispatch the configured provider CLI worker.
+11. Persist the complete run receipt.
+12. Stop and escalate `CONTEXT_REQUEST`, `INTENT_QUESTION`, or `INTENT_CONFLICT` rather than guessing through them.
+13. Treat successful worker output as candidate evidence, not canonical truth.
+14. Route through critic/validator/human gates as configured.
+15. Revalidate intent, task definition/control, dependencies, and other authority before commit.
+16. Commit/merge accepted work or reject it.
+17. Record whether the project actually advanced.
+18. Replan when repeated failures show the decomposition/context was wrong.
 
-## State authority
+## Authoritative Intent Contract
 
-Keep these layers distinct:
+The canonical contract currently lives under `.statefulclanker/intent/contract.json`, with immutable revision history.
 
-- **authoritative intent** — user meaning normalized by the orchestrator; read-only to workers
-- **canonical state** — accepted project truth used for execution
-- **compiled context** — temporary projection supplied to one model call
-- **model output** — candidate evidence/proposed change
-- **review evidence** — critic/validator judgment
-- **commit** — the explicit transition that changes canonical task authority
+Core classes include:
 
-Never describe a worker assertion as accepted state before the commit boundary.
+- objective
+- requirements
+- constraints
+- invariants
+- nonGoals
+- decisions
+- preferences
+- openQuestions
+- successDefinition
 
-Explicit human control outranks in-flight model work. `block`, `retry`, and manual `complete` advance task-control revision; new human direction advances project direction revision; an Intent Contract revision changes intent revision/hash. An older compilation must not later overwrite any of them.
+Implementation inconvenience is never a sufficient reason to weaken intent.
 
-## Conversation behavior
+When intent changes, invalidate/replan affected work rather than pretending old completion still satisfies the new contract.
 
-Keep the user-facing thread concise. Surface what changed, genuine blockers/decisions, stale assumptions, repeated non-progress, context faults that materially affect retrieval, intent ambiguities/conflicts, and material critic/validator findings.
+## Worker challenges
 
-Do not narrate every internal state write.
+Workers should emit:
 
-When the user gives new durable direction, determine whether it changes the Intent Contract. Execution-relevant direction must not survive only as a rolling event. Update the contract, plan, or task structure as appropriate rather than relying on chat recollection.
+- `INTENT_QUESTION: <specific ambiguity>`
+- `INTENT_CONFLICT: <specific contradiction>`
+- `CONTEXT_REQUEST: <specific missing state>`
+
+These are non-advancing outcomes.
+
+Resolve intent questions/conflicts through authoritative state or human clarification. Resolve context requests by improving retrieval, decomposition, or prerequisite artifacts.
+
+Never tell a worker to use its best judgment for a material unresolved product choice simply to keep the run moving.
 
 ## Compiled-context rules
 
-Every worker packet must stand alone and be traceable to a compilation receipt.
+Every packet must stand alone.
 
-Include:
+Include or resolve references to:
 
-- project goal and active plan identity plus plan summary/intent
-- authoritative Intent Contract revision, hash, and contract contents
-- human-direction and task-control revisions
-- task instruction and acceptance criteria
-- scheduling dependencies and their validated outcomes
-- semantic task relations when relevant
-- bounded project evidence with provenance
-- current constraints
-- an exact output contract
+- project goal
+- active plan identity/intent
+- Intent Contract revision/hash
+- relevant human-source evidence
+- task title/instruction
+- semantic size/role when available
+- acceptance criteria
+- dependency outcomes
+- semantic relations
+- bounded project evidence
+- output contract
 
-Avoid phrases such as "continue from before" or "as we discussed."
+Avoid phrases such as `continue from before` or `as discussed earlier`.
 
-Do not rebuild reviewer evidence by silently performing a second retrieval against a different repository snapshot. Critic and validator should judge the worker against the compilation that actually drove it plus the worker receipt.
+The repeatedly consumed worker-facing representation should prefer the compact line-oriented task/plan format described in `docs/TASK_RECORD_FORMAT.md` when runtime support exists. JSON remains acceptable for RPC/settings/internal receipts.
 
-## Context faults
+## Context faults and stagnation
 
-A worker that lacks required state should request it explicitly rather than infer unseen continuity.
+A context request is a signal about the plan/compiler boundary, not an invitation to guess.
 
-Treat `CONTEXT_REQUEST:` output as a context/page fault:
+Persist it, mark the cycle non-advancing, and choose among:
 
-- persist it
-- treat the cycle as non-advancing
-- do not create a completion proposal from that run
-- determine whether retrieval policy, task decomposition, or the task's declared selectors were insufficient
-- avoid repeatedly dispatching the same compiled input when the same missing state has already been identified
-
-Unmatched selectors, truncation, and budget exhaustion are compiler telemetry, not worker guilt.
-
-## Dependencies and invalidation
-
-`dependsOn` controls readiness. `relations` preserves other causal structure.
-
-If a completed upstream dependency is retried, superseded, or otherwise loses authority, downstream work derived from it must not silently remain current. Preserve the old receipts, mark affected accepted work stale, and re-establish readiness from valid dependencies.
-
-## Failure and stagnation
-
-A failure is a state transition and an evidence source. Persist command, stdout, stderr, exit code, compilation id, and relevant environment facts.
-
-Choose among:
-
-- better evidence/retrieval
+- better retrieval
 - different decomposition
-- prerequisite task
+- prerequisite inspection/research task
+- persisted design artifact
 - provider/tool change
-- plan revision
-- Intent Contract clarification
-- human decision
+- intent clarification
 
-A repeated run with the same effective input and no accepted state delta is **stagnation**, not merely another attempt. Surface it instead of blindly spending another invocation.
+Repeated runs with the same effective input and no accepted state delta are stagnation. Surface/replan rather than spending another identical invocation.
+
+## Reviews
+
+Critic and validator answer different questions:
+
+- critic: what looks wrong, incomplete, risky, contradictory, or poorly reasoned?
+- validator: do observable acceptance conditions pass from available evidence?
+
+Neither may rewrite the Intent Contract or silently certify its own changed interpretation.
+
+## Desktop application expectations
+
+The Windows application is primarily an observation/configuration plane.
+
+For the active project it should expose at-a-glance telemetry such as:
+
+- active worker/critic/validator sessions
+- total sessions spawned
+- commits/merges
+- completed/blocked/rework tasks
+- retries/non-advancing attempts
+- latest review verdicts
+- provider failures
+- outstanding intent/context escalations
+
+Project list/navigation belongs in the left pane; app restart should restore the last active project. Integrations and providers are machine-level configuration surfaces.
+
+See `docs/WINDOWS_FIRST_DESIGN.md` for the product contract.
 
 ## Human gates
 
-Ask the user only for choices that cannot be resolved mechanically from authoritative intent, project state, repository evidence, tests, or established constraints.
+Use human gates for genuine authority/choice: product behavior, destructive actions, credentials, cost/risk tradeoffs, or unresolved preference.
 
-Human approval is authoritative, but should still be persisted as an explicit transition. Manual completion is not equivalent to a worker self-certifying success.
-
-## Cross-project memory
-
-Do not treat reusable skill memory as canonical StatefulClanker project state or authoritative intent.
-
-If an external memory system supplies a lesson:
-
-1. retrieve it as candidate context
-2. check applicability and freshness against the current project
-3. reconstruct project-specific guidance
-4. cite its provenance in the compiled context when material
-
-A remembered lesson is a prior, not an instruction.
+Missing technical knowledge is normally a research/inspection task. Missing user intent is an interrogation problem.
 
 ## Completion
 
-Project completion means the required terminal graph is current, its acceptance conditions are satisfied by accepted evidence, and the result still conforms to the current Intent Contract. A worker saying "done," or a task having once been complete before an upstream or intent invalidation, is insufficient.
+Project completion means the current terminal graph satisfies the current Intent Contract with accepted evidence.
+
+A worker saying `done`, or a task that was complete before an upstream/intent invalidation, is insufficient.
