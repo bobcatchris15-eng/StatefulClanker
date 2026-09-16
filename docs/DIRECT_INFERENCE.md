@@ -1,153 +1,117 @@
-# Direct inference and the minimal worker harness
+# Direct inference and the inherent worker harness
 
-StatefulClanker supports two interchangeable worker backend types above the same task, current Human Directives, reconciled Intent, freshness, critic, validator, and event machinery.
+StatefulClanker supports two interchangeable worker backend types above the same Current Human Directives, reconciled Intent, task graph, freshness, critic/validator and event machinery.
 
-## CLI harness backend
+## CLI backend
 
-A `cli` backend delegates the inner coding-agent loop to an installed tool such as Codex, Claude Code, Antigravity, OpenCode, Gemini, or another command-line harness.
+A `cli` backend delegates the inner coding-agent loop to an installed provider/local harness such as Codex, Claude Code, OpenCode, Antigravity, Gemini CLI, or another configured command.
 
-```json
-"opencode": {
-  "type": "cli",
-  "command": "opencode",
-  "args": ["run"],
-  "mode": "stdin"
-}
-```
+## API backend
 
-This remains the preferred path when a provider's existing coding harness is useful or when consumer-subscription access is only exposed through that CLI.
+An `api` backend points at a machine-local inference connection and uses StatefulClanker's intentionally small inherent harness.
 
-## Direct API backend
-
-An `api` backend points at a machine-local connection profile and uses StatefulClanker's intentionally small coding harness.
-
-```json
-"local-qwen": {
-  "type": "api",
-  "connection": "local-qwen"
-}
-```
-
-Connection profiles are machine state, not project state, and live at:
+Machine connection profiles live at:
 
 ```text
 %LOCALAPPDATA%\StatefulClanker\connections.json
 ```
 
-The Windows application exposes an **API Connections** tab for adding, editing, removing, testing, and attaching profiles to the active project. API keys entered there are encrypted with Windows DPAPI for the current user. A profile may instead name an environment variable so the key never enters the connection file.
+The Windows **API Connections** page can add/edit/remove/test connections and attach them to the active project. Secrets are DPAPI-encrypted for the current Windows user or referenced by environment variable. Project state stores only a connection id.
 
-## Protocol adapters and intended endpoints
+## Protocol adapter
 
-The first implemented direct protocol is named:
+The implemented direct protocol is `openai-chat`, using OpenAI-compatible `/chat/completions`.
+
+Primary intended targets include Ollama, LM Studio, vLLM, OpenRouter, and arbitrary compatible local/remote gateways. Profiles may override path/headers/request-body fields. Unsupported protocol names fail closed so another native API dialect can be added later without changing task semantics.
+
+## Inherent harness responsibilities
+
+The inherent harness owns only the bounded inner execution loop. StatefulClanker already owns planning, durable authority, context compilation, routing and acceptance.
+
+Built-in tool capabilities include:
 
 ```text
-openai-chat
+builtin.read_file
+builtin.search_text
+builtin.write_file
+builtin.replace_text
+builtin.run_command
+builtin.git_diff
+builtin.finish
 ```
 
-It uses OpenAI-compatible `/chat/completions`. That covers the main intended cases without coupling StatefulClanker to one vendor:
+The actual tool list presented to a worker is **dynamic** and authorization-driven. It may additionally contain:
 
-- Ollama (`http://127.0.0.1:11434/v1`)
-- LM Studio (`http://127.0.0.1:1234/v1`)
-- vLLM (`http://127.0.0.1:8000/v1`)
-- OpenRouter (`https://openrouter.ai/api/v1`)
-- custom OpenAI-compatible gateways and providers
+```text
+intent.human.read
+intent.normalized.read
+mcp.<source>.<tool>
+```
 
-The profile can override the chat path, add arbitrary HTTP headers, and merge extra request-body fields. This is useful for gateways and provider-specific routing options without adding brand-specific runtime code.
+Denied capabilities are omitted from model-visible tool definitions and checked again on invocation.
 
-The protocol field is explicit so another native API dialect can be added later as a small transport adapter without redesigning routing, task state, the worker harness, or review/freshness semantics. A currently unsupported protocol fails closed rather than silently sending the wrong request shape.
+A task can select a named capability profile and narrow it further with task-local `tool-allow` / `tool-deny`. See `WORKER_CAPABILITIES.md`.
 
-OpenCode itself can remain a `cli` backend and use its provider catalogue. If a provider used with OpenCode also exposes an OpenAI-compatible endpoint, that endpoint may instead be configured here directly.
-
-## Minimal harness
-
-The built-in harness deliberately does less than a full Codex/Claude/OpenCode-style agent. StatefulClanker already owns planning, semantic decomposition, durable authority, context compilation, review, and project state.
-
-The direct worker therefore receives one small system instruction plus the normal compiled truth packet, and only these bounded tools:
-
-- `read_file`
-- `search_text`
-- `write_file`
-- `replace_text`
-- `run_command`
-- `git_diff`
-- `finish`
-
-File operations are confined to the worker checkout. Command execution is bounded by timeout and runs in that checkout. The final worker output still flows through the ordinary critic/validator/freshness gates.
-
-## Tool protocols
-
-A connection chooses one of two model/tool interaction modes inside the `openai-chat` adapter:
+## Tool interaction modes
 
 ### `native`
 
-Use OpenAI-compatible tool calls. This is the default for models/endpoints with reliable function calling.
+Uses OpenAI-compatible native tool calls.
 
 ### `text`
 
-Use a strict one-JSON-object-per-turn protocol:
+For local models/servers without reliable function calling, the model emits one compact JSON object per turn:
 
 ```json
 {"tool":"read_file","arguments":{"path":"src/app.cs"}}
 ```
 
-or:
+or finishes with:
 
 ```json
-{"final":"Implemented the bounded task and tests pass."}
+{"final":"Implemented the bounded task and verified the requested behavior."}
 ```
 
-This fallback exists mainly for local models whose servers do not expose native tool calls reliably. It keeps the harness usable without teaching the runtime a provider-specific prompt dialect.
+The available tool names are supplied from the same resolved capability registry used by native mode; text mode does not bypass authorization.
 
-## Connection shape
+## Authority visibility
 
-Representative `connections.json`:
+Direct workers receive Current Human Directives and reconciled Intent in their compiled truth packet. When policy permits they can independently inspect:
+
+- preserved verbatim human source evidence (`read_human_intent`);
+- the orchestrator's normalized Intent/current directive view (`read_normalized_intent`).
+
+This lets a worker verify interpretation without gaining write authority over either layer.
+
+## External MCP tools
+
+Machine-local services such as Toaster or MemPalace may be registered as worker MCP sources. Their tools become candidate capabilities like `mcp.toaster.search`; registration alone does not authorize them.
+
+This is especially useful for small/local models: the direct loop can expose a narrow repository/tool surface plus targeted durable expertise without importing a third-party coding harness system prompt or memory model.
+
+## Routing
+
+Routing names project backends rather than model brands:
 
 ```json
 {
-  "schemaVersion": 1,
-  "connections": {
-    "local-qwen": {
-      "name": "local-qwen",
-      "protocol": "openai-chat",
-      "baseUrl": "http://127.0.0.1:8000/v1",
-      "model": "qwen3-coder",
-      "toolMode": "native",
-      "maxSteps": 24,
-      "apiKeyEnv": null,
-      "apiKeyProtected": null,
-      "headers": {}
-    },
-    "openrouter-coder": {
-      "name": "openrouter-coder",
-      "protocol": "openai-chat",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "model": "provider/model-id",
-      "toolMode": "native",
-      "maxSteps": 24,
-      "apiKeyEnv": "OPENROUTER_API_KEY",
-      "headers": {}
-    }
+  "providerBySize": {
+    "tiny": "local-qwen",
+    "small": "local-qwen",
+    "medium": "opencode",
+    "large": "codex"
+  },
+  "providers": {
+    "local-qwen": { "type": "api", "connection": "local-qwen" },
+    "opencode": { "type": "cli", "command": "opencode", "args": ["run"], "mode": "stdin" }
   }
 }
 ```
 
-## Routing
-
-Routing continues to name project backends rather than model brands:
-
-```json
-"providerBySize": {
-  "tiny": "local-qwen",
-  "small": "local-qwen",
-  "medium": "opencode",
-  "large": "codex"
-}
-```
-
-The task does not need to know whether `local-qwen` is local, remote, API-backed, or CLI-backed. The machine/project deployment configuration owns that choice.
+The same semantic task may move between API and CLI backends without changing project authority.
 
 ## Security boundary
 
-Direct API connections do not change project authority. API workers receive the same CURRENT Human Directives, reconciled Intent, task acceptance boundary, and source references as CLI workers. They cannot commit a stale result merely because the inference transport is different.
+`builtin.run_command` is high-trust: it has the OS privileges of the worker process. External write/action MCP tools can be similarly powerful. Use machine deny rules, named profiles, project narrowing and task-local restrictions to keep ordinary local-model workers bounded.
 
-Project files may safely name a connection by ID, but secrets remain machine/user state and should never be written into `.statefulclanker` or committed to the repository.
+API transport does not weaken freshness. A direct worker cannot commit work compiled against superseded human/Intent/task authority merely because its inference path is local.
