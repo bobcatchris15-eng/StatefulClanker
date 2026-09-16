@@ -136,6 +136,12 @@ Equivalent MCP `task_add` fields are `capabilityProfile`, `toolAllow`, and `tool
 
 Capability profile and task-local policy are part of the task definition hash. Changing them invalidates older compiled work/results before acceptance.
 
+## Resident autofill scheduler
+
+On the normal Windows path, the active project has a resident autofill supervisor. Treat it as execution machinery, not another planner. It periodically fills vacant worker slots from the oldest already-ready tasks up to `maxConcurrent`, and it only uses the existing dependency/human-gate/hold/directive authority gates.
+
+When autofill is resident, do **not** reflexively call `run_start`/`run_parallel` after every planning turn. Author and ready the correct task graph, reconcile Intent, then allow the supervisor to keep the worker pool full. Manual execution remains useful when autofill is disabled/stopped or when deliberately operating headless. If manual execution is rejected because autofill owns dispatch, do not fight the guard; inspect/adjust the queue or request the supervisor be stopped.
+
 ## Operating loop
 
 1. Establish/select the intended active project.
@@ -145,7 +151,7 @@ Capability profile and task-local policy are part of the task definition hash. C
 5. Update/reconcile current directives and Intent when human meaning changes.
 6. Build/revise the semantic plan and decompose into cold-start tasks.
 7. Assign semantic size and, where useful, a capability profile/task-local restrictions.
-8. Select ready work from the dependency graph.
+8. Select/author ready work from the dependency graph; with resident autofill, the harness owns filling available execution slots.
 9. Compile a bounded truth packet with goal, directives, Intent revision/hash, task, acceptance criteria, source references, dependencies, evidence, and capability metadata.
 10. Verify compilation freshness.
 11. Dispatch the configured worker backend.

@@ -43,6 +43,8 @@
     }
   },
   "maxConcurrent": 3,
+  "autofillEnabled": true,
+  "autofillIntervalSeconds": 300,
   "workingSetBudgetChars": 24000,
   "maxFileChars": 8000,
   "dependencyResultBudgetChars": 8000,

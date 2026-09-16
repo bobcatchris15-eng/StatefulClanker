@@ -233,6 +233,8 @@ Machine-local state lives under `%LOCALAPPDATA%\StatefulClanker`. Project author
 
 Parallel tasks use git worktrees. `WorkRoot` is the isolated checkout a worker edits; `StateRoot` remains the canonical project state directory. Cross-process state mutations use a named mutex and atomic file replacement.
 
+The resident autofill supervisor is the normal execution scheduler for the active Windows project. It holds a per-project supervisor mutex, reaps and merges completed worktree workers serially, and on its configurable cadence (300 seconds by default) fills vacant slots from the oldest dispatchable ready tasks up to `maxConcurrent`. It does not create tasks or reinterpret Intent. Holds, human gates, dependency readiness, unreconciled directives, a dirty main worktree, or an empty queue all suppress dispatch. While resident, it owns dispatch so ad-hoc manual runs cannot race its worktree/merge authority.
+
 Distributed multi-writer authority is not claimed. StatefulClanker currently assumes one canonical state authority per project.
 
 ## Review and acceptance

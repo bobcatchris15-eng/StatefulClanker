@@ -13,5 +13,7 @@ A CLI backend delegates the inner coding-agent loop to tools such as Codex, Anti
 API connections are intended especially for local OpenAI-compatible endpoints and gateways such as OpenRouter, but the task should not depend on a vendor transport unless the human explicitly requires one.
 
 Route by semantic work class/capability and project backend name. Do not rewrite task semantics merely because one machine routes `small` work to a local API model and another routes it to a CLI harness. API credentials and external-tool secrets are machine/user-local and must never be copied into project state or human-source artifacts.
+
+On the normal Windows path, a resident autofill supervisor owns execution dispatch for the active project. It periodically fills vacant slots from already-ready tasks up to maxConcurrent. The conversational plane should therefore concentrate on directives, Intent, planning, task readiness, and blocking decisions instead of issuing a new run call after every worker completion. Manual run tools may fail closed while autofill is resident to prevent competing worktree/merge schedulers.
 '@
 }

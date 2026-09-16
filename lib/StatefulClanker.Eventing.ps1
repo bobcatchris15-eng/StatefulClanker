@@ -40,7 +40,7 @@ function Publish-SCControlEvent([string]$Type,[string]$Text,$Data=$null,[string]
         $statePath=Get-SCPath 'control/state.json';$controlState=Read-SCJson $statePath;$last=0
         if($controlState-and$controlState.PSObject.Properties['lastSequence']){$last=[long]$controlState.lastSequence}
         $sequence=$last+1;$evt=[ordered]@{schemaVersion=1;sequence=$sequence;id=New-SCId 'control';ts=(Get-Date).ToUniversalTime().ToString('o');level=$Level;type=$Type;message=$Text;data=$Data}
-        ((ConvertTo-SCJson $evt 14)-replace"`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'control/events.jsonl') -Encoding UTF8
+        Add-SCTextLine (Get-SCPath 'control/events.jsonl') ((ConvertTo-SCJson $evt 14)-replace"`r?`n",'')
         Write-SCJson $statePath ([ordered]@{schemaVersion=1;lastSequence=$sequence;updatedAt=$evt.ts})
         return [pscustomobject]$evt
     }

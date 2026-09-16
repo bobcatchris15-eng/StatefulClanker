@@ -195,6 +195,12 @@ retrieve
 
 Parallel ready tasks can run in isolated Git worktrees while canonical `.statefulclanker` state remains in the main project root.
 
+### Resident autofill
+
+The Windows host starts a per-project autofill supervisor for the active project by default. It is deliberately not a planner: every five minutes (configurable) it checks the already-authorized ready queue and tops the active worker pool back up to `maxConcurrent`. It never bypasses dependencies, human gates, project holds, or unreconciled human directives, and it does nothing when the queue is empty.
+
+Project config controls it with `autofillEnabled` (default `true`) and `autofillIntervalSeconds` (default `300`). While the supervisor is resident it owns execution dispatch; manual `run`/`run parallel` calls fail closed instead of racing the worktree scheduler. `StatefulClanker.ps1 autofill status` reports it and `autofill stop` requests a graceful drain.
+
 ## Install / build
 
 Use the Windows installer release when available. To build from source:

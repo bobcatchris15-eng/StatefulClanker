@@ -166,6 +166,70 @@ sealed class McpHost : IDisposable
     }
 }
 
+sealed class AutofillHost : IDisposable
+{
+    readonly string _root;
+    Process? _owned;
+    string? _project;
+    public AutofillHost(string root) { _root = root; }
+
+    static string StateDir(string project) => System.IO.Path.Combine(project, ".statefulclanker", "autofill");
+    static string StatusPath(string project) => System.IO.Path.Combine(StateDir(project), "supervisor.json");
+    static string StopPath(string project) => System.IO.Path.Combine(StateDir(project), "stop.request");
+
+    static bool Enabled(string project)
+    {
+        try
+        {
+            var path = System.IO.Path.Combine(project, ".statefulclanker", "config.json");
+            if (!File.Exists(path)) return false;
+            using var d = JsonDocument.Parse(File.ReadAllText(path));
+            return !d.RootElement.TryGetProperty("autofillEnabled", out var enabled) || enabled.ValueKind != JsonValueKind.False;
+        }
+        catch { return false; }
+    }
+
+    static bool ExistingAlive(string project)
+    {
+        try
+        {
+            var path = StatusPath(project); if (!File.Exists(path)) return false;
+            using var d = JsonDocument.Parse(File.ReadAllText(path)); if (!d.RootElement.TryGetProperty("pid", out var p)) return false;
+            using var proc = Process.GetProcessById(p.GetInt32()); return !proc.HasExited;
+        }
+        catch { return false; }
+    }
+
+    static void RequestStop(string? project)
+    {
+        if (string.IsNullOrWhiteSpace(project)) return;
+        try { Directory.CreateDirectory(StateDir(project)); File.WriteAllText(StopPath(project), DateTimeOffset.UtcNow.ToString("O"), new UTF8Encoding(false)); } catch { }
+    }
+
+    public void EnsureStarted(string? project)
+    {
+        if (string.IsNullOrWhiteSpace(project) || !Directory.Exists(project)) { if (_project is not null) RequestStop(_project); _project = null; return; }
+        if (!string.Equals(_project, project, StringComparison.OrdinalIgnoreCase) && _project is not null) RequestStop(_project);
+        _project = project;
+        if (!Enabled(project)) { RequestStop(project); return; }
+        if (_owned is { HasExited: false } || ExistingAlive(project)) return;
+        var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1"); if (!File.Exists(harness)) return;
+        try
+        {
+            var psi = new ProcessStartInfo(Runtime.FindPowerShell()) { WorkingDirectory = project, UseShellExecute = false, CreateNoWindow = true };
+            foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", harness, "autofill", "run" }) psi.ArgumentList.Add(arg);
+            _owned = Process.Start(psi);
+        }
+        catch { _owned = null; }
+    }
+
+    public void Dispose()
+    {
+        RequestStop(_project);
+        _owned?.Dispose();
+    }
+}
+
 sealed class ProjectMetrics
 {
     public int ActiveAgents, Sessions, Commits, Critics, CompleteTasks, TotalTasks;
@@ -278,6 +342,7 @@ sealed class MainForm : Form
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
     int _refreshing;
     readonly McpHost _mcp;
+    readonly AutofillHost _autofill;
     readonly NotifyIcon _notify;
     bool _reallyExit;
 
@@ -285,7 +350,7 @@ sealed class MainForm : Form
     {
         Text = "StatefulClanker"; Width = 1160; Height = 740; MinimumSize = new Size(920, 590); StartPosition = FormStartPosition.CenterScreen;
         try { using var s = typeof(MainForm).Assembly.GetManifestResourceStream("StatefulClanker.ico"); if (s is not null) Icon = new Icon(s); } catch { }
-        _mcp = new McpHost(_root, _settings.HttpPort); _mcp.EnsureStarted();
+        _mcp = new McpHost(_root, _settings.HttpPort); _mcp.EnsureStarted(); _autofill = new AutofillHost(_root);
         var menu = new ContextMenuStrip(); menu.Items.Add("Open StatefulClanker", null, (_, _) => ShowFromTray()); menu.Items.Add("Exit", null, (_, _) => { _reallyExit = true; Close(); });
         _notify = new NotifyIcon { Text = "StatefulClanker", Icon = Icon ?? SystemIcons.Application, Visible = true, ContextMenuStrip = menu }; _notify.DoubleClick += (_, _) => ShowFromTray();
         BuildUi(); RestoreProjects(); Theme.Apply(this); _ = RefreshAllAsync();
@@ -406,7 +471,7 @@ sealed class MainForm : Form
 
     UiSnapshot BuildSnapshot(string? projectPath)
     {
-        _mcp.EnsureStarted();
+        _mcp.EnsureStarted(); _autofill.EnsureStarted(projectPath);
         var snapshot = new UiSnapshot { Mcp = _mcp.Details(), HasProject = !string.IsNullOrWhiteSpace(projectPath) && Directory.Exists(projectPath) };
         if (snapshot.HasProject)
         {
@@ -502,5 +567,5 @@ sealed class MainForm : Form
     void OpenConfig() { var path = _settings.ActiveProjectPath; if (string.IsNullOrWhiteSpace(path)) return; var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json"); if (File.Exists(cfg)) try { Process.Start(new ProcessStartInfo("notepad.exe") { UseShellExecute = true, ArgumentList = { cfg } }); } catch { } }
     static void Copy(string text) { if (!string.IsNullOrWhiteSpace(text)) Clipboard.SetText(text); }
     void ShowFromTray() { Show(); WindowState = FormWindowState.Normal; Activate(); }
-    void HandleFormClosing(object? sender, FormClosingEventArgs e) { if (!_reallyExit) { e.Cancel = true; Hide(); return; } _timer.Stop(); _mcp.Dispose(); _notify.Visible = false; _notify.Dispose(); }
+    void HandleFormClosing(object? sender, FormClosingEventArgs e) { if (!_reallyExit) { e.Cancel = true; Hide(); return; } _timer.Stop(); _autofill.Dispose(); _mcp.Dispose(); _notify.Visible = false; _notify.Dispose(); }
 }

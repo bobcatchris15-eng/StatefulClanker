@@ -140,6 +140,66 @@ function Get-SCParallelChildOutput($Run) {
     return [ordered]@{ stdout=[string]$stdout; stderr=[string]$stderr }
 }
 
+function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
+    $task = Get-SCTask $Run.taskId
+    $entry = [ordered]@{ taskId = $Run.taskId; status = $task.status; committed = $false; merged = $false; reason = $null; logPath = $Run.logPath }
+    if ($Run.process.ExitCode -ne 0) {
+        $child=Get-SCParallelChildOutput $Run
+        Write-Warning "parallel child $($Run.taskId) exited $($Run.process.ExitCode). STDOUT: $($child.stdout) STDERR: $($child.stderr)"
+    }
+    if ($task.status -ne 'complete') {
+        $child=Get-SCParallelChildOutput $Run
+        $entry.reason = if ($task.blockReason) { [string]$task.blockReason } else { "cycle ended as '$($task.status)'" }
+        Remove-SCWorktree $StateRoot $Run.taskId
+        return $entry
+    }
+    try {
+        $entry.committed = Save-SCWorktreeWork $Run.worktree "$($Run.taskId): $($task.title)"
+        if (-not $entry.committed) {
+            $entry.reason = 'validated but changed no files - check the provider could actually write'
+            Remove-SCWorktree $StateRoot $Run.taskId
+            return $entry
+        }
+    } catch {
+        $entry.reason = $_.Exception.Message
+        Remove-SCWorktree $StateRoot $Run.taskId
+        return $entry
+    }
+    if ($NoMerge) {
+        $entry.reason = "left on branch $($Run.worktree.branch)"
+        Remove-SCWorktree $StateRoot $Run.taskId -KeepBranch
+        return $entry
+    }
+    $merge = Merge-SCWorktreeBranch $StateRoot $Run.worktree
+    $entry.merged = $merge.merged
+    if (-not $merge.merged) {
+        $entry.reason = "$($merge.reason) - work kept on branch $($Run.worktree.branch)"
+        $current = Get-SCTask $Run.taskId
+        $current.status = 'needs_rework'
+        $current.blockReason = "Merge conflict against the main tree; work preserved on $($Run.worktree.branch)."
+        Save-SCTask $current
+        Add-SCEvent 'merge.conflict' $current.blockReason @{ taskId = $Run.taskId; branch = $Run.worktree.branch }
+        Remove-SCWorktree $StateRoot $Run.taskId -KeepBranch
+    } else {
+        Add-SCEvent 'merge.completed' "Merged $($Run.worktree.branch)." @{ taskId = $Run.taskId; branch = $Run.worktree.branch }
+        Remove-SCWorktree $StateRoot $Run.taskId
+    }
+    return $entry
+}
+
+function Invoke-SCParallelPostMergeReview($Results) {
+    $mergedCount = @($Results | Where-Object { $_.merged }).Count
+    if ($mergedCount -gt 1) {
+        Write-Warning "$mergedCount branches were merged. Merging cleanly is not the same as still working: two changes that each passed alone can break together with no textual conflict."
+    }
+    $afterMerge = [bool](Get-SCProjectReviewSetting 'projectReviewAfterMultiMerge' $true)
+    if ($mergedCount -gt 1 -and $afterMerge -and (Get-SCProjectReviewInterval) -gt 0) {
+        Invoke-SCProjectReview 'multi-merge' | Out-Null
+    } elseif ($mergedCount -gt 0) {
+        Invoke-SCProjectReviewIfDue 'interval' | Out-Null
+    }
+}
+
 function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$HarnessPath, [switch]$NoMerge) {
     Assert-SCInitialized
     Assert-SCNotHeld

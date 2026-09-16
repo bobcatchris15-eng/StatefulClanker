@@ -56,9 +56,21 @@ function Set-SCProperty($Object,[string]$Name,$Value) {
 function Write-SCJson([string]$TargetPath,$Value) {
     $parent=Split-Path -Parent $TargetPath
     if($parent -and -not(Test-Path $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null}
-    $tmp="$TargetPath.tmp"
-    ConvertTo-SCJson $Value 30 | Set-Content -LiteralPath $tmp -Encoding UTF8
-    Move-Item -Force -LiteralPath $tmp -Destination $TargetPath
+    $leaf=Split-Path -Leaf $TargetPath;$nonce="$PID-$([Guid]::NewGuid().ToString('N'))";$tmp=Join-Path $parent (".{0}.{1}.tmp"-f$leaf,$nonce);$backup=Join-Path $parent (".{0}.{1}.bak"-f$leaf,$nonce)
+    try {
+        ConvertTo-SCJson $Value 30 | Set-Content -LiteralPath $tmp -Encoding UTF8
+        for($i=0;$i-lt40;$i++){
+            try {
+                if(Test-Path -LiteralPath $TargetPath){[IO.File]::Replace($tmp,$TargetPath,$backup)}else{[IO.File]::Move($tmp,$TargetPath)}
+                return
+            } catch [System.IO.IOException] {
+                if($i-ge39){throw};Start-Sleep -Milliseconds 25
+            }
+        }
+    } finally {
+        if(Test-Path -LiteralPath $tmp){Remove-Item -Force -LiteralPath $tmp -ErrorAction SilentlyContinue}
+        if(Test-Path -LiteralPath $backup){Remove-Item -Force -LiteralPath $backup -ErrorAction SilentlyContinue}
+    }
 }
 function Read-SCJson([string]$TargetPath) {
     if(-not(Test-Path $TargetPath)){return $null}
@@ -77,10 +89,17 @@ function Get-SCFileHashValue([string]$FilePath) {
     if(-not(Test-Path -LiteralPath $FilePath -PathType Leaf)){return $null}
     try{return (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()}catch{return $null}
 }
+function Add-SCTextLine([string]$TargetPath,[string]$Line,[int]$Retries=40) {
+    $parent=Split-Path -Parent $TargetPath;if($parent-and-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null}
+    for($i=0;$i-lt$Retries;$i++){
+        try{$Line|Add-Content -LiteralPath $TargetPath -Encoding UTF8;return}
+        catch [System.IO.IOException]{if($i-ge($Retries-1)){throw};Start-Sleep -Milliseconds 25}
+    }
+}
 function Add-SCEvent([string]$Type,[string]$Text,$Data=$null) {
     Assert-SCInitialized
     $evt=[ordered]@{id=New-SCId 'event';ts=(Get-Date).ToUniversalTime().ToString('o');type=$Type;message=$Text;data=$Data}
-    Invoke-SCLocked { ((ConvertTo-SCJson $evt 12) -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'events.jsonl') -Encoding UTF8 }
+    Invoke-SCLocked { Add-SCTextLine (Get-SCPath 'events.jsonl') ((ConvertTo-SCJson $evt 12) -replace "`r?`n",'') }
 }
 function Get-SCState { Assert-SCInitialized;Invoke-SCLocked { Read-SCJson (Get-SCPath 'state.json') } }
 function Save-SCState($State) {
@@ -92,12 +111,10 @@ function Save-SCState($State) {
 function Get-SCConfig { Assert-SCInitialized;$cfg=Read-SCJson (Get-SCPath 'config.json');if($null-eq$cfg){throw 'Missing .statefulclanker/config.json'};return $cfg }
 <# Reads take the same lock as writes.
 
-   Write-SCJson replaces a file with temp-file + Move-Item. That is atomic for the
-   final rename, but a concurrent reader can still catch the target absent or locked
-   during the replace and get $null back - which surfaces as a spurious "Unknown
-   task" and kills a cycle mid-review. Observed as an intermittent failure in the
-   parallel conflict test: a cycle stopped at status 'reviewing' with no error.
-   The mutex is reentrant per-thread, so nesting inside a Save-* is fine. #>
+   Write-SCJson writes a unique temp file and atomically replaces the destination. Reads
+   take the same mutex as task/state writes, so they do not race replacement and
+   surface spurious missing/partial state. The mutex is reentrant per-thread, so
+   nesting inside a Save-* is fine. #>
 function Get-SCTask([string]$Id) { $task=Invoke-SCLocked { Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$Id)) };if($null-eq$task){throw "Unknown task: $Id"};return $task }
 function Save-SCTask($Task) {
     Invoke-SCLocked {
@@ -165,7 +182,7 @@ function Ensure-SCTelemetryLayout {
 function Add-SCTelemetryEvent([string]$Type,$Record) {
     Ensure-SCTelemetryLayout
     $evt=[ordered]@{ts=(Get-Date).ToUniversalTime().ToString('o');type=$Type;agentId=$Record.agentId;taskId=$Record.taskId;stage=$Record.stage;lifecycle=$Record.lifecycle;provider=$Record.provider;compilationId=if($Record.PSObject.Properties['compilationId']){$Record.compilationId}else{$null}}
-    ((ConvertTo-SCJson $evt 8) -replace "`r?`n",'')|Add-Content -LiteralPath (Get-SCPath 'telemetry/events.jsonl') -Encoding UTF8
+    Add-SCTextLine (Get-SCPath 'telemetry/events.jsonl') ((ConvertTo-SCJson $evt 8) -replace "`r?`n",'')
 }
 function Save-SCActiveTelemetry($Record) { Ensure-SCTelemetryLayout;Write-SCJson (Get-SCPath ("telemetry/active/{0}.json"-f$Record.agentId)) $Record }
 function Complete-SCTelemetry($Record) {
@@ -199,7 +216,7 @@ function Initialize-SC {
     ''|Set-Content -LiteralPath (Join-Path $dir 'telemetry/context-faults.jsonl') -Encoding UTF8
     $example=Join-Path $script:StatefulClankerHome 'statefulclanker.example.json'
     if(Test-Path $example){Copy-Item -LiteralPath $example -Destination (Join-Path $dir 'config.json')}
-    else{Write-SCJson (Join-Path $dir 'config.json') ([ordered]@{defaultProvider='opencode';criticProvider=$null;validatorProvider=$null;providers=[ordered]@{};workingSetBudgetChars=24000;maxFileChars=8000;dependencyResultBudgetChars=8000;recentEventCount=12;recentEventBudgetChars=4000;stagnationWarningThreshold=2;requireHumanApprovalForPlan=$true;criticEnabled=$true;validatorEnabled=$true})}
+    else{Write-SCJson (Join-Path $dir 'config.json') ([ordered]@{defaultProvider='opencode';criticProvider=$null;validatorProvider=$null;providers=[ordered]@{};maxConcurrent=3;autofillEnabled=$true;autofillIntervalSeconds=300;workingSetBudgetChars=24000;maxFileChars=8000;dependencyResultBudgetChars=8000;recentEventCount=12;recentEventBudgetChars=4000;stagnationWarningThreshold=2;requireHumanApprovalForPlan=$true;criticEnabled=$true;validatorEnabled=$true})}
     Add-SCEvent 'project.initialized' 'StatefulClanker initialized.' @{root=Get-SCRoot};Write-Host "Initialized $dir"
 }
 function Set-SCGoal([string]$Text) { Assert-SCInitialized;if([string]::IsNullOrWhiteSpace($Text)){throw 'Goal text required.'};$state=Get-SCState;$state.goal=$Text;Save-SCState $state;Add-SCEvent 'goal.changed' $Text;Write-Host 'Goal updated.' }
