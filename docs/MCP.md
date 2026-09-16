@@ -1,255 +1,241 @@
-# Driving StatefulClanker from a conversational agent
+# StatefulClanker MCP control plane
 
-> Setting this up for the first time? **`docs/SETUP.md`** is the step-by-step
-> walkthrough. This page is the tool reference.
+StatefulClanker is designed to be steered by a conversational agent through MCP while the resident Windows application owns project selection, telemetry, provider configuration, and the long-lived orchestration state.
 
-StatefulClanker exposes an MCP server so a chat session can act as the *planner*
-while the harness keeps owning worker dispatch, review gating, and durable state.
+The division of responsibility is deliberate:
 
-The division of labour matters:
+- **Human + conversational agent:** clarify intent, use structured questionnaires, build the plan, semantically decompose it into cold-start worker tasks, respond to ambiguity and project-level decisions.
+- **StatefulClanker:** persist authority, compile bounded task context, launch provider CLIs, record receipts, run critic/validator gates, isolate parallel work, and expose telemetry.
+- **Provider CLIs:** disposable implementation/review processes such as Codex, Antigravity/`agy`, Claude, OpenCode, Gemini, or local tools configured by the user.
 
-- **The session** decides what the work is: sets the goal, decomposes it into tasks,
-  declares retrieval, starts cycles, reads receipts, and re-scopes on failure.
-- **StatefulClanker** decides what is *true*: compiles context, dispatches cold-start
-  workers, runs critic and validator, and commits state only through a validated
-  proposal.
+The conversational model is the planner. StatefulClanker does not pretend that file counts, regexes, line counts, or token thresholds can semantically decompose work.
 
-The agent proposes. The harness certifies. That boundary is the point of the tool,
-so the MCP surface is built to preserve it rather than route around it.
+## Resident transports
 
-## Transports
+When the Windows application is running it starts one loopback MCP authority automatically.
 
-| | stdio | HTTP |
-|---|---|---|
-| Script | `mcp/StatefulClanker.Mcp.ps1` | `mcp/StatefulClanker.McpHttp.ps1` |
-| Started by | the MCP client | you, manually |
-| Use when | the client launches a local command | the client only accepts a URL |
+### Streamable HTTP
 
-Both share `mcp/StatefulClanker.McpCore.ps1`, so the tool surface is identical.
+Connection details are written to:
+
+```text
+%LOCALAPPDATA%\StatefulClanker\mcp-http.json
+```
+
+The default endpoint is:
+
+```text
+http://127.0.0.1:7337/mcp
+```
+
+It is loopback-only and bearer-token protected. The Integrations tab exposes the live endpoint/token status.
+
+The HTTP server is intentionally started without a fixed project. Calls that omit `project` follow the project currently selected in the StatefulClanker application.
 
 ### stdio
 
-```powershell
-.\Install-McpServer.ps1 -Client claude-code   -ProjectPath C:\work\myproject
-.\Install-McpServer.ps1 -Client claude-desktop -ProjectPath C:\work\myproject -Write
-.\Install-McpServer.ps1 -Client opencode      -ProjectPath C:\work\myproject
-.\Install-McpServer.ps1 -Client vscode        -ProjectPath C:\work\myproject
-.\Install-McpServer.ps1                       # generic snippet, no file written
-```
-
-Only `-Write` touches a config file, and it keeps a `.bak`.
-
-### HTTP
+Clients that launch MCP commands use:
 
 ```powershell
-pwsh -NoProfile -File .\mcp\StatefulClanker.McpHttp.ps1 -ProjectPath C:\work\myproject -Port 7337
+pwsh -NoProfile -File <install>\mcp\StatefulClanker.Mcp.ps1
 ```
 
-It prints a bearer token and writes connection details to
-`%LOCALAPPDATA%\StatefulClanker\mcp-http.json`.
+While the Windows app is running this process is a thin stdio bridge to the resident HTTP authority, so stdio and HTTP clients see the same active project and state. If no resident server exists it falls back to an in-process MCP server for headless use.
+
+`Install-McpServer.ps1` emits or writes client registration without pinning a project by default:
+
+```powershell
+.\Install-McpServer.ps1 -Client claude-desktop -Write
+.\Install-McpServer.ps1 -Client claude-code
+.\Install-McpServer.ps1 -Client vscode
+```
+
+Use `-ProjectPath` only when deliberately creating a fixed-project/headless registration.
+
+## Active project
+
+The Windows app stores its machine-local project registry and active project under:
 
 ```text
-Endpoint: http://127.0.0.1:7337/mcp
-Header:   Authorization: Bearer <token>
-Health:   http://127.0.0.1:7337/health   (no auth)
+%LOCALAPPDATA%\StatefulClanker\
 ```
 
-The listener binds to the loopback interface only and requires the token. `-NoAuth`
-disables the token; only use it if you understand that any local process can then
-drive your projects.
+The selected project is also written to `active-project.txt` for the resident MCP process.
 
-> **Reachability caveat.** A loopback endpoint only works for a client that makes the
-> HTTP request *from your machine*. Some products' "connectors" are fetched by the
-> vendor's own backend, which cannot reach `127.0.0.1` on your laptop — for those,
-> stdio is the answer, or a tunnel you set up deliberately. Test your specific app
-> against `/health` before assuming.
+An explicit `project` argument on a tool call always wins. A headless MCP process may also be started with `-ProjectPath`. Otherwise the resident app selection is the authority.
 
-It is built on a raw `TcpListener` rather than `System.Net.HttpListener` on purpose:
-`HttpListener` requires Administrator rights or a `netsh http add urlacl` reservation
-on Windows, which is a hostile install step for a local dev tool.
+If the last-active project is missing at startup, StatefulClanker enters a no-active-project state. It does not silently substitute another saved project.
 
-## Multiple projects, one registration
+## Initialization instructions
 
-`-ProjectPath` sets the *default* project. Every tool also takes an optional
-`project` argument, and `project_use` switches the default for the session. One
-registered server drives as many projects as you like.
+The MCP `initialize` response tells the conversational agent to:
 
-## Tools
+- use the host questionnaire/question tool aggressively for material ambiguity
+- ask contrastive questions where multiple reasonable implementations exist
+- capture execution-relevant human wording durably
+- preserve source and intent references through planning
+- decompose semantically into bounded cold-start tasks
+- prefer small tasks where natural, without arbitrary micro-tasking
+- use `SCPLAN 1` for substantial plans
+- leave implementation to provider CLI worker sessions
+- treat `INTENT_QUESTION`, `INTENT_CONFLICT`, and `CONTEXT_REQUEST` as non-advancing escalations
 
-### Project
+This behavior is part of the control-plane contract rather than optional prose in a README.
 
-| Tool | Purpose |
-|---|---|
-| `project_init` | Initialize or migrate durable state in a directory |
-| `project_use` | Set the default project for this session |
-| `project_status` | Goal, plan approval, cycle state, task summary |
-| `goal_set` | Set or replace the project goal |
+## Durable human sources
 
-### Tasks and plans
+`direction_add` now stores the human wording verbatim under the project's `.statefulclanker/input/` directory and returns a source reference such as:
 
-| Tool | Purpose |
-|---|---|
-| `task_list` / `task_show` | Read the task graph |
-| `task_add` | Add a task with acceptance criteria, retrieval, relations |
-| `task_retry` | Reset to ready, invalidating affected dependents |
-| `task_block` | Block with a reason |
-| `plan_import` | Import a JSON plan/task graph |
-| `task_complete` / `plan_approve` | **Gated.** See below. |
+```text
+human:h-20260916010203-ab12cd
+```
+
+Line ranges can be referenced explicitly:
+
+```text
+human:h-20260916010203-ab12cd#L4-L11
+```
+
+`source_add`, `source_get`, and `source_list` expose the same source store for other material input.
+
+The intended provenance chain is:
+
+```text
+human wording -> durable source -> intent contract -> plan/task -> compiled worker packet
+```
+
+The Intent Contract remains normalized specification authority; a source reference preserves what the human actually said so later orchestrators can audit that normalization.
+
+## Compact plans
+
+`plan_apply` accepts a complete compact plan directly from the conversational agent:
+
+```text
+SCPLAN 1
+plan active-project
+summary Make the selected Windows project the resident MCP authority.
+source human:h-0012#L3-L18
+intent REQ-ACTIVE-PROJECT
+
+task t-021
+size small
+title persist active project
+instruction Persist the exact selected project as machine-local application state.
+source human:h-0012#L3-L18
+intent REQ-ACTIVE-PROJECT
+accept the same project is selected after application restart
+accept a missing project produces no-active-project state
+a ccept no other project is silently substituted
+end
+```
+
+The canonical format is documented in `docs/TASK_RECORD_FORMAT.md`. It is line-oriented so agents and operators can cheaply inspect it with `Get-Content`, `Select-String`, `rg`, or `findstr`.
+
+`.json` plan import remains supported for compatibility. `plan_import` accepts either JSON or `.scplan` files.
+
+## Semantic task size
+
+Tasks may declare:
+
+```text
+size tiny
+size small
+size medium
+size large
+```
+
+The conversational planner assigns this semantically. StatefulClanker never derives it from file count, line count, diff size, regexes, or token count.
+
+Machine/project provider configuration may map those classes to provider CLI names through `providerBySize`. Routing precedence is:
+
+1. explicit provider override for the run
+2. critic/validator provider when applicable
+3. task-specific provider
+4. `providerBySize.<task size>`
+5. `defaultProvider`
+
+This makes it practical to aim routine bounded tasks at consumer-subscription models/CLIs while retaining stronger workers for work that genuinely needs them.
+
+## Main tool surface
+
+### Project and intent
+
+- `project_init`
+- `project_use` (primarily useful in headless/fixed-project operation)
+- `project_status`
+- `goal_set`
+- `direction_add`
+- intent inspection/replacement remains available through the StatefulClanker runtime and operator skill
+
+### Planning/tasks
+
+- `plan_apply` — preferred conversational SCPLAN import
+- `plan_import` — JSON or SCPLAN file
+- `task_list`
+- `task_show`
+- `task_add` — supports `size`, `source`, `intentRef`
+- `task_retry`
+- `task_block`
 
 ### Execution
 
-| Tool | Purpose |
-|---|---|
-| `run_start` | Start ONE cycle **detached**; returns immediately |
-| `run_parallel` | Start SEVERAL ready tasks at once, each in its own git worktree |
-| `run_status` | Poll: in-flight, active agents, log tail |
+- `run_start` — detached single task cycle
+- `run_parallel` — detached worktree-isolated ready-task batch
+- `run_status` — poll active work/log tail
 
-### Providers
+A normal task cycle is:
 
-| Tool | Purpose |
-|---|---|
-| `provider_list` | Show configured providers and the default/critic/validator assignment |
-| `provider_set` | Add or update a provider; optionally assign it. **Required before the first `run_start`** |
-| `provider_test` | Dispatch a probe prompt and report whether the provider is genuinely usable |
+```text
+compile -> worker CLI -> critic CLI -> validator CLI -> freshness check -> commit/reject
+```
 
-Provider configuration lives only in `config.json` and has no CLI command, so
-without `provider_set` a freshly installed server can be connected but can never
-actually run anything.
-
-`provider_set` validates before writing: the command must exist on PATH, and `args`
-must contain `{prompt}` or `{promptFile}`, or the worker receives no task at all.
-
-`provider_test` exists because the two realistic failures are both quiet. An expired
-CLI login exits nonzero with an auth message; a permission-gated headless CLI exits
-**zero having produced nothing**, which then surfaces much later as a critic
-rejecting an empty result. The probe names both directly.
-
-### Project review
-
-| Tool | Purpose |
-|---|---|
-| `project_review` | Run a project-wide critic and validator now (detached) |
-| `review_history` | Recent reviews: trigger, verdict, validate exit code |
-| `review_get` | One review in full, including the evidence packet |
-| `hold_status` | Is dispatch held after a failed review, and why |
-| `hold_clear` | **Gated.** Human release of a hold. |
-
-A project review fires automatically every `projectReviewEveryTasks` completed tasks
-and after any multi-branch merge. On FAIL it halts dispatch and queues a human-gated
-remediation task, so `run_start` and `run_parallel` will refuse until `hold_clear`.
-Check `hold_status` when a run is refused for no obvious reason.
-
-`hold_clear` is gated with the other human-authority tools: the hold exists because
-the project is believed broken, and releasing it is a human judgement.
+Provider execution is intentionally ordinary command-line invocation. Prompts are written to files and may be supplied by `{promptFile}` or piped through stdin depending on provider configuration. StatefulClanker does not require direct provider API billing.
 
 ### Observation
 
-`direction_add`, `telemetry_active`, `telemetry_history`,
-`telemetry_run`, `context_faults`, `compilation_get`, `proposal_get`,
-`progress_history`, `events_recent`.
+- `telemetry_active`
+- `telemetry_history`
+- `telemetry_run`
+- `context_faults`
+- `compilation_get`
+- `proposal_get`
+- `progress_history`
+- `events_recent`
+- `source_list`
+- `source_get`
 
-## Running a cycle is asynchronous
+### Provider configuration
 
-A cycle is worker + critic + validator in sequence — tens of seconds at best, and
-unbounded with a slow provider. That cannot be a blocking tool call, so `run_start`
-spawns the cycle detached and returns a handle in well under a second.
+- `provider_list`
+- `provider_set`
+- `provider_test`
 
-```text
-run_start  -> { taskId, processId, logPath }
-run_status -> { inFlight, processAlive, busyTasks, activeAgents, logTail, errorTail }
-```
+The Windows Providers tab presents the configured command, whether that CLI is currently found, special critic/validator/default roles, and semantic size routes.
 
-Poll `run_status` until `inFlight` is false, then read `task_show` and
-`progress_history` to find out what actually happened.
+## Review and authority gates
 
-### Running several tasks at once
+Worker output remains a proposal, not authority. Critic and validator stages inspect the same compiled context receipt used for the worker.
 
-`run_parallel` dispatches up to `maxConcurrent` ready tasks simultaneously. Each
-gets **its own git worktree**, so two workers cannot overwrite each other's files.
-When a task's cycle passes, its worktree is committed and merged back into the main
-checkout; when it fails, the worktree is discarded.
+`task_complete`, `plan_approve`, and `hold_clear` represent human-authority shortcuts/gates and remain disabled over MCP unless `mcp.allowHumanAuthorityTools` is explicitly enabled for the project.
 
-Requirements: the project must be a git repository with a **clean working tree**.
-Both are refused with a clear message rather than risking a destructive merge.
-
-Worktree isolation is used because tasks declare what they **read** (`retrieval`,
-`evidence`) and never what they **write**. The scheduler therefore cannot know
-whether two ready tasks will touch the same file. On a shared checkout that is
-silent corruption — both workers report success and one overwrites the other. A
-worktree turns it into an explicit merge-time question instead.
-
-When two tasks do collide, the first merges and the second is **held**: the merge is
-aborted so the main tree is never left with conflict markers, the work is preserved
-on its `sc/task/<id>` branch, and the task returns to `needs_rework` saying why.
-
-**Merging cleanly is not the same as still working.** Two changes that each passed
-their own review can break together with no textual conflict — a renamed function
-one worker updated only within its own files, a caller left pointing at a changed
-signature. Git resolves text; nothing checked semantics. Run your own suite after a
-multi-task merge; `run_parallel` warns you when more than one branch landed.
-
-**Only one BATCH runs at a time per project.** This is enforced with an atomic lock
-file, not with task status. Task status is not usable as a lock: the detached process
-does not mark a task `running` until it has started, so two `run_start` calls
-milliseconds apart both see an idle project and both launch. That was observed in
-testing — two cycles on one task, fighting over the same state. The harness itself has
-no locking at all, and `maxConcurrent` in `config.json` is dead config that nothing
-reads.
-
-A second `run_start` while one is in flight returns an error telling you to poll.
-
-## Gated tools
-
-`task_complete` and `plan_approve` are **disabled by default**.
-
-Both bypass the validation gate: `task_complete` marks a task done with no critic or
-validator, and `plan_approve` satisfies `requireHumanApprovalForPlan`. An agent that
-can approve its own plan and then complete its own tasks has routed around every
-check the tool exists to provide, and `progress_history` would fill with
-`human-commit` records that no human made.
-
-They are still reachable from the CLI, where they are recorded as human authority.
-
-To enable them for MCP anyway, in `.statefulclanker/config.json`:
-
-```json
-{
-  "mcp": { "allowHumanAuthorityTools": true }
-}
-```
-
-`project_status` reports the current setting as `humanAuthority`.
-
-## Errors
-
-Tool failures come back as a **result with `isError: true`**, not as a JSON-RPC
-protocol error, so the model sees the message and can react. Protocol errors are
-reserved for genuinely malformed requests. Every response echoes the request `id`,
-including on the failure paths.
-
-## A worked session
+Workers may emit:
 
 ```text
-project_use    { project: "C:\\work\\myproject" }
-project_init   {}
-goal_set       { text: "Add a local-first semantic cache" }
-
-task_add       { taskId: "cache-index",
-                 title: "Implement the cache index",
-                 instruction: "Implement the index described in docs/cache.md.",
-                 accept: ["Tests pass", "Existing behaviour unchanged"],
-                 retrieval: ["docs/cache.md", "src/*.ps1"] }
-
-run_start      { taskId: "cache-index" }
-run_status     {}                       -> inFlight: true   ... poll ...
-run_status     {}                       -> inFlight: false
-
-task_show      { taskId: "cache-index" } -> status: needs_rework
-                                            blockReason: "Critic rejected worker result."
-context_faults {}                        -> what the worker said it was missing
-task_retry     { taskId: "cache-index" } -> after widening retrieval
+CONTEXT_REQUEST: <specific missing state>
+INTENT_QUESTION: <specific ambiguity>
+INTENT_CONFLICT: <specific contradiction>
 ```
 
-A rejection is the system working. Read `progress_history` to tell activity from
-progress: `advanced: false` with a repeating `inputFingerprint` means the cycle is
-spinning, and the packet needs re-scoping rather than another attempt.
+These stop advancement. The conversational orchestrator should resolve the cause, revise intent/plan/retrieval if necessary, then recompile rather than telling the worker to guess.
+
+## Headless operation
+
+The native Windows application is the normal product surface, but the runtime remains scriptable.
+
+A fixed-project HTTP server can still be started explicitly:
+
+```powershell
+pwsh -NoProfile -File .\mcp\StatefulClanker.McpHttp.ps1 -ProjectPath C:\work\project -Port 7337
+```
+
+Likewise a stdio server may be launched with `-ProjectPath` if there is no resident app. This compatibility path is intentional; it does not change the Windows-first application model.
