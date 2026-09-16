@@ -1,6 +1,7 @@
 # Preserve planner semantics in the actual compiled IR seen by workers/reviewers,
-# and make canonical-state source artifacts participate correctly in freshness even
-# when the worker's WorkRoot is a separate git worktree.
+# include the current reconciled human-directive snapshot, and make canonical-state
+# source artifacts participate correctly in freshness even when WorkRoot is a git
+# worktree and StateRoot remains the canonical project state.
 
 $script:SCBaseNewCompilation = (Get-Item Function:\New-SCCompilation).ScriptBlock
 $script:SCBaseCompilationFreshness = (Get-Item Function:\Test-SCCompilationFreshness).ScriptBlock
@@ -37,14 +38,31 @@ function Resolve-SCSourceReference([string]$SourceRef) {
 }
 
 function New-SCCompilation($Task) {
+    if(-not(Test-SCDirectivesReconciled)) {
+        $state=Get-SCState
+        $pending=if($state.PSObject.Properties['pendingDirectiveIds']){@($state.pendingDirectiveIds)-join', '}else{'unknown'}
+        throw "Current human directives changed and the Intent Contract has not been reconciled yet. Pending directive(s): $pending. The control plane must reconcile intent before dispatch."
+    }
+
     $receipt = & $script:SCBaseNewCompilation $Task
     if($null-eq$receipt-or$null-eq$receipt.ir-or$null-eq$receipt.ir.task){return $receipt}
     $sizeValue='small';if($Task.PSObject.Properties['size']-and$Task.size){$sizeValue=[string]$Task.size}
     $sources=@();if($Task.PSObject.Properties['sources']){$sources=@($Task.sources)}
     $intentRefs=@();if($Task.PSObject.Properties['intentRefs']){$intentRefs=@($Task.intentRefs)}
+    $directives=Get-SCCurrentDirectiveSnapshot
+
     Set-SCProperty $receipt.ir.task 'size' $sizeValue
     Set-SCProperty $receipt.ir.task 'sources' $sources
     Set-SCProperty $receipt.ir.task 'intentRefs' $intentRefs
+    Set-SCProperty $receipt.ir.project 'humanDirectives' ([ordered]@{
+        authority='current latest direct human word by directive scope; superseded history excluded'
+        revision=[int]$directives.revision
+        hash=[string]$directives.hash
+        items=@($directives.items)
+    })
+    Set-SCProperty $receipt.readSet 'directiveRevision' ([int]$directives.revision)
+    Set-SCProperty $receipt.readSet 'directiveHash' ([string]$directives.hash)
+    $receipt.inputFingerprint=Get-SCHashString (ConvertTo-SCJson $receipt.readSet 22)
     $receipt.contextFingerprint=Get-SCHashString (ConvertTo-SCJson $receipt.ir 24)
     Write-SCJson (Get-SCPath ("compilations/{0}.json"-f$receipt.id)) $receipt
     return $receipt
@@ -55,6 +73,13 @@ function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit') {
     # file freshness is repeated below with the correct root per source class.
     $base = & $script:SCBaseCompilationFreshness $Compilation 'commit'
     $reasons=@($base.reasons)
+
+    if($Compilation.readSet.PSObject.Properties['directiveRevision']) {
+        $directives=Get-SCCurrentDirectiveSnapshot
+        if([int]$directives.revision-ne[int]$Compilation.readSet.directiveRevision-or[string]$directives.hash-ne[string]$Compilation.readSet.directiveHash){$reasons+='current human directives changed'}
+    }
+    if(-not(Test-SCDirectivesReconciled)){$reasons+='current human directives are awaiting intent reconciliation'}
+
     if($Mode-eq'dispatch') {
         foreach($fileRead in @($Compilation.readSet.files)) {
             $relative=[string]$fileRead.path
