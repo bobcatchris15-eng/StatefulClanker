@@ -22,6 +22,13 @@ function Test-SCModernMcpRequest($Request) {
     if([string]$Request.method-eq'server/discover'){return $true}
     return (Get-SCMcpRequestProtocolVersion $Request)-eq$script:SCModernProtocol
 }
+function Test-SCModernEnvelope($Request) {
+    $meta=Get-SCMcpRequestMeta $Request
+    if($null-eq$meta){return 'MCP 2026-07-28 requests require params._meta.'}
+    $version=$meta.PSObject.Properties['io.modelcontextprotocol/protocolVersion'];if($null-eq$version-or[string]$version.Value-ne$script:SCModernProtocol){return "MCP 2026-07-28 requests require _meta['io.modelcontextprotocol/protocolVersion'] = '$script:SCModernProtocol'."}
+    $caps=$meta.PSObject.Properties['io.modelcontextprotocol/clientCapabilities'];if($null-eq$caps-or$null-eq$caps.Value){return "MCP 2026-07-28 requests require _meta['io.modelcontextprotocol/clientCapabilities']."}
+    return $null
+}
 function Add-SCModernServerInfo($Response) {
     if($null-eq$Response-or-not$Response.PSObject.Properties['result']-or$null-eq$Response.result){return $Response}
     $result=$Response.result;$meta=$null
@@ -42,6 +49,7 @@ function New-SCModernProtocolError($Request,[int]$Code,[string]$Message) {
 
 function Invoke-McpRpc($Request) {
     $method=[string]$Request.method;$modern=Test-SCModernMcpRequest $Request
+    if($modern){$envelopeError=Test-SCModernEnvelope $Request;if($envelopeError){return New-SCModernProtocolError $Request -32602 $envelopeError}}
     if($method-eq'server/discover'){return New-SCModernDiscoverResponse $Request}
     if($modern-and$method-eq'initialize'){return New-SCModernProtocolError $Request -32601 'initialize is not part of MCP 2026-07-28; use server/discover or call the desired method directly with a per-request _meta envelope.'}
     $response=& $script:SCProtocolInvokeMcpRpc $Request
