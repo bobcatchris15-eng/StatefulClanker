@@ -43,6 +43,13 @@ try {
     $task=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\launcher-task.json')|ConvertFrom-Json
     Assert-True ($task.status -eq 'stale') 'Task governed by changed Intent ref should be marked stale.'
 
+    Write-Host '  DIRECTIVE 3b: unreconciled authority blocks dispatch before mutating task state'
+    $blocked=$false
+    try { & $harness run -TaskId launcher-task|Out-Null } catch { $blocked=$true }
+    Assert-True $blocked 'Dispatch should fail while current directives await Intent reconciliation.'
+    $taskAfter=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\launcher-task.json')|ConvertFrom-Json
+    Assert-True ($taskAfter.status -eq 'stale') 'Dispatch guard changed task state before rejecting unreconciled authority.'
+
     Write-Host '  DIRECTIVE 4: control inbox is sequenced and HUMAN_REQUIRED for reconciliation'
     $events=@(Get-Content -LiteralPath (Join-Path $temp '.statefulclanker\control\events.jsonl')|Where-Object{$_}|ForEach-Object{$_|ConvertFrom-Json})
     Assert-True ($events.Count -gt 0) 'Control event inbox is empty.'
