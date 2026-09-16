@@ -13,7 +13,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
-$runtimeRef='8d76d1eb29cbf39fe21759df70a3d7fa32133524'
+$runtimeRef='e46188cd4b4f9559122874c0dcb022fb1910323a'
 $runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
