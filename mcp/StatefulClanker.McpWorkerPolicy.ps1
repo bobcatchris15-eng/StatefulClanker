@@ -22,7 +22,6 @@ function Get-McpWorkerProjectPolicy([string]$Project) {
 function Test-McpCapabilityPattern([string]$Capability,[string]$Pattern) {if($Pattern-eq'*'){return $true};if($Pattern.EndsWith('*')){return $Capability.StartsWith($Pattern.Substring(0,$Pattern.Length-1),[StringComparison]::OrdinalIgnoreCase)};return $Capability.Equals($Pattern,[StringComparison]::OrdinalIgnoreCase)}
 function Test-McpMachineCanGrantPattern([string]$Pattern,$Catalog) {
     if($Pattern-eq'*'){return (@($Catalog.allow)-contains'*')}
-    # A project pattern may be narrower than an allowed machine prefix, but never broader.
     foreach($allowed in @($Catalog.allow)){
         $a=[string]$allowed;if($a-eq'*'){return $true}
         if($a.EndsWith('*')){$prefix=$a.Substring(0,$a.Length-1);if($Pattern.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){return $true}}
@@ -40,9 +39,12 @@ function Add-McpWorkerAudit([string]$Action,$Data) {
     $root=Split-Path -Parent (Get-McpWorkerMachinePolicyPath);$path=Join-Path $root 'worker-capability-audit.jsonl';$record=[ordered]@{ts=(Get-Date).ToUniversalTime().ToString('o');action=$Action;data=$Data};(($record|ConvertTo-Json -Depth 20 -Compress))|Add-Content -LiteralPath $path -Encoding UTF8
 }
 function Resolve-McpHeaderValue([string]$Value) {if($Value -match '^\$\{env:([^}]+)\}$'){return [Environment]::GetEnvironmentVariable($Matches[1])};return $Value}
+function ConvertFrom-McpWorkerSourceContent($Content) {
+    if($null-eq$Content){return $null};if($Content -isnot [string]){return $Content};$text=[string]$Content;$trim=$text.Trim();if($trim.StartsWith('{')-or$trim.StartsWith('[')){return $trim|ConvertFrom-Json};$messages=@();foreach($line in ($text-split"`r?`n")){if($line -match '^data:\s*(.+)$'){try{$messages+=,($Matches[1]|ConvertFrom-Json)}catch{}}};if($messages.Count-eq0){throw 'MCP source returned neither JSON nor parseable SSE data.'};return $messages[-1]
+}
 function Invoke-McpWorkerSourceRpc($Source,[string]$Method,$Params=$null) {
-    $headers=@{'Accept'='application/json, text/event-stream'};if($Source.PSObject.Properties['headers']-and$Source.headers){foreach($h in $Source.headers.PSObject.Properties){$v=Resolve-McpHeaderValue ([string]$h.Value);if($v){$headers[$h.Name]=$v}}}
-    $body=[ordered]@{jsonrpc='2.0';id=[Guid]::NewGuid().ToString('N');method=$Method};if($null-ne$Params){$body.params=$Params};return Invoke-RestMethod -Method Post -Uri ([string]$Source.url) -Headers $headers -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 30 -Compress) -TimeoutSec 60
+    $headers=@{'Accept'='application/json, text/event-stream';'MCP-Protocol-Version'='2025-06-18'};if($Source.PSObject.Properties['headers']-and$Source.headers){foreach($h in $Source.headers.PSObject.Properties){$v=Resolve-McpHeaderValue ([string]$h.Value);if($v){$headers[$h.Name]=$v}}}
+    $body=[ordered]@{jsonrpc='2.0';id=[Guid]::NewGuid().ToString('N');method=$Method};if($null-ne$Params){$body.params=$Params};$response=Invoke-WebRequest -UseBasicParsing -Method Post -Uri ([string]$Source.url) -Headers $headers -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 30 -Compress) -TimeoutSec 60;return ConvertFrom-McpWorkerSourceContent $response.Content
 }
 function Get-McpWorkerSourceTools([string]$Name) {
     $catalog=Get-McpWorkerCatalog;$prop=$catalog.sources.PSObject.Properties[$Name];if($null-eq$prop){throw "Unknown worker tool source: $Name"};$source=$prop.Value
@@ -56,7 +58,7 @@ function New-SCExtendedTools {
     $base+=@(
       @{name='worker_policy_get';description='Inspect machine worker capabilities, external MCP tool sources, and the active project tighten-only policy.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
       @{name='worker_policy_apply';description='Replace the active project worker capability policy. Project policy may only narrow machine-authorized capabilities. Use deny for tools workers must never see.';inputSchema=@{type='object';properties=@{project=@{type='string'};policy=@{type='object'}};required=@('policy')}},
-      @{name='worker_source_set';description='Register/update a machine-local MCP tool source for inherent workers. HTTP/Streamable HTTP only. Headers should use ${env:NAME} for secrets. Optionally add machine allow patterns.';inputSchema=@{type='object';properties=@{name=@{type='string'};source=@{type='object'};allow=@{type='array';items=@{type='string'}}};required=@('name','source')}},
+      @{name='worker_source_set';description='Register/update a machine-local MCP tool source for inherent workers. HTTP/Streamable HTTP only. Headers should use ${env:NAME} for secrets. Optional allow entries must belong to this source.';inputSchema=@{type='object';properties=@{name=@{type='string'};source=@{type='object'};allow=@{type='array';items=@{type='string'}}};required=@('name','source')}},
       @{name='worker_source_remove';description='Remove a machine-local inherent-worker MCP tool source and its matching explicit allow entries.';inputSchema=@{type='object';properties=@{name=@{type='string'}};required=@('name')}},
       @{name='worker_source_tools';description='List/discover tools exposed by a configured inherent-worker MCP source. This does not grant them.';inputSchema=@{type='object';properties=@{name=@{type='string'}};required=@('name')}}
     )
@@ -74,9 +76,10 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
       'worker_source_set' {
         $sourceName=Get-McpArgRequired $Arguments 'name';if($sourceName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Invalid source name.'};if(-not$Arguments.PSObject.Properties['source']){throw 'source required'};$source=$Arguments.source
         $transport=if($source.PSObject.Properties['transport']){[string]$source.transport}else{'http'};if(@('http','streamable-http')-notcontains$transport){throw 'Inherent worker MCP sources currently support http/streamable-http.'};if(-not$source.PSObject.Properties['url']){throw 'source.url required'}
+        $prefix="mcp.$sourceName.";$requestedAllow=@();if($Arguments.PSObject.Properties['allow']-and$Arguments.allow){$requestedAllow=@($Arguments.allow|ForEach-Object{[string]$_});foreach($pattern in $requestedAllow){if(-not$pattern.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){throw "worker_source_set may only grant capabilities under '$prefix*'. Use project policy to narrow existing built-ins."}}}
         $catalog=Get-McpWorkerCatalog;if($null-eq$catalog.sources){$catalog|Add-Member sources ([pscustomobject]@{}) -Force};$catalog.sources|Add-Member -NotePropertyName $sourceName -NotePropertyValue $source -Force
-        if($Arguments.PSObject.Properties['allow']-and$Arguments.allow){$a=@($catalog.allow);foreach($pattern in @($Arguments.allow)){if($a -notcontains [string]$pattern){$a+=,[string]$pattern}};$catalog.allow=@($a)}
-        Write-McpWorkerJson (Get-McpWorkerMachinePolicyPath) $catalog;Add-McpWorkerAudit 'source-set' @{name=$sourceName;source=$source;allow=@($Arguments.allow)};return New-McpTextResult ([ordered]@{updated=$true;source=$sourceName;machineAllow=@($catalog.allow)})
+        if($requestedAllow.Count-gt0){$a=@($catalog.allow);foreach($pattern in $requestedAllow){if($a -notcontains $pattern){$a+=,$pattern}};$catalog.allow=@($a)}
+        Write-McpWorkerJson (Get-McpWorkerMachinePolicyPath) $catalog;Add-McpWorkerAudit 'source-set' @{name=$sourceName;source=$source;allow=$requestedAllow};return New-McpTextResult ([ordered]@{updated=$true;source=$sourceName;machineAllow=@($catalog.allow)})
       }
       'worker_source_remove' {
         $sourceName=Get-McpArgRequired $Arguments 'name';$catalog=Get-McpWorkerCatalog;$prop=$catalog.sources.PSObject.Properties[$sourceName];if($prop){$catalog.sources.PSObject.Properties.Remove($sourceName)};$prefix="mcp.$sourceName.";$catalog.allow=@($catalog.allow|Where-Object{-not([string]$_).StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)});$catalog.deny=@($catalog.deny|Where-Object{-not([string]$_).StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)});Write-McpWorkerJson (Get-McpWorkerMachinePolicyPath) $catalog;Add-McpWorkerAudit 'source-remove' @{name=$sourceName};return New-McpTextResult ([ordered]@{removed=[bool]$prop;source=$sourceName})
