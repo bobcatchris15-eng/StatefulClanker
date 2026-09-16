@@ -2,6 +2,7 @@
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent $PSScriptRoot;$harness=Join-Path $repo 'StatefulClanker.ps1';$slow=Join-Path $PSScriptRoot 'SlowWritingProvider.cmd';$mock=Join-Path $PSScriptRoot 'MockProvider.cmd'
 function Assert-True([bool]$Condition,[string]$Message){if(-not$Condition){throw "AUTOFILL TEST FAILED: $Message"}}
+function Read-JsonRetry([string]$Path){for($i=0;$i-lt40;$i++){try{return (Get-Content -Raw -LiteralPath $Path|ConvertFrom-Json)}catch [System.IO.IOException]{if($i-ge39){throw};Start-Sleep -Milliseconds 25}}}
 $pwshPath=(Get-Process -Id $PID).Path
 if(-not(Get-Command git -ErrorAction SilentlyContinue)){Write-Host '  AUTOFILL: SKIPPED - git not found.';return}
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('sc-autofill-'+[Guid]::NewGuid().ToString('N'));New-Item -ItemType Directory -Force -Path $temp|Out-Null
@@ -24,7 +25,7 @@ try {
     $deadline=(Get-Date).AddSeconds(35);$maxBusy=0;$complete=0
     do {
         Start-Sleep -Milliseconds 250
-        $tasks=@(Get-ChildItem (Join-Path $temp '.statefulclanker\tasks') -Filter *.json|ForEach-Object{Get-Content -Raw $_.FullName|ConvertFrom-Json})
+        $tasks=@(Get-ChildItem (Join-Path $temp '.statefulclanker\tasks') -Filter *.json|ForEach-Object{Read-JsonRetry $_.FullName})
         $busy=@($tasks|Where-Object{@('running','reviewing','validating')-contains[string]$_.status}).Count;if($busy-gt$maxBusy){$maxBusy=$busy}
         $complete=@($tasks|Where-Object{$_.status-eq'complete'}).Count
     } while($complete-lt4-and(Get-Date)-lt$deadline)
@@ -39,12 +40,12 @@ try {
     Assert-True ($maxBusy-ge2) "Autofill never filled the allowed complement of two workers (observed $maxBusy)."
     foreach($i in 1..4){Assert-True (Test-Path (Join-Path $temp "out-a$i.txt")) "Merged output for a$i is missing."}
     $statusPath=Join-Path $temp '.statefulclanker\autofill\supervisor.json';$idle=$false;$idleDeadline=(Get-Date).AddSeconds(6)
-    do{Start-Sleep -Milliseconds 200;if(Test-Path $statusPath){try{$st=Get-Content -Raw $statusPath|ConvertFrom-Json;$idle=([string]$st.state-eq'idle'-and[int]$st.ownedActive-eq0-and[int]$st.readyCount-eq0)}catch{}}}while(-not$idle-and(Get-Date)-lt$idleDeadline)
+    do{Start-Sleep -Milliseconds 200;if(Test-Path $statusPath){try{$st=Read-JsonRetry $statusPath;$idle=([string]$st.state-eq'idle'-and[int]$st.ownedActive-eq0-and[int]$st.readyCount-eq0)}catch{}}}while(-not$idle-and(Get-Date)-lt$idleDeadline)
     Assert-True $idle 'Autofill did not settle to idle after the ready queue was exhausted.'
     $events=@(Get-Content (Join-Path $temp '.statefulclanker\events.jsonl')|Where-Object{$_}|ForEach-Object{$_|ConvertFrom-Json});Assert-True (@($events|Where-Object{$_.type-eq'autofill.dispatched'}).Count-ge4) 'Expected at least four autofill.dispatched events.'
     Write-Host '  AUTOFILL 2: human-gated work remains queued and undispatched'
     & $pwshPath -NoProfile -File $harness task add -TaskId gate -Title 'Human gate' -Instruction 'Do not dispatch automatically.' -Accept 'human approval' -Retrieval 'seed.txt' -HumanGate|Out-Null
-    Start-Sleep -Seconds 3;$g=Get-Content -Raw (Join-Path $temp '.statefulclanker\tasks\gate.json')|ConvertFrom-Json
+    Start-Sleep -Seconds 3;$g=Read-JsonRetry (Join-Path $temp '.statefulclanker\tasks\gate.json')
     Assert-True ([bool]$g.humanGate) 'Human-gated test task lost its gate.';Assert-True (@('running','reviewing','validating','complete')-notcontains[string]$g.status) "Human-gated task was dispatched (status $($g.status)).";Assert-True (-not(Test-Path (Join-Path $temp 'out-gate.txt'))) 'Human-gated task produced worker output.'
     Write-Host '  AUTOFILL 3: manual dispatch is rejected while autofill owns scheduling'
     $manual=$null;$oldPref=$ErrorActionPreference;try{$ErrorActionPreference='Continue';$manual=& $pwshPath -NoProfile -File $harness run 2>&1|Out-String}finally{$ErrorActionPreference=$oldPref};Assert-True ($manual-match'autofill supervisor') "Manual dispatch was not rejected clearly. Got: $manual"

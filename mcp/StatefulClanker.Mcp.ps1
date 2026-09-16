@@ -15,6 +15,9 @@ $ErrorActionPreference='Stop'
 if($ProjectPath-and(Test-Path -LiteralPath $ProjectPath -PathType Container)){Set-McpDefaultProject $ProjectPath}
 
 function Get-ResidentDetails {
+    # An explicit stdio project is an execution boundary. Do not silently replace it
+    # with the resident app's active-project authority just because the tray host exists.
+    if(-not[string]::IsNullOrWhiteSpace($ProjectPath)){return $null}
     $detailsPath=Join-Path (Join-Path $env:LOCALAPPDATA 'StatefulClanker') 'mcp-http.json';if(-not(Test-Path -LiteralPath $detailsPath -PathType Leaf)){return $null}
     try{$details=Get-Content -Raw -LiteralPath $detailsPath|ConvertFrom-Json}catch{return $null};if(-not$details.url-or-not$details.pid){return $null};if(-not(Get-Process -Id ([int]$details.pid) -ErrorAction SilentlyContinue)){return $null};return $details
 }
@@ -25,7 +28,7 @@ function Get-ResidentMcpName($Rpc) {
 function Invoke-ResidentRpc($Details,$Rpc,[string]$JsonLine) {
     Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue;$client=New-Object Net.Http.HttpClient
     try{
-        $request=New-Object Net.Http.HttpRequestMessage ([Net.Http.HttpMethod]::Post),([string]$Details.url);$request.Content=New-Object Net.Http.StringContent $JsonLine,[Text.Encoding]::UTF8,'application/json';$request.Headers.Accept.ParseAdd('application/json, text/event-stream')
+        $request=New-Object Net.Http.HttpRequestMessage ([Net.Http.HttpMethod]::Post),([string]$Details.url);$request.Content=New-Object Net.Http.StringContent -ArgumentList @($JsonLine,[Text.Encoding]::UTF8);$request.Content.Headers.ContentType=New-Object Net.Http.Headers.MediaTypeHeaderValue 'application/json';$request.Headers.Accept.ParseAdd('application/json, text/event-stream')
         if($Details.token){$request.Headers.Authorization=New-Object Net.Http.Headers.AuthenticationHeaderValue 'Bearer',([string]$Details.token)}
         if(Test-SCModernMcpRequest $Rpc){$request.Headers.TryAddWithoutValidation('MCP-Protocol-Version',$script:SCModernProtocol)|Out-Null;$request.Headers.TryAddWithoutValidation('Mcp-Method',[string]$Rpc.method)|Out-Null;$name=Get-ResidentMcpName $Rpc;if($name){$request.Headers.TryAddWithoutValidation('Mcp-Name',$name)|Out-Null}}
         $response=$client.SendAsync($request).GetAwaiter().GetResult();if([int]$response.StatusCode-eq202){return $null};$body=$response.Content.ReadAsStringAsync().GetAwaiter().GetResult();if(-not$response.IsSuccessStatusCode){throw "Resident MCP returned HTTP $([int]$response.StatusCode): $body"};return $body
