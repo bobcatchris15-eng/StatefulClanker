@@ -10,33 +10,36 @@
   },
   "providers": {
     "codex": {
+      "type": "cli",
       "command": "codex",
-      "args": [
-        "exec"
-      ],
+      "args": ["exec"],
       "mode": "stdin"
     },
     "claude": {
+      "type": "cli",
       "command": "claude",
-      "args": [
-        "-p"
-      ],
+      "args": ["-p"],
       "mode": "stdin"
     },
     "agy": {
+      "type": "cli",
       "command": "agy",
-      "args": [
-        "--mode",
-        "accept-edits"
-      ],
+      "args": ["--mode", "accept-edits"],
       "mode": "stdin"
     },
     "opencode": {
+      "type": "cli",
       "command": "opencode",
-      "args": [
-        "run"
-      ],
+      "args": ["run"],
       "mode": "stdin"
+    },
+    "local-qwen": {
+      "type": "api",
+      "connection": "local-qwen"
+    },
+    "openrouter-coder": {
+      "type": "api",
+      "connection": "openrouter-coder"
     }
   },
   "maxConcurrent": 3,
