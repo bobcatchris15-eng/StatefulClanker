@@ -14,7 +14,7 @@ $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
 $runtimeRef='8d76d1eb29cbf39fe21759df70a3d7fa32133524'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1')
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.ProjectReview.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -35,6 +35,7 @@ if($useCheckedOut){
 . (Join-Path $runtimeLib 'StatefulClanker.Context.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Plan.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Execution.ps1')
+. (Join-Path $runtimeLib 'StatefulClanker.Routing.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Intent.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.Concurrency.ps1')
 . (Join-Path $runtimeLib 'StatefulClanker.ProjectReview.ps1')
