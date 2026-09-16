@@ -2,7 +2,20 @@
   "defaultProvider": "opencode",
   "criticProvider": null,
   "validatorProvider": null,
+  "providerBySize": {
+    "tiny": null,
+    "small": null,
+    "medium": null,
+    "large": null
+  },
   "providers": {
+    "codex": {
+      "command": "codex",
+      "args": [
+        "-p",
+        "{promptFile}"
+      ]
+    },
     "claude": {
       "command": "claude",
       "args": [
@@ -13,10 +26,9 @@
     "agy": {
       "command": "agy",
       "args": [
-        "--mode",
-        "accept-edits"
-      ],
-      "mode": "stdin"
+        "-p",
+        "{promptFile}"
+      ]
     },
     "opencode": {
       "command": "opencode",
