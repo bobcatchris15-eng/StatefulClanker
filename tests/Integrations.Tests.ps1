@@ -98,3 +98,7 @@ if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Modern MCP tests 
 Write-Host '  INT 9: direct API minimal worker harness'
 & (Join-Path $PSScriptRoot 'DirectApi.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Direct API tests failed (exit $LASTEXITCODE)." }
+
+Write-Host '  INT 10: inherent-worker capability policy'
+& (Join-Path $PSScriptRoot 'WorkerPolicy.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Worker policy tests failed (exit $LASTEXITCODE)." }
