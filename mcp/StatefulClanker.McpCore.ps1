@@ -1,7 +1,7 @@
 <# StatefulClanker MCP core: tool definitions and dispatch, shared by the stdio
    and HTTP hosts. Hosts own transport only; everything below is transport-free. #>
 
-$script:McpVersion = '0.7.5'
+$script:McpVersion = '0.8.2'
 $script:McpProtocol = '2025-06-18'
 $script:McpHarness = Join-Path (Split-Path -Parent $PSScriptRoot) 'StatefulClanker.ps1'
 $script:McpDefaultProject = $null
@@ -520,7 +520,7 @@ function Get-McpLockPath([string]$Project) { Join-Path (Get-McpStateDir $Project
 
    Task status is NOT a usable lock: the detached process does not flip a task to
    'running' until it has started, so two run_start calls milliseconds apart both see
-   an idle project and both launch. Observed in testing — two cycles on one task,
+   an idle project and both launch. Observed in testing -- two cycles on one task,
    fighting over the same state. CreateNew is an atomic filesystem operation and does
    not have that window. #>
 function Enter-McpRunLock([string]$Project) {

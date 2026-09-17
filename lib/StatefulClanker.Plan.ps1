@@ -150,7 +150,8 @@ function Import-SCPlan([string]$PlanPath) {
 
 function Get-SCTaskDefinitionHash($Task) {
     $sizeValue='small';if($Task.PSObject.Properties['size']-and$Task.size){$sizeValue=[string]$Task.size};$sources=@();if($Task.PSObject.Properties['sources']){$sources=@($Task.sources)};$intentRefs=@();if($Task.PSObject.Properties['intentRefs']){$intentRefs=@($Task.intentRefs)}
-    $definition=[ordered]@{title=$Task.title;instruction=$Task.instruction;size=$sizeValue;sources=$sources;intentRefs=$intentRefs;acceptance=@($Task.acceptance);dependsOn=@($Task.dependsOn);relations=if($Task.PSObject.Properties['relations']){@($Task.relations)}else{@()};retrieval=@($Task.retrieval);evidence=@($Task.evidence);provider=$Task.provider;role=$Task.role;humanGate=[bool]$Task.humanGate}
+    $taskRole=if($Task.PSObject.Properties['role']-and$Task.role){[string]$Task.role}else{'worker'}
+    $definition=[ordered]@{title=$Task.title;instruction=$Task.instruction;size=$sizeValue;sources=$sources;intentRefs=$intentRefs;acceptance=@($Task.acceptance);dependsOn=@($Task.dependsOn);relations=if($Task.PSObject.Properties['relations']){@($Task.relations)}else{@()};retrieval=@($Task.retrieval);evidence=@($Task.evidence);provider=$Task.provider;role=$taskRole;humanGate=[bool]$Task.humanGate}
     return Get-SCHashString (ConvertTo-SCJson $definition 16)
 }
 

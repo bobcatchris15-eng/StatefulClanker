@@ -1,4 +1,4 @@
-﻿function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
+function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
     $cfg=Get-SCConfig;$def=if($cfg.PSObject.Properties['defaultProvider']){[string]$cfg.defaultProvider}else{''}
     $prioritized=@();if($cfg.PSObject.Properties['providers']-and$cfg.providers){
         foreach($p in $cfg.providers.PSObject.Properties){
@@ -94,7 +94,8 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
     $exe=[string]$providerRecord.config.command;$args=@();foreach($arg in @($providerRecord.config.args)){$args+=Expand-SCArg ([string]$arg) $Prompt $promptPath $Task}
     $stdoutPath=Get-SCPath ("runs/{0}.stdout.txt"-f$receiptId);$stderrPath=Get-SCPath ("runs/{0}.stderr.txt"-f$receiptId);$started=(Get-Date).ToUniversalTime()
     $compilationId=if($Compilation){$Compilation.id}else{$null};$fingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};$retrievedChars=0;if($Compilation-and$Compilation.ir.sources.retrieved){$retrievedChars=[int]$Compilation.ir.sources.retrieved.usedChars}
-    $telemetry=[ordered]@{schemaVersion=2;agentId=$agentId;receiptId=$receiptId;parentAgentId=$ParentAgentId;taskId=$Task.id;taskTitle=$Task.title;stage=$Stage;role=$Task.role;provider=$providerRecord.name;model=$null;lifecycle='running';processId=$null;startedAt=$started.ToString('o');heartbeatAt=$started.ToString('o');endedAt=$null;durationSeconds=$null;promptChars=$Prompt.Length;retrievedChars=$retrievedChars;compilationId=$compilationId;inputFingerprint=$fingerprint;command=$exe;args=$args;exitCode=$null;verdict=$null;stdoutPath=$stdoutPath;stderrPath=$stderrPath;error=$null}
+    $taskRole=if($Task.PSObject.Properties['role']-and$Task.role){[string]$Task.role}else{'worker'}
+    $telemetry=[ordered]@{schemaVersion=2;agentId=$agentId;receiptId=$receiptId;parentAgentId=$ParentAgentId;taskId=$Task.id;taskTitle=$Task.title;stage=$Stage;role=$taskRole;provider=$providerRecord.name;model=$null;lifecycle='running';processId=$null;startedAt=$started.ToString('o');heartbeatAt=$started.ToString('o');endedAt=$null;durationSeconds=$null;promptChars=$Prompt.Length;retrievedChars=$retrievedChars;compilationId=$compilationId;inputFingerprint=$fingerprint;command=$exe;args=$args;exitCode=$null;verdict=$null;stdoutPath=$stdoutPath;stderrPath=$stderrPath;error=$null}
     Save-SCActiveTelemetry $telemetry;Add-SCTelemetryEvent 'agent.started' $telemetry;$stdout='';$stderr='';$exitCode=-1
     $mode=if($providerRecord.config.PSObject.Properties['mode']){[string]$providerRecord.config.mode}else{''}
     try{
