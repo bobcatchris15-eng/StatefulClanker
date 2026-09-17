@@ -658,7 +658,7 @@ sealed class MainForm : Form
     readonly TabControl _tabs = new();
     readonly Label _header = new(), _mcpState = new(), _intent = new(), _goal = new();
     readonly Label[] _metrics = Enumerable.Range(0, 5).Select(_ => new Label()).ToArray();
-    readonly TextBox _usage = new(), _overviewActivity = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new();
+    readonly TextBox _usage = new(), _overviewActivity = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new(), _activeProvidersText = new();
     readonly BlinkenLightsPanel _blinken = new();
     readonly DataGridView _integrations = new(), _providers = new();
     readonly Label _autofillStatus = new();
@@ -709,11 +709,13 @@ sealed class MainForm : Form
 
     TabPage BuildOverview()
     {
-        var p = Page("Overview"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 10, ColumnCount = 1 };
+        var p = Page("Overview"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 12, ColumnCount = 1 };
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
@@ -742,16 +744,20 @@ sealed class MainForm : Form
         var authority = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12), BackColor = Theme.Surface }; _intent.Dock = DockStyle.Top; _intent.Height = 26; _intent.ForeColor = Theme.Accent; _intent.Font = new Font("Cascadia Mono", 9, FontStyle.Bold); _goal.Dock = DockStyle.Fill; authority.Controls.Add(_goal); authority.Controls.Add(_intent);
         _overviewActivity.Dock = DockStyle.Fill; _overviewActivity.Multiline = true; _overviewActivity.ReadOnly = true; _overviewActivity.ScrollBars = ScrollBars.Vertical; _overviewActivity.Font = new Font("Cascadia Mono", 8.5f);
 
+        _activeProvidersText.Dock = DockStyle.Fill; _activeProvidersText.ReadOnly = true; _activeProvidersText.BackColor = Theme.Surface; _activeProvidersText.BorderStyle = BorderStyle.None; _activeProvidersText.Font = new Font("Cascadia Mono", 9f, FontStyle.Bold); _activeProvidersText.ForeColor = Theme.Accent;
+        
         rows.Controls.Add(metrics, 0, 0);
         rows.Controls.Add(_blinken, 0, 1);
         rows.Controls.Add(Section("AUTONOMOUS AUTOFILL & WORKER SLOTS"), 0, 2);
         rows.Controls.Add(autofillBar, 0, 3);
-        rows.Controls.Add(Section("MODEL / TOKEN USAGE"), 0, 4);
-        rows.Controls.Add(_usage, 0, 5);
-        rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 6);
-        rows.Controls.Add(authority, 0, 7);
-        rows.Controls.Add(Section("RECENT ACTIVITY"), 0, 8);
-        rows.Controls.Add(_overviewActivity, 0, 9);
+        rows.Controls.Add(Section("ACTIVE PROVIDERS"), 0, 4);
+        rows.Controls.Add(_activeProvidersText, 0, 5);
+        rows.Controls.Add(Section("MODEL / TOKEN USAGE"), 0, 6);
+        rows.Controls.Add(_usage, 0, 7);
+        rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 8);
+        rows.Controls.Add(authority, 0, 9);
+        rows.Controls.Add(Section("RECENT ACTIVITY"), 0, 10);
+        rows.Controls.Add(_overviewActivity, 0, 11);
         p.Controls.Add(rows);
         return p;
     }
@@ -780,13 +786,10 @@ sealed class MainForm : Form
         rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var bar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        var toggle = Btn("Disable / Enable", 125); toggle.Click += (_, _) => ToggleSelectedProviderDisabled();
-        var moveUp = Btn("Move Up", 85); moveUp.Click += (_, _) => AdjustProviderPriority(-1);
-        var moveDown = Btn("Move Down", 90); moveDown.Click += (_, _) => AdjustProviderPriority(1);
         var test = Btn("Test Provider", 105); test.Click += (_, _) => TestSelectedProvider();
         var open = Btn("Open config", 100); open.Click += (_, _) => OpenConfig();
         var refresh = Btn("Refresh", 85); refresh.Click += async (_, _) => await RefreshAllAsync();
-        bar.Controls.AddRange(new Control[] { toggle, moveUp, moveDown, test, open, refresh });
+        bar.Controls.AddRange(new Control[] { test, open, refresh });
 
         var roleBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         var roleLbl = new Label { Text = "Routing role:", AutoSize = true, Margin = new Padding(4, 10, 4, 0), ForeColor = Theme.Muted };
@@ -805,20 +808,50 @@ sealed class MainForm : Form
         rows.Controls.Add(roleBar, 0, 1);
         rows.Controls.Add(Section("WORKER BACKEND STATUS, PRIORITY, AND ROUTING"), 0, 2);
 
-        _providers.Dock = DockStyle.Fill; _providers.ReadOnly = true; _providers.AllowUserToAddRows = false; _providers.RowHeadersVisible = false; _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _providers.Dock = DockStyle.Fill; _providers.ReadOnly = false; _providers.AllowUserToAddRows = false; _providers.RowHeadersVisible = false; _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _providers.Columns.Add(new DataGridViewCheckBoxColumn { Name = "enabled", HeaderText = "Enabled", Width = 60, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
         _providers.Columns.Add("name", "Provider");
-        _providers.Columns.Add("status", "Status");
-        _providers.Columns.Add("priority", "Priority");
         _providers.Columns.Add("backend", "Backend");
         _providers.Columns.Add("target", "Target");
         _providers.Columns.Add("roles", "Routing / roles");
+        foreach(DataGridViewColumn c in _providers.Columns) if (c.Name != "enabled") c.ReadOnly = true;
+        _providers.AllowDrop = true;
+        Rectangle dragBox = Rectangle.Empty; int dragIndex = -1;
+        _providers.MouseDown += (s, e) => {
+            var hit = _providers.HitTest(e.X, e.Y);
+            dragIndex = hit.RowIndex;
+            if (dragIndex >= 0 && hit.ColumnIndex != 0) {
+                var dragSize = SystemInformation.DragSize;
+                dragBox = new Rectangle(new Point(e.X - (dragSize.Width / 2), e.Y - (dragSize.Height / 2)), dragSize);
+            } else dragBox = Rectangle.Empty;
+        };
+        _providers.MouseMove += (s, e) => {
+            if ((e.Button & MouseButtons.Left) == MouseButtons.Left) {
+                if (dragBox != Rectangle.Empty && !dragBox.Contains(e.X, e.Y)) {
+                    _providers.DoDragDrop(_providers.Rows[dragIndex], DragDropEffects.Move);
+                }
+            }
+        };
+        _providers.DragEnter += (s, e) => e.Effect = DragDropEffects.Move;
+        _providers.DragDrop += (s, e) => {
+            var cp = _providers.PointToClient(new Point(e.X, e.Y));
+            var hit = _providers.HitTest(cp.X, cp.Y);
+            if (hit.RowIndex >= 0 && dragIndex >= 0 && hit.RowIndex != dragIndex) {
+                ReorderProviderConfig(dragIndex, hit.RowIndex);
+            }
+        };
+        _providers.CellValueChanged += (s, e) => {
+            if (e.RowIndex >= 0 && e.ColumnIndex == 0) {
+                ToggleProviderConfig(e.RowIndex, (bool)_providers.Rows[e.RowIndex].Cells[0].Value);
+            }
+        };
+        _providers.CurrentCellDirtyStateChanged += (s, e) => {
+            if (_providers.IsCurrentCellDirty && _providers.CurrentCell.ColumnIndex == 0) {
+                _providers.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            }
+        };
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Disable / Enable", null, (_, _) => ToggleSelectedProviderDisabled());
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Move Up (Priority)", null, (_, _) => AdjustProviderPriority(-1));
-        menu.Items.Add("Move Down (Priority)", null, (_, _) => AdjustProviderPriority(1));
-        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Set as Default Provider", null, (_, _) => SetProviderRole("defaultProvider"));
         menu.Items.Add("Set as Critic Provider", null, (_, _) => SetProviderRole("criticProvider"));
         menu.Items.Add("Set as Validator Provider", null, (_, _) => SetProviderRole("validatorProvider"));
@@ -849,82 +882,47 @@ sealed class MainForm : Form
 
     ProviderStatus? SelectedProvider => _providers.SelectedRows.Count > 0 ? _providers.SelectedRows[0].Tag as ProviderStatus : null;
 
-    void ToggleSelectedProviderDisabled()
+    void ToggleProviderConfig(int rowIndex, bool enabled)
     {
-        var p = SelectedProvider;
         var path = _settings.ActiveProjectPath;
-        if (p is null || string.IsNullOrWhiteSpace(path)) return;
-        var cfgPath = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
-        if (!File.Exists(cfgPath)) return;
-        try
-        {
-            var node = JsonNode.Parse(File.ReadAllText(cfgPath));
-            var providers = node?["providers"] as JsonObject;
-            if (providers is not null && providers.TryGetPropertyValue(p.Name, out var pNode) && pNode is JsonObject pObj)
-            {
-                var current = pObj.TryGetPropertyValue("disabled", out var dv) && dv is not null && dv.GetValue<bool>();
-                pObj["disabled"] = !current;
-                File.WriteAllText(cfgPath, node!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+        if (string.IsNullOrWhiteSpace(path)) return;
+        var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
+        if (!File.Exists(cfg)) return;
+        try {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(cfg)) as System.Text.Json.Nodes.JsonObject;
+            if (node == null || !node.TryGetPropertyValue("providers", out var providersNode) || providersNode is not System.Text.Json.Nodes.JsonObject providers) return;
+            var providerName = _providers.Rows[rowIndex].Cells["name"].Value?.ToString();
+            if (providerName != null && providers.TryGetPropertyValue(providerName, out var providerNode) && providerNode is System.Text.Json.Nodes.JsonObject pObj) {
+                pObj["disabled"] = !enabled;
+                File.WriteAllText(cfg, node.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
                 _ = RefreshAllAsync();
             }
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, "Failed to update provider status: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+        } catch { }
     }
 
-    void AdjustProviderPriority(int direction)
+    void ReorderProviderConfig(int fromIndex, int toIndex)
     {
-        var p = SelectedProvider;
         var path = _settings.ActiveProjectPath;
-        if (p is null || string.IsNullOrWhiteSpace(path)) return;
-        var cfgPath = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
-        if (!File.Exists(cfgPath)) return;
-        try
-        {
-            var node = JsonNode.Parse(File.ReadAllText(cfgPath));
-            var providers = node?["providers"] as JsonObject;
-            if (providers is null) return;
-
-            var list = new List<(string Name, int Priority, JsonObject Obj)>();
-            int fallbackPri = 1;
-            foreach (var kv in providers)
-            {
-                if (kv.Value is JsonObject obj)
-                {
-                    int pri = obj.TryGetPropertyValue("priority", out var pv) && pv is not null && int.TryParse(pv.ToString(), out var parsed)
-                        ? parsed
-                        : fallbackPri * 10;
-                    list.Add((kv.Key, pri, obj));
-                    fallbackPri++;
+        if (string.IsNullOrWhiteSpace(path)) return;
+        var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
+        if (!File.Exists(cfg)) return;
+        try {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(cfg)) as System.Text.Json.Nodes.JsonObject;
+            if (node == null || !node.TryGetPropertyValue("providers", out var providersNode) || providersNode is not System.Text.Json.Nodes.JsonObject providers) return;
+            var list = new System.Collections.Generic.List<string>();
+            foreach (DataGridViewRow row in _providers.Rows) list.Add(row.Cells["name"].Value.ToString()!);
+            var item = list[fromIndex];
+            list.RemoveAt(fromIndex);
+            list.Insert(toIndex, item);
+            for (int i = 0; i < list.Count; i++) {
+                if (providers.TryGetPropertyValue(list[i], out var providerNode) && providerNode is System.Text.Json.Nodes.JsonObject pObj) {
+                    pObj["priority"] = (i + 1) * 10;
                 }
             }
-            if (list.Count < 2) return;
-            list = list.OrderBy(x => x.Priority).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
-            var currentIndex = list.FindIndex(x => x.Name == p.Name);
-            if (currentIndex < 0) return;
-            var targetIndex = currentIndex + direction;
-            if (targetIndex < 0 || targetIndex >= list.Count) return;
-
-            var item = list[currentIndex];
-            list.RemoveAt(currentIndex);
-            list.Insert(targetIndex, item);
-
-            for (int i = 0; i < list.Count; i++)
-            {
-                list[i].Obj["priority"] = i + 1;
-            }
-
-            File.WriteAllText(cfgPath, node!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            File.WriteAllText(cfg, node.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
             _ = RefreshAllAsync();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, "Failed to adjust provider priority: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+        } catch { }
     }
-
     void SetProviderRole(string roleOrSize)
     {
         var p = SelectedProvider;
@@ -1106,6 +1104,8 @@ sealed class MainForm : Form
             SetMetrics(snapshot.Project);
             SetAutofillUi(snapshot.Autofill, true);
             _overviewActivity.Text = _allActivity.Text = snapshot.Project.Activity;
+            var active = snapshot.Providers.Where(p => !p.Disabled).OrderBy(p => p.Priority).Select(p => p.Name).ToList();
+            _activeProvidersText.Text = active.Count > 0 ? string.Join(", ", active) : "None (All disabled)";
         }
         else
         {
@@ -1125,13 +1125,11 @@ sealed class MainForm : Form
         {
             _providers.Rows.Clear();
             foreach (var item in snapshot.Providers) {
-                var statusText = item.Disabled ? "DISABLED" : "Active";
-                var priText = item.Priority < 1000 ? item.Priority.ToString() : "-";
-                var i = _providers.Rows.Add(item.Name, statusText, priText, item.Backend, item.Target, item.Roles);
+                var i = _providers.Rows.Add(!item.Disabled, item.Name, item.Backend, item.Target, item.Roles);
                 _providers.Rows[i].Tag = item;
                 if (item.Disabled)
                 {
-                    _providers.Rows[i].DefaultCellStyle.ForeColor = Theme.Warn;
+                    _providers.Rows[i].DefaultCellStyle.ForeColor = Theme.Muted;
                 }
             }
         }
