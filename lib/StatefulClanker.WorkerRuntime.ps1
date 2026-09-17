@@ -116,6 +116,29 @@ function New-SCDirectWorkerSystemPrompt([string]$ToolMode,$Registry) {
     if($ToolMode-eq'text'){return $common+"`nThis endpoint uses the text tool protocol. On every turn output exactly one compact JSON object and no markdown. Tool call: {`"tool`":`"<authorized tool name>`",`"arguments`":{...}}. Finish: {`"final`":`"summary`"}."}
     return $common
 }
+function Get-SCWorkerMaxSteps($Connection,$Task,[string]$Stage='worker') {
+    $cfg=try{Get-SCConfig}catch{$null}
+    $taskSize=if($Task -and $Task.PSObject.Properties['size'] -and $Task.size){[string]$Task.size.ToLowerInvariant()}else{'small'}
+    if($cfg -and $cfg.PSObject.Properties['maxStepsBySize'] -and $cfg.maxStepsBySize.PSObject.Properties[$taskSize]){
+        return [Math]::Min(150,[Math]::Max(1,[int]$cfg.maxStepsBySize.$taskSize))
+    }
+    if($cfg -and $cfg.PSObject.Properties['maxSteps'] -and [int]$cfg.maxSteps -gt 0){
+        return [Math]::Min(150,[Math]::Max(1,[int]$cfg.maxSteps))
+    }
+    if($Connection -and $Connection.PSObject.Properties['maxSteps'] -and [int]$Connection.maxSteps -gt 0){
+        $connSteps=[int]$Connection.maxSteps
+        if($taskSize-eq'large' -and $connSteps -lt 60){return 60}
+        if($taskSize-eq'medium' -and $connSteps -lt 40){return 40}
+        return [Math]::Min(150,[Math]::Max(1,$connSteps))
+    }
+    switch($taskSize){
+        'tiny'{return 16}
+        'small'{return 24}
+        'medium'{return 40}
+        'large'{return 60}
+        default{return 32}
+    }
+}
 function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
     $body=[ordered]@{model=[string]$Connection.model;messages=@($Messages)}
     if($ToolMode-ne'text'){$body.tools=$Tools;$body.tool_choice='auto'}
@@ -126,7 +149,30 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
     if((Get-SCApiUri $Connection)-match'(?i)openrouter\.ai'){$body.usage=[ordered]@{include=$true}}
     if($Connection.PSObject.Properties['body']-and$Connection.body){foreach($p in $Connection.body.PSObject.Properties){$body[$p.Name]=$p.Value}}
     $json=$body|ConvertTo-Json -Depth 40 -Compress
-    try{return Invoke-RestMethod -Method Post -Uri (Get-SCApiUri $Connection) -Headers (New-SCApiHeaders $Connection) -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 300}catch{throw "Direct inference request failed: $($_.Exception.Message)"}
+    $bytes=[Text.Encoding]::UTF8.GetBytes($json)
+    $uri=Get-SCApiUri $Connection
+    $headers=New-SCApiHeaders $Connection
+
+    $maxAttempts=5
+    for($attempt=1;$attempt-le$maxAttempts;$attempt++){
+        try{
+            return Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 300
+        }catch{
+            $ex=$_
+            $status=0
+            if($ex.Exception -and $ex.Exception.PSObject.Properties['Response'] -and $ex.Exception.Response){
+                try{$status=[int]$ex.Exception.Response.StatusCode}catch{}
+            }
+            $isTransient=($status -in @(429, 408, 500, 502, 503, 504)) -or ($ex.Exception.Message -match '(?i)timeout|timed out|forcibly closed|connection refused|reset by peer|429|502|503|504')
+            if($attempt -lt $maxAttempts -and $isTransient){
+                $backoffSec=[Math]::Pow(2, $attempt) + (Get-Random -Minimum 0.1 -Maximum 0.9)
+                Write-Warning "Direct inference request transient error ($($ex.Exception.Message)); retrying in $([math]::Round($backoffSec,1))s (attempt $attempt/$maxAttempts)..."
+                Start-Sleep -Seconds ([int][Math]::Ceiling($backoffSec))
+                continue
+            }
+            throw "Direct inference request failed: $($ex.Exception.Message)"
+        }
+    }
 }
 function Get-SCAssistantMessage($Response) {
     if($null-eq$Response-or$null-eq$Response.choices-or@($Response.choices).Count-eq0){throw 'Inference endpoint returned no choices.'}
@@ -147,7 +193,7 @@ function Add-SCApiUsage($Accumulator,$Response) {
 }
 function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$Stage='worker',$UsageAccumulator=$null) {
     $toolMode=if($Connection.PSObject.Properties['toolMode']-and$Connection.toolMode){[string]$Connection.toolMode}else{'native'};if(@('native','text')-notcontains$toolMode){throw "Unsupported toolMode '$toolMode'."}
-    $maxSteps=if($Connection.PSObject.Properties['maxSteps']){[Math]::Min(100,[Math]::Max(1,[int]$Connection.maxSteps))}else{24}
+    $maxSteps=Get-SCWorkerMaxSteps $Connection $Task $Stage
     $registry=@(Get-SCWorkerToolRecords $Task $Stage);if($registry.Count-eq0){throw 'No worker capabilities are authorized for this invocation.'}
     $messages=@(@{role='system';content=New-SCDirectWorkerSystemPrompt $toolMode $registry},@{role='user';content=$Prompt});$tools=@($registry|ForEach-Object{$_.definition})
     for($step=1;$step-le$maxSteps;$step++){

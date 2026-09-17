@@ -145,7 +145,7 @@ function Capture-SCContextRequests($Task,$Run,$Compilation) {
    false FAILs on work that had actually passed.
    Rule 3 is why this does not simply take the last match: a reviewer that votes
    FAIL and then discusses a PASS must not flip the gate open. Ambiguity fails. #>
-function Get-SCVerdict([string]$Text,[int]$ExitCode) { if($ExitCode-ne 0){return 'FAIL'};$seen=@();foreach($line in @($Text-split"`r?`n")){$trimmed=$line.Trim();if($trimmed-match'^[\s>*_#`~\-\[\]()."'':]*VERDICT\s*:\s*(PASS|FAIL)[\s*_`~.!,:;''"\[\]()]*$'){$seen+=$Matches[1].ToUpperInvariant()}};if($seen-contains'FAIL'){return 'FAIL'};if($seen-contains'PASS'){return 'PASS'};return 'FAIL' }
+function Get-SCVerdict([string]$Text,[int]$ExitCode) { if($ExitCode-ne 0){return 'ERROR'};$seen=@();foreach($line in @($Text-split"`r?`n")){$trimmed=$line.Trim();if($trimmed-match'^[\s>*_#`~\-\[\]()."'':]*VERDICT\s*:\s*(PASS|FAIL|ERROR)[\s*_`~.!,:;''"\[\]()]*$'){$seen+=$Matches[1].ToUpperInvariant()}};if($seen-contains'ERROR'){return 'ERROR'};if($seen-contains'FAIL'){return 'FAIL'};if($seen-contains'PASS'){return 'PASS'};return 'FAIL' }
 function Set-SCTelemetryVerdict([string]$AgentId,[string]$Verdict) { $path=Get-SCPath ("telemetry/runs/{0}.json"-f$AgentId);$record=Read-SCJson $path;if($record){$record.verdict=$Verdict;Write-SCJson $path $record} }
 function Invoke-SCReview($Task,$Run,$Compilation,[string]$Stage) {
     $receipt=Invoke-SCProvider $Task (New-SCReviewPrompt $Task $Run $Compilation $Stage) $Stage $null $Run.agentId $Compilation;$receipt.verdict=Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode);Set-SCTelemetryVerdict $receipt.agentId $receipt.verdict;$dir=if($Stage-eq'critic'){'critiques'}else{'validations'};Write-SCJson (Get-SCPath ("{0}/{1}.json"-f$dir,$receipt.id)) $receipt;Add-SCEvent "$Stage.finished" "$Stage $($receipt.id): $($receipt.verdict)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$receipt.verdict;compilationId=$Compilation.id};return $receipt
@@ -192,8 +192,66 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
     if([int]$run.exitCode-ne 0){$task=Get-SCTask $task.id;$task.status='failed';$task.blockReason="Worker exited $($run.exitCode)";Save-SCTask $task;Add-SCEvent 'run.failed' $task.blockReason @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;compilationId=$compilation.id};Add-SCProgressRecord $task $compilation $false 'worker-failed' $task.blockReason|Out-Null;Write-Warning $task.blockReason;return};Add-SCEvent 'run.finished' "Worker finished $($run.id)" @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;compilationId=$compilation.id}
     if($contextRequests.Count-gt 0){$task=Get-SCTask $task.id;$task.status='needs_rework';$task.blockReason='Worker requested missing context; completion was not proposed.';Save-SCTask $task;Add-SCProgressRecord $task $compilation $false 'context-fault' ($contextRequests -join '; ')|Out-Null;Write-Warning $task.blockReason;return}
     $task=Get-SCTask $task.id;$proposal=New-SCCompletionProposal $task $run $compilation
-    if([bool]$cfg.criticEnabled){$task.status='reviewing';Save-SCTask $task;$critique=Invoke-SCReview $task $run $compilation 'critic';$proposal.evidence.criticId=$critique.id;$proposal.evidence.criticVerdict=$critique.verdict;Save-SCProposal $proposal;$task=Get-SCTask $task.id;$task.latestCritiqueId=$critique.id;Save-SCTask $task;if($critique.verdict-ne'PASS'){Reject-SCProposal $proposal @('critic rejected worker result');$task.status='needs_rework';$task.blockReason='Critic rejected worker result.';Save-SCTask $task;Add-SCProgressRecord $task $compilation $false 'critic-rejected' $task.blockReason|Out-Null;Write-Warning $task.blockReason;return};if(Stop-SCForStaleCompilation $task $compilation 'stale-after-critic' 'Compiled state became stale during critic review.' $proposal){return};$task=Get-SCTask $task.id}
-    if([bool]$cfg.validatorEnabled){$task.status='validating';Save-SCTask $task;$validation=Invoke-SCReview $task $run $compilation 'validator';$proposal.evidence.validationId=$validation.id;$proposal.evidence.validationVerdict=$validation.verdict;Save-SCProposal $proposal;$task=Get-SCTask $task.id;$task.latestValidationId=$validation.id;Save-SCTask $task;if($validation.verdict-ne'PASS'){Reject-SCProposal $proposal @('validator rejected worker result');$task.status='needs_rework';$task.blockReason='Validator rejected worker result.';Save-SCTask $task;Add-SCProgressRecord $task $compilation $false 'validator-rejected' $task.blockReason|Out-Null;Write-Warning $task.blockReason;return}}
+    if([bool]$cfg.criticEnabled){
+        $task.status='reviewing';Save-SCTask $task
+        $critique=Invoke-SCReview $task $run $compilation 'critic'
+        $proposal.evidence.criticId=$critique.id
+        $proposal.evidence.criticVerdict=$critique.verdict
+        Save-SCProposal $proposal
+        $task=Get-SCTask $task.id
+        $task.latestCritiqueId=$critique.id
+        Save-SCTask $task
+        if($critique.verdict-eq'ERROR'){
+            $errDetail=if($critique.stderr){$critique.stderr.Trim()}else{'Critic review encountered an infrastructure error.'}
+            $task.status='needs_rework'
+            $task.blockReason="Critic infrastructure error: $errDetail"
+            Save-SCTask $task
+            Add-SCProgressRecord $task $compilation $false 'critic-error' $task.blockReason|Out-Null
+            Add-SCEvent 'critic.error' $task.blockReason @{taskId=$task.id;receiptId=$critique.id;error=$errDetail}
+            Write-Warning $task.blockReason
+            return
+        }
+        if($critique.verdict-ne'PASS'){
+            Reject-SCProposal $proposal @('critic rejected worker result')
+            $task.status='needs_rework'
+            $task.blockReason='Critic rejected worker result.'
+            Save-SCTask $task
+            Add-SCProgressRecord $task $compilation $false 'critic-rejected' $task.blockReason|Out-Null
+            Write-Warning $task.blockReason
+            return
+        }
+        if(Stop-SCForStaleCompilation $task $compilation 'stale-after-critic' 'Compiled state became stale during critic review.' $proposal){return}
+        $task=Get-SCTask $task.id
+    }
+    if([bool]$cfg.validatorEnabled){
+        $task.status='validating';Save-SCTask $task
+        $validation=Invoke-SCReview $task $run $compilation 'validator'
+        $proposal.evidence.validationId=$validation.id
+        $proposal.evidence.validationVerdict=$validation.verdict
+        Save-SCProposal $proposal
+        $task=Get-SCTask $task.id
+        $task.latestValidationId=$validation.id
+        Save-SCTask $task
+        if($validation.verdict-eq'ERROR'){
+            $errDetail=if($validation.stderr){$validation.stderr.Trim()}else{'Validator review encountered an infrastructure error.'}
+            $task.status='needs_rework'
+            $task.blockReason="Validator infrastructure error: $errDetail"
+            Save-SCTask $task
+            Add-SCProgressRecord $task $compilation $false 'validator-error' $task.blockReason|Out-Null
+            Add-SCEvent 'validator.error' $task.blockReason @{taskId=$task.id;receiptId=$validation.id;error=$errDetail}
+            Write-Warning $task.blockReason
+            return
+        }
+        if($validation.verdict-ne'PASS'){
+            Reject-SCProposal $proposal @('validator rejected worker result')
+            $task.status='needs_rework'
+            $task.blockReason='Validator rejected worker result.'
+            Save-SCTask $task
+            Add-SCProgressRecord $task $compilation $false 'validator-rejected' $task.blockReason|Out-Null
+            Write-Warning $task.blockReason
+            return
+        }
+    }
     $task=Get-SCTask $task.id;if(Commit-SCProposal $task $proposal $compilation){Write-Host "Task complete: $($task.id)"}else{Write-Warning "Task not committed: $($task.id)"}
     Invoke-SCProjectReviewIfDue 'interval'|Out-Null
 }

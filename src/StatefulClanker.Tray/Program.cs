@@ -372,15 +372,157 @@ static class Theme
 
 sealed class BlinkenLightsPanel : Control
 {
-    readonly System.Windows.Forms.Timer _pulse = new() { Interval = 220 };
-    readonly Random _rng = new(); readonly bool[] _lamps = new bool[20];
-    readonly Font _caption = new("Cascadia Mono", 7f, FontStyle.Bold); bool _active;
-    public bool Active { get => _active; set { if(_active==value)return; _active=value; if(value){_pulse.Start();Step();}else{_pulse.Stop();Array.Clear(_lamps);Invalidate();} } }
-    public BlinkenLightsPanel(){DoubleBuffered=true;MinimumSize=new Size(220,72);_pulse.Tick+=(_,_)=>Step();}
-    void Step(){for(var i=0;i<_lamps.Length;i++)if(_rng.NextDouble()<.55)_lamps[i]=_rng.NextDouble()<.38;Invalidate();}
-    protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);e.Graphics.Clear(Color.FromArgb(12,16,15));var gap=7;var w=Math.Max(80,(Width-gap*3)/2);DrawBank(e.Graphics,new Rectangle(gap,gap,w,Height-gap*2),"WORKER BUS",0);DrawBank(e.Graphics,new Rectangle(gap*2+w,gap,w,Height-gap*2),"REVIEW / I-O",10);}
-    void DrawBank(Graphics g,Rectangle r,string title,int offset){using var panel=new SolidBrush(Color.FromArgb(22,28,25));using var edge=new Pen(Color.FromArgb(73,83,72));g.FillRectangle(panel,r);g.DrawRectangle(edge,r);g.DrawString(title,_caption,Brushes.DarkSeaGreen,r.X+6,r.Y+4);var y=r.Y+23;var spacing=Math.Max(14,(r.Width-18)/5);for(var i=0;i<10;i++){var col=i%5;var row=i/5;var x=r.X+8+col*spacing;var ly=y+row*17;var on=Active&&_lamps[offset+i];var baseColor=i%5==0?Color.IndianRed:i%3==0?Color.Goldenrod:Color.LimeGreen;using var b=new SolidBrush(on?baseColor:Color.FromArgb(36,baseColor));g.FillRectangle(b,x,ly,8,8);g.DrawRectangle(Pens.DimGray,x,ly,8,8);}using var screw=new SolidBrush(Color.FromArgb(95,100,91));g.FillEllipse(screw,r.Left+3,r.Bottom-7,3,3);g.FillEllipse(screw,r.Right-6,r.Bottom-7,3,3);}
-    protected override void Dispose(bool disposing){if(disposing){_pulse.Dispose();_caption.Dispose();}base.Dispose(disposing);}
+    readonly System.Windows.Forms.Timer _pulse = new() { Interval = 110 };
+    readonly Random _rng = new();
+    const int TotalLamps = 160;
+    readonly bool[] _lamps = new bool[TotalLamps];
+    readonly byte[] _colorPalette = new byte[TotalLamps];
+    int _sweepStep;
+    bool _active;
+
+    public bool Active
+    {
+        get => _active;
+        set
+        {
+            if (_active == value) return;
+            _active = value;
+            _pulse.Interval = value ? 110 : 250;
+            Invalidate();
+        }
+    }
+
+    public BlinkenLightsPanel()
+    {
+        DoubleBuffered = true;
+        MinimumSize = new Size(220, 72);
+        for (var i = 0; i < TotalLamps; i++)
+        {
+            var roll = _rng.Next(100);
+            _colorPalette[i] = roll < 35 ? (byte)3 : roll < 60 ? (byte)1 : roll < 80 ? (byte)2 : roll < 95 ? (byte)0 : (byte)4;
+        }
+        _pulse.Tick += (_, _) => Step();
+        _pulse.Start();
+    }
+
+    void Step()
+    {
+        _sweepStep = (_sweepStep + 1) % 32;
+        if (Active)
+        {
+            for (var i = 0; i < TotalLamps; i++)
+            {
+                var bank = i / 40;
+                var col = i % 10;
+                var sweepHit = ((col + bank * 2) % 10) == (_sweepStep % 10);
+                if (_rng.NextDouble() < 0.65)
+                {
+                    _lamps[i] = sweepHit ? (_rng.NextDouble() < 0.85) : (_rng.NextDouble() < 0.42);
+                }
+            }
+        }
+        else
+        {
+            for (var i = 0; i < TotalLamps; i++)
+            {
+                if (_rng.NextDouble() < 0.08)
+                    _lamps[i] = _rng.NextDouble() < 0.06;
+            }
+        }
+        Invalidate();
+    }
+
+    static Color GetColor(byte code, bool on)
+    {
+        Color lit = code switch
+        {
+            0 => Color.FromArgb(255, 60, 60),
+            1 => Color.FromArgb(255, 140, 30),
+            2 => Color.FromArgb(255, 210, 40),
+            3 => Color.FromArgb(50, 235, 110),
+            _ => Color.FromArgb(60, 210, 255)
+        };
+        return on ? lit : Color.FromArgb(28, Math.Max(20, (int)(lit.R * 0.22f)), Math.Max(25, (int)(lit.G * 0.22f)), Math.Max(25, (int)(lit.B * 0.22f)));
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        var g = e.Graphics;
+        g.Clear(Color.FromArgb(10, 14, 18));
+
+        const int numBanks = 4;
+        const int rowsPerBank = 4;
+        const int colsPerBank = 10;
+        var gap = 6;
+        var availWidth = Width - gap * (numBanks + 1);
+        var bankWidth = Math.Max(40, availWidth / numBanks);
+        var bankHeight = Height - gap * 2;
+
+        for (var b = 0; b < numBanks; b++)
+        {
+            var r = new Rectangle(gap + b * (bankWidth + gap), gap, bankWidth, bankHeight);
+            DrawBank(g, r, b * (rowsPerBank * colsPerBank), rowsPerBank, colsPerBank);
+        }
+    }
+
+    void DrawBank(Graphics g, Rectangle r, int offset, int rows, int cols)
+    {
+        using var panelBrush = new SolidBrush(Color.FromArgb(18, 24, 30));
+        using var edgePen = new Pen(Color.FromArgb(48, 62, 76));
+        using var innerPen = new Pen(Color.FromArgb(30, 38, 48));
+
+        g.FillRectangle(panelBrush, r);
+        g.DrawRectangle(edgePen, r);
+
+        using var screwBrush = new SolidBrush(Color.FromArgb(80, 92, 104));
+        g.FillEllipse(screwBrush, r.Left + 3, r.Top + 3, 3, 3);
+        g.FillEllipse(screwBrush, r.Right - 6, r.Top + 3, 3, 3);
+        g.FillEllipse(screwBrush, r.Left + 3, r.Bottom - 6, 3, 3);
+        g.FillEllipse(screwBrush, r.Right - 6, r.Bottom - 6, 3, 3);
+
+        var padX = 10;
+        var padY = 8;
+        var drawW = r.Width - padX * 2;
+        var drawH = r.Height - padY * 2;
+        if (drawW <= 0 || drawH <= 0) return;
+
+        var ledW = Math.Max(4, (drawW - (cols - 1) * 3) / cols);
+        var ledH = Math.Max(4, (drawH - (rows - 1) * 3) / rows);
+        var spacingX = (drawW - ledW * cols) / Math.Max(1, cols - 1) + ledW;
+        var spacingY = (drawH - ledH * rows) / Math.Max(1, rows - 1) + ledH;
+
+        for (var row = 0; row < rows; row++)
+        {
+            for (var col = 0; col < cols; col++)
+            {
+                var idx = (offset + row * cols + col) % TotalLamps;
+                var x = r.X + padX + col * spacingX;
+                var y = r.Y + padY + row * spacingY;
+                var on = _lamps[idx];
+                var c = GetColor(_colorPalette[idx], on);
+
+                using var b = new SolidBrush(c);
+                g.FillRectangle(b, x, y, ledW, ledH);
+
+                if (on)
+                {
+                    using var center = new SolidBrush(Color.FromArgb(200, 255, 255, 255));
+                    g.FillRectangle(center, x + 1, y + 1, Math.Max(1, ledW - 2), Math.Max(1, ledH - 2));
+                }
+                else
+                {
+                    g.DrawRectangle(innerPen, x, y, ledW, ledH);
+                }
+            }
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _pulse.Dispose();
+        base.Dispose(disposing);
+    }
 }
 
 sealed class MainForm : Form

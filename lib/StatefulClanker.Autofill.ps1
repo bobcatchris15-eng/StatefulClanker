@@ -42,8 +42,8 @@ function Test-SCAutofillMainTreeReady {
     $dirtyLines=@($dirty -split "`r?`n"|Where-Object{
         if([string]::IsNullOrWhiteSpace($_)){return $false}
         $line=$_.Trim()
-        $filePart=if($line.Length -gt 3){$line.Substring(3).Trim()}else{$line}
-        if($filePart -match '^\.statefulclanker[/\\]?' -or $filePart -eq '.statefulclanker'){return $false}
+        $filePart=if($line.Length -gt 3){$line.Substring(3).Trim().Trim('"').Trim("'")}else{$line.Trim('"').Trim("'")}
+        if($filePart -match '(^|[/\\])\.statefulclanker([/\\]|$)' -or $filePart -eq '.statefulclanker'){return $false}
         return $true
     })
     if($dirtyLines.Count -gt 0){
@@ -132,13 +132,15 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
                 $state='blocked'
                 if($lastBlock-ne$reason){Add-SCEvent 'autofill.blocked' $reason @{maxConcurrent=$limit};$lastBlock=$reason}
             }else{
-                $lastBlock=$null
                 if($stopRequested){
                     $state='draining'
+                    $lastBlock=$null
                 }elseif($running.Count-gt0){
                     $state='running'
+                    $lastBlock=$null
                 }elseif($readyCount-gt0){
                     $state='running'
+                    $lastBlock=$null
                 }else{
                     $stalled=@(Get-SCTasks|Where-Object{@('needs_rework','stale','blocked')-contains[string]$_.status})
                     if($stalled.Count-gt0){
@@ -149,12 +151,20 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
                         if($lastBlock-ne$reason){Add-SCEvent 'autofill.stalled' $reason @{stalledCount=$stalled.Count};$lastBlock=$reason}
                     }else{
                         $state='idle'
+                        $lastBlock=$null
                     }
                 }
             }
             $busyNow=@(Get-SCBusyTaskIds)
             Write-SCAutofillStatus ([ordered]@{schemaVersion=1;pid=$PID;startedAt=$started;updatedAt=(Get-Date).ToUniversalTime().ToString('o');state=$state;paused=$false;intervalSeconds=$interval;maxConcurrent=$limit;ownedActive=$running.Count;activeTasks=$busyNow;readyCount=$readyCount;slots=$slots;lastDispatchAt=if($lastDispatch-eq[datetime]::MinValue){$null}else{$lastDispatch.ToUniversalTime().ToString('o')};blockReason=$reason})
-            Start-Sleep -Seconds 2
+
+            $waitLimit = if($running.Count -gt 0){ 2 } else { $interval }
+            for($w = 0; $w -lt $waitLimit; $w += 1){
+                Start-Sleep -Seconds 1
+                if((Test-Path -LiteralPath $stopPath) -or (Test-Path -LiteralPath $pausePath) -or (Test-Path -LiteralPath $triggerPath)){
+                    break
+                }
+            }
         }
     } finally {
         Add-SCEvent 'autofill.stopped' 'Autofill supervisor stopped.' @{pid=$PID}

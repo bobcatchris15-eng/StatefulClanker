@@ -32,7 +32,7 @@ Write-Host 'STEP 1c: verdict parser contract'
 . (Join-Path $repo 'lib\StatefulClanker.Execution.ps1')
 if((Get-SCVerdict "VERDICT: PASS" 0) -ne 'PASS'){throw 'Get-SCVerdict failed to parse PASS.'}
 if((Get-SCVerdict "VERDICT: FAIL" 0) -ne 'FAIL'){throw 'Get-SCVerdict failed to parse FAIL.'}
-if((Get-SCVerdict "VERDICT: PASS" 1) -ne 'FAIL'){throw 'Get-SCVerdict must fail closed on nonzero exit.'}
+if((Get-SCVerdict "VERDICT: PASS" 1) -ne 'ERROR'){throw 'Get-SCVerdict must return ERROR on nonzero exit.'}
 if((Get-SCVerdict "chatty preamble" 0) -ne 'FAIL'){throw 'Get-SCVerdict must fail closed on malformed output.'}
 if((Get-SCVerdict "I reviewed the diff and the tests run.`n`nVERDICT: PASS" 0) -ne 'PASS'){throw 'Get-SCVerdict must accept a verdict after a preamble.'}
 if((Get-SCVerdict "Findings:`n- all criteria met`n**VERDICT: PASS**" 0) -ne 'PASS'){throw 'Get-SCVerdict must tolerate markdown decoration.'}

@@ -9,10 +9,24 @@ function Test-SCGitAvailable {
     return [bool](Get-Command git -ErrorAction SilentlyContinue)
 }
 
+function Invoke-SCGitCapture([string]$WorkingPath,[string[]]$Arguments) {
+    $oldPreference=$ErrorActionPreference
+    $text='';$code=-1
+    try {
+        $ErrorActionPreference='Continue'
+        $text=(& git -C $WorkingPath @Arguments 2>&1 | Out-String)
+        $code=$LASTEXITCODE
+    } finally {
+        $ErrorActionPreference=$oldPreference
+        $global:LASTEXITCODE=0
+    }
+    return [ordered]@{exitCode=[int]$code;output=[string]$text}
+}
+
 function Test-SCGitRepo([string]$Path) {
     if (-not (Test-SCGitAvailable)) { return $false }
-    & git -C $Path rev-parse --is-inside-work-tree 2>$null | Out-Null
-    return ($LASTEXITCODE -eq 0)
+    $res = Invoke-SCGitCapture $Path @('rev-parse', '--is-inside-work-tree')
+    return ($res.exitCode -eq 0 -and $res.output -match 'true')
 }
 
 function Get-SCWorktreeRoot([string]$StateRoot) {
@@ -35,26 +49,9 @@ function Get-SCMaxConcurrent([int]$Override = 0) {
     return 1
 }
 
-# Windows PowerShell turns native stderr into ErrorRecords and, with the harness-wide
-# ErrorActionPreference=Stop, may throw even when the native process exits 0. Git
-# uses stderr for normal progress (notably `worktree add`), so capture native output
-# under Continue and make the native exit code the authority.
-function Invoke-SCGitCapture([string]$WorkingPath,[string[]]$Arguments) {
-    $oldPreference=$ErrorActionPreference
-    $text='';$code=-1
-    try {
-        $ErrorActionPreference='Continue'
-        $text=(& git -C $WorkingPath @Arguments 2>&1 | Out-String)
-        $code=$LASTEXITCODE
-    } finally {
-        $ErrorActionPreference=$oldPreference
-    }
-    return [ordered]@{exitCode=[int]$code;output=[string]$text}
-}
-
 function Test-SCBranchExists([string]$StateRoot,[string]$Branch) {
-    & git -C $StateRoot show-ref --verify --quiet "refs/heads/$Branch"
-    return ($LASTEXITCODE -eq 0)
+    $res = Invoke-SCGitCapture $StateRoot @('show-ref', '--verify', '--quiet', "refs/heads/$Branch")
+    return ($res.exitCode -eq 0)
 }
 function Remove-SCBranchIfExists([string]$StateRoot,[string]$Branch) {
     if (-not (Test-SCBranchExists $StateRoot $Branch)) { return }
@@ -150,7 +147,24 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
     if ($task.status -ne 'complete') {
         $child=Get-SCParallelChildOutput $Run
         $entry.reason = if ($task.blockReason) { [string]$task.blockReason } else { "cycle ended as '$($task.status)'" }
-        Remove-SCWorktree $StateRoot $Run.taskId
+        $preservedBranch = $null
+        try {
+            $hasWork = Save-SCWorktreeWork $Run.worktree "failed $($Run.taskId) attempt: $($entry.reason)"
+            if ($hasWork) {
+                $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+                $slug = ($Run.taskId -replace '[^A-Za-z0-9_.-]', '-')
+                $failBranch = "failed/$slug/$stamp"
+                & git -C $StateRoot branch $failBranch $Run.worktree.branch 2>$null | Out-Null
+                $preservedBranch = $failBranch
+                Add-SCEvent 'worktree.failed.preserved' "Preserved worktree snapshot for failed $($Run.taskId)." @{ taskId = $Run.taskId; branch = $failBranch }
+            }
+        } catch {}
+        if ($preservedBranch) {
+            $entry.reason = if ($entry.reason) { "$($entry.reason) (work preserved on $preservedBranch)" } else { "work preserved on $preservedBranch" }
+            Remove-SCWorktree $StateRoot $Run.taskId -KeepBranch
+        } else {
+            Remove-SCWorktree $StateRoot $Run.taskId
+        }
         return $entry
     }
     try {
@@ -190,6 +204,7 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
 function Invoke-SCParallelPostMergeReview($Results) {
     $mergedCount = @($Results | Where-Object { $_.merged }).Count
     if ($mergedCount -gt 1) {
+        Write-Host ''
         Write-Warning "$mergedCount branches were merged. Merging cleanly is not the same as still working: two changes that each passed alone can break together with no textual conflict."
     }
     $afterMerge = [bool](Get-SCProjectReviewSetting 'projectReviewAfterMultiMerge' $true)
@@ -200,23 +215,34 @@ function Invoke-SCParallelPostMergeReview($Results) {
     }
 }
 
-function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$HarnessPath, [switch]$NoMerge) {
+function Invoke-SCParallel([int]$Limit=0, [string]$Provider, [switch]$NoMerge, [switch]$NoProjectReview) {
     Assert-SCInitialized
-    Assert-SCNotHeld
     $stateRoot = Get-SCStateRoot
+    $cfg = Get-SCConfig
 
-    if (-not (Test-SCGitAvailable)) { throw 'Parallel execution needs git on PATH.' }
-    if (-not (Test-SCGitRepo $stateRoot)) {
-        throw "Parallel execution needs the project to be a git repository (worktree isolation). '$stateRoot' is not one. Run: git init"
-    }
+    if (-not (Test-SCGitAvailable)) { throw 'parallel execution requires git on PATH' }
+    if (-not (Test-SCGitRepo $stateRoot)) { throw "$stateRoot is not a git repository" }
     $dirty = & git -C $stateRoot status --porcelain 2>$null | Out-String
     if (-not [string]::IsNullOrWhiteSpace($dirty)) {
-        throw "The working tree has uncommitted changes. Commit or stash them first: parallel runs merge branches into this checkout, and a dirty tree makes that unsafe.`n$($dirty.Trim())"
+        $dirtyLines=@($dirty -split "`r?`n"|Where-Object{
+            if([string]::IsNullOrWhiteSpace($_)){return $false}
+            $line=$_.Trim()
+            $filePart=if($line.Length -gt 3){$line.Substring(3).Trim().Trim('"').Trim("'")}else{$line.Trim('"').Trim("'")}
+            if($filePart -match '(^|[/\\])\.statefulclanker([/\\]|$)' -or $filePart -eq '.statefulclanker'){return $false}
+            return $true
+        })
+        if($dirtyLines.Count -gt 0){
+            $preview=(@($dirtyLines|Select-Object -First 5)) -join ', '
+            if($dirtyLines.Count -gt 5){$preview+=" (+$($dirtyLines.Count - 5) more)"}
+            throw "main worktree has uncommitted changes: $preview"
+        }
     }
 
-    $limit = Get-SCMaxConcurrent $MaxConcurrent
     $candidates = @(Get-SCDispatchableTasks)
-    if ($candidates.Count -eq 0) { Write-Host 'No dispatchable ready tasks.'; return }
+    if ($candidates.Count -eq 0) { Write-Host 'No runnable ready tasks.'; return }
+
+    $limit = if ($Limit -gt 0) { $Limit } else { Get-SCMaxConcurrent }
+    $HarnessPath = Join-Path $script:StatefulClankerHome 'StatefulClanker.ps1'
 
     $batch = @($candidates | Select-Object -First $limit)
     Write-Host "Dispatching $($batch.Count) of $($candidates.Count) ready task(s), limit $limit."
@@ -251,7 +277,24 @@ function Invoke-SCParallel([int]$MaxConcurrent = 0, [string]$Provider, [string]$
             $child=Get-SCParallelChildOutput $r
             $entry.reason = if ($task.blockReason) { [string]$task.blockReason } else { "cycle ended as '$($task.status)'" }
             Write-Warning "parallel child $($r.taskId) exited $($r.process.ExitCode) without completing task. STDOUT: $($child.stdout) STDERR: $($child.stderr)"
-            Remove-SCWorktree $stateRoot $r.taskId
+            $preservedBranch = $null
+            try {
+                $hasWork = Save-SCWorktreeWork $r.worktree "failed $($r.taskId) attempt: $($entry.reason)"
+                if ($hasWork) {
+                    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+                    $slug = ($r.taskId -replace '[^A-Za-z0-9_.-]', '-')
+                    $failBranch = "failed/$slug/$stamp"
+                    & git -C $stateRoot branch $failBranch $r.worktree.branch 2>$null | Out-Null
+                    $preservedBranch = $failBranch
+                    Add-SCEvent 'worktree.failed.preserved' "Preserved worktree snapshot for failed $($r.taskId)." @{ taskId = $r.taskId; branch = $failBranch }
+                }
+            } catch {}
+            if ($preservedBranch) {
+                $entry.reason = if ($entry.reason) { "$($entry.reason) (work preserved on $preservedBranch)" } else { "work preserved on $preservedBranch" }
+                Remove-SCWorktree $stateRoot $r.taskId -KeepBranch
+            } else {
+                Remove-SCWorktree $stateRoot $r.taskId
+            }
             $results += $entry
             continue
         }

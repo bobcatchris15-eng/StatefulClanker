@@ -233,6 +233,16 @@ function Initialize-SC {
             if($giContent -notmatch '(?m)^\.statefulclanker/?$'){Add-Content -LiteralPath $giPath -Value "`n.statefulclanker/" -Encoding UTF8}
         }else{Set-Content -LiteralPath $giPath -Value ".statefulclanker/`n" -Encoding UTF8}
     }catch{}
+    if((Test-SCGitAvailable) -and (Test-SCGitRepo $root)){
+        try{
+            $tracked=(Invoke-SCGitCapture $root @('ls-files', '.statefulclanker')).output
+            if(-not[string]::IsNullOrWhiteSpace($tracked)){
+                $msg=".statefulclanker is tracked in git index, which will cause merge and worktree dirty lockouts. Run 'git rm -r --cached .statefulclanker' to untrack."
+                Write-Warning $msg
+                Add-SCEvent 'git.tracked_state_warning' $msg @{root=$root}
+            }
+        }catch{}
+    }
     Add-SCEvent 'project.initialized' 'StatefulClanker initialized.' @{root=Get-SCRoot};Write-Host "Initialized $dir"
 }
 function Set-SCGoal([string]$Text) { Assert-SCInitialized;if([string]::IsNullOrWhiteSpace($Text)){throw 'Goal text required.'};$state=Get-SCState;$state.goal=$Text;Save-SCState $state;Add-SCEvent 'goal.changed' $Text;Write-Host 'Goal updated.' }
