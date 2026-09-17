@@ -126,7 +126,7 @@ function Start-SCCycleProcess([string]$StateRoot, $Worktree, [string]$TaskId, [s
 
     return [ordered]@{
         taskId = $TaskId; worktree = $Worktree; process = $proc
-        logPath = $logPath; startedAt = (Get-Date)
+        logPath = $logPath; startedAt = (Get-Date); provider = $Provider
     }
 }
 
@@ -142,10 +142,44 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
     $entry = [ordered]@{ taskId = $Run.taskId; status = $task.status; committed = $false; merged = $false; reason = $null; logPath = $Run.logPath }
     if ($Run.process.ExitCode -ne 0) {
         $child=Get-SCParallelChildOutput $Run
+        $err = [string]$child.stderr + "`n" + [string]$child.stdout
         Write-Warning "parallel child $($Run.taskId) exited $($Run.process.ExitCode). STDOUT: $($child.stdout) STDERR: $($child.stderr)"
+        
+        $isTransient = $false
+        if ($err -match '(?i)quota exhausted|insufficient_quota|rate limit|429 too many requests') {
+            $isTransient = $true
+            if ($Run.provider) {
+                $cfg = Get-SCConfig
+                if ($cfg.providers -and $cfg.providers.PSObject.Properties.Match($Run.provider).Count -gt 0) {
+                    $p = $cfg.providers.($Run.provider)
+                    if (-not $p.PSObject.Properties['disabled']) { $p | Add-Member -NotePropertyName 'disabled' -NotePropertyValue $true } else { $p.disabled = $true }
+                    Write-SCJson (Get-SCPath 'config.json') $cfg
+                    Write-Warning "Provider '$($Run.provider)' disabled due to quota/rate limit error."
+                }
+            }
+        } elseif ($err -match '(?i)timeout|transient|connection refused|502 bad gateway|503 service unavailable|504 gateway timeout') {
+            $isTransient = $true
+        }
+
+        if ($isTransient) {
+            $task.status = 'ready'
+            $task.blockReason = $null
+            Save-SCTask $task
+            Add-SCEvent 'task.retried.transient' "Retrying task $($task.id) due to transient error." @{taskId=$task.id}
+            $entry.reason = "Transient error, task requeued."
+            $entry.status = 'ready'
+            Remove-SCWorktree $StateRoot $Run.taskId
+            return $entry
+        }
+
+        if (@('running','reviewing','validating') -contains $task.status) {
+            $task.status = 'failed'
+            $task.blockReason = "Worker crashed with exit code $($Run.process.ExitCode)"
+            Save-SCTask $task
+        }
     }
     if ($task.status -ne 'complete') {
-        $child=Get-SCParallelChildOutput $Run
+        if (-not $child) { $child=Get-SCParallelChildOutput $Run }
         $entry.reason = if ($task.blockReason) { [string]$task.blockReason } else { "cycle ended as '$($task.status)'" }
         $preservedBranch = $null
         try {
