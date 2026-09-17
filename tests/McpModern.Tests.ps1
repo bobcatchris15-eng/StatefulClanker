@@ -20,11 +20,13 @@ try {
     Assert-True ($null-ne$discover.result._meta.'io.modelcontextprotocol/serverInfo') 'Modern discover result lacks serverInfo response metadata.'
     Assert-True (-not$discover.result.PSObject.Properties['serverInfo']) 'Modern discover should not use the legacy/body serverInfo field.'
 
-    Write-Host '  MCP MODERN 2: legacy initialize remains legacy; modern initialize is rejected'
+    Write-Host '  MCP MODERN 2: legacy initialize remains legacy; modern initialize is accepted'
     $legacy=Invoke-McpRpc ([pscustomobject]@{jsonrpc='2.0';id=1;method='initialize';params=[pscustomobject]@{}})
     Assert-True (-not[bool]$legacy.result.capabilities.resources.subscribe) 'Legacy initialize falsely advertises legacy resources/subscribe.'
+    Assert-True ([string]$legacy.result.instructions-match'Aggressively clarify material ambiguity') 'Legacy initialize lacks control-plane instructions.'
     $modernInit=Invoke-McpRpc ([pscustomobject]@{jsonrpc='2.0';id='mi';method='initialize';params=[pscustomobject]@{_meta=New-ModernMeta}})
-    Assert-True ([int]$modernInit.error.code-eq-32601) 'Modern initialize should fail as an era-mismatched method.'
+    Assert-True ($null-ne$modernInit.result) 'Modern initialize should succeed and return result.'
+    Assert-True ([string]$modernInit.result.instructions-match'Aggressively clarify material ambiguity') 'Modern initialize lacks control-plane instructions.'
 
     Write-Host '  MCP MODERN 3: modern tools/resources carry server identity and capability authoring'
     $tools=Invoke-McpRpc ([pscustomobject]@{jsonrpc='2.0';id=2;method='tools/list';params=[pscustomobject]@{_meta=New-ModernMeta}});$names=@($tools.result.tools|ForEach-Object{[string]$_.name})

@@ -66,12 +66,13 @@ function Invoke-McpRpc($Request) {
     $method=[string]$Request.method;$modern=Test-SCModernMcpRequest $Request
     if($modern){$envelopeError=Test-SCModernEnvelope $Request;if($envelopeError){return New-SCModernProtocolError $Request -32602 $envelopeError}}
     if($method-eq'server/discover'){return New-SCModernDiscoverResponse $Request}
-    if($modern-and$method-eq'initialize'){return New-SCModernProtocolError $Request -32601 'initialize is not part of MCP 2026-07-28; use server/discover or call the desired method directly with a per-request _meta envelope.'}
     $response=& $script:SCProtocolInvokeMcpRpc $Request
-    if($modern){return Add-SCModernServerInfo $response}
-    if($method-eq'initialize'-and$response-and$response.result-and$response.result.capabilities){
-        # This implementation does not expose legacy resources/subscribe or a standalone GET event stream.
-        $response.result.capabilities['resources']=@{subscribe=$false;listChanged=$false}
+    if($method-eq'initialize'-and$response-and$response.result){
+        if($response.result.capabilities){
+            $response.result.capabilities['resources']=@{subscribe=$false;listChanged=$false}
+        }
+        $response.result['instructions']=Get-SCControlPlaneInstructions
     }
+    if($modern){return Add-SCModernServerInfo $response}
     return $response
 }
