@@ -211,23 +211,31 @@ function Repair-SCOrphanedAgents {
     $now = (Get-Date).ToUniversalTime()
     foreach($rec in $activeRecords) {
         $isDead = $false
-        if ($rec.PSObject.Properties['processId'] -and $rec.processId) {
-            try {
-                $proc = Get-Process -Id ([int]$rec.processId) -ErrorAction SilentlyContinue
-                if (-not $proc) { $isDead = $true }
-            } catch { $isDead = $true }
-        } else {
-            $hbRaw = if ($rec.PSObject.Properties['heartbeatAt'] -and $rec.heartbeatAt) { $rec.heartbeatAt }
-                     elseif ($rec.PSObject.Properties['startedAt'] -and $rec.startedAt) { $rec.startedAt }
-                     else { $null }
-            $heartbeat = [datetime]::MinValue
-            if ($hbRaw -is [datetime]) {
-                $heartbeat = $hbRaw.ToUniversalTime()
-            } elseif (-not [string]::IsNullOrWhiteSpace([string]$hbRaw)) {
-                try { $heartbeat = ([datetime]::Parse([string]$hbRaw)).ToUniversalTime() } catch {}
-            }
-            if (($now - $heartbeat).TotalMinutes -ge 10) {
+        if ($rec.taskId) {
+            $t = Get-SCTask $rec.taskId
+            if (-not $t -or (@('running','reviewing','validating') -notcontains [string]$t.status)) {
                 $isDead = $true
+            }
+        }
+        if (-not $isDead) {
+            if ($rec.PSObject.Properties['processId'] -and $rec.processId) {
+                try {
+                    $proc = Get-Process -Id ([int]$rec.processId) -ErrorAction SilentlyContinue
+                    if (-not $proc) { $isDead = $true }
+                } catch { $isDead = $true }
+            } else {
+                $hbRaw = if ($rec.PSObject.Properties['heartbeatAt'] -and $rec.heartbeatAt) { $rec.heartbeatAt }
+                         elseif ($rec.PSObject.Properties['startedAt'] -and $rec.startedAt) { $rec.startedAt }
+                         else { $null }
+                $heartbeat = [datetime]::MinValue
+                if ($hbRaw -is [datetime]) {
+                    $heartbeat = $hbRaw.ToUniversalTime()
+                } elseif (-not [string]::IsNullOrWhiteSpace([string]$hbRaw)) {
+                    try { $heartbeat = ([datetime]::Parse([string]$hbRaw)).ToUniversalTime() } catch {}
+                }
+                if ($heartbeat -ne [datetime]::MinValue -and ($now - $heartbeat).TotalMinutes -ge 5) {
+                    $isDead = $true
+                }
             }
         }
 
