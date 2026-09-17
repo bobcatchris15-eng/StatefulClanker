@@ -17,9 +17,24 @@ function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
         return [ordered]@{name=$Override;config=$property.Value}
     }
     $candidate=$null
+    $taskProvider=$null
+    $taskSize='small'
+    if($Task){
+        if($Task -is [System.Collections.IDictionary]){
+            if($Task.Contains('provider')-and$Task['provider']){$taskProvider=[string]$Task['provider']}
+            if($Task.Contains('size')-and$Task['size']){$taskSize=[string]$Task['size']}
+        }else{
+            if($Task.PSObject.Properties['provider']-and$Task.provider){$taskProvider=[string]$Task.provider}
+            if($Task.PSObject.Properties['size']-and$Task.size){$taskSize=[string]$Task.size}
+        }
+    }
     if($Stage-eq'critic'-and$cfg.PSObject.Properties['criticProvider']-and$cfg.criticProvider){$candidate=[string]$cfg.criticProvider}
     elseif($Stage-eq'validator'-and$cfg.PSObject.Properties['validatorProvider']-and$cfg.validatorProvider){$candidate=[string]$cfg.validatorProvider}
-    elseif($Task-and$Task.PSObject.Properties['provider']-and$Task.provider){$candidate=[string]$Task.provider}
+    elseif($taskProvider){$candidate=$taskProvider}
+    elseif($Stage-eq'worker'-and$cfg.PSObject.Properties['providerBySize']-and$cfg.providerBySize){
+        $route=$cfg.providerBySize.PSObject.Properties[$taskSize]
+        if($route-and-not[string]::IsNullOrWhiteSpace([string]$route.Value)){$candidate=[string]$route.Value}
+    }
     if($candidate){
         $prop=if($cfg.providers){$cfg.providers.PSObject.Properties[$candidate]}else{$null}
         if($prop-and-not($prop.Value.PSObject.Properties['disabled']-and[bool]$prop.Value.disabled)){return [ordered]@{name=$candidate;config=$prop.Value}}

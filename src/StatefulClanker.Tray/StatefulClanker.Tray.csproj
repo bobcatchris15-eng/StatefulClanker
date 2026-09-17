@@ -7,10 +7,10 @@
     <AssemblyName>StatefulClanker</AssemblyName>
     <RootNamespace>StatefulClanker.Tray</RootNamespace>
     <ApplicationIcon>..\..\install\StatefulClanker.ico</ApplicationIcon>
-    <Version>0.7.1</Version>
-    <AssemblyVersion>0.7.1.0</AssemblyVersion>
-    <FileVersion>0.7.1.0</FileVersion>
-    <InformationalVersion>0.7.1</InformationalVersion>
+    <Version>0.7.2</Version>
+    <AssemblyVersion>0.7.2.0</AssemblyVersion>
+    <FileVersion>0.7.2.0</FileVersion>
+    <InformationalVersion>0.7.2</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

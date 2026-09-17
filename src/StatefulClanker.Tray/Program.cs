@@ -442,19 +442,38 @@ sealed class MainForm : Form
 
     TabPage BuildProviders()
     {
-        var p = Page("Providers"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1 }; rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill };
+        var p = Page("Providers"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1 };
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         var toggle = Btn("Disable / Enable", 125); toggle.Click += (_, _) => ToggleSelectedProviderDisabled();
-        var moveUp = Btn("Move Up", 90); moveUp.Click += (_, _) => AdjustProviderPriority(-1);
-        var moveDown = Btn("Move Down", 95); moveDown.Click += (_, _) => AdjustProviderPriority(1);
-        var setDefault = Btn("Set Default", 105); setDefault.Click += (_, _) => SetProviderRole("defaultProvider");
-        var setCritic = Btn("Set Critic", 100); setCritic.Click += (_, _) => SetProviderRole("criticProvider");
-        var setValidator = Btn("Set Validator", 110); setValidator.Click += (_, _) => SetProviderRole("validatorProvider");
-        var test = Btn("Test Provider", 110); test.Click += (_, _) => TestSelectedProvider();
-        var open = Btn("Open config", 105); open.Click += (_, _) => OpenConfig();
-        var refresh = Btn("Refresh", 90); refresh.Click += async (_, _) => await RefreshAllAsync();
-        bar.Controls.AddRange(new Control[] { toggle, moveUp, moveDown, setDefault, setCritic, setValidator, test, open, refresh });
-        rows.Controls.Add(bar, 0, 0); rows.Controls.Add(Section("WORKER BACKEND STATUS, PRIORITY, AND ROUTING"), 0, 1);
+        var moveUp = Btn("Move Up", 85); moveUp.Click += (_, _) => AdjustProviderPriority(-1);
+        var moveDown = Btn("Move Down", 90); moveDown.Click += (_, _) => AdjustProviderPriority(1);
+        var test = Btn("Test Provider", 105); test.Click += (_, _) => TestSelectedProvider();
+        var open = Btn("Open config", 100); open.Click += (_, _) => OpenConfig();
+        var refresh = Btn("Refresh", 85); refresh.Click += async (_, _) => await RefreshAllAsync();
+        bar.Controls.AddRange(new Control[] { toggle, moveUp, moveDown, test, open, refresh });
+
+        var roleBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        var roleLbl = new Label { Text = "Routing role:", AutoSize = true, Margin = new Padding(4, 10, 4, 0), ForeColor = Theme.Muted };
+        var setDefault = Btn("Set Default", 95); setDefault.Click += (_, _) => SetProviderRole("defaultProvider");
+        var setCritic = Btn("Set Critic", 90); setCritic.Click += (_, _) => SetProviderRole("criticProvider");
+        var setValidator = Btn("Set Validator", 105); setValidator.Click += (_, _) => SetProviderRole("validatorProvider");
+        var sizeLbl = new Label { Text = "Task size:", AutoSize = true, Margin = new Padding(12, 10, 4, 0), ForeColor = Theme.Muted };
+        var setTiny = Btn("Set Tiny", 80); setTiny.Click += (_, _) => SetProviderRole("tiny");
+        var setSmall = Btn("Set Small", 85); setSmall.Click += (_, _) => SetProviderRole("small");
+        var setMed = Btn("Set Medium", 95); setMed.Click += (_, _) => SetProviderRole("medium");
+        var setLrg = Btn("Set Large", 85); setLrg.Click += (_, _) => SetProviderRole("large");
+        var clearRoles = Btn("Clear Roles", 95); clearRoles.Click += (_, _) => ClearProviderRoles();
+        roleBar.Controls.AddRange(new Control[] { roleLbl, setDefault, setCritic, setValidator, sizeLbl, setTiny, setSmall, setMed, setLrg, clearRoles });
+
+        rows.Controls.Add(bar, 0, 0);
+        rows.Controls.Add(roleBar, 0, 1);
+        rows.Controls.Add(Section("WORKER BACKEND STATUS, PRIORITY, AND ROUTING"), 0, 2);
+
         _providers.Dock = DockStyle.Fill; _providers.ReadOnly = true; _providers.AllowUserToAddRows = false; _providers.RowHeadersVisible = false; _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         _providers.Columns.Add("name", "Provider");
         _providers.Columns.Add("status", "Status");
@@ -462,7 +481,39 @@ sealed class MainForm : Form
         _providers.Columns.Add("backend", "Backend");
         _providers.Columns.Add("target", "Target");
         _providers.Columns.Add("roles", "Routing / roles");
-        rows.Controls.Add(_providers, 0, 2); p.Controls.Add(rows); return p;
+
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Disable / Enable", null, (_, _) => ToggleSelectedProviderDisabled());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Move Up (Priority)", null, (_, _) => AdjustProviderPriority(-1));
+        menu.Items.Add("Move Down (Priority)", null, (_, _) => AdjustProviderPriority(1));
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Set as Default Provider", null, (_, _) => SetProviderRole("defaultProvider"));
+        menu.Items.Add("Set as Critic Provider", null, (_, _) => SetProviderRole("criticProvider"));
+        menu.Items.Add("Set as Validator Provider", null, (_, _) => SetProviderRole("validatorProvider"));
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Set for Tiny Tasks", null, (_, _) => SetProviderRole("tiny"));
+        menu.Items.Add("Set for Small Tasks", null, (_, _) => SetProviderRole("small"));
+        menu.Items.Add("Set for Medium Tasks", null, (_, _) => SetProviderRole("medium"));
+        menu.Items.Add("Set for Large Tasks", null, (_, _) => SetProviderRole("large"));
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Clear Roles & Sizes for Provider", null, (_, _) => ClearProviderRoles());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Test Provider", null, (_, _) => TestSelectedProvider());
+
+        _providers.ContextMenuStrip = menu;
+        _providers.CellMouseDown += (s, e) =>
+        {
+            if (e.Button == MouseButtons.Right && e.RowIndex >= 0)
+            {
+                _providers.ClearSelection();
+                _providers.Rows[e.RowIndex].Selected = true;
+            }
+        };
+
+        rows.Controls.Add(_providers, 0, 3);
+        p.Controls.Add(rows);
+        return p;
     }
 
     ProviderStatus? SelectedProvider => _providers.SelectedRows.Count > 0 ? _providers.SelectedRows[0].Tag as ProviderStatus : null;
@@ -543,7 +594,7 @@ sealed class MainForm : Form
         }
     }
 
-    void SetProviderRole(string roleKey)
+    void SetProviderRole(string roleOrSize)
     {
         var p = SelectedProvider;
         var path = _settings.ActiveProjectPath;
@@ -553,16 +604,64 @@ sealed class MainForm : Form
         try
         {
             var node = JsonNode.Parse(File.ReadAllText(cfgPath));
-            if (node is not null)
+            if (node is null) return;
+
+            if (roleOrSize is "tiny" or "small" or "medium" or "large")
             {
-                node[roleKey] = p.Name;
-                File.WriteAllText(cfgPath, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
-                _ = RefreshAllAsync();
+                if (node["providerBySize"] is not JsonObject bySize)
+                {
+                    bySize = new JsonObject();
+                    node["providerBySize"] = bySize;
+                }
+                bySize[roleOrSize] = p.Name;
             }
+            else
+            {
+                node[roleOrSize] = p.Name;
+            }
+
+            File.WriteAllText(cfgPath, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            _ = RefreshAllAsync();
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, "Failed to update config: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    void ClearProviderRoles()
+    {
+        var p = SelectedProvider;
+        var path = _settings.ActiveProjectPath;
+        if (p is null || string.IsNullOrWhiteSpace(path)) return;
+        var cfgPath = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
+        if (!File.Exists(cfgPath)) return;
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(cfgPath));
+            if (node is null) return;
+
+            if (node["defaultProvider"]?.ToString() == p.Name) node.AsObject().Remove("defaultProvider");
+            if (node["criticProvider"]?.ToString() == p.Name) node.AsObject().Remove("criticProvider");
+            if (node["validatorProvider"]?.ToString() == p.Name) node.AsObject().Remove("validatorProvider");
+
+            if (node["providerBySize"] is JsonObject bySize)
+            {
+                foreach (var size in new[] { "tiny", "small", "medium", "large" })
+                {
+                    if (bySize[size]?.ToString() == p.Name)
+                    {
+                        bySize.Remove(size);
+                    }
+                }
+            }
+
+            File.WriteAllText(cfgPath, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            _ = RefreshAllAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Failed to clear provider roles: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 

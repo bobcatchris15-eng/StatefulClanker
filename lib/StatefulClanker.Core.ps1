@@ -48,7 +48,12 @@ function Invoke-SCLocked([scriptblock]$Body, [int]$TimeoutSeconds = 120) {
         $mutex.Dispose()
     }
 }
-function ConvertTo-SCJson($Value,[int]$Depth=12) { $Value | ConvertTo-Json -Depth $Depth }
+function ConvertTo-SCJson {
+    param([Parameter(ValueFromPipeline=$true, Position=0)]$Value, [Parameter(Position=1)][int]$Depth=12)
+    process {
+        if ($null -ne $Value) { $Value | ConvertTo-Json -Depth $Depth }
+    }
+}
 function Set-SCProperty($Object,[string]$Name,$Value) {
     if($Object -is [System.Collections.IDictionary]){$Object[$Name]=$Value;return}
     if($Object.PSObject.Properties[$Name]){$Object.$Name=$Value}else{$Object|Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force}

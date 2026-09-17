@@ -311,20 +311,40 @@ function Set-McpProvider([string]$Project, $Arguments) {
     $providerObj = [ordered]@{
         command = $command; args = $providerArgs; mode = $mode
     }
-    if ($Arguments -and $Arguments.PSObject.Properties['priority'] -and $null -ne $Arguments.priority) {
-        $providerObj['priority'] = [int]$Arguments.priority
+    $priorityVal = Get-McpArgOptional $Arguments 'priority'
+    if ($null -ne $priorityVal) {
+        $providerObj['priority'] = [int]$priorityVal
     }
-    if ($Arguments -and $Arguments.PSObject.Properties['disabled']) {
-        $providerObj['disabled'] = [bool]$Arguments.disabled
+    $disabledVal = Get-McpArgOptional $Arguments 'disabled'
+    if ($null -ne $disabledVal) {
+        $providerObj['disabled'] = [bool]$disabledVal
     }
     $cfg.providers | Add-Member -NotePropertyName $name -NotePropertyValue ([pscustomobject]$providerObj) -Force
 
     $assigned = @()
     foreach ($pair in @(@('setDefault', 'defaultProvider'), @('setCritic', 'criticProvider'), @('setValidator', 'validatorProvider'))) {
-        if ($Arguments -and $Arguments.PSObject.Properties[$pair[0]] -and [bool]$Arguments.$($pair[0])) {
+        $v = Get-McpArgOptional $Arguments $pair[0]
+        if ($null -ne $v -and [bool]$v) {
             $cfg | Add-Member -NotePropertyName $pair[1] -NotePropertyValue $name -Force
             $assigned += $pair[1]
         }
+    }
+
+    if (-not $cfg.PSObject.Properties['providerBySize'] -or $null -eq $cfg.providerBySize) {
+        $cfg | Add-Member -NotePropertyName providerBySize -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    foreach ($sizeName in @('tiny', 'small', 'medium', 'large')) {
+        $flagName = "set$([char]::ToUpperInvariant($sizeName[0]))$($sizeName.Substring(1))"
+        $v = Get-McpArgOptional $Arguments $flagName
+        if ($null -ne $v -and [bool]$v) {
+            $cfg.providerBySize | Add-Member -NotePropertyName $sizeName -NotePropertyValue $name -Force
+            $assigned += $sizeName
+        }
+    }
+    $sizeArg = Get-McpArgOptional $Arguments 'size'
+    if ($sizeArg -and @('tiny', 'small', 'medium', 'large') -contains $sizeArg.ToLowerInvariant()) {
+        $cfg.providerBySize | Add-Member -NotePropertyName $sizeArg.ToLowerInvariant() -NotePropertyValue $name -Force
+        $assigned += $sizeArg.ToLowerInvariant()
     }
 
     $cfg | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
@@ -725,6 +745,7 @@ function Get-McpToolList {
             taskId      = @{ type = 'string'; description = 'Optional stable id. Generated when omitted.' }
             title       = @{ type = 'string' }
             instruction = @{ type = 'string'; description = 'What the cold-start worker must do. Must stand alone.' }
+            size        = @{ type = 'string'; enum = @('tiny', 'small', 'medium', 'large'); description = 'Semantic size assigned by the planner.' }
             accept      = @{ type = 'array'; items = @{ type = 'string' }; description = 'Observable acceptance criteria.' }
             retrieval   = @{ type = 'array'; items = @{ type = 'string' }; description = 'Files/dirs/globs to compile into the worker context.' }
             evidence    = @{ type = 'array'; items = @{ type = 'string' } }
@@ -733,6 +754,11 @@ function Get-McpToolList {
             provider    = @{ type = 'string' }
             humanGate   = @{ type = 'boolean'; description = 'Require a human to release this task before it can run.' }
         }); required = @('title', 'instruction') } },
+        @{ name = 'task_set'; description = 'Update an existing task in the graph, such as setting its semantic size (tiny/small/medium/large) or assigned provider.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{
+            taskId      = @{ type = 'string'; description = 'Target task id to update.' }
+            size        = @{ type = 'string'; enum = @('tiny', 'small', 'medium', 'large'); description = 'Semantic size (tiny/small/medium/large).' }
+            provider    = @{ type = 'string'; description = 'Specific provider to assign, or empty to clear.' }
+        }); required = @('taskId') } },
         @{ name = 'task_retry'; description = 'Reset a task to ready and invalidate affected dependents. Advances the task control revision.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ taskId = @{ type = 'string' } }); required = @('taskId') } },
         @{ name = 'task_block'; description = 'Block a task with a reason. Advances the task control revision.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ taskId = @{ type = 'string' }; reason = @{ type = 'string' } }); required = @('taskId', 'reason') } },
         @{ name = 'task_complete'; description = 'HUMAN AUTHORITY: mark a task complete WITHOUT critic/validator review. Disabled unless mcp.allowHumanAuthorityTools is true.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ taskId = @{ type = 'string' } }); required = @('taskId') } },
@@ -754,7 +780,7 @@ function Get-McpToolList {
         # ---- observation ----
         @{ name = 'direction_add'; description = 'Record human direction durably and advance the project direction revision, staling older compilations.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ message = @{ type = 'string' } }); required = @('message') } },
         @{ name = 'provider_list'; description = 'List configured worker providers and which one is default/critic/validator.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
-        @{ name = 'provider_set'; description = 'Add or update a worker provider (the CLI that actually does the work) and optionally make it the default/critic/validator. Required before the first run_start.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{
+        @{ name = 'provider_set'; description = 'Add or update a worker provider (the CLI that actually does the work) and optionally make it the default/critic/validator or map to task sizes (tiny/small/medium/large). Required before the first run_start.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{
             name        = @{ type = 'string'; description = 'Short id, e.g. claude, opencode, agy.' }
             command     = @{ type = 'string'; description = 'Executable to run. Must be on PATH or a full path.' }
             args        = @{ type = 'array'; items = @{ type = 'string' }; description = 'Arguments. MUST include {prompt} or {promptFile}. Also supports {projectRoot} and {taskId}.' }
@@ -764,6 +790,11 @@ function Get-McpToolList {
             setDefault  = @{ type = 'boolean' }
             setCritic   = @{ type = 'boolean' }
             setValidator = @{ type = 'boolean' }
+            setTiny     = @{ type = 'boolean'; description = 'Route tiny tasks to this provider.' }
+            setSmall    = @{ type = 'boolean'; description = 'Route small tasks to this provider.' }
+            setMedium   = @{ type = 'boolean'; description = 'Route medium tasks to this provider.' }
+            setLarge    = @{ type = 'boolean'; description = 'Route large tasks to this provider.' }
+            size        = @{ type = 'string'; enum = @('tiny', 'small', 'medium', 'large'); description = 'Assign task size routing for this provider.' }
         }); required = @('name', 'command', 'args') } },
         @{ name = 'provider_test'; description = 'Dispatch a trivial probe prompt to a provider and report whether it is actually usable. Catches expired logins and headless permission gates before a real cycle wastes an attempt.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ name = @{ type = 'string'; description = 'Defaults to the configured default provider.' }; timeoutSeconds = @{ type = 'integer'; minimum = 10; maximum = 300 } }) } },
         @{ name = 'telemetry_active'; description = 'List currently active subagents.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
@@ -840,6 +871,17 @@ function Invoke-McpTool([string]$Name, $Arguments) {
             if ($Arguments -and $Arguments.PSObject.Properties['humanGate'] -and [bool]$Arguments.humanGate) { $cli += '-HumanGate' }
             $r = Invoke-McpHarness $project $cli
             return New-McpTextResult ([ordered]@{ taskId = $r.stdout; created = $true })
+        }
+        'task_set' {
+            Assert-McpInitialized $project
+            $id = Get-McpArgRequired $Arguments 'taskId'
+            $size = Get-McpArgOptional $Arguments 'size'
+            $provider = Get-McpArgOptional $Arguments 'provider'
+            $cli = @('task', 'set', '-TaskId', $id)
+            if ($size) { $cli += @('-Size', $size) }
+            if ($provider) { $cli += @('-Provider', $provider) }
+            $r = Invoke-McpHarness $project $cli
+            return New-McpTextResult ([ordered]@{ taskId = $id; size = $size; provider = $provider; output = $r.stdout })
         }
         'task_retry' {
             Assert-McpInitialized $project
@@ -940,6 +982,10 @@ function Invoke-McpTool([string]$Name, $Arguments) {
                     }
                 } catch { }
             }
+            $defProvider = if ($cfg -and $cfg.PSObject.Properties['defaultProvider']) { [string]$cfg.defaultProvider } else { $null }
+            $critProvider = if ($cfg -and $cfg.PSObject.Properties['criticProvider']) { [string]$cfg.criticProvider } else { $null }
+            $valProvider = if ($cfg -and $cfg.PSObject.Properties['validatorProvider']) { [string]$cfg.validatorProvider } else { $null }
+            $bySize = if ($cfg -and $cfg.PSObject.Properties['providerBySize']) { $cfg.providerBySize } else { $null }
             $rows = @()
             if ($cfg -and $cfg.PSObject.Properties['providers'] -and $cfg.providers) {
                 foreach ($p in $cfg.providers.PSObject.Properties) {
@@ -980,6 +1026,15 @@ function Invoke-McpTool([string]$Name, $Arguments) {
                         $status = 'disabled'
                         $errorMsg = 'Provider is disabled in config.json.'
                     }
+                    $roles = @()
+                    if ($p.Name -eq $defProvider) { $roles += 'default' }
+                    if ($p.Name -eq $critProvider) { $roles += 'critic' }
+                    if ($p.Name -eq $valProvider) { $roles += 'validator' }
+                    if ($bySize) {
+                        foreach ($szProp in $bySize.PSObject.Properties) {
+                            if ([string]$szProp.Value -eq $p.Name) { $roles += $szProp.Name }
+                        }
+                    }
                     $rows += [ordered]@{
                         name       = $p.Name
                         type       = $type
@@ -990,15 +1045,13 @@ function Invoke-McpTool([string]$Name, $Arguments) {
                         priority   = $priority
                         ready      = $ready
                         status     = $status
+                        roles      = $roles
                         error      = $errorMsg
                     }
                 }
             }
-            $defProvider = if ($cfg -and $cfg.PSObject.Properties['defaultProvider']) { $cfg.defaultProvider } else { $null }
-            $critProvider = if ($cfg -and $cfg.PSObject.Properties['criticProvider']) { $cfg.criticProvider } else { $null }
-            $valProvider = if ($cfg -and $cfg.PSObject.Properties['validatorProvider']) { $cfg.validatorProvider } else { $null }
             $sortedRows = @($rows | Sort-Object { if ($null -ne $_.priority) { $_.priority } elseif ($_.name -eq $defProvider) { 0 } else { 100 } }, name)
-            return New-McpTextResult ([ordered]@{ defaultProvider = $defProvider; criticProvider = $critProvider; validatorProvider = $valProvider; providers = $sortedRows })
+            return New-McpTextResult ([ordered]@{ defaultProvider = $defProvider; criticProvider = $critProvider; validatorProvider = $valProvider; providerBySize = $bySize; providers = $sortedRows })
         }
         'provider_set' {
             return New-McpTextResult (Set-McpProvider $project $Arguments)

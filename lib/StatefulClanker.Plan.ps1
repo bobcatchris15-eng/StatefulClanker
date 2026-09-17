@@ -160,7 +160,27 @@ function Add-SCTask {
     $taskObj=New-SCTaskObject $id $Title $Instruction @($Accept) @($DependsOn) @($Relation) @($Retrieval) @($Evidence) $Provider $Role ([bool]$HumanGate)
     $sizeValue=if($Size){$Size.ToLowerInvariant()}else{'small'};if(@('tiny','small','medium','large')-notcontains$sizeValue){throw "Invalid -Size '$Size'."}
     Set-SCProperty $taskObj 'size' $sizeValue;Set-SCProperty $taskObj 'sources' @($Source);Set-SCProperty $taskObj 'intentRefs' @($IntentRef)
-    Save-SCTask $taskObj;Update-SCReadiness;Add-SCEvent 'task.created' $Title @{taskId=$id;size=$sizeValue;sources=@($Source);intentRefs=@($IntentRef);relations=@($taskObj.relations)};Write-Host $id
+    Save-SCTask $taskObj;Update-SCReadiness;Add-SCEvent 'task.created' $Title @{taskId=$id;size=$sizeValue;sources=@($Source);intentRefs=@($IntentRef);relations=@($taskObj.relations)}
+    [Console]::Out.WriteLine($id)
+}
+
+function Set-SCTaskSize([string]$TargetTaskId,[string]$TargetSize,[string]$TargetProvider) {
+    $id=if($TargetTaskId){$TargetTaskId}elseif($TaskId){$TaskId}else{throw '-TaskId is required.'}
+    $task=Get-SCTask $id
+    $sz=if($TargetSize){$TargetSize}elseif($Size){$Size}else{''}
+    if($sz){
+        $sizeValue=$sz.ToLowerInvariant()
+        if(@('tiny','small','medium','large')-notcontains$sizeValue){throw "Invalid -Size '$sz'. Must be tiny, small, medium, or large."}
+        Set-SCProperty $task 'size' $sizeValue
+    }
+    $prov=if($TargetProvider){$TargetProvider}elseif($Provider){$Provider}else{''}
+    if($prov){
+        Set-SCProperty $task 'provider' $prov
+    }
+    Save-SCTask $task;Update-SCReadiness
+    Add-SCEvent 'task.updated' $task.title @{taskId=$id;size=$task.size;provider=$task.provider}
+    [Console]::Out.WriteLine("Updated task $id (size: $($task.size))")
+    return $task
 }
 
 function Get-SCRetrievalPacket($Task) {
