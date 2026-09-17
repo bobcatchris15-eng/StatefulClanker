@@ -62,6 +62,12 @@ owning worker coordination, validation gating, and durable state.
   No .NET SDK on this box and the repo has never had a build step; a compiled app
   would add a toolchain dependency for a local dev tool. Revisit if the UI outgrows
   what WinForms-by-script can carry.
+- ~~D8~~ SUPERSEDED 2026-09-17: the UI did outgrow the script. There is now a
+  compiled WinForms C# tray at src/StatefulClanker.Tray/Program.cs (the
+  blinkenlights rack, csproj, `dotnet build` verified clean) alongside the
+  original desktop/StatefulClanker.Tray.ps1. The .NET SDK IS installed on this
+  box (`dotnet` on PATH, net8.0-windows). D8's premise was wrong by the time of
+  this check; don't cite it as a reason to avoid touching src/StatefulClanker.Tray.
 - D9 2026-09-14: Installer is Inno Setup, PER-USER (PrivilegesRequired=lowest). No
   UAC, and the MCP client configs it manages are per-user anyway. Inno 6.7.3 was
   already installed at %LOCALAPPDATA%\Programs, so nothing new was added to the box.

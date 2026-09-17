@@ -309,7 +309,7 @@ sealed class ActiveAgentInfo
 
 sealed class ProjectMetrics
 {
-    public int ActiveAgents, Sessions, Commits, Critics, CompleteTasks, TotalTasks;
+    public int ActiveAgents, Sessions, Commits, Validators, CompleteTasks, TotalTasks;
     public long UsageReports, PromptTokens, CompletionTokens, TotalTokens;
     public Dictionary<string,long> ModelTokens = new(StringComparer.OrdinalIgnoreCase);
     public string IntentRevision = "—", Goal = "", Activity = "";
@@ -360,18 +360,26 @@ static class Inspector
                 AddModels(m, r);
 
                 var type = "Worker";
+                string? tidStr = null;
+                if (r.TryGetProperty("taskId", out var tidProp) && tidProp.ValueKind == JsonValueKind.String) tidStr = tidProp.GetString();
+                // Project-level reviews run through the same 'critic'/'validator' stages as
+                // per-task review, but their pseudo-task id is prefixed "review-" (New-SCId
+                // 'review' in ProjectReview.ps1). Only the project-level critic stays red;
+                // everything else (per-task critic, per-task validator, project validator)
+                // is the amber "Validator" lamp.
+                var isProjectReview = !string.IsNullOrEmpty(tidStr) && tidStr.StartsWith("review-", StringComparison.OrdinalIgnoreCase);
                 if (r.TryGetProperty("stage", out var st) && st.ValueKind == JsonValueKind.String)
                 {
                     var s = st.GetString()?.ToLowerInvariant();
-                    if (s == "critic") type = "Critic";
-                    else if (s == "validator") type = "Validator";
+                    if (s == "critic" && isProjectReview) type = "Project Critic";
+                    else if (s == "critic" || s == "validator") type = "Validator";
                     else if (s == "research" || s == "researcher") type = "Researcher";
                     else if (r.TryGetProperty("role", out var ro) && ro.ValueKind == JsonValueKind.String && ro.GetString()?.ToLowerInvariant() == "researcher")
                         type = "Researcher";
                 }
                 m.ActiveTypes[type] = m.ActiveTypes.TryGetValue(type, out var cur) ? cur + 1 : 1;
                 var info = new ActiveAgentInfo { AgentId = System.IO.Path.GetFileNameWithoutExtension(file) };
-                if (r.TryGetProperty("taskId", out var tid) && tid.ValueKind == JsonValueKind.String) info.TaskId = tid.GetString() ?? "";
+                info.TaskId = tidStr ?? "";
                 if (r.TryGetProperty("agentId", out var aid) && aid.ValueKind == JsonValueKind.String) info.AgentId = aid.GetString() ?? info.AgentId;
                 info.Type = type;
                 m.ActiveAgentList.Add(info);
@@ -384,7 +392,7 @@ static class Inspector
         var runs = JsonFiles(System.IO.Path.Combine(state, "telemetry", "runs")).ToArray(); m.Sessions = runs.Length;
         foreach (var file in runs)
         {
-            try { using var d = JsonDocument.Parse(File.ReadAllText(file)); var r=d.RootElement; if (r.TryGetProperty("stage", out var s) && s.GetString() == "critic") m.Critics++; AddUsage(m,r); } catch { }
+            try { using var d = JsonDocument.Parse(File.ReadAllText(file)); var r=d.RootElement; if (r.TryGetProperty("stage", out var s) && (s.GetString() == "critic" || s.GetString() == "validator")) m.Validators++; AddUsage(m,r); } catch { }
         }
         foreach (var file in JsonFiles(System.IO.Path.Combine(state, "tasks")))
         {
@@ -616,7 +624,7 @@ sealed class AgentBlinkenBank : Control
         Color borderColor, headerColor;
         switch (AgentType.ToLowerInvariant())
         {
-            case "critic":
+            case "project critic":
                 borderColor = IsActive ? Color.FromArgb(240, 60, 60) : Color.FromArgb(48, 58, 68);
                 headerColor = Color.FromArgb(255, 95, 95);
                 break;
@@ -865,7 +873,7 @@ sealed class MainForm : Form
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var metricNames = new[] { "ACTIVE AGENTS", "WORKER SESSIONS", "COMMITS", "CRITIC RUNS", "TASKS COMPLETE" }; var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1 };
+        var metricNames = new[] { "ACTIVE AGENTS", "WORKER SESSIONS", "COMMITS", "VALIDATOR RUNS", "TASKS COMPLETE" }; var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1 };
         for (var i = 0; i < 5; i++) { metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20)); _metrics[i].Dock = DockStyle.Fill; _metrics[i].Margin = new Padding(5); _metrics[i].TextAlign = ContentAlignment.MiddleCenter; _metrics[i].Font = new Font("Cascadia Mono", 12, FontStyle.Bold); _metrics[i].Text = metricNames[i] + "\r\n—"; metrics.Controls.Add(_metrics[i], i, 0); }
         _blinkenRack.Dock = DockStyle.Fill; _blinkenRack.Margin = new Padding(5,2,5,2);
 
@@ -1446,7 +1454,7 @@ sealed class MainForm : Form
         _metrics[0].Text = agentText;
         _metrics[1].Text = $"WORKER SESSIONS\r\n{m.Sessions}";
         _metrics[2].Text = $"COMMITS\r\n{m.Commits}";
-        _metrics[3].Text = $"CRITIC RUNS\r\n{m.Critics}";
+        _metrics[3].Text = $"VALIDATOR RUNS\r\n{m.Validators}";
         _metrics[4].Text = $"TASKS COMPLETE\r\n{m.CompleteTasks}/{m.TotalTasks}";
         _intent.Text = $"INTENT REVISION  {m.IntentRevision}";
         _goal.Text = string.IsNullOrWhiteSpace(m.Goal) ? "No project goal recorded." : m.Goal;
