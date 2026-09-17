@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -295,6 +295,7 @@ sealed class AutofillSnapshot
     public int ActiveWorkers;
     public int MaxConcurrent = 3;
     public int ReadyCount;
+    public int RetryCount;
     public int Slots = 3;
     public string? BlockReason;
 }
@@ -305,6 +306,8 @@ sealed class ProjectMetrics
     public long UsageReports, PromptTokens, CompletionTokens, TotalTokens;
     public Dictionary<string,long> ModelTokens = new(StringComparer.OrdinalIgnoreCase);
     public string IntentRevision = "—", Goal = "", Activity = "";
+    public Dictionary<string, int> ActiveTypes = new(StringComparer.OrdinalIgnoreCase);
+    public string ActiveTypesSummary = "";
 }
 
 sealed class IntegrationStatus
@@ -342,7 +345,29 @@ static class Inspector
     {
         var m = new ProjectMetrics(); var state = System.IO.Path.Combine(project, ".statefulclanker"); if (!Directory.Exists(state)) return m;
         var active = JsonFiles(System.IO.Path.Combine(state, "telemetry", "active")).ToArray(); m.ActiveAgents = active.Length;
-        foreach (var file in active) { try { using var d = JsonDocument.Parse(File.ReadAllText(file)); AddModels(m, d.RootElement); } catch { } }
+        foreach (var file in active) {
+            try {
+                using var d = JsonDocument.Parse(File.ReadAllText(file));
+                var r = d.RootElement;
+                AddModels(m, r);
+
+                var type = "Worker";
+                if (r.TryGetProperty("stage", out var st) && st.ValueKind == JsonValueKind.String)
+                {
+                    var s = st.GetString()?.ToLowerInvariant();
+                    if (s == "critic") type = "Critic";
+                    else if (s == "validator") type = "Validator";
+                    else if (s == "research" || s == "researcher") type = "Researcher";
+                    else if (r.TryGetProperty("role", out var ro) && ro.ValueKind == JsonValueKind.String && ro.GetString()?.ToLowerInvariant() == "researcher")
+                        type = "Researcher";
+                }
+                m.ActiveTypes[type] = m.ActiveTypes.TryGetValue(type, out var cur) ? cur + 1 : 1;
+            } catch { }
+        }
+        if (m.ActiveTypes.Count > 0)
+        {
+            m.ActiveTypesSummary = string.Join(", ", m.ActiveTypes.Select(kv => kv.Value == 1 ? kv.Key : $"{kv.Value} {kv.Key}s"));
+        }
         var runs = JsonFiles(System.IO.Path.Combine(state, "telemetry", "runs")).ToArray(); m.Sessions = runs.Length;
         foreach (var file in runs)
         {
@@ -399,10 +424,17 @@ static class Inspector
                     snap.Paused = pzb.ValueKind == JsonValueKind.True;
                 if (root.TryGetProperty("activeWorkers", out var aw) && aw.TryGetInt32(out var awVal))
                     snap.ActiveWorkers = awVal;
+                else if (root.TryGetProperty("ownedActive", out var oa) && oa.TryGetInt32(out var oaVal))
+                    snap.ActiveWorkers = oaVal;
+                else if (root.TryGetProperty("activeTasks", out var at) && at.ValueKind == JsonValueKind.Array)
+                    snap.ActiveWorkers = at.GetArrayLength();
+
                 if (root.TryGetProperty("maxConcurrent", out var mcv) && mcv.TryGetInt32(out var mcvVal))
                     snap.MaxConcurrent = mcvVal;
                 if (root.TryGetProperty("readyCount", out var rc) && rc.TryGetInt32(out var rcVal))
                     snap.ReadyCount = rcVal;
+                if (root.TryGetProperty("retryCount", out var rtc) && rtc.TryGetInt32(out var rtcVal))
+                    snap.RetryCount = rtcVal;
                 if (root.TryGetProperty("slots", out var sl) && sl.TryGetInt32(out var slVal))
                     snap.Slots = slVal;
                 if (root.TryGetProperty("blockReason", out var br) && br.ValueKind == JsonValueKind.String)
@@ -1102,7 +1134,7 @@ sealed class MainForm : Form
         if (snapshot.HasProject)
         {
             SetMetrics(snapshot.Project);
-            SetAutofillUi(snapshot.Autofill, true);
+            SetAutofillUi(snapshot.Autofill, snapshot.Project, true);
             _overviewActivity.Text = _allActivity.Text = snapshot.Project.Activity;
             var active = snapshot.Providers.Where(p => !p.Disabled).OrderBy(p => p.Priority).Select(p => p.Name).ToList();
             _activeProvidersText.Text = active.Count > 0 ? string.Join(", ", active) : "None (All disabled)";
@@ -1110,7 +1142,7 @@ sealed class MainForm : Form
         else
         {
             SetMetrics(new());
-            SetAutofillUi(snapshot.Autofill, false);
+            SetAutofillUi(snapshot.Autofill, new(), false);
             _overviewActivity.Text = _allActivity.Text = "Select a project at left. StatefulClanker does not silently substitute a default project.";
         }
         _integrations.SuspendLayout();
@@ -1136,7 +1168,7 @@ sealed class MainForm : Form
         finally { _providers.ResumeLayout(); }
     }
 
-    void SetAutofillUi(AutofillSnapshot a, bool hasProject)
+    void SetAutofillUi(AutofillSnapshot a, ProjectMetrics m, bool hasProject)
     {
         _updatingAutofillUi = true;
         try
@@ -1164,7 +1196,19 @@ sealed class MainForm : Form
             }
 
             var stateStr = a.Paused ? "PAUSED" : (a.Running ? "RUNNING" : "STOPPED");
-            var statusText = $"Status: {stateStr}  |  Slots: {a.ActiveWorkers}/{a.MaxConcurrent} active ({a.Slots} free)  |  Queue: {a.ReadyCount} ready";
+            var activeCount = Math.Max(a.ActiveWorkers, m.ActiveAgents);
+            var freeSlots = Math.Max(0, a.MaxConcurrent - activeCount);
+            var activePart = activeCount == 0
+                ? $"Slots: 0/{a.MaxConcurrent} active ({freeSlots} free)"
+                : (string.IsNullOrEmpty(m.ActiveTypesSummary)
+                    ? $"Slots: {activeCount}/{a.MaxConcurrent} active ({freeSlots} free)"
+                    : $"Slots: {activeCount}/{a.MaxConcurrent} active [{m.ActiveTypesSummary}] ({freeSlots} free)");
+
+            var queuePart = a.RetryCount > 0
+                ? $"Queue: {a.ReadyCount} ready, {a.RetryCount} retry"
+                : $"Queue: {a.ReadyCount} ready";
+
+            var statusText = $"Status: {stateStr}  |  {activePart}  |  {queuePart}";
             if (!string.IsNullOrWhiteSpace(a.BlockReason)) statusText += $"  [{a.BlockReason}]";
             _autofillStatus.Text = statusText;
             _autofillStatus.ForeColor = a.Paused ? Theme.Warn : (a.Running ? Theme.Good : Theme.Muted);
@@ -1286,8 +1330,18 @@ sealed class MainForm : Form
 
     void SetMetrics(ProjectMetrics m)
     {
-        _metrics[0].Text = $"ACTIVE AGENTS\r\n{m.ActiveAgents}"; _metrics[1].Text = $"WORKER SESSIONS\r\n{m.Sessions}"; _metrics[2].Text = $"COMMITS\r\n{m.Commits}"; _metrics[3].Text = $"CRITIC RUNS\r\n{m.Critics}"; _metrics[4].Text = $"TASKS COMPLETE\r\n{m.CompleteTasks}/{m.TotalTasks}"; _intent.Text = $"INTENT REVISION  {m.IntentRevision}"; _goal.Text = string.IsNullOrWhiteSpace(m.Goal) ? "No project goal recorded." : m.Goal;
-        _usage.Text = UsageText(m); _blinken.Active = m.ActiveAgents > 0;
+        var agentText = m.ActiveAgents == 0
+            ? "ACTIVE AGENTS\r\n0"
+            : (string.IsNullOrEmpty(m.ActiveTypesSummary) ? $"ACTIVE AGENTS\r\n{m.ActiveAgents}" : $"ACTIVE AGENTS\r\n{m.ActiveAgents} ({m.ActiveTypesSummary})");
+        _metrics[0].Text = agentText;
+        _metrics[1].Text = $"WORKER SESSIONS\r\n{m.Sessions}";
+        _metrics[2].Text = $"COMMITS\r\n{m.Commits}";
+        _metrics[3].Text = $"CRITIC RUNS\r\n{m.Critics}";
+        _metrics[4].Text = $"TASKS COMPLETE\r\n{m.CompleteTasks}/{m.TotalTasks}";
+        _intent.Text = $"INTENT REVISION  {m.IntentRevision}";
+        _goal.Text = string.IsNullOrWhiteSpace(m.Goal) ? "No project goal recorded." : m.Goal;
+        _usage.Text = UsageText(m);
+        _blinken.Active = m.ActiveAgents > 0;
     }
 
     List<IntegrationStatus> ReadIntegrationStatus()

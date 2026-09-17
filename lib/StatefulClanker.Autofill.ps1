@@ -97,35 +97,58 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
             $busy=@(Get-SCBusyTaskIds)
             $ownedIds=@($running|ForEach-Object{[string]$_.taskId})
             $all=@($busy+$ownedIds|Select-Object -Unique)
-            $external=@($busy|Where-Object{$ownedIds-notcontains$_})
             $slots=[Math]::Max(0,$limit-$all.Count)
-            $candidates=@(Get-SCDispatchableTasks|Where-Object{$all-notcontains[string]$_.id})
-            $readyCount=$candidates.Count
+
+            $readyCandidates=@(Get-SCDispatchableTasks|Where-Object{$all-notcontains[string]$_.id})
+            $retryCandidates=@(Get-SCRetryableTasks|Where-Object{$all-notcontains[string]$_.id})
+            $readyCount=$readyCandidates.Count
+            $retryCount=$retryCandidates.Count
 
             $reason=$null
             try{Assert-SCDispatchAuthority;Assert-SCNotHeld}catch{$reason=$_.Exception.Message}
             if(-not$reason){$tree=Test-SCAutofillMainTreeReady;if(-not$tree.ok){$reason=[string]$tree.reason}}
-            if(-not$reason-and$external.Count-gt0){$reason="non-autofill task(s) already active: $($external -join ', ')"}
 
-            if(-not$stopRequested-and-not$reason-and$slots-gt0-and$readyCount-gt0){
+            if(-not$stopRequested-and-not$reason-and$slots-gt0){
                 $lastDispatch=$now
-                foreach($task in @($candidates|Select-Object -First $slots)){
+                $dispatched=0
+                foreach($task in @($readyCandidates|Select-Object -First $slots)){
                     try{
                         $wt=New-SCWorktree (Get-SCStateRoot) $task.id
                         $run=Start-SCCycleProcess (Get-SCStateRoot) $wt $task.id $Provider $HarnessPath
                         $running+=,$run
-                        Add-SCEvent 'autofill.dispatched' "Autofill dispatched $($task.id)." @{taskId=$task.id;activeAfter=$running.Count;maxConcurrent=$limit}
+                        $dispatched++
+                        Add-SCEvent 'autofill.dispatched' "Autofill dispatched $($task.id)." @{taskId=$task.id;activeAfter=$running.Count;maxConcurrent=$limit;queue='ready'}
                     }catch{
                         Write-Warning "Autofill could not start $($task.id): $($_.Exception.Message)"
                         try{Remove-SCWorktree (Get-SCStateRoot) $task.id}catch{}
                     }
                 }
+
+                $remainingSlots=$slots-$dispatched
+                if($remainingSlots-gt 0){
+                    foreach($task in @($retryCandidates|Select-Object -First $remainingSlots)){
+                        try{
+                            Write-Host "Autofill retrying $($task.id) from retry queue..."
+                            Retry-SCTask $task.id
+                            $wt=New-SCWorktree (Get-SCStateRoot) $task.id
+                            $run=Start-SCCycleProcess (Get-SCStateRoot) $wt $task.id $Provider $HarnessPath
+                            $running+=,$run
+                            Add-SCEvent 'autofill.dispatched' "Autofill dispatched $($task.id) from retry queue." @{taskId=$task.id;activeAfter=$running.Count;maxConcurrent=$limit;queue='retry'}
+                        }catch{
+                            Write-Warning "Autofill could not retry $($task.id): $($_.Exception.Message)"
+                            try{Remove-SCWorktree (Get-SCStateRoot) $task.id}catch{}
+                        }
+                    }
+                }
+
                 $busy=@(Get-SCBusyTaskIds)
                 $ownedIds=@($running|ForEach-Object{[string]$_.taskId})
                 $all=@($busy+$ownedIds|Select-Object -Unique)
                 $slots=[Math]::Max(0,$limit-$all.Count)
-                $candidates=@(Get-SCDispatchableTasks|Where-Object{$all-notcontains[string]$_.id})
-                $readyCount=$candidates.Count
+                $readyCandidates=@(Get-SCDispatchableTasks|Where-Object{$all-notcontains[string]$_.id})
+                $retryCandidates=@(Get-SCRetryableTasks|Where-Object{$all-notcontains[string]$_.id})
+                $readyCount=$readyCandidates.Count
+                $retryCount=$retryCandidates.Count
             }
 
             if($reason){
@@ -135,34 +158,20 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
                 if($stopRequested){
                     $state='draining'
                     $lastBlock=$null
-                }elseif($running.Count-gt0){
+                }elseif($running.Count-gt0 -or $busy.Count-gt0){
                     $state='running'
                     $lastBlock=$null
-                }elseif($readyCount-gt0){
+                }elseif($readyCount-gt0 -or $retryCount-gt0){
                     $state='running'
                     $lastBlock=$null
                 }else{
-                    $stalled=@(Get-SCTasks|Where-Object{@('needs_rework','stale','blocked')-contains[string]$_.status})
+                    $stalled=@(Get-SCTasks|Where-Object{@('needs_rework','stale','blocked','failed')-contains[string]$_.status})
                     if($stalled.Count-gt0){
-                        $retryCount = 0
-                        foreach ($t in $stalled) {
-                            $attempts = if ($t.PSObject.Properties['attemptCount']) { [int]$t.attemptCount } else { 0 }
-                            if ($t.status -eq 'needs_rework' -and $attempts -lt 3) {
-                                Write-Host "Autofill auto-retrying task $($t.id) (attempt $attempts of 3)..."
-                                try { Retry-SCTask $t.id; $retryCount++ } catch { Write-Warning "Auto-retry failed: $($_.Exception.Message)" }
-                            }
-                        }
-                        if ($retryCount -gt 0) {
-                            $state='running'
-                            $lastBlock=$null
-                            $readyCount+=$retryCount
-                        } else {
-                            $stalledNames=(@($stalled|Select-Object -First 3|ForEach-Object{"$($_.id) ($($_.status))"})) -join ', '
-                            if($stalled.Count-gt3){$stalledNames+=" (+$($stalled.Count-3) more)"}
-                            $reason="no ready tasks; $($stalled.Count) task(s) require intervention/retry: $stalledNames"
-                            $state='blocked'
-                            if($lastBlock-ne$reason){Add-SCEvent 'autofill.stalled' $reason @{stalledCount=$stalled.Count};$lastBlock=$reason}
-                        }
+                        $stalledNames=(@($stalled|Select-Object -First 3|ForEach-Object{"$($_.id) ($($_.status))"})) -join ', '
+                        if($stalled.Count-gt3){$stalledNames+=" (+$($stalled.Count-3) more)"}
+                        $reason="no ready or retriable tasks; $($stalled.Count) task(s) require manual intervention: $stalledNames"
+                        $state='blocked'
+                        if($lastBlock-ne$reason){Add-SCEvent 'autofill.stalled' $reason @{stalledCount=$stalled.Count};$lastBlock=$reason}
                     }else{
                         $state='idle'
                         $lastBlock=$null
@@ -170,7 +179,7 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
                 }
             }
             $busyNow=@(Get-SCBusyTaskIds)
-            Write-SCAutofillStatus ([ordered]@{schemaVersion=1;pid=$PID;startedAt=$started;updatedAt=(Get-Date).ToUniversalTime().ToString('o');state=$state;paused=$false;intervalSeconds=$interval;maxConcurrent=$limit;ownedActive=$running.Count;activeTasks=$busyNow;readyCount=$readyCount;slots=$slots;lastDispatchAt=if($lastDispatch-eq[datetime]::MinValue){$null}else{$lastDispatch.ToUniversalTime().ToString('o')};blockReason=$reason})
+            Write-SCAutofillStatus ([ordered]@{schemaVersion=1;pid=$PID;startedAt=$started;updatedAt=(Get-Date).ToUniversalTime().ToString('o');state=$state;paused=$false;intervalSeconds=$interval;maxConcurrent=$limit;activeWorkers=$all.Count;ownedActive=$running.Count;activeTasks=$busyNow;readyCount=$readyCount;retryCount=$retryCount;slots=$slots;lastDispatchAt=if($lastDispatch-eq[datetime]::MinValue){$null}else{$lastDispatch.ToUniversalTime().ToString('o')};blockReason=$reason})
 
             $waitLimit = if($running.Count -gt 0){ 2 } else { $interval }
             for($w = 0; $w -lt $waitLimit; $w += 1){
@@ -193,6 +202,7 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
 function Show-SCAutofillStatus {
     $s=Get-SCAutofillStatus
     if($null-eq$s){Write-Host 'Autofill: stopped';return}
-    Write-Host "Autofill: $($s.state)  PID $($s.pid)  active $(@($s.activeTasks).Count)/$($s.maxConcurrent)  ready $($s.readyCount)  slots $($s.slots)  interval $($s.intervalSeconds)s"
+    $retryTxt = if($s.PSObject.Properties['retryCount'] -and $s.retryCount -gt 0){ ", $($s.retryCount) retry" } else { "" }
+    Write-Host "Autofill: $($s.state)  PID $($s.pid)  active $(@($s.activeTasks).Count)/$($s.maxConcurrent)  ready $($s.readyCount)$retryTxt  slots $($s.slots)  interval $($s.intervalSeconds)s"
     if($s.PSObject.Properties['blockReason']-and$s.blockReason){Write-Host "Blocked: $($s.blockReason)"}
 }

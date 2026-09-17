@@ -40,6 +40,32 @@ function Get-SCDispatchableTasks {
         Sort-Object createdAt)
 }
 
+function Get-SCRetryableTasks {
+    $tasks = @(Get-SCTasks)
+    $map = @{}
+    foreach($t in $tasks){ if($t.id){ $map[[string]$t.id] = $t } }
+    $retryable = @()
+    foreach($t in $tasks){
+        if(@('needs_rework','stale','failed') -notcontains [string]$t.status){ continue }
+        if([bool]$t.humanGate){ continue }
+        $attempts = if ($t.PSObject.Properties['attemptCount']) { [int]$t.attemptCount } else { 0 }
+        if($attempts -ge 3){ continue }
+
+        $depsMet = $true
+        foreach($dep in @($t.dependsOn)){
+            if([string]::IsNullOrWhiteSpace([string]$dep)){ continue }
+            if(-not $map.ContainsKey([string]$dep) -or $map[[string]$dep].status -ne 'complete'){
+                $depsMet = $false
+                break
+            }
+        }
+        if($depsMet){
+            $retryable += ,$t
+        }
+    }
+    return @($retryable | Sort-Object updatedAt)
+}
+
 function Get-SCMaxConcurrent([int]$Override = 0) {
     if ($Override -gt 0) { return $Override }
     $cfg = Get-SCConfig
