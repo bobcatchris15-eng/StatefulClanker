@@ -308,9 +308,16 @@ function Set-McpProvider([string]$Project, $Arguments) {
     if (-not $cfg.PSObject.Properties['providers'] -or $null -eq $cfg.providers) {
         $cfg | Add-Member -NotePropertyName providers -NotePropertyValue ([pscustomobject]@{}) -Force
     }
-    $cfg.providers | Add-Member -NotePropertyName $name -NotePropertyValue ([pscustomobject]@{
-            command = $command; args = $providerArgs; mode = $mode
-        }) -Force
+    $providerObj = [ordered]@{
+        command = $command; args = $providerArgs; mode = $mode
+    }
+    if ($Arguments -and $Arguments.PSObject.Properties['priority'] -and $null -ne $Arguments.priority) {
+        $providerObj['priority'] = [int]$Arguments.priority
+    }
+    if ($Arguments -and $Arguments.PSObject.Properties['disabled']) {
+        $providerObj['disabled'] = [bool]$Arguments.disabled
+    }
+    $cfg.providers | Add-Member -NotePropertyName $name -NotePropertyValue ([pscustomobject]$providerObj) -Force
 
     $assigned = @()
     foreach ($pair in @(@('setDefault', 'defaultProvider'), @('setCritic', 'criticProvider'), @('setValidator', 'validatorProvider'))) {
@@ -340,6 +347,9 @@ function Test-McpProvider([string]$Project, $Arguments) {
         throw "Provider '$name' is not configured. Use provider_set first."
     }
     $entry = $cfg.providers.$name
+    if ($entry.PSObject.Properties['disabled'] -and [bool]$entry.disabled) {
+        return [ordered]@{ provider = $name; usable = $false; diagnosis = "Provider '$name' is disabled in config.json." }
+    }
     $type = if ($entry.PSObject.Properties['type'] -and $entry.type) { [string]$entry.type } else { 'cli' }
 
     if ($type -eq 'api') {
@@ -749,6 +759,8 @@ function Get-McpToolList {
             command     = @{ type = 'string'; description = 'Executable to run. Must be on PATH or a full path.' }
             args        = @{ type = 'array'; items = @{ type = 'string' }; description = 'Arguments. MUST include {prompt} or {promptFile}. Also supports {projectRoot} and {taskId}.' }
             mode        = @{ type = 'string'; enum = @('inline', 'prompt-file'); description = 'Inferred from the placeholder when omitted.' }
+            priority    = @{ type = 'integer'; minimum = 1; description = 'Routing priority (1 is highest priority).' }
+            disabled    = @{ type = 'boolean'; description = 'Temporarily disable this provider from automatic routing.' }
             setDefault  = @{ type = 'boolean' }
             setCritic   = @{ type = 'boolean' }
             setValidator = @{ type = 'boolean' }
@@ -961,12 +973,21 @@ function Invoke-McpTool([string]$Name, $Arguments) {
                             $status = 'ready'
                         }
                     }
+                    $disabled = if ($entry.PSObject.Properties['disabled']) { [bool]$entry.disabled } else { $false }
+                    $priority = if ($entry.PSObject.Properties['priority'] -and $null -ne $entry.priority) { [int]$entry.priority } else { $null }
+                    if ($disabled) {
+                        $ready = $false
+                        $status = 'disabled'
+                        $errorMsg = 'Provider is disabled in config.json.'
+                    }
                     $rows += [ordered]@{
                         name       = $p.Name
                         type       = $type
                         command    = $cmd
                         connection = $conn
                         mode       = if ($entry.PSObject.Properties['mode']) { $entry.mode } else { $null }
+                        disabled   = $disabled
+                        priority   = $priority
                         ready      = $ready
                         status     = $status
                         error      = $errorMsg
@@ -976,7 +997,8 @@ function Invoke-McpTool([string]$Name, $Arguments) {
             $defProvider = if ($cfg -and $cfg.PSObject.Properties['defaultProvider']) { $cfg.defaultProvider } else { $null }
             $critProvider = if ($cfg -and $cfg.PSObject.Properties['criticProvider']) { $cfg.criticProvider } else { $null }
             $valProvider = if ($cfg -and $cfg.PSObject.Properties['validatorProvider']) { $cfg.validatorProvider } else { $null }
-            return New-McpTextResult ([ordered]@{ defaultProvider = $defProvider; criticProvider = $critProvider; validatorProvider = $valProvider; providers = @($rows) })
+            $sortedRows = @($rows | Sort-Object { if ($null -ne $_.priority) { $_.priority } elseif ($_.name -eq $defProvider) { 0 } else { 100 } }, name)
+            return New-McpTextResult ([ordered]@{ defaultProvider = $defProvider; criticProvider = $critProvider; validatorProvider = $valProvider; providers = $sortedRows })
         }
         'provider_set' {
             return New-McpTextResult (Set-McpProvider $project $Arguments)
@@ -1035,9 +1057,11 @@ function Invoke-McpTool([string]$Name, $Arguments) {
 <# Handle one JSON-RPC request object and return the response object, or $null for
    notifications. Transport-free so both hosts share it. #>
 function Invoke-McpRpc($Request) {
-    $method = [string]$Request.method
+    $method = if ($Request -is [System.Collections.IDictionary]) { [string]$Request['method'] } else { [string]$Request.method }
     $id = $null
-    if ($Request.PSObject.Properties['id']) { $id = $Request.id }
+    if ($Request -is [System.Collections.IDictionary]) {
+        if ($Request.Contains('id')) { $id = $Request['id'] }
+    } elseif ($Request.PSObject.Properties['id']) { $id = $Request.id }
 
     switch ($method) {
         'initialize' {
@@ -1051,9 +1075,13 @@ function Invoke-McpRpc($Request) {
         'ping' { return [ordered]@{ jsonrpc = '2.0'; id = $id; result = @{} } }
         'tools/list' { return [ordered]@{ jsonrpc = '2.0'; id = $id; result = @{ tools = Get-McpToolList } } }
         'tools/call' {
-            $toolName = [string]$Request.params.name
+            $toolName = if ($Request.params -is [System.Collections.IDictionary]) { [string]$Request.params['name'] } else { [string]$Request.params.name }
             $toolArgs = $null
-            if ($Request.params.PSObject.Properties['arguments']) { $toolArgs = $Request.params.arguments }
+            if ($Request.params -is [System.Collections.IDictionary]) {
+                if ($Request.params.Contains('arguments')) { $toolArgs = $Request.params['arguments'] }
+            } elseif ($Request.params.PSObject.Properties['arguments']) {
+                $toolArgs = $Request.params.arguments
+            }
             try {
                 return [ordered]@{ jsonrpc = '2.0'; id = $id; result = (Invoke-McpTool $toolName $toolArgs) }
             } catch {

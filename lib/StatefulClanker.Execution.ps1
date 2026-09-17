@@ -1,5 +1,32 @@
 function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
-    $cfg=Get-SCConfig;$name=$null;if($Override){$name=$Override}elseif($Stage-eq'critic'-and$cfg.PSObject.Properties['criticProvider']-and$cfg.criticProvider){$name=[string]$cfg.criticProvider}elseif($Stage-eq'validator'-and$cfg.PSObject.Properties['validatorProvider']-and$cfg.validatorProvider){$name=[string]$cfg.validatorProvider}elseif($Task.provider){$name=[string]$Task.provider}else{$name=[string]$cfg.defaultProvider};$property=$cfg.providers.PSObject.Properties[$name];if($null-eq$property){throw "Provider '$name' not configured."};return [ordered]@{name=$name;config=$property.Value}
+    $cfg=Get-SCConfig;$def=if($cfg.PSObject.Properties['defaultProvider']){[string]$cfg.defaultProvider}else{''}
+    $prioritized=@();if($cfg.PSObject.Properties['providers']-and$cfg.providers){
+        foreach($p in $cfg.providers.PSObject.Properties){
+            $entry=$p.Value;$dis=($entry.PSObject.Properties['disabled']-and[bool]$entry.disabled)
+            if(-not$dis){
+                $pri=if($entry.PSObject.Properties['priority']-and$null-ne$entry.priority){[int]$entry.priority}elseif($p.Name-eq$def){0}else{100}
+                $prioritized+=[pscustomobject]@{Name=$p.Name;Priority=$pri;IsDefault=($p.Name-eq$def);Config=$entry}
+            }
+        }
+    }
+    $prioritized=@($prioritized|Sort-Object Priority,{if($_.IsDefault){0}else{1}},Name)
+    if($Override){
+        $property=if($cfg.providers){$cfg.providers.PSObject.Properties[$Override]}else{$null}
+        if($null-eq$property){throw "Provider '$Override' not configured."}
+        if($property.Value.PSObject.Properties['disabled']-and[bool]$property.Value.disabled){throw "Provider '$Override' is currently disabled in .statefulclanker/config.json."}
+        return [ordered]@{name=$Override;config=$property.Value}
+    }
+    $candidate=$null
+    if($Stage-eq'critic'-and$cfg.PSObject.Properties['criticProvider']-and$cfg.criticProvider){$candidate=[string]$cfg.criticProvider}
+    elseif($Stage-eq'validator'-and$cfg.PSObject.Properties['validatorProvider']-and$cfg.validatorProvider){$candidate=[string]$cfg.validatorProvider}
+    elseif($Task-and$Task.PSObject.Properties['provider']-and$Task.provider){$candidate=[string]$Task.provider}
+    if($candidate){
+        $prop=if($cfg.providers){$cfg.providers.PSObject.Properties[$candidate]}else{$null}
+        if($prop-and-not($prop.Value.PSObject.Properties['disabled']-and[bool]$prop.Value.disabled)){return [ordered]@{name=$candidate;config=$prop.Value}}
+    }
+    if($prioritized.Count-gt 0){$top=$prioritized[0];return [ordered]@{name=$top.Name;config=$top.Config}}
+    if($candidate){throw "Provider '$candidate' is configured but disabled, and no other enabled providers are available."}
+    throw "No enabled provider available. Configure or enable at least one provider in .statefulclanker/config.json."
 }
 function Expand-SCArg([string]$Arg,[string]$Prompt,[string]$PromptFile,$Task) { $Arg.Replace('{prompt}',$Prompt).Replace('{promptFile}',$PromptFile).Replace('{projectRoot}',(Get-SCRoot)).Replace('{taskId}',[string]$Task.id) }
 

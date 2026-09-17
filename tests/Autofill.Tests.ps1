@@ -2,7 +2,7 @@
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent $PSScriptRoot;$harness=Join-Path $repo 'StatefulClanker.ps1';$slow=Join-Path $PSScriptRoot 'SlowWritingProvider.cmd';$mock=Join-Path $PSScriptRoot 'MockProvider.cmd'
 function Assert-True([bool]$Condition,[string]$Message){if(-not$Condition){throw "AUTOFILL TEST FAILED: $Message"}}
-function Read-JsonRetry([string]$Path){for($i=0;$i-lt40;$i++){try{return (Get-Content -Raw -LiteralPath $Path|ConvertFrom-Json)}catch [System.IO.IOException]{if($i-ge39){throw};Start-Sleep -Milliseconds 25}}}
+function Read-JsonRetry([string]$Path){for($i=0;$i-lt40;$i++){try{if(Test-Path -LiteralPath $Path){return (Get-Content -Raw -LiteralPath $Path|ConvertFrom-Json)}}catch{if($i-ge39){throw}};Start-Sleep -Milliseconds 50}}
 $pwshPath=(Get-Process -Id $PID).Path
 if(-not(Get-Command git -ErrorAction SilentlyContinue)){Write-Host '  AUTOFILL: SKIPPED - git not found.';return}
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('sc-autofill-'+[Guid]::NewGuid().ToString('N'));New-Item -ItemType Directory -Force -Path $temp|Out-Null

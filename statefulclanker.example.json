@@ -13,33 +13,45 @@
       "type": "cli",
       "command": "codex",
       "args": ["exec"],
-      "mode": "stdin"
+      "mode": "stdin",
+      "priority": 1,
+      "disabled": false
     },
     "claude": {
       "type": "cli",
       "command": "claude",
       "args": ["-p"],
-      "mode": "stdin"
+      "mode": "stdin",
+      "priority": 2,
+      "disabled": false
     },
     "agy": {
       "type": "cli",
       "command": "agy",
       "args": ["--mode", "accept-edits"],
-      "mode": "stdin"
+      "mode": "stdin",
+      "priority": 3,
+      "disabled": false
     },
     "opencode": {
       "type": "cli",
       "command": "opencode",
       "args": ["run"],
-      "mode": "stdin"
+      "mode": "stdin",
+      "priority": 4,
+      "disabled": false
     },
     "local-qwen": {
       "type": "api",
-      "connection": "local-qwen"
+      "connection": "local-qwen",
+      "priority": 5,
+      "disabled": false
     },
     "openrouter-coder": {
       "type": "api",
-      "connection": "openrouter-coder"
+      "connection": "openrouter-coder",
+      "priority": 6,
+      "disabled": false
     }
   },
   "maxConcurrent": 3,

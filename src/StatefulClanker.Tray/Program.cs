@@ -251,6 +251,8 @@ sealed class IntegrationStatus
 sealed class ProviderStatus
 {
     public string Name = "", Backend = "", Target = "", Roles = "";
+    public bool Disabled;
+    public int Priority = 100;
 }
 
 sealed class UiSnapshot
@@ -442,18 +444,104 @@ sealed class MainForm : Form
     {
         var p = Page("Providers"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1 }; rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var bar = new FlowLayoutPanel { Dock = DockStyle.Fill };
-        var setDefault = Btn("Set Default", 110); setDefault.Click += (_, _) => SetProviderRole("defaultProvider");
-        var setCritic = Btn("Set Critic", 110); setCritic.Click += (_, _) => SetProviderRole("criticProvider");
+        var toggle = Btn("Disable / Enable", 125); toggle.Click += (_, _) => ToggleSelectedProviderDisabled();
+        var moveUp = Btn("Move Up", 90); moveUp.Click += (_, _) => AdjustProviderPriority(-1);
+        var moveDown = Btn("Move Down", 95); moveDown.Click += (_, _) => AdjustProviderPriority(1);
+        var setDefault = Btn("Set Default", 105); setDefault.Click += (_, _) => SetProviderRole("defaultProvider");
+        var setCritic = Btn("Set Critic", 100); setCritic.Click += (_, _) => SetProviderRole("criticProvider");
         var setValidator = Btn("Set Validator", 110); setValidator.Click += (_, _) => SetProviderRole("validatorProvider");
         var test = Btn("Test Provider", 110); test.Click += (_, _) => TestSelectedProvider();
-        var open = Btn("Open config", 110); open.Click += (_, _) => OpenConfig();
-        var refresh = Btn("Refresh", 100); refresh.Click += async (_, _) => await RefreshAllAsync();
-        bar.Controls.AddRange(new Control[] { setDefault, setCritic, setValidator, test, open, refresh });
-        rows.Controls.Add(bar, 0, 0); rows.Controls.Add(Section("WORKER BACKEND STATUS AND SEMANTIC SIZE ROUTING"), 0, 1);
-        _providers.Dock = DockStyle.Fill; _providers.ReadOnly = true; _providers.AllowUserToAddRows = false; _providers.RowHeadersVisible = false; _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _providers.Columns.Add("name", "Provider"); _providers.Columns.Add("backend", "Backend"); _providers.Columns.Add("target", "Target"); _providers.Columns.Add("roles", "Routing / roles"); rows.Controls.Add(_providers, 0, 2); p.Controls.Add(rows); return p;
+        var open = Btn("Open config", 105); open.Click += (_, _) => OpenConfig();
+        var refresh = Btn("Refresh", 90); refresh.Click += async (_, _) => await RefreshAllAsync();
+        bar.Controls.AddRange(new Control[] { toggle, moveUp, moveDown, setDefault, setCritic, setValidator, test, open, refresh });
+        rows.Controls.Add(bar, 0, 0); rows.Controls.Add(Section("WORKER BACKEND STATUS, PRIORITY, AND ROUTING"), 0, 1);
+        _providers.Dock = DockStyle.Fill; _providers.ReadOnly = true; _providers.AllowUserToAddRows = false; _providers.RowHeadersVisible = false; _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _providers.Columns.Add("name", "Provider");
+        _providers.Columns.Add("status", "Status");
+        _providers.Columns.Add("priority", "Priority");
+        _providers.Columns.Add("backend", "Backend");
+        _providers.Columns.Add("target", "Target");
+        _providers.Columns.Add("roles", "Routing / roles");
+        rows.Controls.Add(_providers, 0, 2); p.Controls.Add(rows); return p;
     }
 
     ProviderStatus? SelectedProvider => _providers.SelectedRows.Count > 0 ? _providers.SelectedRows[0].Tag as ProviderStatus : null;
+
+    void ToggleSelectedProviderDisabled()
+    {
+        var p = SelectedProvider;
+        var path = _settings.ActiveProjectPath;
+        if (p is null || string.IsNullOrWhiteSpace(path)) return;
+        var cfgPath = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
+        if (!File.Exists(cfgPath)) return;
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(cfgPath));
+            var providers = node?["providers"] as JsonObject;
+            if (providers is not null && providers.TryGetPropertyValue(p.Name, out var pNode) && pNode is JsonObject pObj)
+            {
+                var current = pObj.TryGetPropertyValue("disabled", out var dv) && dv is not null && dv.GetValue<bool>();
+                pObj["disabled"] = !current;
+                File.WriteAllText(cfgPath, node!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+                _ = RefreshAllAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Failed to update provider status: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    void AdjustProviderPriority(int direction)
+    {
+        var p = SelectedProvider;
+        var path = _settings.ActiveProjectPath;
+        if (p is null || string.IsNullOrWhiteSpace(path)) return;
+        var cfgPath = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
+        if (!File.Exists(cfgPath)) return;
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(cfgPath));
+            var providers = node?["providers"] as JsonObject;
+            if (providers is null) return;
+
+            var list = new List<(string Name, int Priority, JsonObject Obj)>();
+            int fallbackPri = 1;
+            foreach (var kv in providers)
+            {
+                if (kv.Value is JsonObject obj)
+                {
+                    int pri = obj.TryGetPropertyValue("priority", out var pv) && pv is not null && int.TryParse(pv.ToString(), out var parsed)
+                        ? parsed
+                        : fallbackPri * 10;
+                    list.Add((kv.Key, pri, obj));
+                    fallbackPri++;
+                }
+            }
+            if (list.Count < 2) return;
+            list = list.OrderBy(x => x.Priority).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            var currentIndex = list.FindIndex(x => x.Name == p.Name);
+            if (currentIndex < 0) return;
+            var targetIndex = currentIndex + direction;
+            if (targetIndex < 0 || targetIndex >= list.Count) return;
+
+            var item = list[currentIndex];
+            list.RemoveAt(currentIndex);
+            list.Insert(targetIndex, item);
+
+            for (int i = 0; i < list.Count; i++)
+            {
+                list[i].Obj["priority"] = i + 1;
+            }
+
+            File.WriteAllText(cfgPath, node!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            _ = RefreshAllAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Failed to adjust provider priority: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
 
     void SetProviderRole(string roleKey)
     {
@@ -604,8 +692,14 @@ sealed class MainForm : Form
         {
             _providers.Rows.Clear();
             foreach (var item in snapshot.Providers) {
-                var i = _providers.Rows.Add(item.Name, item.Backend, item.Target, item.Roles);
+                var statusText = item.Disabled ? "DISABLED" : "Active";
+                var priText = item.Priority < 1000 ? item.Priority.ToString() : "-";
+                var i = _providers.Rows.Add(item.Name, statusText, priText, item.Backend, item.Target, item.Roles);
                 _providers.Rows[i].Tag = item;
+                if (item.Disabled)
+                {
+                    _providers.Rows[i].DefaultCellStyle.ForeColor = Theme.Warn;
+                }
             }
         }
         finally { _providers.ResumeLayout(); }
@@ -662,10 +756,25 @@ sealed class MainForm : Form
             using var d = JsonDocument.Parse(File.ReadAllText(cfg)); var root = d.RootElement; var def = root.TryGetProperty("defaultProvider", out var dv) ? dv.GetString() : null; var critic = root.TryGetProperty("criticProvider", out var cv) ? cv.GetString() : null; var validator = root.TryGetProperty("validatorProvider", out var vv) ? vv.GetString() : null; var routes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (root.TryGetProperty("providerBySize", out var map) && map.ValueKind == JsonValueKind.Object) foreach (var x in map.EnumerateObject()) if (x.Value.ValueKind == JsonValueKind.String) routes[x.Name] = x.Value.GetString() ?? "";
             if (!root.TryGetProperty("providers", out var providers) || providers.ValueKind != JsonValueKind.Object) return result;
+            int defaultPri = 1;
             foreach (var p in providers.EnumerateObject())
             {
-                var type = p.Value.TryGetProperty("type", out var tv) && tv.ValueKind == JsonValueKind.String ? tv.GetString() ?? "cli" : "cli"; var cmd = p.Value.TryGetProperty("command", out var c) ? c.GetString() ?? "" : ""; var connection = p.Value.TryGetProperty("connection", out var cn) ? cn.GetString() ?? "" : ""; var target = type.Equals("api", StringComparison.OrdinalIgnoreCase) ? connection : cmd; var status = type.Equals("api", StringComparison.OrdinalIgnoreCase) ? (string.IsNullOrWhiteSpace(connection) ? "missing" : "api") : (Runtime.CommandExists(cmd) ? "cli" : "missing"); var tags = new List<string>(); if (p.Name == def) tags.Add("default"); if (p.Name == critic) tags.Add("critic"); if (p.Name == validator) tags.Add("validator"); foreach (var route in routes.Where(x => x.Value == p.Name)) tags.Add(route.Key); result.Add(new ProviderStatus { Name = p.Name, Backend = status, Target = target, Roles = string.Join(", ", tags) });
+                var type = p.Value.TryGetProperty("type", out var tv) && tv.ValueKind == JsonValueKind.String ? tv.GetString() ?? "cli" : "cli";
+                var cmd = p.Value.TryGetProperty("command", out var c) ? c.GetString() ?? "" : "";
+                var connection = p.Value.TryGetProperty("connection", out var cn) ? cn.GetString() ?? "" : "";
+                var target = type.Equals("api", StringComparison.OrdinalIgnoreCase) ? connection : cmd;
+                var disabled = p.Value.TryGetProperty("disabled", out var disV) && disV.ValueKind == JsonValueKind.True;
+                var pri = p.Value.TryGetProperty("priority", out var pv) && pv.TryGetInt32(out var parsedPri) ? parsedPri : (p.Name == def ? 0 : defaultPri * 10);
+                defaultPri++;
+                var status = disabled ? "disabled" : (type.Equals("api", StringComparison.OrdinalIgnoreCase) ? (string.IsNullOrWhiteSpace(connection) ? "missing" : "api") : (Runtime.CommandExists(cmd) ? "cli" : "missing"));
+                var tags = new List<string>();
+                if (p.Name == def) tags.Add("default");
+                if (p.Name == critic) tags.Add("critic");
+                if (p.Name == validator) tags.Add("validator");
+                foreach (var route in routes.Where(x => x.Value == p.Name)) tags.Add(route.Key);
+                result.Add(new ProviderStatus { Name = p.Name, Backend = status, Target = target, Roles = string.Join(", ", tags), Disabled = disabled, Priority = pri });
             }
+            result = result.OrderBy(x => x.Priority).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
         }
         catch { }
         return result;
