@@ -547,8 +547,21 @@ sealed class AgentBlinkenBank : Control
     const int Cols = 10;
     const int TotalLamps = Rows * Cols;
     readonly bool[] _lamps = new bool[TotalLamps];
+    readonly int[] _lampColors = new int[TotalLamps];
     readonly Random _rng = new();
     int _sweepStep;
+
+    static readonly Color[] LampPalette = new[]
+    {
+        Color.FromArgb(65, 235, 95),   // Vivid Green
+        Color.FromArgb(255, 175, 35),  // Warm Amber
+        Color.FromArgb(255, 65, 65),   // Crimson Red
+        Color.FromArgb(50, 215, 255),  // Bright Cyan
+        Color.FromArgb(255, 235, 60),  // Vivid Yellow
+        Color.FromArgb(220, 85, 255),  // Electric Violet
+        Color.FromArgb(255, 110, 180), // Hot Pink
+        Color.FromArgb(120, 180, 255)  // Ice Blue
+    };
 
     public AgentBlinkenBank(string? agentId, string? taskId, string agentType)
     {
@@ -559,6 +572,11 @@ sealed class AgentBlinkenBank : Control
         DoubleBuffered = true;
         Size = new Size(165, 62);
         Margin = new Padding(3, 2, 3, 2);
+
+        for (var i = 0; i < TotalLamps; i++)
+        {
+            _lampColors[i] = _rng.Next(LampPalette.Length);
+        }
     }
 
     public void Step()
@@ -577,6 +595,11 @@ sealed class AgentBlinkenBank : Control
             if (_rng.NextDouble() < 0.65)
             {
                 _lamps[i] = sweepHit ? (_rng.NextDouble() < 0.85) : (_rng.NextDouble() < 0.38);
+                // Each lamp changes color dynamically as it operates
+                if (_rng.NextDouble() < 0.22)
+                {
+                    _lampColors[i] = (_lampColors[i] + _rng.Next(1, LampPalette.Length)) % LampPalette.Length;
+                }
             }
         }
         Invalidate();
@@ -590,47 +613,42 @@ sealed class AgentBlinkenBank : Control
 
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
 
-        Color litColor, unlitColor, borderColor, headerColor;
+        Color borderColor, headerColor;
         switch (AgentType.ToLowerInvariant())
         {
             case "critic":
-                litColor = Color.FromArgb(255, 65, 65);
-                unlitColor = Color.FromArgb(42, 16, 16);
-                borderColor = IsActive ? Color.FromArgb(130, 35, 35) : Color.FromArgb(48, 58, 68);
+                borderColor = IsActive ? Color.FromArgb(240, 60, 60) : Color.FromArgb(48, 58, 68);
                 headerColor = Color.FromArgb(255, 95, 95);
                 break;
             case "validator":
-                litColor = Color.FromArgb(255, 215, 45);
-                unlitColor = Color.FromArgb(42, 36, 14);
-                borderColor = IsActive ? Color.FromArgb(130, 105, 25) : Color.FromArgb(48, 58, 68);
+                borderColor = IsActive ? Color.FromArgb(245, 210, 45) : Color.FromArgb(48, 58, 68);
                 headerColor = Color.FromArgb(255, 220, 70);
                 break;
             case "researcher":
-                litColor = Color.FromArgb(50, 205, 255);
-                unlitColor = Color.FromArgb(16, 38, 48);
-                borderColor = IsActive ? Color.FromArgb(25, 90, 115) : Color.FromArgb(48, 58, 68);
+                borderColor = IsActive ? Color.FromArgb(50, 215, 255) : Color.FromArgb(48, 58, 68);
                 headerColor = Color.FromArgb(70, 215, 255);
                 break;
             case "worker":
-                litColor = Color.FromArgb(65, 225, 95);
-                unlitColor = Color.FromArgb(16, 42, 22);
-                borderColor = IsActive ? Color.FromArgb(35, 110, 45) : Color.FromArgb(48, 58, 68);
+                borderColor = IsActive ? Color.FromArgb(60, 225, 95) : Color.FromArgb(48, 58, 68);
                 headerColor = Color.FromArgb(85, 225, 115);
                 break;
             default:
-                litColor = Color.FromArgb(60, 75, 90);
-                unlitColor = Color.FromArgb(22, 28, 34);
-                borderColor = Color.FromArgb(38, 48, 58);
+                borderColor = Color.FromArgb(45, 55, 65);
                 headerColor = Color.FromArgb(90, 105, 120);
                 break;
         }
 
         using var panelBrush = new SolidBrush(Color.FromArgb(18, 24, 30));
-        using var edgePen = new Pen(borderColor);
+        using var edgePen = new Pen(borderColor, IsActive ? 1.5f : 1.0f);
         using var innerPen = new Pen(Color.FromArgb(28, 36, 44));
 
         g.FillRectangle(panelBrush, r);
         g.DrawRectangle(edgePen, r);
+        if (IsActive)
+        {
+            using var glowPen = new Pen(Color.FromArgb(65, borderColor));
+            g.DrawRectangle(glowPen, r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2);
+        }
 
         using var screwBrush = new SolidBrush(Color.FromArgb(70, 82, 94));
         g.FillEllipse(screwBrush, r.Left + 2, r.Top + 2, 3, 3);
@@ -664,6 +682,9 @@ sealed class AgentBlinkenBank : Control
                 var x = r.X + padX + col * spacingX;
                 var y = r.Y + padY + row * spacingY;
                 var on = IsActive && _lamps[idx];
+                var baseColor = LampPalette[_lampColors[idx]];
+                var litColor = baseColor;
+                var unlitColor = Color.FromArgb(Math.Max(12, baseColor.R / 7), Math.Max(14, baseColor.G / 7), Math.Max(16, baseColor.B / 7));
                 var c = on ? litColor : unlitColor;
 
                 using var b = new SolidBrush(c);
