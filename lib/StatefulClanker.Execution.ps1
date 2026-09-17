@@ -1,4 +1,4 @@
-function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
+﻿function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
     $cfg=Get-SCConfig;$def=if($cfg.PSObject.Properties['defaultProvider']){[string]$cfg.defaultProvider}else{''}
     $prioritized=@();if($cfg.PSObject.Properties['providers']-and$cfg.providers){
         foreach($p in $cfg.providers.PSObject.Properties){
@@ -148,7 +148,8 @@ function Capture-SCContextRequests($Task,$Run,$Compilation) {
 function Get-SCVerdict([string]$Text,[int]$ExitCode) { if($ExitCode-ne 0){return 'ERROR'};$seen=@();foreach($line in @($Text-split"`r?`n")){$trimmed=$line.Trim();if($trimmed-match'^[\s>*_#`~\-\[\]()."'':]*VERDICT\s*:\s*(PASS|FAIL|ERROR)[\s*_`~.!,:;''"\[\]()]*$'){$seen+=$Matches[1].ToUpperInvariant()}};if($seen-contains'ERROR'){return 'ERROR'};if($seen-contains'FAIL'){return 'FAIL'};if($seen-contains'PASS'){return 'PASS'};return 'FAIL' }
 function Set-SCTelemetryVerdict([string]$AgentId,[string]$Verdict) { $path=Get-SCPath ("telemetry/runs/{0}.json"-f$AgentId);$record=Read-SCJson $path;if($record){$record.verdict=$Verdict;Write-SCJson $path $record} }
 function Invoke-SCReview($Task,$Run,$Compilation,[string]$Stage) {
-    $receipt=Invoke-SCProvider $Task (New-SCReviewPrompt $Task $Run $Compilation $Stage) $Stage $null $Run.agentId $Compilation;$receipt.verdict=Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode);Set-SCTelemetryVerdict $receipt.agentId $receipt.verdict;$dir=if($Stage-eq'critic'){'critiques'}else{'validations'};Write-SCJson (Get-SCPath ("{0}/{1}.json"-f$dir,$receipt.id)) $receipt;Add-SCEvent "$Stage.finished" "$Stage $($receipt.id): $($receipt.verdict)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$receipt.verdict;compilationId=$Compilation.id};return $receipt
+    Add-SCEvent "$Stage.started" "$Stage review started for $($Task.id)" @{taskId=$Task.id;stage=$Stage;compilationId=$Compilation.id}
+    $receipt=Invoke-SCProvider $Task (New-SCReviewPrompt $Task $Run $Compilation $Stage) $Stage $null $Run.agentId $Compilation;$receipt.verdict=Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode);Set-SCTelemetryVerdict $receipt.agentId $receipt.verdict;$dir=if($Stage-eq'critic'){'critiques'}else{'validations'};Write-SCJson (Get-SCPath ("{0}/{1}.json"-f$dir,$receipt.id)) $receipt;Add-SCEvent "$Stage.finished" "$Stage review finished for $($Task.id): $($receipt.verdict)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$receipt.verdict;compilationId=$Compilation.id};return $receipt
 }
 function New-SCCompletionProposal($Task,$Run,$Compilation) {
     $proposal=[ordered]@{schemaVersion=1;id=New-SCId 'proposal';taskId=$Task.id;kind='task_completion';status='pending';createdAt=(Get-Date).ToUniversalTime().ToString('o');committedAt=$null;rejectedAt=$null;base=[ordered]@{compilationId=$Compilation.id;inputFingerprint=$Compilation.inputFingerprint;taskDefinitionHash=$Compilation.readSet.taskDefinitionHash;taskControlRevision=$Compilation.readSet.taskControlRevision};evidence=[ordered]@{runId=$Run.id;criticId=$null;criticVerdict=$null;validationId=$null;validationVerdict=$null};rejectionReasons=@()}
@@ -261,19 +262,30 @@ function Retry-SCTask([string]$Id) {
     $was=$task.status
 
     if ($task.latestRunId -and $task.latestCompilationId) {
-        try {
-            $run = Read-SCJson (Get-SCPath ("runs/{0}.json" -f $task.latestRunId))
-            $comp = Read-SCJson (Get-SCPath ("compilations/{0}.json" -f $task.latestCompilationId))
-            if ($run -and $comp) {
-                Write-Host "Running critic against previous failure before retrying..."
-                $task.status='reviewing'; Save-SCTask $task
-                $critique = Invoke-SCReview $task $run $comp 'critic'
-                $task = Get-SCTask $task.id
-                $task.latestCritiqueId = $critique.id
-                Save-SCTask $task
+        $alreadyCritiqued = $false
+        if ($task.latestCritiqueId) {
+            try {
+                $c = Read-SCJson (Get-SCPath ("critiques/{0}.json" -f $task.latestCritiqueId))
+                if ($c -and $c.compilationId -eq $task.latestCompilationId) {
+                    $alreadyCritiqued = $true
+                }
+            } catch {}
+        }
+        if (-not $alreadyCritiqued) {
+            try {
+                $run = Read-SCJson (Get-SCPath ("runs/{0}.json" -f $task.latestRunId))
+                $comp = Read-SCJson (Get-SCPath ("compilations/{0}.json" -f $task.latestCompilationId))
+                if ($run -and $comp) {
+                    Write-Host "Running critic against previous failure before retrying $($task.id)..."
+                    $task.status='reviewing'; Save-SCTask $task
+                    $critique = Invoke-SCReview $task $run $comp 'critic'
+                    $task = Get-SCTask $task.id
+                    $task.latestCritiqueId = $critique.id
+                    Save-SCTask $task
+                }
+            } catch {
+                Write-Warning "Failed to run critic during retry: $($_.Exception.Message)"
             }
-        } catch {
-            Write-Warning "Failed to run critic during retry: $($_.Exception.Message)"
         }
     }
 

@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -300,6 +300,13 @@ sealed class AutofillSnapshot
     public string? BlockReason;
 }
 
+sealed class ActiveAgentInfo
+{
+    public string AgentId = "";
+    public string TaskId = "";
+    public string Type = "Worker";
+}
+
 sealed class ProjectMetrics
 {
     public int ActiveAgents, Sessions, Commits, Critics, CompleteTasks, TotalTasks;
@@ -308,6 +315,7 @@ sealed class ProjectMetrics
     public string IntentRevision = "—", Goal = "", Activity = "";
     public Dictionary<string, int> ActiveTypes = new(StringComparer.OrdinalIgnoreCase);
     public string ActiveTypesSummary = "";
+    public List<ActiveAgentInfo> ActiveAgentList = new();
 }
 
 sealed class IntegrationStatus
@@ -362,6 +370,11 @@ static class Inspector
                         type = "Researcher";
                 }
                 m.ActiveTypes[type] = m.ActiveTypes.TryGetValue(type, out var cur) ? cur + 1 : 1;
+                var info = new ActiveAgentInfo { AgentId = System.IO.Path.GetFileNameWithoutExtension(file) };
+                if (r.TryGetProperty("taskId", out var tid) && tid.ValueKind == JsonValueKind.String) info.TaskId = tid.GetString() ?? "";
+                if (r.TryGetProperty("agentId", out var aid) && aid.ValueKind == JsonValueKind.String) info.AgentId = aid.GetString() ?? info.AgentId;
+                info.Type = type;
+                m.ActiveAgentList.Add(info);
             } catch { }
         }
         if (m.ActiveTypes.Count > 0)
@@ -523,54 +536,35 @@ static class Theme
     }
 }
 
-sealed class BlinkenLightsPanel : Control
+sealed class AgentBlinkenBank : Control
 {
-    readonly System.Windows.Forms.Timer _pulse = new() { Interval = 110 };
-    readonly Random _rng = new();
-    const int TotalLamps = 160;
+    public readonly string? AgentId;
+    public string TaskId { get; set; } = "";
+    public string AgentType { get; set; } = "Standby";
+    public bool IsActive { get; set; }
+
+    const int Rows = 4;
+    const int Cols = 10;
+    const int TotalLamps = Rows * Cols;
     readonly bool[] _lamps = new bool[TotalLamps];
-    readonly byte[] _colorPalette = new byte[TotalLamps];
+    readonly Random _rng = new();
     int _sweepStep;
-    bool _active;
 
-    public bool Active
+    public AgentBlinkenBank(string? agentId, string? taskId, string agentType)
     {
-        get => _active;
-        set
-        {
-            if (_active == value) return;
-            _active = value;
-            if (_active)
-            {
-                _pulse.Interval = 110;
-                _pulse.Start();
-            }
-            else
-            {
-                _pulse.Stop();
-                Array.Clear(_lamps, 0, _lamps.Length);
-            }
-            Invalidate();
-        }
-    }
-
-    public BlinkenLightsPanel()
-    {
+        AgentId = agentId;
+        TaskId = taskId ?? "";
+        AgentType = agentType;
+        IsActive = !string.Equals(agentType, "standby", StringComparison.OrdinalIgnoreCase);
         DoubleBuffered = true;
-        MinimumSize = new Size(220, 72);
-        for (var i = 0; i < TotalLamps; i++)
-        {
-            var roll = _rng.Next(100);
-            _colorPalette[i] = roll < 35 ? (byte)3 : roll < 60 ? (byte)1 : roll < 80 ? (byte)2 : roll < 95 ? (byte)0 : (byte)4;
-        }
-        _pulse.Tick += (_, _) => Step();
+        Size = new Size(165, 62);
+        Margin = new Padding(3, 2, 3, 2);
     }
 
-    void Step()
+    public void Step()
     {
-        if (!Active)
+        if (!IsActive)
         {
-            _pulse.Stop();
             Array.Clear(_lamps, 0, _lamps.Length);
             Invalidate();
             return;
@@ -578,28 +572,14 @@ sealed class BlinkenLightsPanel : Control
         _sweepStep = (_sweepStep + 1) % 32;
         for (var i = 0; i < TotalLamps; i++)
         {
-            var bank = i / 40;
-            var col = i % 10;
-            var sweepHit = ((col + bank * 2) % 10) == (_sweepStep % 10);
+            var col = i % Cols;
+            var sweepHit = (col == (_sweepStep % Cols));
             if (_rng.NextDouble() < 0.65)
             {
-                _lamps[i] = sweepHit ? (_rng.NextDouble() < 0.85) : (_rng.NextDouble() < 0.42);
+                _lamps[i] = sweepHit ? (_rng.NextDouble() < 0.85) : (_rng.NextDouble() < 0.38);
             }
         }
         Invalidate();
-    }
-
-    static Color GetColor(byte code, bool on)
-    {
-        Color lit = code switch
-        {
-            0 => Color.FromArgb(255, 60, 60),
-            1 => Color.FromArgb(255, 140, 30),
-            2 => Color.FromArgb(255, 210, 40),
-            3 => Color.FromArgb(50, 235, 110),
-            _ => Color.FromArgb(60, 210, 255)
-        };
-        return on ? lit : Color.FromArgb(28, Math.Max(20, (int)(lit.R * 0.22f)), Math.Max(25, (int)(lit.G * 0.22f)), Math.Max(25, (int)(lit.B * 0.22f)));
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -608,56 +588,83 @@ sealed class BlinkenLightsPanel : Control
         var g = e.Graphics;
         g.Clear(Color.FromArgb(10, 14, 18));
 
-        const int numBanks = 4;
-        const int rowsPerBank = 4;
-        const int colsPerBank = 10;
-        var gap = 6;
-        var availWidth = Width - gap * (numBanks + 1);
-        var bankWidth = Math.Max(40, availWidth / numBanks);
-        var bankHeight = Height - gap * 2;
+        var r = new Rectangle(0, 0, Width - 1, Height - 1);
 
-        for (var b = 0; b < numBanks; b++)
+        Color litColor, unlitColor, borderColor, headerColor;
+        switch (AgentType.ToLowerInvariant())
         {
-            var r = new Rectangle(gap + b * (bankWidth + gap), gap, bankWidth, bankHeight);
-            DrawBank(g, r, b * (rowsPerBank * colsPerBank), rowsPerBank, colsPerBank);
+            case "critic":
+                litColor = Color.FromArgb(255, 65, 65);
+                unlitColor = Color.FromArgb(42, 16, 16);
+                borderColor = IsActive ? Color.FromArgb(130, 35, 35) : Color.FromArgb(48, 58, 68);
+                headerColor = Color.FromArgb(255, 95, 95);
+                break;
+            case "validator":
+                litColor = Color.FromArgb(255, 215, 45);
+                unlitColor = Color.FromArgb(42, 36, 14);
+                borderColor = IsActive ? Color.FromArgb(130, 105, 25) : Color.FromArgb(48, 58, 68);
+                headerColor = Color.FromArgb(255, 220, 70);
+                break;
+            case "researcher":
+                litColor = Color.FromArgb(50, 205, 255);
+                unlitColor = Color.FromArgb(16, 38, 48);
+                borderColor = IsActive ? Color.FromArgb(25, 90, 115) : Color.FromArgb(48, 58, 68);
+                headerColor = Color.FromArgb(70, 215, 255);
+                break;
+            case "worker":
+                litColor = Color.FromArgb(65, 225, 95);
+                unlitColor = Color.FromArgb(16, 42, 22);
+                borderColor = IsActive ? Color.FromArgb(35, 110, 45) : Color.FromArgb(48, 58, 68);
+                headerColor = Color.FromArgb(85, 225, 115);
+                break;
+            default:
+                litColor = Color.FromArgb(60, 75, 90);
+                unlitColor = Color.FromArgb(22, 28, 34);
+                borderColor = Color.FromArgb(38, 48, 58);
+                headerColor = Color.FromArgb(90, 105, 120);
+                break;
         }
-    }
 
-    void DrawBank(Graphics g, Rectangle r, int offset, int rows, int cols)
-    {
         using var panelBrush = new SolidBrush(Color.FromArgb(18, 24, 30));
-        using var edgePen = new Pen(Color.FromArgb(48, 62, 76));
-        using var innerPen = new Pen(Color.FromArgb(30, 38, 48));
+        using var edgePen = new Pen(borderColor);
+        using var innerPen = new Pen(Color.FromArgb(28, 36, 44));
 
         g.FillRectangle(panelBrush, r);
         g.DrawRectangle(edgePen, r);
 
-        using var screwBrush = new SolidBrush(Color.FromArgb(80, 92, 104));
-        g.FillEllipse(screwBrush, r.Left + 3, r.Top + 3, 3, 3);
-        g.FillEllipse(screwBrush, r.Right - 6, r.Top + 3, 3, 3);
-        g.FillEllipse(screwBrush, r.Left + 3, r.Bottom - 6, 3, 3);
-        g.FillEllipse(screwBrush, r.Right - 6, r.Bottom - 6, 3, 3);
+        using var screwBrush = new SolidBrush(Color.FromArgb(70, 82, 94));
+        g.FillEllipse(screwBrush, r.Left + 2, r.Top + 2, 3, 3);
+        g.FillEllipse(screwBrush, r.Right - 5, r.Top + 2, 3, 3);
+        g.FillEllipse(screwBrush, r.Left + 2, r.Bottom - 5, 3, 3);
+        g.FillEllipse(screwBrush, r.Right - 5, r.Bottom - 5, 3, 3);
 
-        var padX = 10;
-        var padY = 8;
+        var labelText = string.IsNullOrEmpty(TaskId) 
+            ? AgentType.ToUpperInvariant() 
+            : $"{AgentType.ToUpperInvariant()}: {TaskId}";
+        using var font = new Font("Cascadia Mono", 7.5f, FontStyle.Bold);
+        using var textBrush = new SolidBrush(headerColor);
+        g.DrawString(labelText, font, textBrush, 8, 3);
+
+        var padX = 8;
+        var padY = 18;
         var drawW = r.Width - padX * 2;
-        var drawH = r.Height - padY * 2;
+        var drawH = r.Height - padY - 4;
         if (drawW <= 0 || drawH <= 0) return;
 
-        var ledW = Math.Max(4, (drawW - (cols - 1) * 3) / cols);
-        var ledH = Math.Max(4, (drawH - (rows - 1) * 3) / rows);
-        var spacingX = (drawW - ledW * cols) / Math.Max(1, cols - 1) + ledW;
-        var spacingY = (drawH - ledH * rows) / Math.Max(1, rows - 1) + ledH;
+        var ledW = Math.Max(4, (drawW - (Cols - 1) * 3) / Cols);
+        var ledH = Math.Max(4, (drawH - (Rows - 1) * 3) / Rows);
+        var spacingX = (drawW - ledW * Cols) / Math.Max(1, Cols - 1) + ledW;
+        var spacingY = (drawH - ledH * Rows) / Math.Max(1, Rows - 1) + ledH;
 
-        for (var row = 0; row < rows; row++)
+        for (var row = 0; row < Rows; row++)
         {
-            for (var col = 0; col < cols; col++)
+            for (var col = 0; col < Cols; col++)
             {
-                var idx = (offset + row * cols + col) % TotalLamps;
+                var idx = row * Cols + col;
                 var x = r.X + padX + col * spacingX;
                 var y = r.Y + padY + row * spacingY;
-                var on = _lamps[idx];
-                var c = GetColor(_colorPalette[idx], on);
+                var on = IsActive && _lamps[idx];
+                var c = on ? litColor : unlitColor;
 
                 using var b = new SolidBrush(c);
                 g.FillRectangle(b, x, y, ledW, ledH);
@@ -674,10 +681,92 @@ sealed class BlinkenLightsPanel : Control
             }
         }
     }
+}
+
+sealed class BlinkenRack : Panel
+{
+    readonly FlowLayoutPanel _flow = new()
+    {
+        Dock = DockStyle.Fill,
+        AutoScroll = true,
+        WrapContents = false,
+        BackColor = Color.FromArgb(10, 14, 18),
+        Padding = new Padding(2)
+    };
+    readonly System.Windows.Forms.Timer _pulse = new() { Interval = 110 };
+    readonly List<AgentBlinkenBank> _banks = new();
+    readonly AgentBlinkenBank _standbyBank = new(null, null, "Standby");
+
+    public BlinkenRack()
+    {
+        Dock = DockStyle.Fill;
+        BackColor = Color.FromArgb(10, 14, 18);
+        Controls.Add(_flow);
+        _flow.Controls.Add(_standbyBank);
+        _pulse.Tick += (_, _) =>
+        {
+            foreach (var b in _banks) b.Step();
+        };
+        _pulse.Start();
+    }
+
+    public void SyncAgents(List<ActiveAgentInfo> agents)
+    {
+        _flow.SuspendLayout();
+        try
+        {
+            var activeIds = new HashSet<string>(agents.Select(a => a.AgentId), StringComparer.OrdinalIgnoreCase);
+
+            for (var i = _banks.Count - 1; i >= 0; i--)
+            {
+                var b = _banks[i];
+                if (!activeIds.Contains(b.AgentId ?? ""))
+                {
+                    b.IsActive = false;
+                    _flow.Controls.Remove(b);
+                    _banks.RemoveAt(i);
+                    b.Dispose();
+                }
+            }
+
+            foreach (var a in agents)
+            {
+                var existing = _banks.FirstOrDefault(b => string.Equals(b.AgentId, a.AgentId, StringComparison.OrdinalIgnoreCase));
+                if (existing is not null)
+                {
+                    existing.TaskId = a.TaskId;
+                    existing.AgentType = a.Type;
+                    existing.IsActive = true;
+                }
+                else
+                {
+                    var newBank = new AgentBlinkenBank(a.AgentId, a.TaskId, a.Type);
+                    _banks.Add(newBank);
+                    _flow.Controls.Add(newBank);
+                }
+            }
+
+            if (!_flow.Controls.Contains(_standbyBank))
+            {
+                _flow.Controls.Add(_standbyBank);
+            }
+            _flow.Controls.SetChildIndex(_standbyBank, _flow.Controls.Count - 1);
+            _standbyBank.IsActive = false;
+        }
+        finally
+        {
+            _flow.ResumeLayout();
+        }
+    }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _pulse.Dispose();
+        if (disposing)
+        {
+            _pulse.Dispose();
+            foreach (var b in _banks) b.Dispose();
+            _standbyBank.Dispose();
+        }
         base.Dispose(disposing);
     }
 }
@@ -691,7 +780,7 @@ sealed class MainForm : Form
     readonly Label _header = new(), _mcpState = new(), _intent = new(), _goal = new();
     readonly Label[] _metrics = Enumerable.Range(0, 5).Select(_ => new Label()).ToArray();
     readonly TextBox _usage = new(), _overviewActivity = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new(), _activeProvidersText = new();
-    readonly BlinkenLightsPanel _blinken = new();
+    readonly BlinkenRack _blinkenRack = new();
     readonly DataGridView _integrations = new(), _providers = new();
     readonly Label _autofillStatus = new();
     readonly Button _btnAutofillToggle = Btn("Start Autofill", 115);
@@ -743,7 +832,7 @@ sealed class MainForm : Form
     {
         var p = Page("Overview"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 12, ColumnCount = 1 };
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
@@ -757,7 +846,7 @@ sealed class MainForm : Form
 
         var metricNames = new[] { "ACTIVE AGENTS", "WORKER SESSIONS", "COMMITS", "CRITIC RUNS", "TASKS COMPLETE" }; var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1 };
         for (var i = 0; i < 5; i++) { metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20)); _metrics[i].Dock = DockStyle.Fill; _metrics[i].Margin = new Padding(5); _metrics[i].TextAlign = ContentAlignment.MiddleCenter; _metrics[i].Font = new Font("Cascadia Mono", 12, FontStyle.Bold); _metrics[i].Text = metricNames[i] + "\r\n—"; metrics.Controls.Add(_metrics[i], i, 0); }
-        _blinken.Dock = DockStyle.Fill; _blinken.Margin = new Padding(5,2,5,2);
+        _blinkenRack.Dock = DockStyle.Fill; _blinkenRack.Margin = new Padding(5,2,5,2);
 
         var autofillBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         _btnAutofillToggle.Click += (_, _) => ToggleAutofill();
@@ -779,7 +868,7 @@ sealed class MainForm : Form
         _activeProvidersText.Dock = DockStyle.Fill; _activeProvidersText.ReadOnly = true; _activeProvidersText.BackColor = Theme.Surface; _activeProvidersText.BorderStyle = BorderStyle.None; _activeProvidersText.Font = new Font("Cascadia Mono", 9f, FontStyle.Bold); _activeProvidersText.ForeColor = Theme.Accent;
         
         rows.Controls.Add(metrics, 0, 0);
-        rows.Controls.Add(_blinken, 0, 1);
+        rows.Controls.Add(_blinkenRack, 0, 1);
         rows.Controls.Add(Section("AUTONOMOUS AUTOFILL & WORKER SLOTS"), 0, 2);
         rows.Controls.Add(autofillBar, 0, 3);
         rows.Controls.Add(Section("ACTIVE PROVIDERS"), 0, 4);
@@ -1341,7 +1430,7 @@ sealed class MainForm : Form
         _intent.Text = $"INTENT REVISION  {m.IntentRevision}";
         _goal.Text = string.IsNullOrWhiteSpace(m.Goal) ? "No project goal recorded." : m.Goal;
         _usage.Text = UsageText(m);
-        _blinken.Active = m.ActiveAgents > 0;
+        _blinkenRack.SyncAgents(m.ActiveAgentList);
     }
 
     List<IntegrationStatus> ReadIntegrationStatus()

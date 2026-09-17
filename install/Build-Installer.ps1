@@ -12,7 +12,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '0.7.8',
+    [string]$Version = '0.7.9',
     [switch]$IconOnly
 )
 
