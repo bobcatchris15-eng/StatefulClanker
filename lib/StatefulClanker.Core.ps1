@@ -158,6 +158,7 @@ function Update-SCReadiness {
     Invoke-SCLocked { Update-SCReadinessCore }
 }
 function Update-SCReadinessCore {
+    Repair-SCOrphanedAgents
     $tasks=@(Get-SCTasks);$map=@{}
     foreach($task in $tasks){if($task.id){$map[[string]$task.id]=$task}}
     foreach($task in $tasks){
@@ -202,6 +203,67 @@ function Complete-SCTelemetry($Record) {
 function Get-SCActiveTelemetry { Ensure-SCTelemetryLayout;return @(Get-ChildItem -LiteralPath (Get-SCPath 'telemetry/active') -Filter '*.json' -File|ForEach-Object{Read-SCJson $_.FullName}|Sort-Object startedAt) }
 function Get-SCTelemetryRuns([int]$Limit=100) { Ensure-SCTelemetryLayout;return @(Get-ChildItem -LiteralPath (Get-SCPath 'telemetry/runs') -Filter '*.json' -File|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First $Limit|ForEach-Object{Read-SCJson $_.FullName}) }
 function Get-SCContextFaults([int]$Limit=100) { Ensure-SCTelemetryLayout;$p=Get-SCPath 'telemetry/context-faults.jsonl';return @(Get-Content -LiteralPath $p|Where-Object{$_}|Select-Object -Last $Limit|ForEach-Object{$_|ConvertFrom-Json}) }
+
+function Repair-SCOrphanedAgents {
+    Ensure-SCTelemetryLayout
+    $activeRecords = @(Get-SCActiveTelemetry)
+    $now = (Get-Date).ToUniversalTime()
+    foreach($rec in $activeRecords) {
+        $isDead = $false
+        if ($rec.PSObject.Properties['processId'] -and $rec.processId) {
+            try {
+                $proc = Get-Process -Id ([int]$rec.processId) -ErrorAction SilentlyContinue
+                if (-not $proc) { $isDead = $true }
+            } catch { $isDead = $true }
+        } else {
+            $hbRaw = if ($rec.PSObject.Properties['heartbeatAt'] -and $rec.heartbeatAt) { $rec.heartbeatAt }
+                     elseif ($rec.PSObject.Properties['startedAt'] -and $rec.startedAt) { $rec.startedAt }
+                     else { $null }
+            $heartbeat = [datetime]::MinValue
+            if ($hbRaw -is [datetime]) {
+                $heartbeat = $hbRaw.ToUniversalTime()
+            } elseif (-not [string]::IsNullOrWhiteSpace([string]$hbRaw)) {
+                try { $heartbeat = ([datetime]::Parse([string]$hbRaw)).ToUniversalTime() } catch {}
+            }
+            if (($now - $heartbeat).TotalMinutes -ge 10) {
+                $isDead = $true
+            }
+        }
+
+        if ($isDead) {
+            Write-Warning "Recovering orphaned agent $($rec.agentId) for task $($rec.taskId)..."
+            $rec.lifecycle = 'failed'
+            $rec.error = 'Agent abandoned, process exited, or heartbeat timed out.'
+            $rec.endedAt = $now.ToString('o')
+            Complete-SCTelemetry $rec
+            Add-SCEvent 'agent.orphaned' "Recovered orphaned agent $($rec.agentId) on task $($rec.taskId)." @{agentId=$rec.agentId;taskId=$rec.taskId;stage=$rec.stage}
+
+            if ($rec.taskId) {
+                $t = Get-SCTask $rec.taskId
+                if ($t -and (@('running','reviewing','validating') -contains [string]$t.status)) {
+                    $t.status = 'needs_rework'
+                    $t.blockReason = 'Worker or reviewer process abandoned / timed out.'
+                    Save-SCTask $t
+                    Add-SCEvent 'task.recovered' "Reset abandoned task $($t.id) to needs_rework." @{taskId=$t.id;previousStatus=$t.status}
+                }
+            }
+        }
+    }
+
+    $activeAgentTaskIds = @((Get-SCActiveTelemetry) | ForEach-Object { [string]$_.taskId })
+    foreach($t in @(Get-SCTasks)) {
+        if (@('running','reviewing','validating') -contains [string]$t.status) {
+            if ($activeAgentTaskIds -notcontains [string]$t.id) {
+                Write-Warning "Task $($t.id) in status '$($t.status)' has no active telemetry. Recovering to needs_rework..."
+                $was = $t.status
+                $t.status = 'needs_rework'
+                $t.blockReason = 'No active telemetry record found for in-flight task.'
+                Save-SCTask $t
+                Add-SCEvent 'task.recovered' "Reset untracked in-flight task $($t.id) to needs_rework." @{taskId=$t.id;previousStatus=$was}
+            }
+        }
+    }
+}
 
 function Upgrade-SCStateLayout {
     Assert-SCInitialized

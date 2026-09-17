@@ -42,6 +42,8 @@ function Get-SCDispatchableTasks {
 
 function Get-SCRetryableTasks {
     $tasks = @(Get-SCTasks)
+    $cfg = Get-SCConfig
+    $maxAttempts = if($cfg.PSObject.Properties['maxTaskAttempts'] -and $cfg.maxTaskAttempts){ [int]$cfg.maxTaskAttempts } else { 5 }
     $map = @{}
     foreach($t in $tasks){ if($t.id){ $map[[string]$t.id] = $t } }
     $retryable = @()
@@ -49,7 +51,7 @@ function Get-SCRetryableTasks {
         if(@('needs_rework','stale','failed') -notcontains [string]$t.status){ continue }
         if([bool]$t.humanGate){ continue }
         $attempts = if ($t.PSObject.Properties['attemptCount']) { [int]$t.attemptCount } else { 0 }
-        if($attempts -ge 3){ continue }
+        if($attempts -ge $maxAttempts){ continue }
 
         $depsMet = $true
         foreach($dep in @($t.dependsOn)){
