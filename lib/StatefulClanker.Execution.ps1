@@ -255,10 +255,42 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
     $task=Get-SCTask $task.id;if(Commit-SCProposal $task $proposal $compilation){Write-Host "Task complete: $($task.id)"}else{Write-Warning "Task not committed: $($task.id)"}
     Invoke-SCProjectReviewIfDue 'interval'|Out-Null
 }
-function Retry-SCTask([string]$Id) { if(-not$Id){throw '-TaskId required.'};$task=Get-SCTask $Id;$was=$task.status;Advance-SCTaskControlRevision $task|Out-Null;$task.status='ready';$task.blockReason=$null;Save-SCTask $task;if($was-eq'complete'-or$was-eq'stale'){Invalidate-SCDependents $Id 'upstream task retried'};Update-SCReadiness;Add-SCEvent 'task.retried' "Retry $Id" @{taskId=$Id;previousStatus=$was;controlRevision=$task.controlRevision};Write-Host 'Task reset to ready.' }
+function Retry-SCTask([string]$Id) {
+    if(-not$Id){throw '-TaskId required.'}
+    $task=Get-SCTask $Id
+    $was=$task.status
+
+    if ($task.latestRunId -and $task.latestCompilationId) {
+        try {
+            $run = Read-SCJson (Get-SCPath ("runs/{0}.json" -f $task.latestRunId))
+            $comp = Read-SCJson (Get-SCPath ("compilations/{0}.json" -f $task.latestCompilationId))
+            if ($run -and $comp) {
+                Write-Host "Running critic against previous failure before retrying..."
+                $task.status='reviewing'; Save-SCTask $task
+                $critique = Invoke-SCReview $task $run $comp 'critic'
+                $task = Get-SCTask $task.id
+                $task.latestCritiqueId = $critique.id
+                Save-SCTask $task
+            }
+        } catch {
+            Write-Warning "Failed to run critic during retry: $($_.Exception.Message)"
+        }
+    }
+
+    $task=Get-SCTask $Id
+    Advance-SCTaskControlRevision $task|Out-Null
+    $task.status='ready'
+    $task.blockReason=$null
+    Save-SCTask $task
+    if($was-eq'complete'-or$was-eq'stale'){Invalidate-SCDependents $Id 'upstream task retried'}
+    Update-SCReadiness
+    Add-SCEvent 'task.retried' "Retry $Id" @{taskId=$Id;previousStatus=$was;controlRevision=$task.controlRevision}
+    Write-Host 'Task reset to ready.'
+}
 function Complete-SCTask([string]$Id) { if(-not$Id){throw '-TaskId required.'};$task=Get-SCTask $Id;$was=$task.status;Advance-SCTaskControlRevision $task|Out-Null;$task.status='complete';$task.blockReason=$null;Save-SCTask $task;Add-SCEvent 'task.completed.manual' "Completed $Id manually" @{taskId=$Id;previousStatus=$was;authority='human';controlRevision=$task.controlRevision};Add-SCProgressRecord $task $null $true 'human-commit' 'Human explicitly committed task completion.'|Out-Null;Update-SCReadiness;Write-Host 'Task completed.' }
 function Block-SCTask([string]$Id,[string]$Why) { if(-not$Id){throw '-TaskId required.'};if(-not$Why){throw '-Reason required.'};$task=Get-SCTask $Id;$was=$task.status;Advance-SCTaskControlRevision $task|Out-Null;$task.status='blocked';$task.blockReason=$Why;Save-SCTask $task;if($was-eq'complete'){Invalidate-SCDependents $Id 'upstream task blocked after completion'};Add-SCEvent 'task.blocked' $Why @{taskId=$Id;previousStatus=$was;controlRevision=$task.controlRevision};Write-Host 'Task blocked.' }
 function Show-SCProviders { $cfg=Get-SCConfig;$rows=@();foreach($property in $cfg.providers.PSObject.Properties){$rows+=[pscustomobject]@{name=$property.Name;command=$property.Value.command;mode=$property.Value.mode}};$rows|Format-Table -AutoSize }
 function Show-SCTelemetry([string]$Mode,[string]$Id) { if([string]::IsNullOrWhiteSpace($Mode)){$Mode='active'};switch($Mode.ToLowerInvariant()){'active'{@(Get-SCActiveTelemetry)|Select-Object agentId,taskId,stage,provider,lifecycle,compilationId,startedAt|Format-Table -AutoSize;break};'history'{@(Get-SCTelemetryRuns 100)|Select-Object agentId,taskId,stage,provider,lifecycle,exitCode,verdict,durationSeconds,compilationId,startedAt|Format-Table -AutoSize;break};'faults'{@(Get-SCContextFaults 100)|Select-Object ts,taskId,runId,compilationId,request|Format-Table -AutoSize;break};'show'{if(-not$Id){throw '-RunId required (agent id).'};$record=Read-SCJson (Get-SCPath ("telemetry/runs/{0}.json"-f$Id));if(-not$record){throw "Unknown telemetry run: $Id"};ConvertTo-SCJson $record 14|Write-Host;break};default{throw "Unknown telemetry subcommand: $Mode"}} }
 function Show-SCContext([string]$Mode,[string]$Id) { if([string]::IsNullOrWhiteSpace($Mode)){$Mode='faults'};switch($Mode.ToLowerInvariant()){'faults'{@(Get-SCContextFaults 100)|ConvertTo-SCJson -Depth 12|Write-Host;break};'show'{if(-not$Id){throw '-CompilationId required.'};$record=Read-SCJson (Get-SCPath ("compilations/{0}.json"-f$Id));if(-not$record){throw "Unknown compilation: $Id"};ConvertTo-SCJson $record 24|Write-Host;break};default{throw "Unknown context subcommand: $Mode"}} }
 function Show-SCProgress([string]$Mode) { if([string]::IsNullOrWhiteSpace($Mode)){$Mode='history'};if($Mode.ToLowerInvariant()-ne'history'){throw "Unknown progress subcommand: $Mode"};@(Get-ChildItem -LiteralPath (Get-SCPath 'progress') -Filter '*.json' -File|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 100|ForEach-Object{Read-SCJson $_.FullName})|Select-Object ts,taskId,advanced,outcome,attemptCount,inputFingerprint|Format-Table -AutoSize }
+

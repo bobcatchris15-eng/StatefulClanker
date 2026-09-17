@@ -144,11 +144,25 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
                 }else{
                     $stalled=@(Get-SCTasks|Where-Object{@('needs_rework','stale','blocked')-contains[string]$_.status})
                     if($stalled.Count-gt0){
-                        $stalledNames=(@($stalled|Select-Object -First 3|ForEach-Object{"$($_.id) ($($_.status))"})) -join ', '
-                        if($stalled.Count-gt3){$stalledNames+=" (+$($stalled.Count-3) more)"}
-                        $reason="no ready tasks; $($stalled.Count) task(s) require intervention/retry: $stalledNames"
-                        $state='blocked'
-                        if($lastBlock-ne$reason){Add-SCEvent 'autofill.stalled' $reason @{stalledCount=$stalled.Count};$lastBlock=$reason}
+                        $retryCount = 0
+                        foreach ($t in $stalled) {
+                            $attempts = if ($t.PSObject.Properties['attemptCount']) { [int]$t.attemptCount } else { 0 }
+                            if ($t.status -eq 'needs_rework' -and $attempts -lt 3) {
+                                Write-Host "Autofill auto-retrying task $($t.id) (attempt $attempts of 3)..."
+                                try { Retry-SCTask $t.id; $retryCount++ } catch { Write-Warning "Auto-retry failed: $($_.Exception.Message)" }
+                            }
+                        }
+                        if ($retryCount -gt 0) {
+                            $state='running'
+                            $lastBlock=$null
+                            $readyCount+=$retryCount
+                        } else {
+                            $stalledNames=(@($stalled|Select-Object -First 3|ForEach-Object{"$($_.id) ($($_.status))"})) -join ', '
+                            if($stalled.Count-gt3){$stalledNames+=" (+$($stalled.Count-3) more)"}
+                            $reason="no ready tasks; $($stalled.Count) task(s) require intervention/retry: $stalledNames"
+                            $state='blocked'
+                            if($lastBlock-ne$reason){Add-SCEvent 'autofill.stalled' $reason @{stalledCount=$stalled.Count};$lastBlock=$reason}
+                        }
                     }else{
                         $state='idle'
                         $lastBlock=$null
