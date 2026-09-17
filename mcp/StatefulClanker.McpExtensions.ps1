@@ -139,7 +139,9 @@ function New-SCExtendedTools {
         @{name='directive_retire';description='Retire a current human directive because the human removed that rule/feature. Requires Intent reconciliation.';inputSchema=@{type='object';properties=@{project=@{type='string'};id=@{type='string'};reason=@{type='string'}};required=@('id')}},
         @{name='intent_apply';description='Commit the complete normalized Intent Contract after reconciling it against ALL current human directives. Clears the directive-reconciliation gate. contract object requires 9 fields: objective (string), requirements (array), constraints (array), invariants (array), nonGoals (array), decisions (array), preferences (array), openQuestions (array), successDefinition (string).';inputSchema=@{type='object';properties=@{project=@{type='string'};contract=@{type='object';description='Intent contract object containing objective, requirements, constraints, invariants, nonGoals, decisions, preferences, openQuestions, successDefinition.'};reason=@{type='string'}};required=@('contract')}},
         @{name='control_events_since';description='Read durable sequenced control-plane events after a cursor. Keep the returned cursor and use it next time; push notifications are only a wake-up signal.';inputSchema=@{type='object';properties=@{project=@{type='string'};since=@{type='integer';minimum=0};limit=@{type='integer';minimum=1;maximum=1000};minimumLevel=@{type='string';enum=@('fyi','attention','human_required')}}}},
-        @{name='control_snapshot';description='Read the current human-facing project snapshot: goal, current directives, Intent, reconciliation gate, task counts, holds, active agents, and event cursor.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}}
+        @{name='control_snapshot';description='Read the current human-facing project snapshot: goal, current directives, Intent, reconciliation gate, task counts, holds, active agents, and event cursor.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
+        @{name='autofill_status';description='Inspect the resident autofill supervisor: state (running, paused, idle, blocked, draining, stopped), PID, slot availability, ready task count, and blocking reasons.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
+        @{name='autofill_control';description='Control the resident autofill supervisor: pause (suspend dispatch and allow manual runs), resume, stop (drain and exit), or trigger_now (immediate dispatch tick).';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('stop','pause','resume','trigger_now')}};required=@('action')}}
     )
 }
 
@@ -191,6 +193,55 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
             $events=@(Get-McpControlEventsSince $project $since $limit $min);return New-McpTextResult ([ordered]@{since=$since;cursor=Get-McpControlCursor $project;events=$events})
         }
         'control_snapshot' {return New-McpTextResult (Get-McpControlSnapshot $project)}
+        'autofill_status' {
+            $status=Invoke-McpHarness $project @('autofill','status')
+            $sJson=Join-Path (Get-McpStateDir $project) 'autofill\supervisor.json'
+            if(Test-Path -LiteralPath $sJson -PathType Leaf){
+                try{
+                    $record=Read-McpJson $sJson
+                    if($record){
+                        return New-McpTextResult ([ordered]@{
+                            running=$true
+                            state=[string]$record.state
+                            pid=[int]$record.pid
+                            startedAt=$record.startedAt
+                            updatedAt=$record.updatedAt
+                            intervalSeconds=[int]$record.intervalSeconds
+                            maxConcurrent=[int]$record.maxConcurrent
+                            ownedActive=[int]$record.ownedActive
+                            activeTasks=@($record.activeTasks)
+                            readyCount=[int]$record.readyCount
+                            slots=[int]$record.slots
+                            lastDispatchAt=$record.lastDispatchAt
+                            blockReason=$record.blockReason
+                            paused=if($record.PSObject.Properties['paused']){[bool]$record.paused}else{$false}
+                            output=$status.stdout
+                        })
+                    }
+                }catch{}
+            }
+            return New-McpTextResult ([ordered]@{
+                running=$false
+                state='stopped'
+                output=$status.stdout
+            })
+        }
+        'autofill_control' {
+            $action=Get-McpArgRequired $Arguments 'action'
+            $subcmd=switch($action.ToLowerInvariant()){
+                'stop' { 'stop' }
+                'pause' { 'pause' }
+                'resume' { 'resume' }
+                'trigger_now' { 'trigger' }
+                default { throw "Unknown autofill action: $action. Expected stop, pause, resume, trigger_now." }
+            }
+            $res=Invoke-McpHarness $project @('autofill',$subcmd)
+            return New-McpTextResult ([ordered]@{
+                action=$action
+                success=$true
+                output=$res.stdout
+            })
+        }
         default {throw "Unknown extended tool: $Name"}
     }
 }
@@ -253,11 +304,17 @@ function Invoke-McpRpc($Request) {
         return $response
     }
     if($method-eq'tools/call') {
-        $name=[string]$Request.params.name;$args=$null;if($Request.params.PSObject.Properties['arguments']){$args=$Request.params.arguments}
+        $params = if($Request -is [System.Collections.IDictionary]){$Request['params']}else{$Request.params}
+        $name = if($params -is [System.Collections.IDictionary]){[string]$params['name']}else{[string]$params.name}
+        $args = $null
+        if($params -is [System.Collections.IDictionary]){if($params.Contains('arguments')){$args=$params['arguments']}}
+        elseif($params -and $params.PSObject.Properties['arguments']){$args=$params.arguments}
+        $hasSemanticTaskAdd = $args -and (($args -is [System.Collections.IDictionary] -and ($args.Contains('size') -or $args.Contains('source') -or $args.Contains('intentRef'))) -or ($args.PSObject.Properties['size'] -or $args.PSObject.Properties['source'] -or $args.PSObject.Properties['intentRef']))
         if(@('directive_set','directive_list','directive_get','directive_history','directive_retire')-contains$name){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCDirectiveTool $name $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool '{0}' failed: {1}"-f$name,$_.Exception.Message)})}}}}
-        if(@('plan_apply','source_add','source_get','source_list','intent_apply','control_events_since','control_snapshot','worker_policy_get','worker_policy_apply','worker_source_set','worker_source_remove','worker_source_tools')-contains$name){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCExtendedTool $name $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool '{0}' failed: {1}"-f$name,$_.Exception.Message)})}}}}
         if($name-eq'direction_add'){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCDirectionAdd $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool 'direction_add' failed: {0}"-f$_.Exception.Message)})}}}}
-        if($name-eq'task_add'-and$args-and($args.PSObject.Properties['size']-or$args.PSObject.Properties['source']-or$args.PSObject.Properties['intentRef'])){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCSemanticTaskAdd $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool 'task_add' failed: {0}"-f$_.Exception.Message)})}}}}
+        if($name-eq'task_add'-and$hasSemanticTaskAdd){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCSemanticTaskAdd $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool 'task_add' failed: {0}"-f$_.Exception.Message)})}}}}
+        $extNames=@(New-SCExtendedTools|ForEach-Object{[string]$_.name})
+        if($extNames -contains $name){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCExtendedTool $name $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool '{0}' failed: {1}"-f$name,$_.Exception.Message)})}}}}
     }
     return (& $script:SCBaseInvokeMcpRpc $Request)
 }

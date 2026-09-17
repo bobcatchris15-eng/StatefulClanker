@@ -42,7 +42,7 @@ switch($Command.ToLowerInvariant()){
 'events'{Get-SCControlEventsSince $Since $Limit $MinimumLevel|ConvertTo-SCJson -Depth 16|Write-Host;break}
 'intent'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='show'};switch($Subcommand.ToLowerInvariant()){'show'{Show-SCIntent 'show';break};'history'{Show-SCIntent 'history';break};'escalations'{Show-SCIntent 'escalations';break};'replace'{Replace-SCIntentContract $Path $Reason;break};default{throw "Unknown intent subcommand: $Subcommand"}};break}
 'run'{if($Parallel -gt 0 -or $Subcommand -eq 'parallel'){Invoke-SCParallel $Parallel $Provider $PSCommandPath -NoMerge:$NoMerge}else{Invoke-SCTask $TaskId $Provider};break}
-'autofill'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){'run'{Invoke-SCAutofillSupervisor $IntervalSeconds $Provider $PSCommandPath -NoMerge:$NoMerge;break};'status'{Show-SCAutofillStatus;break};'stop'{Request-SCAutofillStop;break};default{throw "Unknown autofill subcommand: $Subcommand"}};break}
+'autofill'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){'run'{Invoke-SCAutofillSupervisor $IntervalSeconds $Provider $PSCommandPath -NoMerge:$NoMerge;break};'status'{Show-SCAutofillStatus;break};'stop'{Request-SCAutofillStop;break};'pause'{Request-SCAutofillPause;break};'resume'{Request-SCAutofillResume;break};'trigger'{Request-SCAutofillTrigger;break};default{throw "Unknown autofill subcommand: $Subcommand"}};break}
 'complete'{Complete-SCTask $TaskId;break}
 'block'{Block-SCTask $TaskId $Reason;break}
 'event'{Add-SCDirection $Message;break}

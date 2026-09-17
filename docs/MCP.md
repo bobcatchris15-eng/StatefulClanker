@@ -149,7 +149,7 @@ Capability policy is part of the task definition hash, so changing it invalidate
 
 ### Planning/execution
 
-`plan_apply`, `plan_import`, `task_list`, `task_show`, `task_add`, `task_retry`, `task_block`, `run_start`, `run_parallel`, `run_status`, `project_review`.
+`plan_apply`, `plan_import`, `task_list`, `task_show`, `task_add`, `task_retry`, `task_block`, `run_start`, `run_parallel`, `run_status`, `project_review`, `autofill_status`, `autofill_control`.
 
 ### Human awareness
 

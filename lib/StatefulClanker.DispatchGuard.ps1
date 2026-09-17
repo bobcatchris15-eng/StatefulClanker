@@ -18,7 +18,10 @@ function Assert-SCNoAutofillConflict {
     if($managed-and[bool]$managed.Value){return}
     if(-not(Get-Command Get-SCAutofillStatus -ErrorAction SilentlyContinue)){return}
     $autofill=Get-SCAutofillStatus
-    if($autofill){throw "Dispatch is owned by the resident autofill supervisor (PID $($autofill.pid)). Add/ready work normally and let autofill fill available slots, or request 'autofill stop' before manual execution."}
+    if($autofill){
+        if($autofill.PSObject.Properties['state'] -and $autofill.state -eq 'paused'){return}
+        throw "Dispatch is owned by the resident autofill supervisor (PID $($autofill.pid)). Add/ready work normally and let autofill fill available slots, or request 'autofill stop' or 'autofill_control' (action: 'pause' or 'stop') before manual execution."
+    }
 }
 
 function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {

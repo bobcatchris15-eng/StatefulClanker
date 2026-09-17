@@ -1,7 +1,7 @@
 <# StatefulClanker MCP core: tool definitions and dispatch, shared by the stdio
    and HTTP hosts. Hosts own transport only; everything below is transport-free. #>
 
-$script:McpVersion = '0.5.0'
+$script:McpVersion = '0.7.3'
 $script:McpProtocol = '2025-06-18'
 $script:McpHarness = Join-Path (Split-Path -Parent $PSScriptRoot) 'StatefulClanker.ps1'
 $script:McpDefaultProject = $null
@@ -132,7 +132,23 @@ function Get-McpArgArray($Arguments, [string]$Name) {
 }
 
 function New-McpTextResult($Value) {
-    @{ content = @(@{ type = 'text'; text = ($Value | ConvertTo-Json -Depth 30) }) }
+    $text = ''
+    if ($null -eq $Value) {
+        $text = 'null'
+    } elseif ($Value -is [string]) {
+        $text = $Value
+    } elseif ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [System.Collections.IDictionary])) {
+        $count = 0
+        try { $count = $Value.Count } catch { foreach ($x in $Value) { $count++ } }
+        if ($count -eq 0) {
+            $text = '[]'
+        } else {
+            $text = ConvertTo-Json -InputObject $Value -Depth 30
+        }
+    } else {
+        $text = ConvertTo-Json -InputObject $Value -Depth 30
+    }
+    @{ content = @(@{ type = 'text'; text = [string]$text }) }
 }
 
 function Get-McpConfigFlag([string]$Project, [string]$Name, [bool]$Default) {
@@ -1103,7 +1119,12 @@ function Invoke-McpTool([string]$Name, $Arguments) {
             $limit = Get-McpArgLimit $Arguments
             return New-McpTextResult (@(Read-McpJsonl (Join-Path $stateDir 'events.jsonl') $limit))
         }
-        default { throw "Unknown tool: $Name" }
+        default {
+            if (Get-Command Invoke-SCExtendedTool -ErrorAction SilentlyContinue) {
+                return (Invoke-SCExtendedTool $Name $Arguments)
+            }
+            throw "Unknown tool: $Name"
+        }
     }
 }
 

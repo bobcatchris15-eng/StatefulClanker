@@ -29,6 +29,7 @@ sealed class AppSettings
     public List<ProjectEntry> Projects { get; set; } = new();
     public string? ActiveProjectPath { get; set; }
     public int HttpPort { get; set; } = 7337;
+    public string? McpToken { get; set; }
 }
 
 static class AppStore
@@ -42,9 +43,27 @@ static class AppStore
     public static AppSettings Load()
     {
         Directory.CreateDirectory(Root);
-        try { if (File.Exists(SettingsPath)) return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath), JsonOptions) ?? new(); }
+        AppSettings settings = new();
+        try { if (File.Exists(SettingsPath)) settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath), JsonOptions) ?? new(); }
         catch { }
-        return new();
+        if (string.IsNullOrWhiteSpace(settings.McpToken))
+        {
+            try
+            {
+                if (File.Exists(McpDetailsPath))
+                {
+                    var d = JsonSerializer.Deserialize<McpDetails>(File.ReadAllText(McpDetailsPath), JsonOptions);
+                    if (!string.IsNullOrWhiteSpace(d?.token)) settings.McpToken = d.token;
+                }
+            }
+            catch { }
+            if (string.IsNullOrWhiteSpace(settings.McpToken))
+            {
+                settings.McpToken = Guid.NewGuid().ToString("N");
+            }
+            Save(settings);
+        }
+        return settings;
     }
 
     public static void Save(AppSettings settings)
@@ -134,7 +153,8 @@ sealed class McpHost : IDisposable
     readonly string _root;
     Process? _owned;
     public int Port { get; }
-    public McpHost(string root, int port) { _root = root; Port = port; }
+    public string? Token { get; }
+    public McpHost(string root, int port, string? token = null) { _root = root; Port = port; Token = token; }
 
     public McpDetails? Details()
     {
@@ -155,7 +175,9 @@ sealed class McpHost : IDisposable
         var script = System.IO.Path.Combine(_root, "mcp", "StatefulClanker.McpHttp.ps1");
         if (!File.Exists(script)) return;
         var psi = new ProcessStartInfo(Runtime.FindPowerShell()) { WorkingDirectory = _root, UseShellExecute = false, CreateNoWindow = true };
-        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", script, "-Port", Port.ToString() }) psi.ArgumentList.Add(arg);
+        var args = new List<string> { "-NoProfile", "-NonInteractive", "-File", script, "-Port", Port.ToString() };
+        if (!string.IsNullOrWhiteSpace(Token)) { args.AddRange(new[] { "-Token", Token }); }
+        foreach (var arg in args) psi.ArgumentList.Add(arg);
         try { _owned = Process.Start(psi); } catch { _owned = null; }
     }
 
@@ -383,7 +405,7 @@ sealed class MainForm : Form
     {
         Text = "StatefulClanker"; Width = 1160; Height = 740; MinimumSize = new Size(920, 590); StartPosition = FormStartPosition.CenterScreen;
         try { using var s = typeof(MainForm).Assembly.GetManifestResourceStream("StatefulClanker.ico"); if (s is not null) Icon = new Icon(s); } catch { }
-        _mcp = new McpHost(_root, _settings.HttpPort); _mcp.EnsureStarted(); _autofill = new AutofillHost(_root);
+        _mcp = new McpHost(_root, _settings.HttpPort, _settings.McpToken); _mcp.EnsureStarted(); _autofill = new AutofillHost(_root);
         var menu = new ContextMenuStrip(); menu.Items.Add("Open StatefulClanker", null, (_, _) => ShowFromTray()); menu.Items.Add("Exit", null, (_, _) => { _reallyExit = true; Close(); });
         _notify = new NotifyIcon { Text = "StatefulClanker", Icon = Icon ?? SystemIcons.Application, Visible = true, ContextMenuStrip = menu }; _notify.DoubleClick += (_, _) => ShowFromTray();
         BuildUi(); RestoreProjects(); Theme.Apply(this); _ = RefreshAllAsync();

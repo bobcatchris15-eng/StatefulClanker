@@ -226,6 +226,13 @@ function Initialize-SC {
     $example=Join-Path $script:StatefulClankerHome 'statefulclanker.example.json'
     if(Test-Path $example){Copy-Item -LiteralPath $example -Destination (Join-Path $dir 'config.json')}
     else{Write-SCJson (Join-Path $dir 'config.json') ([ordered]@{defaultProvider='opencode';criticProvider=$null;validatorProvider=$null;providers=[ordered]@{};maxConcurrent=3;autofillEnabled=$true;autofillIntervalSeconds=300;workingSetBudgetChars=24000;maxFileChars=8000;dependencyResultBudgetChars=8000;recentEventCount=12;recentEventBudgetChars=4000;stagnationWarningThreshold=2;requireHumanApprovalForPlan=$true;criticEnabled=$true;validatorEnabled=$true})}
+    $root=Get-SCRoot;$giPath=Join-Path $root '.gitignore'
+    try{
+        if(Test-Path -LiteralPath $giPath -PathType Leaf){
+            $giContent=Get-Content -LiteralPath $giPath -Raw
+            if($giContent -notmatch '(?m)^\.statefulclanker/?$'){Add-Content -LiteralPath $giPath -Value "`n.statefulclanker/" -Encoding UTF8}
+        }else{Set-Content -LiteralPath $giPath -Value ".statefulclanker/`n" -Encoding UTF8}
+    }catch{}
     Add-SCEvent 'project.initialized' 'StatefulClanker initialized.' @{root=Get-SCRoot};Write-Host "Initialized $dir"
 }
 function Set-SCGoal([string]$Text) { Assert-SCInitialized;if([string]::IsNullOrWhiteSpace($Text)){throw 'Goal text required.'};$state=Get-SCState;$state.goal=$Text;Save-SCState $state;Add-SCEvent 'goal.changed' $Text;Write-Host 'Goal updated.' }

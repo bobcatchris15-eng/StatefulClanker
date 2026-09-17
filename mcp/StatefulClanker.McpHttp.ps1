@@ -12,8 +12,32 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpProtocol.ps1')
 . (Join-Path $PSScriptRoot 'StatefulClanker.SubscriptionPump.ps1')
 if($ProjectPath-and(Test-Path -LiteralPath $ProjectPath -PathType Container)){Set-McpDefaultProject $ProjectPath}
-if([string]::IsNullOrWhiteSpace($Token)){$Token=[Guid]::NewGuid().ToString('N')}
-$tokenDir=Join-Path $env:LOCALAPPDATA 'StatefulClanker';if(-not(Test-Path -LiteralPath $tokenDir)){New-Item -ItemType Directory -Force -Path $tokenDir|Out-Null};$tokenPath=Join-Path $tokenDir 'mcp-http.json'
+$tokenDir=Join-Path $env:LOCALAPPDATA 'StatefulClanker';if(-not(Test-Path -LiteralPath $tokenDir)){New-Item -ItemType Directory -Force -Path $tokenDir|Out-Null};$tokenPath=Join-Path $tokenDir 'mcp-http.json';$appSettingsPath=Join-Path $tokenDir 'app.json'
+if([string]::IsNullOrWhiteSpace($Token)){
+    if(Test-Path -LiteralPath $appSettingsPath -PathType Leaf){
+        try{
+            $appJson=Get-Content -LiteralPath $appSettingsPath -Raw|ConvertFrom-Json
+            if($appJson-and$appJson.mcpToken){$Token=[string]$appJson.mcpToken}
+            elseif($appJson-and$appJson.McpToken){$Token=[string]$appJson.McpToken}
+        }catch{}
+    }
+    if([string]::IsNullOrWhiteSpace($Token)-and(Test-Path -LiteralPath $tokenPath -PathType Leaf)){
+        try{
+            $existing=Get-Content -LiteralPath $tokenPath -Raw|ConvertFrom-Json
+            if($existing-and$existing.token){$Token=[string]$existing.token}
+        }catch{}
+    }
+    if([string]::IsNullOrWhiteSpace($Token)){
+        $Token=[Guid]::NewGuid().ToString('N')
+    }
+    try{
+        $appData=if(Test-Path -LiteralPath $appSettingsPath -PathType Leaf){Get-Content -LiteralPath $appSettingsPath -Raw|ConvertFrom-Json}else{[PSCustomObject]@{}}
+        if($appData){
+            $appData|Add-Member -NotePropertyName 'mcpToken' -NotePropertyValue $Token -Force
+            $appData|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $appSettingsPath -Encoding UTF8
+        }
+    }catch{}
+}
 
 function Write-HttpResponse($Stream,[int]$Status,[string]$Body,[string]$ContentType='application/json'){
     $reason=switch($Status){200{'OK'}202{'Accepted'}400{'Bad Request'}401{'Unauthorized'}404{'Not Found'}405{'Method Not Allowed'}413{'Payload Too Large'}default{'Internal Server Error'}};$bytes=[Text.Encoding]::UTF8.GetBytes($Body)
