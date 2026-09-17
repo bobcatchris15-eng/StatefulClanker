@@ -4,7 +4,7 @@
 ; self-contained native WinForms host, then invokes ISCC with RepoRoot/PublishDir.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.7.4"
+  #define MyAppVersion "0.7.5"
 #endif
 #ifndef RepoRoot
   #define RepoRoot ".."

@@ -195,11 +195,13 @@ sealed class AutofillHost : IDisposable
     string? _project;
     public AutofillHost(string root) { _root = root; }
 
-    static string StateDir(string project) => System.IO.Path.Combine(project, ".statefulclanker", "autofill");
-    static string StatusPath(string project) => System.IO.Path.Combine(StateDir(project), "supervisor.json");
-    static string StopPath(string project) => System.IO.Path.Combine(StateDir(project), "stop.request");
+    public static string StateDir(string project) => System.IO.Path.Combine(project, ".statefulclanker", "autofill");
+    public static string StatusPath(string project) => System.IO.Path.Combine(StateDir(project), "supervisor.json");
+    public static string StopPath(string project) => System.IO.Path.Combine(StateDir(project), "stop.request");
+    public static string PausePath(string project) => System.IO.Path.Combine(StateDir(project), "pause.request");
+    public static string TriggerPath(string project) => System.IO.Path.Combine(StateDir(project), "trigger.request");
 
-    static bool Enabled(string project)
+    public static bool Enabled(string project)
     {
         try
         {
@@ -211,21 +213,52 @@ sealed class AutofillHost : IDisposable
         catch { return false; }
     }
 
+    public static bool IsProcessAlive(int pid)
+    {
+        if (pid <= 0) return false;
+        try { using var proc = Process.GetProcessById(pid); return !proc.HasExited; }
+        catch { return false; }
+    }
+
     static bool ExistingAlive(string project)
     {
         try
         {
             var path = StatusPath(project); if (!File.Exists(path)) return false;
             using var d = JsonDocument.Parse(File.ReadAllText(path)); if (!d.RootElement.TryGetProperty("pid", out var p)) return false;
-            using var proc = Process.GetProcessById(p.GetInt32()); return !proc.HasExited;
+            return IsProcessAlive(p.GetInt32());
         }
         catch { return false; }
     }
 
-    static void RequestStop(string? project)
+    public static void RequestStop(string? project)
     {
         if (string.IsNullOrWhiteSpace(project)) return;
         try { Directory.CreateDirectory(StateDir(project)); File.WriteAllText(StopPath(project), DateTimeOffset.UtcNow.ToString("O"), new UTF8Encoding(false)); } catch { }
+    }
+
+    public static void RequestPause(string? project)
+    {
+        if (string.IsNullOrWhiteSpace(project)) return;
+        try { Directory.CreateDirectory(StateDir(project)); File.WriteAllText(PausePath(project), DateTimeOffset.UtcNow.ToString("O"), new UTF8Encoding(false)); } catch { }
+    }
+
+    public static void RequestResume(string? project)
+    {
+        if (string.IsNullOrWhiteSpace(project)) return;
+        try
+        {
+            var p = PausePath(project);
+            if (File.Exists(p)) File.Delete(p);
+            RequestTrigger(project);
+        }
+        catch { }
+    }
+
+    public static void RequestTrigger(string? project)
+    {
+        if (string.IsNullOrWhiteSpace(project)) return;
+        try { Directory.CreateDirectory(StateDir(project)); File.WriteAllText(TriggerPath(project), DateTimeOffset.UtcNow.ToString("O"), new UTF8Encoding(false)); } catch { }
     }
 
     public void EnsureStarted(string? project)
@@ -250,6 +283,20 @@ sealed class AutofillHost : IDisposable
         RequestStop(_project);
         _owned?.Dispose();
     }
+}
+
+sealed class AutofillSnapshot
+{
+    public bool Enabled = true;
+    public bool Running;
+    public string State = "stopped";
+    public bool Paused;
+    public int Pid;
+    public int ActiveWorkers;
+    public int MaxConcurrent = 3;
+    public int ReadyCount;
+    public int Slots = 3;
+    public string? BlockReason;
 }
 
 sealed class ProjectMetrics
@@ -281,6 +328,7 @@ sealed class UiSnapshot
 {
     public McpDetails? Mcp;
     public ProjectMetrics Project = new();
+    public AutofillSnapshot Autofill = new();
     public List<IntegrationStatus> Integrations = new();
     public List<ProviderStatus> Providers = new();
     public bool HasProject;
@@ -307,6 +355,78 @@ static class Inspector
         try { m.Goal = JsonNode.Parse(File.ReadAllText(System.IO.Path.Combine(state, "state.json")))?["goal"]?.GetValue<string>() ?? ""; } catch { }
         try { m.IntentRevision = JsonNode.Parse(File.ReadAllText(System.IO.Path.Combine(state, "intent", "contract.json")))?["revision"]?.ToString() ?? "—"; } catch { }
         m.Commits = CommitCount(project); m.Activity = Activity(System.IO.Path.Combine(state, "events.jsonl")); return m;
+    }
+
+    public static AutofillSnapshot Autofill(string project)
+    {
+        var snap = new AutofillSnapshot();
+        var state = System.IO.Path.Combine(project, ".statefulclanker");
+        if (!Directory.Exists(state)) return snap;
+
+        var cfgPath = System.IO.Path.Combine(state, "config.json");
+        if (File.Exists(cfgPath))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(cfgPath));
+                var root = doc.RootElement;
+                if (root.TryGetProperty("autofillEnabled", out var aeb) && aeb.ValueKind == JsonValueKind.False)
+                    snap.Enabled = false;
+                if (root.TryGetProperty("maxConcurrent", out var mc) && mc.TryGetInt32(out var parsedMc))
+                    snap.MaxConcurrent = Math.Max(1, Math.Min(16, parsedMc));
+            }
+            catch { }
+        }
+
+        var statusPath = AutofillHost.StatusPath(project);
+        if (File.Exists(statusPath))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(statusPath));
+                var root = doc.RootElement;
+                if (root.TryGetProperty("pid", out var pv) && pv.TryGetInt32(out var pid))
+                {
+                    snap.Pid = pid;
+                    snap.Running = AutofillHost.IsProcessAlive(pid);
+                }
+                if (root.TryGetProperty("state", out var sv) && sv.ValueKind == JsonValueKind.String)
+                    snap.State = sv.GetString() ?? (snap.Running ? "running" : "stopped");
+                else
+                    snap.State = snap.Running ? "running" : "stopped";
+
+                if (root.TryGetProperty("paused", out var pzb))
+                    snap.Paused = pzb.ValueKind == JsonValueKind.True;
+                if (root.TryGetProperty("activeWorkers", out var aw) && aw.TryGetInt32(out var awVal))
+                    snap.ActiveWorkers = awVal;
+                if (root.TryGetProperty("maxConcurrent", out var mcv) && mcv.TryGetInt32(out var mcvVal))
+                    snap.MaxConcurrent = mcvVal;
+                if (root.TryGetProperty("readyCount", out var rc) && rc.TryGetInt32(out var rcVal))
+                    snap.ReadyCount = rcVal;
+                if (root.TryGetProperty("slots", out var sl) && sl.TryGetInt32(out var slVal))
+                    snap.Slots = slVal;
+                if (root.TryGetProperty("blockReason", out var br) && br.ValueKind == JsonValueKind.String)
+                    snap.BlockReason = br.GetString();
+            }
+            catch { }
+        }
+        else
+        {
+            snap.Running = false;
+            snap.State = "stopped";
+        }
+
+        if (File.Exists(AutofillHost.PausePath(project)))
+            snap.Paused = true;
+
+        if (!snap.Running)
+        {
+            snap.State = "stopped";
+            snap.ActiveWorkers = 0;
+            snap.Slots = snap.MaxConcurrent;
+        }
+
+        return snap;
     }
 
     static long Number(JsonElement r,string name) => r.TryGetProperty(name,out var n) && n.ValueKind==JsonValueKind.Number && n.TryGetInt64(out var v) ? v : 0;
@@ -363,6 +483,7 @@ static class Theme
         {
             if (c is Button b) { b.FlatStyle = FlatStyle.Flat; b.FlatAppearance.BorderColor = Border; b.BackColor = Surface2; b.ForeColor = Text; }
             else if (c is TextBox tb) { tb.BackColor = Surface; tb.ForeColor = Text; }
+            else if (c is NumericUpDown nud) { nud.BackColor = Surface; nud.ForeColor = Text; }
             else if (c is TreeView tv) { tv.BackColor = Surface; tv.ForeColor = Text; tv.BorderStyle = BorderStyle.FixedSingle; }
             else if (c is DataGridView dg) { dg.BackgroundColor = Surface; dg.GridColor = Border; dg.BorderStyle = BorderStyle.None; dg.DefaultCellStyle.BackColor = Surface; dg.DefaultCellStyle.ForeColor = Text; dg.DefaultCellStyle.SelectionBackColor = Surface2; dg.DefaultCellStyle.SelectionForeColor = Text; dg.ColumnHeadersDefaultCellStyle.BackColor = Surface2; dg.ColumnHeadersDefaultCellStyle.ForeColor = Text; dg.EnableHeadersVisualStyles = false; }
             Apply(c);
@@ -387,7 +508,16 @@ sealed class BlinkenLightsPanel : Control
         {
             if (_active == value) return;
             _active = value;
-            _pulse.Interval = value ? 110 : 250;
+            if (_active)
+            {
+                _pulse.Interval = 110;
+                _pulse.Start();
+            }
+            else
+            {
+                _pulse.Stop();
+                Array.Clear(_lamps, 0, _lamps.Length);
+            }
             Invalidate();
         }
     }
@@ -402,31 +532,26 @@ sealed class BlinkenLightsPanel : Control
             _colorPalette[i] = roll < 35 ? (byte)3 : roll < 60 ? (byte)1 : roll < 80 ? (byte)2 : roll < 95 ? (byte)0 : (byte)4;
         }
         _pulse.Tick += (_, _) => Step();
-        _pulse.Start();
     }
 
     void Step()
     {
-        _sweepStep = (_sweepStep + 1) % 32;
-        if (Active)
+        if (!Active)
         {
-            for (var i = 0; i < TotalLamps; i++)
-            {
-                var bank = i / 40;
-                var col = i % 10;
-                var sweepHit = ((col + bank * 2) % 10) == (_sweepStep % 10);
-                if (_rng.NextDouble() < 0.65)
-                {
-                    _lamps[i] = sweepHit ? (_rng.NextDouble() < 0.85) : (_rng.NextDouble() < 0.42);
-                }
-            }
+            _pulse.Stop();
+            Array.Clear(_lamps, 0, _lamps.Length);
+            Invalidate();
+            return;
         }
-        else
+        _sweepStep = (_sweepStep + 1) % 32;
+        for (var i = 0; i < TotalLamps; i++)
         {
-            for (var i = 0; i < TotalLamps; i++)
+            var bank = i / 40;
+            var col = i % 10;
+            var sweepHit = ((col + bank * 2) % 10) == (_sweepStep % 10);
+            if (_rng.NextDouble() < 0.65)
             {
-                if (_rng.NextDouble() < 0.08)
-                    _lamps[i] = _rng.NextDouble() < 0.06;
+                _lamps[i] = sweepHit ? (_rng.NextDouble() < 0.85) : (_rng.NextDouble() < 0.42);
             }
         }
         Invalidate();
@@ -536,6 +661,12 @@ sealed class MainForm : Form
     readonly TextBox _usage = new(), _overviewActivity = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new();
     readonly BlinkenLightsPanel _blinken = new();
     readonly DataGridView _integrations = new(), _providers = new();
+    readonly Label _autofillStatus = new();
+    readonly Button _btnAutofillToggle = Btn("Start Autofill", 115);
+    readonly Button _btnAutofillPause = Btn("Pause", 80);
+    readonly Button _btnAutofillTrigger = Btn("Trigger Now", 95);
+    readonly NumericUpDown _numMaxConcurrent = new() { Minimum = 1, Maximum = 16, Value = 3, Width = 55, Margin = new Padding(0, 4, 8, 0), Font = new Font("Segoe UI", 9) };
+    bool _updatingAutofillUi;
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
     int _refreshing;
     readonly McpHost _mcp;
@@ -578,15 +709,51 @@ sealed class MainForm : Form
 
     TabPage BuildOverview()
     {
-        var p = Page("Overview"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 8, ColumnCount = 1 };
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 96)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 76)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 86)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 84)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 26)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var p = Page("Overview"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 10, ColumnCount = 1 };
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 74));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
         var metricNames = new[] { "ACTIVE AGENTS", "WORKER SESSIONS", "COMMITS", "CRITIC RUNS", "TASKS COMPLETE" }; var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1 };
         for (var i = 0; i < 5; i++) { metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20)); _metrics[i].Dock = DockStyle.Fill; _metrics[i].Margin = new Padding(5); _metrics[i].TextAlign = ContentAlignment.MiddleCenter; _metrics[i].Font = new Font("Cascadia Mono", 12, FontStyle.Bold); _metrics[i].Text = metricNames[i] + "\r\n—"; metrics.Controls.Add(_metrics[i], i, 0); }
         _blinken.Dock = DockStyle.Fill; _blinken.Margin = new Padding(5,2,5,2);
+
+        var autofillBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        _btnAutofillToggle.Click += (_, _) => ToggleAutofill();
+        _btnAutofillPause.Click += (_, _) => ToggleAutofillPause();
+        _btnAutofillTrigger.Click += (_, _) => TriggerAutofill();
+        _numMaxConcurrent.ValueChanged += (_, _) => OnMaxConcurrentChanged();
+        var maxLbl = new Label { Text = "Max:", AutoSize = true, Margin = new Padding(4, 8, 4, 0), ForeColor = Theme.Muted };
+        _autofillStatus.AutoSize = true;
+        _autofillStatus.Margin = new Padding(12, 8, 4, 0);
+        _autofillStatus.Font = new Font("Cascadia Mono", 9, FontStyle.Bold);
+        _autofillStatus.ForeColor = Theme.Muted;
+        _autofillStatus.Text = "Autofill stopped";
+        autofillBar.Controls.AddRange(new Control[] { _btnAutofillToggle, _btnAutofillPause, _btnAutofillTrigger, maxLbl, _numMaxConcurrent, _autofillStatus });
+
         _usage.Dock = DockStyle.Fill; _usage.Multiline = true; _usage.ReadOnly = true; _usage.ScrollBars = ScrollBars.Vertical; _usage.WordWrap = false; _usage.Font = new Font("Cascadia Mono", 8.5f);
         var authority = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12), BackColor = Theme.Surface }; _intent.Dock = DockStyle.Top; _intent.Height = 26; _intent.ForeColor = Theme.Accent; _intent.Font = new Font("Cascadia Mono", 9, FontStyle.Bold); _goal.Dock = DockStyle.Fill; authority.Controls.Add(_goal); authority.Controls.Add(_intent);
         _overviewActivity.Dock = DockStyle.Fill; _overviewActivity.Multiline = true; _overviewActivity.ReadOnly = true; _overviewActivity.ScrollBars = ScrollBars.Vertical; _overviewActivity.Font = new Font("Cascadia Mono", 8.5f);
-        rows.Controls.Add(metrics, 0, 0); rows.Controls.Add(_blinken, 0, 1); rows.Controls.Add(Section("MODEL / TOKEN USAGE"), 0, 2); rows.Controls.Add(_usage, 0, 3); rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 4); rows.Controls.Add(authority, 0, 5); rows.Controls.Add(Section("RECENT ACTIVITY"), 0, 6); rows.Controls.Add(_overviewActivity, 0, 7); p.Controls.Add(rows); return p;
+
+        rows.Controls.Add(metrics, 0, 0);
+        rows.Controls.Add(_blinken, 0, 1);
+        rows.Controls.Add(Section("AUTONOMOUS AUTOFILL & WORKER SLOTS"), 0, 2);
+        rows.Controls.Add(autofillBar, 0, 3);
+        rows.Controls.Add(Section("MODEL / TOKEN USAGE"), 0, 4);
+        rows.Controls.Add(_usage, 0, 5);
+        rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 6);
+        rows.Controls.Add(authority, 0, 7);
+        rows.Controls.Add(Section("RECENT ACTIVITY"), 0, 8);
+        rows.Controls.Add(_overviewActivity, 0, 9);
+        p.Controls.Add(rows);
+        return p;
     }
 
     TabPage BuildActivity()
@@ -919,6 +1086,7 @@ sealed class MainForm : Form
         if (snapshot.HasProject)
         {
             snapshot.Project = Inspector.Project(projectPath!);
+            snapshot.Autofill = Inspector.Autofill(projectPath!);
             snapshot.Providers = ReadProviderStatus(projectPath!);
         }
         snapshot.Integrations = ReadIntegrationStatus();
@@ -936,11 +1104,13 @@ sealed class MainForm : Form
         if (snapshot.HasProject)
         {
             SetMetrics(snapshot.Project);
+            SetAutofillUi(snapshot.Autofill, true);
             _overviewActivity.Text = _allActivity.Text = snapshot.Project.Activity;
         }
         else
         {
             SetMetrics(new());
+            SetAutofillUi(snapshot.Autofill, false);
             _overviewActivity.Text = _allActivity.Text = "Select a project at left. StatefulClanker does not silently substitute a default project.";
         }
         _integrations.SuspendLayout();
@@ -966,6 +1136,143 @@ sealed class MainForm : Form
             }
         }
         finally { _providers.ResumeLayout(); }
+    }
+
+    void SetAutofillUi(AutofillSnapshot a, bool hasProject)
+    {
+        _updatingAutofillUi = true;
+        try
+        {
+            if (!hasProject)
+            {
+                _btnAutofillToggle.Enabled = false;
+                _btnAutofillPause.Enabled = false;
+                _btnAutofillTrigger.Enabled = false;
+                _numMaxConcurrent.Enabled = false;
+                _autofillStatus.Text = "No project selected";
+                _autofillStatus.ForeColor = Theme.Muted;
+                return;
+            }
+
+            _btnAutofillToggle.Enabled = true;
+            _btnAutofillToggle.Text = a.Enabled && a.Running ? "Stop Autofill" : "Start Autofill";
+            _btnAutofillPause.Enabled = a.Running;
+            _btnAutofillPause.Text = a.Paused ? "Resume" : "Pause";
+            _btnAutofillTrigger.Enabled = a.Running && !a.Paused;
+            _numMaxConcurrent.Enabled = true;
+            if (_numMaxConcurrent.Value != a.MaxConcurrent && a.MaxConcurrent >= 1 && a.MaxConcurrent <= 16)
+            {
+                _numMaxConcurrent.Value = a.MaxConcurrent;
+            }
+
+            var stateStr = a.Paused ? "PAUSED" : (a.Running ? "RUNNING" : "STOPPED");
+            var statusText = $"Status: {stateStr}  |  Slots: {a.ActiveWorkers}/{a.MaxConcurrent} active ({a.Slots} free)  |  Queue: {a.ReadyCount} ready";
+            if (!string.IsNullOrWhiteSpace(a.BlockReason)) statusText += $"  [{a.BlockReason}]";
+            _autofillStatus.Text = statusText;
+            _autofillStatus.ForeColor = a.Paused ? Theme.Warn : (a.Running ? Theme.Good : Theme.Muted);
+        }
+        finally
+        {
+            _updatingAutofillUi = false;
+        }
+    }
+
+    void ToggleAutofill()
+    {
+        var path = _settings.ActiveProjectPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        var cfgPath = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
+        try
+        {
+            var enabled = AutofillHost.Enabled(path);
+            var newEnabled = !enabled;
+            if (File.Exists(cfgPath))
+            {
+                var node = JsonNode.Parse(File.ReadAllText(cfgPath));
+                if (node is not null)
+                {
+                    node["autofillEnabled"] = newEnabled;
+                    File.WriteAllText(cfgPath, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+                }
+            }
+            if (newEnabled)
+            {
+                var stopFile = AutofillHost.StopPath(path);
+                if (File.Exists(stopFile)) try { File.Delete(stopFile); } catch { }
+                _autofill.EnsureStarted(path);
+            }
+            else
+            {
+                AutofillHost.RequestStop(path);
+            }
+            _ = RefreshAllAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Failed to toggle autofill: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    void ToggleAutofillPause()
+    {
+        var path = _settings.ActiveProjectPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        try
+        {
+            var pauseFile = AutofillHost.PausePath(path);
+            if (File.Exists(pauseFile))
+            {
+                AutofillHost.RequestResume(path);
+            }
+            else
+            {
+                AutofillHost.RequestPause(path);
+            }
+            _ = RefreshAllAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Failed to change pause state: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    void TriggerAutofill()
+    {
+        var path = _settings.ActiveProjectPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        try
+        {
+            AutofillHost.RequestTrigger(path);
+            _ = RefreshAllAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Failed to trigger autofill: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    void OnMaxConcurrentChanged()
+    {
+        if (_updatingAutofillUi) return;
+        var path = _settings.ActiveProjectPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        var cfgPath = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
+        try
+        {
+            int val = (int)_numMaxConcurrent.Value;
+            if (File.Exists(cfgPath))
+            {
+                var node = JsonNode.Parse(File.ReadAllText(cfgPath));
+                if (node is not null)
+                {
+                    node["maxConcurrent"] = val;
+                    File.WriteAllText(cfgPath, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+                }
+            }
+            AutofillHost.RequestTrigger(path);
+            _ = RefreshAllAsync();
+        }
+        catch { }
     }
 
     static string TokenText(long value) => value >= 1_000_000 ? $"{value / 1_000_000d:0.00}M" : value >= 1_000 ? $"{value / 1_000d:0.0}K" : value.ToString("N0");
