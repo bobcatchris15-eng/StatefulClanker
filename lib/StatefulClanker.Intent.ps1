@@ -53,8 +53,14 @@ function Get-SCIntentHash($Contract=$null) {
 }
 function Assert-SCIntentShape($Contract) {
     if($null-eq$Contract){throw 'Intent contract is empty.'}
-    foreach($field in @('objective','requirements','constraints','invariants','nonGoals','decisions','preferences','openQuestions','successDefinition')){
-        if(-not$Contract.PSObject.Properties[$field]){throw "Intent contract missing required field '$field'."}
+    $required = @('objective','requirements','constraints','invariants','nonGoals','decisions','preferences','openQuestions','successDefinition')
+    $missing = @()
+    foreach($field in $required){
+        if(-not$Contract.PSObject.Properties[$field]){$missing += $field}
+    }
+    if($missing.Count -gt 0){
+        $fieldsList = ($missing | ForEach-Object { "'$_'" }) -join ', '
+        throw "Intent contract missing required field(s): $fieldsList. Required contract fields are: $($required -join ', ')."
     }
 }
 function Save-SCIntentRevision($Contract,[string]$Reason) {

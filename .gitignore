@@ -4,4 +4,7 @@
 
 # Installer build output and generated icon
 install/output/
+install/publish/
 install/StatefulClanker.ico
+bin/
+obj/

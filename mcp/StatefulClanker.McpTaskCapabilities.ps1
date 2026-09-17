@@ -5,7 +5,7 @@ function Invoke-SCCapabilityTaskAdd($Arguments) {
     $project=Get-McpProject $Arguments;Assert-McpInitialized $project
     $title=Get-McpArgRequired $Arguments 'title';$instruction=Get-McpArgRequired $Arguments 'instruction';$cli=@('task','add','-Title',$title,'-Instruction',$instruction)
     foreach($pair in @(@('taskId','-TaskId'),@('size','-Size'),@('provider','-Provider'),@('role','-Role'),@('capabilityProfile','-CapabilityProfile'))){$value=Get-McpArgOptional $Arguments $pair[0];if($value){$cli+=@($pair[1],$value)}}
-    foreach($pair in @(@('accept','-Accept'),@('dependsOn','-DependsOn'),@('retrieval','-Retrieval'),@('evidence','-Evidence'),@('relation','-Relation'),@('source','-Source'),@('intentRef','-IntentRef'),@('toolAllow','-ToolAllow'),@('toolDeny','-ToolDeny'))){$values=Get-McpArgArray $Arguments $pair[0];if($values.Count-gt0){$cli+=$pair[1];$cli+=,$values}}
+    foreach($pair in @(@('accept','-Accept'),@('dependsOn','-DependsOn'),@('retrieval','-Retrieval'),@('evidence','-Evidence'),@('relation','-Relation'),@('source','-Source'),@('intentRef','-IntentRef'),@('toolAllow','-ToolAllow'),@('toolDeny','-ToolDeny'))){$values=@(Get-McpArgArray $Arguments $pair[0]);if($values.Count-gt0){$cli+=$pair[1];$cli+=,$values}}
     if($Arguments-and$Arguments.PSObject.Properties['humanGate']-and[bool]$Arguments.humanGate){$cli+='-HumanGate'}
     $result=Invoke-McpHarness $project $cli;return New-McpTextResult ([ordered]@{taskId=([string]$result.stdout).Trim();output=$result.stdout})
 }

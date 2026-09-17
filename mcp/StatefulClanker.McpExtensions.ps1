@@ -137,7 +137,7 @@ function New-SCExtendedTools {
         @{name='directive_get';description='Read one CURRENT authoritative human directive.';inputSchema=@{type='object';properties=@{project=@{type='string'};id=@{type='string'}};required=@('id')}},
         @{name='directive_history';description='Audit/debug only: read superseded revisions for a directive. Never treat these as current worker specification.';inputSchema=@{type='object';properties=@{project=@{type='string'};id=@{type='string'}};required=@('id')}},
         @{name='directive_retire';description='Retire a current human directive because the human removed that rule/feature. Requires Intent reconciliation.';inputSchema=@{type='object';properties=@{project=@{type='string'};id=@{type='string'};reason=@{type='string'}};required=@('id')}},
-        @{name='intent_apply';description='Commit the complete normalized Intent Contract after reconciling it against ALL current human directives. This clears the directive-reconciliation gate.';inputSchema=@{type='object';properties=@{project=@{type='string'};contract=@{type='object'};reason=@{type='string'}};required=@('contract')}},
+        @{name='intent_apply';description='Commit the complete normalized Intent Contract after reconciling it against ALL current human directives. Clears the directive-reconciliation gate. contract object requires 9 fields: objective (string), requirements (array), constraints (array), invariants (array), nonGoals (array), decisions (array), preferences (array), openQuestions (array), successDefinition (string).';inputSchema=@{type='object';properties=@{project=@{type='string'};contract=@{type='object';description='Intent contract object containing objective, requirements, constraints, invariants, nonGoals, decisions, preferences, openQuestions, successDefinition.'};reason=@{type='string'}};required=@('contract')}},
         @{name='control_events_since';description='Read durable sequenced control-plane events after a cursor. Keep the returned cursor and use it next time; push notifications are only a wake-up signal.';inputSchema=@{type='object';properties=@{project=@{type='string'};since=@{type='integer';minimum=0};limit=@{type='integer';minimum=1;maximum=1000};minimumLevel=@{type='string';enum=@('fyi','attention','human_required')}}}},
         @{name='control_snapshot';description='Read the current human-facing project snapshot: goal, current directives, Intent, reconciliation gate, task counts, holds, active agents, and event cursor.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}}
     )
@@ -156,7 +156,7 @@ function Invoke-SCDirectiveTool([string]$Name,$Arguments) {
             $scope=Get-McpArgOptional $Arguments 'scope';if($scope){$cli+=@('-Scope',$scope)}
             $source=Get-McpArgOptional $Arguments 'sourceRef';if($source){$cli+=@('-SourceRef',$source)}
             $reason=Get-McpArgOptional $Arguments 'reason';if($reason){$cli+=@('-Reason',$reason)}
-            $refs=Get-McpArgArray $Arguments 'intentRefs';if($refs.Count-gt0){$cli+='-IntentRef';$cli+=,$refs}
+            $refs=@(Get-McpArgArray $Arguments 'intentRefs');if($refs.Count-gt0){$cli+='-IntentRef';$cli+=,$refs}
             $result=Invoke-McpHarness $project $cli
             return New-McpTextResult ([ordered]@{updated=$true;requiresIntentReconciliation=$true;output=$result.stdout})
         }
@@ -204,7 +204,7 @@ function Invoke-SCDirectionAdd($Arguments) {
 function Invoke-SCSemanticTaskAdd($Arguments) {
     $project=Get-McpProject $Arguments;Assert-McpInitialized $project;$title=Get-McpArgRequired $Arguments 'title';$instruction=Get-McpArgRequired $Arguments 'instruction';$cli=@('task','add','-Title',$title,'-Instruction',$instruction)
     $taskId=Get-McpArgOptional $Arguments 'taskId';if($taskId){$cli+=@('-TaskId',$taskId)};$size=Get-McpArgOptional $Arguments 'size';if($size){$cli+=@('-Size',$size)};$provider=Get-McpArgOptional $Arguments 'provider';if($provider){$cli+=@('-Provider',$provider)}
-    foreach($pair in @(@('accept','-Accept'),@('dependsOn','-DependsOn'),@('retrieval','-Retrieval'),@('evidence','-Evidence'),@('relation','-Relation'),@('source','-Source'),@('intentRef','-IntentRef'))){$values=Get-McpArgArray $Arguments $pair[0];if($values.Count-gt0){$cli+=$pair[1];$cli+=,$values}}
+    foreach($pair in @(@('accept','-Accept'),@('dependsOn','-DependsOn'),@('retrieval','-Retrieval'),@('evidence','-Evidence'),@('relation','-Relation'),@('source','-Source'),@('intentRef','-IntentRef'))){$values=@(Get-McpArgArray $Arguments $pair[0]);if($values.Count-gt0){$cli+=$pair[1];$cli+=,$values}}
     if($Arguments-and$Arguments.PSObject.Properties['humanGate']-and[bool]$Arguments.humanGate){$cli+='-HumanGate'}
     $result=Invoke-McpHarness $project $cli;return New-McpTextResult ([ordered]@{taskId=([string]$result.stdout).Trim();output=$result.stdout})
 }
@@ -255,7 +255,7 @@ function Invoke-McpRpc($Request) {
     if($method-eq'tools/call') {
         $name=[string]$Request.params.name;$args=$null;if($Request.params.PSObject.Properties['arguments']){$args=$Request.params.arguments}
         if(@('directive_set','directive_list','directive_get','directive_history','directive_retire')-contains$name){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCDirectiveTool $name $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool '{0}' failed: {1}"-f$name,$_.Exception.Message)})}}}}
-        if(@('plan_apply','source_add','source_get','source_list','intent_apply','control_events_since','control_snapshot')-contains$name){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCExtendedTool $name $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool '{0}' failed: {1}"-f$name,$_.Exception.Message)})}}}}
+        if(@('plan_apply','source_add','source_get','source_list','intent_apply','control_events_since','control_snapshot','worker_policy_get','worker_policy_apply','worker_source_set','worker_source_remove','worker_source_tools')-contains$name){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCExtendedTool $name $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool '{0}' failed: {1}"-f$name,$_.Exception.Message)})}}}}
         if($name-eq'direction_add'){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCDirectionAdd $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool 'direction_add' failed: {0}"-f$_.Exception.Message)})}}}}
         if($name-eq'task_add'-and$args-and($args.PSObject.Properties['size']-or$args.PSObject.Properties['source']-or$args.PSObject.Properties['intentRef'])){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCSemanticTaskAdd $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool 'task_add' failed: {0}"-f$_.Exception.Message)})}}}}
     }

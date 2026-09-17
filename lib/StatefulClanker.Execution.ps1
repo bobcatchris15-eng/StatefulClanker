@@ -56,6 +56,9 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
     Save-SCActiveTelemetry $telemetry;Add-SCTelemetryEvent 'agent.started' $telemetry;$stdout='';$stderr='';$exitCode=-1
     $mode=if($providerRecord.config.PSObject.Properties['mode']){[string]$providerRecord.config.mode}else{''}
     try{
+        if (-not (Get-Command $exe -ErrorAction SilentlyContinue) -and -not (Test-Path -LiteralPath $exe)) {
+            throw "Executable '$exe' not found on PATH or filesystem."
+        }
         if($mode-eq'stdin'){
             # Pipe the prompt file to the provider's stdin: no OS length limit, and
             # no shell quoting of arbitrary prompt text.
@@ -65,7 +68,17 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
             & $exe @args 1> $stdoutPath 2> $stderrPath
         }
         $exitCode=$LASTEXITCODE;if($null-eq$exitCode){$exitCode=0};if(Test-Path $stdoutPath){$stdout=Get-Content -Raw -LiteralPath $stdoutPath};if(Test-Path $stderrPath){$stderr=Get-Content -Raw -LiteralPath $stderrPath}
-    }catch{$stderr=$_|Out-String;$telemetry.error=$stderr;$exitCode=-1}
+        if($exitCode -ne 0 -and [string]::IsNullOrWhiteSpace($stderr)){
+            $stderr = "Process '$exe' exited with code $exitCode without emitting standard error output."
+            $telemetry.error = $stderr
+            $stderr | Set-Content -LiteralPath $stderrPath -Encoding UTF8
+        }
+    }catch{
+        $stderr = "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
+        $telemetry.error = $stderr
+        $exitCode = -1
+        try { $stderr | Set-Content -LiteralPath $stderrPath -Encoding UTF8 } catch {}
+    }
     $ended=(Get-Date).ToUniversalTime();$telemetry.lifecycle=if($exitCode-eq 0){'completed'}else{'failed'};$telemetry.exitCode=$exitCode;$telemetry.endedAt=$ended.ToString('o');$telemetry.heartbeatAt=$telemetry.endedAt;$telemetry.durationSeconds=[math]::Round(($ended-$started).TotalSeconds,3);Complete-SCTelemetry $telemetry
     return [ordered]@{schemaVersion=2;id=$receiptId;agentId=$agentId;taskId=$Task.id;stage=$Stage;provider=$providerRecord.name;compilationId=$compilationId;inputFingerprint=$fingerprint;command=$exe;args=$args;promptPath=$promptPath;startedAt=$started.ToString('o');endedAt=$ended.ToString('o');durationSeconds=$telemetry.durationSeconds;exitCode=$exitCode;stdout=$stdout;stderr=$stderr}
 }

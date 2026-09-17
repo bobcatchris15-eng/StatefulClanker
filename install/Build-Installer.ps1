@@ -12,7 +12,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '0.6.7',
+    [string]$Version = '0.7.0',
     [switch]$IconOnly
 )
 
@@ -53,12 +53,29 @@ New-IcoFile $iconPath @(16,32,48,64,128,256)
 Write-Host "  $((Get-Item $iconPath).Length) bytes"
 if($IconOnly){return}
 
-$dotnet=Get-Command dotnet -ErrorAction SilentlyContinue
-if(-not$dotnet){throw 'The .NET 8 SDK is required to build the native Windows host. Install: winget install Microsoft.DotNet.SDK.8'}
+function Find-DotNet {
+    $cmd = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $sdkCheck = & $cmd.Source --list-sdks 2>&1
+        if ($LASTEXITCODE -eq 0 -and $sdkCheck) { return $cmd.Source }
+    }
+    $candidates = @()
+    if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe') }
+    if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'dotnet\dotnet.exe') }
+    foreach ($c in $candidates) {
+        if (Test-Path -LiteralPath $c) {
+            $sdkCheck = & $c --list-sdks 2>&1
+            if ($LASTEXITCODE -eq 0 -and $sdkCheck) { return $c }
+        }
+    }
+    throw 'The .NET 8 SDK is required to build the native Windows host. Install: winget install Microsoft.DotNet.SDK.8'
+}
+
+$dotnetPath = Find-DotNet
 if(Test-Path -LiteralPath $publishDir){Remove-Item -LiteralPath $publishDir -Recurse -Force}
 New-Item -ItemType Directory -Force -Path $publishDir|Out-Null
-Write-Host "Publishing native Windows host..."
-& $dotnet.Source publish $trayProject -c Release -r win-x64 --self-contained true -o $publishDir `
+Write-Host "Publishing native Windows host using $dotnetPath..."
+& $dotnetPath publish $trayProject -c Release -r win-x64 --self-contained true -o $publishDir `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false
 if($LASTEXITCODE-ne0){throw "dotnet publish failed with exit code $LASTEXITCODE"}
 $appExe=Join-Path $publishDir 'StatefulClanker.exe'

@@ -76,7 +76,11 @@ function Read-SCJson([string]$TargetPath) {
     if(-not(Test-Path $TargetPath)){return $null}
     $raw=Get-Content -Raw -LiteralPath $TargetPath
     if([string]::IsNullOrWhiteSpace($raw)){return $null}
-    return ($raw|ConvertFrom-Json)
+    try {
+        return ($raw|ConvertFrom-Json)
+    } catch {
+        throw "Failed to parse JSON in '$TargetPath': $($_.Exception.Message)"
+    }
 }
 function Assert-SCInitialized { if(-not(Test-Path (Get-SCPath 'state.json'))){throw 'Not initialized. Run: .\StatefulClanker.ps1 init'} }
 function New-SCId([string]$Prefix) { "$Prefix-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))-$([Guid]::NewGuid().ToString('N').Substring(0,8))" }

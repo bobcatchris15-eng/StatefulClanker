@@ -60,5 +60,8 @@
   "projectValidatorEnabled": true,
   "projectValidateCommand": null,
   "projectValidateTimeoutSeconds": 600,
-  "projectReviewRemediationTask": true
+  "projectReviewRemediationTask": true,
+  "mcp": {
+    "allowHumanAuthorityTools": false
+  }
 }

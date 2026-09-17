@@ -441,8 +441,66 @@ sealed class MainForm : Form
     TabPage BuildProviders()
     {
         var p = Page("Providers"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1 }; rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill }; var open = Btn("Open config"); open.Click += (_, _) => OpenConfig(); var refresh = Btn("Refresh"); refresh.Click += async (_, _) => await RefreshAllAsync(); bar.Controls.Add(open); bar.Controls.Add(refresh); rows.Controls.Add(bar, 0, 0); rows.Controls.Add(Section("WORKER BACKEND STATUS AND SEMANTIC SIZE ROUTING"), 0, 1);
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill };
+        var setDefault = Btn("Set Default", 110); setDefault.Click += (_, _) => SetProviderRole("defaultProvider");
+        var setCritic = Btn("Set Critic", 110); setCritic.Click += (_, _) => SetProviderRole("criticProvider");
+        var setValidator = Btn("Set Validator", 110); setValidator.Click += (_, _) => SetProviderRole("validatorProvider");
+        var test = Btn("Test Provider", 110); test.Click += (_, _) => TestSelectedProvider();
+        var open = Btn("Open config", 110); open.Click += (_, _) => OpenConfig();
+        var refresh = Btn("Refresh", 100); refresh.Click += async (_, _) => await RefreshAllAsync();
+        bar.Controls.AddRange(new Control[] { setDefault, setCritic, setValidator, test, open, refresh });
+        rows.Controls.Add(bar, 0, 0); rows.Controls.Add(Section("WORKER BACKEND STATUS AND SEMANTIC SIZE ROUTING"), 0, 1);
         _providers.Dock = DockStyle.Fill; _providers.ReadOnly = true; _providers.AllowUserToAddRows = false; _providers.RowHeadersVisible = false; _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _providers.Columns.Add("name", "Provider"); _providers.Columns.Add("backend", "Backend"); _providers.Columns.Add("target", "Target"); _providers.Columns.Add("roles", "Routing / roles"); rows.Controls.Add(_providers, 0, 2); p.Controls.Add(rows); return p;
+    }
+
+    ProviderStatus? SelectedProvider => _providers.SelectedRows.Count > 0 ? _providers.SelectedRows[0].Tag as ProviderStatus : null;
+
+    void SetProviderRole(string roleKey)
+    {
+        var p = SelectedProvider;
+        var path = _settings.ActiveProjectPath;
+        if (p is null || string.IsNullOrWhiteSpace(path)) return;
+        var cfgPath = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
+        if (!File.Exists(cfgPath)) return;
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(cfgPath));
+            if (node is not null)
+            {
+                node[roleKey] = p.Name;
+                File.WriteAllText(cfgPath, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+                _ = RefreshAllAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Failed to update config: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    void TestSelectedProvider()
+    {
+        var p = SelectedProvider;
+        var path = _settings.ActiveProjectPath;
+        if (p is null || string.IsNullOrWhiteSpace(path)) return;
+        var harness = System.IO.Path.Combine(_root, "mcp", "StatefulClanker.McpCore.ps1");
+        var command = $". '{harness.Replace("'", "''")}'; Test-McpProvider '{path.Replace("'", "''")}' @{{ name='{p.Name.Replace("'", "''")}' }} | ConvertTo-Json -Depth 5 -Compress";
+        var r = Runtime.RunPowerShell(_root, "-Command", command);
+        if (!string.IsNullOrWhiteSpace(r.stdout))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(r.stdout);
+                var elem = doc.RootElement;
+                var usable = elem.TryGetProperty("usable", out var uv) && uv.GetBoolean();
+                var diag = elem.TryGetProperty("diagnosis", out var dv) ? dv.GetString() : "";
+                var icon = usable ? MessageBoxIcon.Information : MessageBoxIcon.Warning;
+                MessageBox.Show(this, $"Provider: {p.Name}\nUsable: {usable}\n\nDiagnosis:\n{diag}", "Provider Test Result", MessageBoxButtons.OK, icon);
+                return;
+            }
+            catch { }
+        }
+        MessageBox.Show(this, (r.stdout + "\n" + r.stderr).Trim(), "Provider Test Output", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     void RestoreProjects()
@@ -545,7 +603,10 @@ sealed class MainForm : Form
         try
         {
             _providers.Rows.Clear();
-            foreach (var item in snapshot.Providers) _providers.Rows.Add(item.Name, item.Backend, item.Target, item.Roles);
+            foreach (var item in snapshot.Providers) {
+                var i = _providers.Rows.Add(item.Name, item.Backend, item.Target, item.Roles);
+                _providers.Rows[i].Tag = item;
+            }
         }
         finally { _providers.ResumeLayout(); }
     }

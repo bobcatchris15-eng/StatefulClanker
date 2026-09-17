@@ -13,12 +13,19 @@ function Set-McpDefaultProject([string]$Path) {
 
 function Get-McpProject($Arguments) {
     $candidate = $null
-    if ($Arguments -and $Arguments.PSObject.Properties['project'] -and $Arguments.project) {
+    if ($Arguments -is [System.Collections.IDictionary]) {
+        if ($Arguments.Contains('project') -and $Arguments['project']) {
+            $candidate = [string]$Arguments['project']
+        }
+    } elseif ($Arguments -and $Arguments.PSObject.Properties['project'] -and $Arguments.project) {
         $candidate = [string]$Arguments.project
-    } elseif ($script:McpDefaultProject) {
-        $candidate = $script:McpDefaultProject
-    } else {
-        throw 'No project selected. Pass "project", or start the server with -ProjectPath.'
+    }
+    if (-not $candidate) {
+        if ($script:McpDefaultProject) {
+            $candidate = $script:McpDefaultProject
+        } else {
+            throw 'No project selected. Pass "project", or start the server with -ProjectPath.'
+        }
     }
     if (-not (Test-Path -LiteralPath $candidate -PathType Container)) {
         throw "Project path does not exist: $candidate"
@@ -38,7 +45,11 @@ function Read-McpJson([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
     $raw = Get-Content -Raw -LiteralPath $Path
     if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
-    return ($raw | ConvertFrom-Json)
+    try {
+        return ($raw | ConvertFrom-Json)
+    } catch {
+        throw "Failed to parse JSON in '$Path': $($_.Exception.Message)"
+    }
 }
 
 function Read-McpJsonDir([string]$Path) {
@@ -52,29 +63,72 @@ function Read-McpJsonl([string]$Path, [int]$Limit = 100) {
 }
 
 function Get-McpArgLimit($Arguments, [int]$Default = 100) {
-    if ($Arguments -and $Arguments.PSObject.Properties['limit'] -and $null -ne $Arguments.limit) {
-        return [Math]::Min(500, [Math]::Max(1, [int]$Arguments.limit))
+    $val = $null
+    if ($Arguments -is [System.Collections.IDictionary]) {
+        if ($Arguments.Contains('limit')) { $val = $Arguments['limit'] }
+    } elseif ($Arguments -and $Arguments.PSObject.Properties['limit']) {
+        $val = $Arguments.limit
+    }
+    if ($null -ne $val) {
+        return [Math]::Min(500, [Math]::Max(1, [int]$val))
     }
     return $Default
 }
 
 function Get-McpArgRequired($Arguments, [string]$Name) {
-    if (-not $Arguments -or -not $Arguments.PSObject.Properties[$Name] -or [string]::IsNullOrWhiteSpace([string]$Arguments.$Name)) {
+    $hasProp = $false
+    $val = $null
+    if ($Arguments -is [System.Collections.IDictionary]) {
+        if ($Arguments.Contains($Name) -and $null -ne $Arguments[$Name]) {
+            $hasProp = $true
+            $val = $Arguments[$Name]
+        }
+    } elseif ($Arguments -and $Arguments.PSObject.Properties[$Name] -and $null -ne $Arguments.$Name) {
+        $hasProp = $true
+        $val = $Arguments.$Name
+    }
+    if (-not $hasProp) {
         throw "Required argument missing: $Name"
     }
-    return [string]$Arguments.$Name
+    if ($val -is [System.Array] -or ($val -is [System.Collections.IEnumerable] -and $val -isnot [string])) {
+        $joined = (@($val | ForEach-Object { [string]$_ }) -join "`n")
+        if ([string]::IsNullOrWhiteSpace($joined)) { throw "Required argument missing: $Name" }
+        return $joined
+    }
+    $text = [string]$val
+    if ([string]::IsNullOrWhiteSpace($text)) { throw "Required argument missing: $Name" }
+    return $text
 }
 
 function Get-McpArgOptional($Arguments, [string]$Name) {
-    if (-not $Arguments -or -not $Arguments.PSObject.Properties[$Name] -or $null -eq $Arguments.$Name) { return $null }
-    $value = [string]$Arguments.$Name
+    $val = $null
+    if ($Arguments -is [System.Collections.IDictionary]) {
+        if ($Arguments.Contains($Name)) { $val = $Arguments[$Name] }
+    } elseif ($Arguments -and $Arguments.PSObject.Properties[$Name]) {
+        $val = $Arguments.$Name
+    }
+    if ($null -eq $val) { return $null }
+    if ($val -is [System.Array] -or ($val -is [System.Collections.IEnumerable] -and $val -isnot [string])) {
+        $joined = (@($val | ForEach-Object { [string]$_ }) -join "`n")
+        if ([string]::IsNullOrWhiteSpace($joined)) { return $null }
+        return $joined
+    }
+    $value = [string]$val
     if ([string]::IsNullOrWhiteSpace($value)) { return $null }
     return $value
 }
 
 function Get-McpArgArray($Arguments, [string]$Name) {
-    if (-not $Arguments -or -not $Arguments.PSObject.Properties[$Name] -or $null -eq $Arguments.$Name) { return @() }
-    return @($Arguments.$Name | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
+    $val = $null
+    if ($Arguments -is [System.Collections.IDictionary]) {
+        if ($Arguments.Contains($Name)) { $val = $Arguments[$Name] }
+    } elseif ($Arguments -and $Arguments.PSObject.Properties[$Name]) {
+        $val = $Arguments.$Name
+    }
+    if ($null -eq $val) { return [string[]]@() }
+    $items = @($val | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
+    if ($items.Count -eq 0) { return [string[]]@() }
+    return [string[]]$items
 }
 
 function New-McpTextResult($Value) {
@@ -83,9 +137,14 @@ function New-McpTextResult($Value) {
 
 function Get-McpConfigFlag([string]$Project, [string]$Name, [bool]$Default) {
     $cfg = Read-McpJson (Join-Path (Get-McpStateDir $Project) 'config.json')
-    if ($null -eq $cfg -or -not $cfg.PSObject.Properties['mcp'] -or $null -eq $cfg.mcp) { return $Default }
-    if (-not $cfg.mcp.PSObject.Properties[$Name] -or $null -eq $cfg.mcp.$Name) { return $Default }
-    return [bool]$cfg.mcp.$Name
+    if ($null -eq $cfg) { return $Default }
+    if ($cfg.PSObject.Properties['mcp'] -and $null -ne $cfg.mcp -and $cfg.mcp.PSObject.Properties[$Name] -and $null -ne $cfg.mcp.$Name) {
+        return [bool]$cfg.mcp.$Name
+    }
+    if ($cfg.PSObject.Properties[$Name] -and $null -ne $cfg.$Name) {
+        return [bool]$cfg.$Name
+    }
+    return $Default
 }
 
 <# Tools that bypass the validation gate are opt-in. The project's own invariant is
@@ -95,7 +154,7 @@ function Get-McpConfigFlag([string]$Project, [string]$Name, [bool]$Default) {
 function Assert-McpHumanAuthority([string]$Project, [string]$Tool) {
     if (Get-McpConfigFlag $Project 'allowHumanAuthorityTools' $false) { return }
     $cfgPath = Join-Path (Get-McpStateDir $Project) 'config.json'
-    throw "Tool '$Tool' bypasses the validation gate and is disabled by default. Set mcp.allowHumanAuthorityTools = true in $cfgPath to enable it, or perform this commit from the CLI, where it is recorded as human authority."
+    throw "Tool '$Tool' bypasses the validation gate and is disabled by default. Enable it in $cfgPath by configuring either:`n  `"mcp`": { `"allowHumanAuthorityTools`": true }`nor at top-level:`n  `"allowHumanAuthorityTools`": true`nor perform this commit from the CLI, where it is recorded as human authority."
 }
 
 <# Run the CLI inside the project directory and capture its output. Writes must go
@@ -281,6 +340,43 @@ function Test-McpProvider([string]$Project, $Arguments) {
         throw "Provider '$name' is not configured. Use provider_set first."
     }
     $entry = $cfg.providers.$name
+    $type = if ($entry.PSObject.Properties['type'] -and $entry.type) { [string]$entry.type } else { 'cli' }
+
+    if ($type -eq 'api') {
+        $conn = if ($entry.PSObject.Properties['connection']) { [string]$entry.connection } else { $null }
+        $connectionsPath = Join-Path (Join-Path $env:LOCALAPPDATA 'StatefulClanker') 'connections.json'
+        if ([string]::IsNullOrWhiteSpace($conn)) {
+            return [ordered]@{ provider = $name; type = 'api'; connection = $conn; usable = $false; diagnosis = 'No API connection name configured for this provider.' }
+        }
+        if (-not (Test-Path -LiteralPath $connectionsPath -PathType Leaf)) {
+            return [ordered]@{ provider = $name; type = 'api'; connection = $conn; usable = $false; diagnosis = "Machine connections file not found: $connectionsPath" }
+        }
+        try {
+            $mcfg = Get-Content -Raw -LiteralPath $connectionsPath | ConvertFrom-Json
+            if (-not $mcfg -or -not $mcfg.PSObject.Properties['connections'] -or -not $mcfg.connections.PSObject.Properties[$conn]) {
+                return [ordered]@{ provider = $name; type = 'api'; connection = $conn; usable = $false; diagnosis = "Machine API connection '$conn' is not configured in $connectionsPath." }
+            }
+            $c = $mcfg.connections.$conn
+            $url = if ($c.PSObject.Properties['baseUrl']) { [string]$c.baseUrl } else { '' }
+            $model = if ($c.PSObject.Properties['model']) { [string]$c.model } else { '' }
+            return [ordered]@{
+                provider   = $name
+                type       = 'api'
+                connection = $conn
+                baseUrl    = $url
+                model      = $model
+                usable     = $true
+                diagnosis  = "API connection '$conn' configured for model '$model' at $url."
+            }
+        } catch {
+            return [ordered]@{ provider = $name; type = 'api'; connection = $conn; usable = $false; diagnosis = "Error reading connections config: $($_.Exception.Message)" }
+        }
+    }
+
+    $cmd = [string]$entry.command
+    if (-not (Get-Command $cmd -ErrorAction SilentlyContinue) -and -not (Test-Path -LiteralPath $cmd)) {
+        return [ordered]@{ provider = $name; type = 'cli'; command = $cmd; usable = $false; diagnosis = "Command not found on PATH: $cmd. Install it first, or specify a full path." }
+    }
 
     $timeout = 90
     if ($Arguments -and $Arguments.PSObject.Properties['timeoutSeconds'] -and $Arguments.timeoutSeconds) {
@@ -820,13 +916,67 @@ function Invoke-McpTool([string]$Name, $Arguments) {
         'provider_list' {
             Assert-McpInitialized $project
             $cfg = Read-McpJson (Join-Path $stateDir 'config.json')
+            $machineConnections = @{}
+            $connectionsPath = Join-Path (Join-Path $env:LOCALAPPDATA 'StatefulClanker') 'connections.json'
+            if (Test-Path -LiteralPath $connectionsPath -PathType Leaf) {
+                try {
+                    $mcfg = Get-Content -Raw -LiteralPath $connectionsPath | ConvertFrom-Json
+                    if ($mcfg -and $mcfg.PSObject.Properties['connections'] -and $mcfg.connections) {
+                        foreach ($cp in $mcfg.connections.PSObject.Properties) {
+                            $machineConnections[$cp.Name] = $cp.Value
+                        }
+                    }
+                } catch { }
+            }
             $rows = @()
             if ($cfg -and $cfg.PSObject.Properties['providers'] -and $cfg.providers) {
                 foreach ($p in $cfg.providers.PSObject.Properties) {
-                    $entry=$p.Value; $type=if($entry.PSObject.Properties['type']-and$entry.type){[string]$entry.type}else{'cli'}; $rows += [ordered]@{ name=$p.Name; type=$type; command=if($entry.PSObject.Properties['command']){$entry.command}else{$null}; connection=if($entry.PSObject.Properties['connection']){$entry.connection}else{$null}; mode=if($entry.PSObject.Properties['mode']){$entry.mode}else{$null} }
+                    $entry = $p.Value
+                    $type = if ($entry.PSObject.Properties['type'] -and $entry.type) { [string]$entry.type } else { 'cli' }
+                    $cmd = if ($entry.PSObject.Properties['command']) { [string]$entry.command } else { $null }
+                    $conn = if ($entry.PSObject.Properties['connection']) { [string]$entry.connection } else { $null }
+                    $ready = $false
+                    $status = 'unknown'
+                    $errorMsg = $null
+                    if ($type -eq 'api') {
+                        if ([string]::IsNullOrWhiteSpace($conn)) {
+                            $status = 'missing_connection'
+                            $errorMsg = 'No connection name specified.'
+                        } elseif (-not $machineConnections.ContainsKey($conn)) {
+                            $status = 'missing_connection'
+                            $errorMsg = "Machine API connection '$conn' is not configured in $connectionsPath."
+                        } else {
+                            $ready = $true
+                            $status = 'ready'
+                        }
+                    } else {
+                        if ([string]::IsNullOrWhiteSpace($cmd)) {
+                            $status = 'missing_command'
+                            $errorMsg = 'No command specified.'
+                        } elseif (-not (Get-Command $cmd -ErrorAction SilentlyContinue) -and -not (Test-Path -LiteralPath $cmd)) {
+                            $status = 'command_not_found'
+                            $errorMsg = "Command '$cmd' not found on PATH."
+                        } else {
+                            $ready = $true
+                            $status = 'ready'
+                        }
+                    }
+                    $rows += [ordered]@{
+                        name       = $p.Name
+                        type       = $type
+                        command    = $cmd
+                        connection = $conn
+                        mode       = if ($entry.PSObject.Properties['mode']) { $entry.mode } else { $null }
+                        ready      = $ready
+                        status     = $status
+                        error      = $errorMsg
+                    }
                 }
             }
-            return New-McpTextResult ([ordered]@{ defaultProvider = $cfg.defaultProvider; criticProvider = $cfg.criticProvider; validatorProvider = $cfg.validatorProvider; providers = @($rows) })
+            $defProvider = if ($cfg -and $cfg.PSObject.Properties['defaultProvider']) { $cfg.defaultProvider } else { $null }
+            $critProvider = if ($cfg -and $cfg.PSObject.Properties['criticProvider']) { $cfg.criticProvider } else { $null }
+            $valProvider = if ($cfg -and $cfg.PSObject.Properties['validatorProvider']) { $cfg.validatorProvider } else { $null }
+            return New-McpTextResult ([ordered]@{ defaultProvider = $defProvider; criticProvider = $critProvider; validatorProvider = $valProvider; providers = @($rows) })
         }
         'provider_set' {
             return New-McpTextResult (Set-McpProvider $project $Arguments)
