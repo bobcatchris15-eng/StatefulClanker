@@ -255,6 +255,13 @@ function Repair-SCOrphanedAgents {
     foreach($t in @(Get-SCTasks)) {
         if (@('running','reviewing','validating') -contains [string]$t.status) {
             if ($activeAgentTaskIds -notcontains [string]$t.id) {
+                $upRaw = if ($t.PSObject.Properties['updatedAt'] -and $t.updatedAt) { $t.updatedAt } else { $null }
+                $updatedTime = [datetime]::MinValue
+                if ($upRaw -is [datetime]) { $updatedTime = $upRaw.ToUniversalTime() }
+                elseif (-not [string]::IsNullOrWhiteSpace([string]$upRaw)) { try { $updatedTime = ([datetime]::Parse([string]$upRaw)).ToUniversalTime() } catch {} }
+                if ($updatedTime -ne [datetime]::MinValue -and ($now - $updatedTime).TotalSeconds -lt 45) {
+                    continue
+                }
                 Write-Warning "Task $($t.id) in status '$($t.status)' has no active telemetry. Recovering to needs_rework..."
                 $was = $t.status
                 $t.status = 'needs_rework'
