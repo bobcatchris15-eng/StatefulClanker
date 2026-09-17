@@ -307,9 +307,18 @@ sealed class ActiveAgentInfo
     public string Type = "Worker";
 }
 
+sealed class TaskBoardEntry
+{
+    public string Id = "";
+    public string Title = "";
+    public string Status = "";
+    public string CreatedAt = "";
+}
+
 sealed class ProjectMetrics
 {
     public int ActiveAgents, Sessions, Commits, Validators, CompleteTasks, TotalTasks;
+    public List<TaskBoardEntry> TaskBoard = new();
     public long UsageReports, PromptTokens, CompletionTokens, TotalTokens;
     public Dictionary<string,long> ModelTokens = new(StringComparer.OrdinalIgnoreCase);
     public string IntentRevision = "—", Goal = "", Activity = "";
@@ -396,8 +405,22 @@ static class Inspector
         }
         foreach (var file in JsonFiles(System.IO.Path.Combine(state, "tasks")))
         {
-            m.TotalTasks++; try { using var d = JsonDocument.Parse(File.ReadAllText(file)); if (d.RootElement.TryGetProperty("status", out var s) && s.GetString() == "complete") m.CompleteTasks++; } catch { }
+            m.TotalTasks++;
+            try
+            {
+                using var d = JsonDocument.Parse(File.ReadAllText(file));
+                var root = d.RootElement;
+                var status = root.TryGetProperty("status", out var s) ? (s.GetString() ?? "") : "";
+                if (status == "complete") m.CompleteTasks++;
+                var id = root.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String ? (idProp.GetString() ?? "") : "";
+                if (string.IsNullOrEmpty(id)) id = System.IO.Path.GetFileNameWithoutExtension(file);
+                var title = root.TryGetProperty("title", out var titleProp) && titleProp.ValueKind == JsonValueKind.String ? (titleProp.GetString() ?? "") : "";
+                var createdAt = root.TryGetProperty("createdAt", out var caProp) && caProp.ValueKind == JsonValueKind.String ? (caProp.GetString() ?? "") : "";
+                m.TaskBoard.Add(new TaskBoardEntry { Id = id, Title = string.IsNullOrEmpty(title) ? id : title, Status = status, CreatedAt = createdAt });
+            }
+            catch { }
         }
+        m.TaskBoard = m.TaskBoard.OrderBy(t => t.CreatedAt, StringComparer.Ordinal).ToList();
         try { m.Goal = JsonNode.Parse(File.ReadAllText(System.IO.Path.Combine(state, "state.json")))?["goal"]?.GetValue<string>() ?? ""; } catch { }
         try { m.IntentRevision = JsonNode.Parse(File.ReadAllText(System.IO.Path.Combine(state, "intent", "contract.json")))?["revision"]?.ToString() ?? "—"; } catch { }
         m.Commits = CommitCount(project); m.Activity = Activity(System.IO.Path.Combine(state, "events.jsonl")); return m;
@@ -800,6 +823,139 @@ sealed class BlinkenRack : Panel
     }
 }
 
+// TASK BOARD
+//
+// The blinkenlights above show currently RUNNING processes. This shows every
+// task's lifecycle status at a glance, mainframe-panel style: one small round
+// lamp per task, colored by status, next to its title.
+sealed class LedIndicator : Control
+{
+    public Color OnColor { get; set; } = Color.FromArgb(48, 58, 68);
+
+    public LedIndicator()
+    {
+        DoubleBuffered = true;
+        Dock = DockStyle.Fill;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        var g = e.Graphics;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+        var d = Math.Max(4, Math.Min(Width, Height) - 8);
+        var rect = new Rectangle((Width - d) / 2, (Height - d) / 2, d, d);
+
+        using (var glow = new SolidBrush(Color.FromArgb(70, OnColor)))
+            g.FillEllipse(glow, rect.X - 2, rect.Y - 2, rect.Width + 4, rect.Height + 4);
+        using (var body = new SolidBrush(OnColor))
+            g.FillEllipse(body, rect);
+        using (var highlight = new SolidBrush(Color.FromArgb(150, 255, 255, 255)))
+            g.FillEllipse(highlight, rect.X + rect.Width / 4, rect.Y + rect.Height / 5, Math.Max(1, rect.Width / 3), Math.Max(1, rect.Height / 3));
+        using var ring = new Pen(Color.FromArgb(10, 14, 18), 1.2f);
+        g.DrawEllipse(ring, rect);
+    }
+}
+
+sealed class TaskBoardRow : TableLayoutPanel
+{
+    public readonly LedIndicator Led = new();
+    readonly Label _title = new() { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Theme.Text, Font = new Font("Cascadia Mono", 8.75f), Margin = new Padding(2, 0, 4, 0) };
+    readonly Label _status = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Cascadia Mono", 8f, FontStyle.Bold), Margin = new Padding(0, 0, 8, 0) };
+
+    public TaskBoardRow()
+    {
+        Dock = DockStyle.Top;
+        Height = 24;
+        ColumnCount = 3;
+        RowCount = 1;
+        BackColor = Color.FromArgb(14, 19, 25);
+        Margin = new Padding(0, 0, 0, 1);
+        ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 26));
+        ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
+        Controls.Add(Led, 0, 0);
+        Controls.Add(_title, 1, 0);
+        Controls.Add(_status, 2, 0);
+    }
+
+    public void SetTask(TaskBoardEntry t)
+    {
+        _title.Text = string.IsNullOrEmpty(t.Title) ? t.Id : t.Title;
+        var (color, label) = StatusVisual(t.Status);
+        Led.OnColor = color;
+        _status.Text = label;
+        _status.ForeColor = color;
+        Led.Invalidate();
+    }
+
+    // Green: done. Blue: worker actively running. Amber: critic/validator review
+    // in flight (same lamp color as the per-task validator blinkenlight). Red:
+    // rejected or awaiting retry. Dark: not started yet.
+    static (Color, string) StatusVisual(string status) => status switch
+    {
+        "complete" => (Color.FromArgb(65, 235, 95), "DONE"),
+        "running" => (Color.FromArgb(70, 150, 255), "RUNNING"),
+        "reviewing" => (Color.FromArgb(255, 220, 70), "CRITIC"),
+        "validating" => (Color.FromArgb(255, 220, 70), "VALIDATOR"),
+        "needs_rework" => (Color.FromArgb(240, 60, 60), "REJECTED"),
+        "failed" => (Color.FromArgb(240, 60, 60), "FAILED"),
+        "stale" => (Color.FromArgb(240, 60, 60), "STALE"),
+        "blocked" => (Color.FromArgb(60, 70, 80), "BLOCKED"),
+        "ready" => (Color.FromArgb(60, 70, 80), "READY"),
+        "pending" => (Color.FromArgb(48, 58, 68), "PENDING"),
+        "" => (Color.FromArgb(48, 58, 68), "—"),
+        _ => (Color.FromArgb(48, 58, 68), status.ToUpperInvariant())
+    };
+}
+
+sealed class TaskBoardPanel : Panel
+{
+    readonly TableLayoutPanel _list = new() { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    readonly Label _empty = new() { Dock = DockStyle.Top, Height = 24, Text = "No tasks yet.", ForeColor = Theme.Muted, Font = new Font("Cascadia Mono", 8.75f), TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(4, 4, 0, 0) };
+
+    public TaskBoardPanel()
+    {
+        Dock = DockStyle.Fill;
+        AutoScroll = true;
+        BackColor = Color.FromArgb(10, 14, 18);
+        Padding = new Padding(2);
+        Controls.Add(_empty);
+        Controls.Add(_list);
+    }
+
+    public void SetTasks(IReadOnlyList<TaskBoardEntry> tasks)
+    {
+        _list.SuspendLayout();
+        try
+        {
+            while (_list.Controls.Count < tasks.Count)
+            {
+                _list.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+                _list.RowCount = _list.Controls.Count + 1;
+                _list.Controls.Add(new TaskBoardRow(), 0, _list.Controls.Count);
+            }
+            while (_list.Controls.Count > tasks.Count)
+            {
+                var last = _list.Controls[_list.Controls.Count - 1];
+                _list.Controls.Remove(last);
+                last.Dispose();
+                if (_list.RowStyles.Count > 0) _list.RowStyles.RemoveAt(_list.RowStyles.Count - 1);
+            }
+            for (var i = 0; i < tasks.Count; i++)
+            {
+                ((TaskBoardRow)_list.Controls[i]).SetTask(tasks[i]);
+            }
+            _empty.Visible = tasks.Count == 0;
+        }
+        finally
+        {
+            _list.ResumeLayout();
+        }
+    }
+}
+
 sealed class MainForm : Form
 {
     readonly string _root = Runtime.FindRoot();
@@ -810,6 +966,7 @@ sealed class MainForm : Form
     readonly Label[] _metrics = Enumerable.Range(0, 5).Select(_ => new Label()).ToArray();
     readonly TextBox _usage = new(), _overviewActivity = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new(), _activeProvidersText = new();
     readonly BlinkenRack _blinkenRack = new();
+    readonly TaskBoardPanel _taskBoard = new();
     readonly DataGridView _integrations = new(), _providers = new();
     readonly Label _autofillStatus = new();
     readonly Button _btnAutofillToggle = Btn("Start Autofill", 115);
@@ -841,8 +998,8 @@ sealed class MainForm : Form
 
     void BuildUi()
     {
-        var shell = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Theme.Back };
-        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270)); shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); Controls.Add(shell);
+        var shell = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = Theme.Back };
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270)); shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 300)); Controls.Add(shell);
         var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0) };
         left.RowStyles.Add(new RowStyle(SizeType.Absolute, 38)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); for (var i = 0; i < 3; i++) left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         left.Controls.Add(new Label { Text = "STATEFULCLANKER", Dock = DockStyle.Fill, Font = new Font("Segoe UI Semibold", 12, FontStyle.Bold), ForeColor = Theme.Accent, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
@@ -855,12 +1012,26 @@ sealed class MainForm : Form
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 }; top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); top.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
         _header.Dock = DockStyle.Fill; _header.Font = new Font("Segoe UI Semibold", 15, FontStyle.Bold); _header.TextAlign = ContentAlignment.MiddleLeft; _mcpState.Dock = DockStyle.Fill; _mcpState.TextAlign = ContentAlignment.MiddleCenter; _mcpState.Font = new Font("Segoe UI Semibold", 9, FontStyle.Bold); top.Controls.Add(_header, 0, 0); top.Controls.Add(_mcpState, 1, 0); right.Controls.Add(top, 0, 0);
         _tabs.Dock = DockStyle.Fill; _tabs.TabPages.Add(BuildOverview()); _tabs.TabPages.Add(BuildActivity()); _tabs.TabPages.Add(BuildIntegrations()); _tabs.TabPages.Add(BuildProviders()); right.Controls.Add(_tabs, 0, 1); right.Margin = new Padding(0); shell.Controls.Add(right, 1, 0);
+
+        // Task rail: persistent across every tab, full window height, roughly
+        // mirroring the project pane's width on the opposite side. ACTIVE AGENTS
+        // up top, the scrollable per-task lamp board filling the rest.
+        var taskRail = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0) };
+        taskRail.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        taskRail.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _metrics[0].Dock = DockStyle.Fill; _metrics[0].Margin = new Padding(0); _metrics[0].TextAlign = ContentAlignment.MiddleLeft;
+        _metrics[0].Font = new Font("Cascadia Mono", 11, FontStyle.Bold);
+        _metrics[0].Text = "ACTIVE AGENTS: —";
+        taskRail.Controls.Add(_metrics[0], 0, 0);
+        _taskBoard.Dock = DockStyle.Fill; _taskBoard.Margin = new Padding(0);
+        taskRail.Controls.Add(_taskBoard, 0, 1);
+        shell.Controls.Add(taskRail, 2, 0);
     }
 
     TabPage BuildOverview()
     {
         var p = Page("Overview"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 12, ColumnCount = 1 };
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 110));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
@@ -873,8 +1044,24 @@ sealed class MainForm : Form
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var metricNames = new[] { "ACTIVE AGENTS", "WORKER SESSIONS", "COMMITS", "VALIDATOR RUNS", "TASKS COMPLETE" }; var metrics = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1 };
-        for (var i = 0; i < 5; i++) { metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20)); _metrics[i].Dock = DockStyle.Fill; _metrics[i].Margin = new Padding(5); _metrics[i].TextAlign = ContentAlignment.MiddleCenter; _metrics[i].Font = new Font("Cascadia Mono", 12, FontStyle.Bold); _metrics[i].Text = metricNames[i] + "\r\n—"; metrics.Controls.Add(_metrics[i], i, 0); }
+        // ACTIVE AGENTS and the per-task status board now live in the persistent
+        // full-height task rail (see BuildUi) so they're visible on every tab, not
+        // just here. This is just the compact rollup, kept small and top-left.
+        var smallStatsNames = new[] { "WORKER SESSIONS", "COMMITS", "VALIDATOR RUNS", "TASKS COMPLETE" };
+        var smallStatsIndex = new[] { 1, 2, 3, 4 };
+        var statPanel = new Panel { Dock = DockStyle.Left, Width = 230, BackColor = Theme.Surface, Margin = new Padding(5, 2, 5, 2), Padding = new Padding(10, 8, 6, 8) };
+        var statStack = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = smallStatsNames.Length };
+        for (var i = 0; i < smallStatsNames.Length; i++)
+        {
+            statStack.RowStyles.Add(new RowStyle(SizeType.Percent, 100f / smallStatsNames.Length));
+            var lbl = _metrics[smallStatsIndex[i]];
+            lbl.Dock = DockStyle.Fill; lbl.Margin = new Padding(0); lbl.TextAlign = ContentAlignment.MiddleLeft;
+            lbl.Font = new Font("Cascadia Mono", 9, FontStyle.Bold);
+            lbl.Text = $"{smallStatsNames[i]}: —";
+            statStack.Controls.Add(lbl, 0, i);
+        }
+        statPanel.Controls.Add(statStack);
+
         _blinkenRack.Dock = DockStyle.Fill; _blinkenRack.Margin = new Padding(5,2,5,2);
 
         var autofillBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
@@ -896,7 +1083,7 @@ sealed class MainForm : Form
 
         _activeProvidersText.Dock = DockStyle.Fill; _activeProvidersText.ReadOnly = true; _activeProvidersText.BackColor = Theme.Surface; _activeProvidersText.BorderStyle = BorderStyle.None; _activeProvidersText.Font = new Font("Cascadia Mono", 9f, FontStyle.Bold); _activeProvidersText.ForeColor = Theme.Accent;
         
-        rows.Controls.Add(metrics, 0, 0);
+        rows.Controls.Add(statPanel, 0, 0);
         rows.Controls.Add(_blinkenRack, 0, 1);
         rows.Controls.Add(Section("AUTONOMOUS AUTOFILL & WORKER SLOTS"), 0, 2);
         rows.Controls.Add(autofillBar, 0, 3);
@@ -1449,17 +1636,18 @@ sealed class MainForm : Form
     void SetMetrics(ProjectMetrics m)
     {
         var agentText = m.ActiveAgents == 0
-            ? "ACTIVE AGENTS\r\n0"
-            : (string.IsNullOrEmpty(m.ActiveTypesSummary) ? $"ACTIVE AGENTS\r\n{m.ActiveAgents}" : $"ACTIVE AGENTS\r\n{m.ActiveAgents} ({m.ActiveTypesSummary})");
+            ? "ACTIVE AGENTS: 0"
+            : (string.IsNullOrEmpty(m.ActiveTypesSummary) ? $"ACTIVE AGENTS: {m.ActiveAgents}" : $"ACTIVE AGENTS: {m.ActiveAgents} ({m.ActiveTypesSummary})");
         _metrics[0].Text = agentText;
-        _metrics[1].Text = $"WORKER SESSIONS\r\n{m.Sessions}";
-        _metrics[2].Text = $"COMMITS\r\n{m.Commits}";
-        _metrics[3].Text = $"VALIDATOR RUNS\r\n{m.Validators}";
-        _metrics[4].Text = $"TASKS COMPLETE\r\n{m.CompleteTasks}/{m.TotalTasks}";
+        _metrics[1].Text = $"WORKER SESSIONS: {m.Sessions}";
+        _metrics[2].Text = $"COMMITS: {m.Commits}";
+        _metrics[3].Text = $"VALIDATOR RUNS: {m.Validators}";
+        _metrics[4].Text = $"TASKS COMPLETE: {m.CompleteTasks}/{m.TotalTasks}";
         _intent.Text = $"INTENT REVISION  {m.IntentRevision}";
         _goal.Text = string.IsNullOrWhiteSpace(m.Goal) ? "No project goal recorded." : m.Goal;
         _usage.Text = UsageText(m);
         _blinkenRack.SyncAgents(m.ActiveAgentList);
+        _taskBoard.SetTasks(m.TaskBoard);
     }
 
     List<IntegrationStatus> ReadIntegrationStatus()
