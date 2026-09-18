@@ -367,7 +367,23 @@ imply a missing saved project must not silently substitute another project
 prove restart with the saved project removed produces no-active-project state
 ```
 
-## 9.1 Implications are not an invitation to infinite hardening
+## 9.1 Current runtime boundary: essential proof must not live only in `imply` / `prove`
+
+The current parser persists `implications` and `proofObligations`, and they participate in task-definition freshness.
+
+However, the current compiled worker/reviewer packet does **not yet project those fields into the model-visible task context**.
+
+Therefore:
+
+- use `imply` / `prove` as durable planning/refinement metadata;
+- do not rely on them as the only place an essential requirement or proof lives;
+- if the worker must perform a proof for the task to pass **today**, encode it in the instruction and/or `accept`;
+- if the proof is materially separate, create a dependent validation/integration task;
+- never assume the critic/validator saw an `imply` or `prove` line unless the runtime is later changed to compile them.
+
+This is a temporary runtime limitation, not a reason to abandon the fields. They remain useful for planner reasoning, freshness, and future refinement.
+
+## 9.2 Implications are not an invitation to infinite hardening
 
 Only record consequences materially connected to current Intent or obvious correctness.
 
@@ -375,7 +391,7 @@ Do not recursively enumerate every imaginable failure.
 
 The critic is allowed to notice risk; the planner should expose the important ones, not attempt to prove the universe safe.
 
-## 9.2 Proof obligations must be executable or inspectable
+## 9.3 Proof obligations must be executable or inspectable
 
 Good:
 
@@ -726,6 +742,10 @@ The goal is to remove ambiguity, not create an impossible checklist.
 
 # 21. Review the plan from the validator's perspective
 
+The task reviewer sees the persisted pre-work compilation plus the worker receipt. It does not automatically receive a magical fresh post-work reread of every changed file.
+
+The worker output contract already asks workers to report files changed, commands run, failures, and unresolved risks. Plan so those reports can carry decisive evidence.
+
 For each acceptance criterion ask:
 
 > What exact evidence will exist after the worker runs that lets a validator say PASS?
@@ -741,6 +761,37 @@ A validator should not need to infer:
 - whether a hidden external side effect occurred.
 
 Provide executable or inspectable proof.
+
+## 21.1 Design the worker receipt as evidence
+
+For implementation tasks, the instruction should make the expected verification behavior obvious enough that a competent worker naturally reports useful evidence.
+
+When relevant, tell the worker to:
+
+- run the named focused test/build/reproduction;
+- report the command and result;
+- identify files materially changed;
+- report any acceptance criterion it could not verify;
+- avoid claiming broad verification it did not perform.
+
+Do not turn every instruction into verbose reporting bureaucracy. The goal is to ensure the validator receives evidence for the criteria it must judge.
+
+Bad planning pattern:
+
+```text
+accept restart restores the exact project
+```
+
+with no runnable test, reproduction, or instruction to exercise restart behavior.
+
+Better:
+
+```text
+instruction Implement exact active-project restoration and run the focused restart test/reproduction before finishing. Report the command/case and observed result.
+accept focused restart verification restores the exact persisted project
+```
+
+If no worker-accessible proof mechanism exists, do not pretend the validator can prove the criterion. Create the proof mechanism or move validation to an environment that can observe it.
 
 ---
 
@@ -940,7 +991,9 @@ Before applying a plan, check every task:
 - Are required capabilities sufficient but narrow?
 - Are acceptance criteria observable and minimal?
 - Are second-order implications captured without turning into infinite hardening?
+- Is each essential proof visible to the current worker/reviewer path, rather than living only in `imply` / `prove` metadata?
 - Is each proof obligation executable or inspectable?
+- Will the worker receipt naturally contain the evidence the validator needs?
 - Could a validator prove PASS from expected evidence?
 - Could a critic reject it for an obvious omission already visible now?
 - If 80% succeeds, is the remaining 20% separable enough that the task should be split?
