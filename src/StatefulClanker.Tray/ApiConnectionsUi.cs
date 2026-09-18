@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -8,16 +9,39 @@ using System.Windows.Forms;
 
 namespace StatefulClanker.Tray;
 
+sealed class ApiDiscoveredModel
+{
+    public string id { get; set; } = "";
+    public string displayName { get; set; } = "";
+    public string ownedBy { get; set; } = "";
+    public long? contextLength { get; set; }
+    public bool? supportsTools { get; set; }
+    public bool? isFree { get; set; }
+    public double? inputPrice { get; set; }
+    public double? outputPrice { get; set; }
+}
+
 sealed class ApiConnectionProfile
 {
     public string name { get; set; } = "";
+    public string presetId { get; set; } = "custom";
     public string protocol { get; set; } = "openai-chat";
     public string baseUrl { get; set; } = "";
-    public string model { get; set; } = "";
-    public string toolMode { get; set; } = "native";
+    public string modelsPath { get; set; } = "/models";
+    public string discoveryKind { get; set; } = "openai";
+    public string? accountId { get; set; }
+    public string toolModeDefault { get; set; } = "native";
     public string? apiKeyProtected { get; set; }
     public string? apiKeyEnv { get; set; }
     public Dictionary<string,string> headers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<ApiDiscoveredModel> models { get; set; } = new();
+    public string health { get; set; } = "unknown";
+    public string? lastTestAt { get; set; }
+    public string? lastError { get; set; }
+
+    // v1 compatibility. Old profiles stored one model per "connection".
+    public string? model { get; set; }
+    public string? toolMode { get; set; }
     public int maxSteps { get; set; } = 24;
     public int? maxTokens { get; set; }
     public double? temperature { get; set; }
@@ -27,6 +51,7 @@ static class ApiConnectionStore
 {
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
     public static string Path => System.IO.Path.Combine(AppStore.Root, "connections.json");
+
     public static Dictionary<string,ApiConnectionProfile> Load()
     {
         try
@@ -35,25 +60,141 @@ static class ApiConnectionStore
             using var d = JsonDocument.Parse(File.ReadAllText(Path));
             if (!d.RootElement.TryGetProperty("connections", out var c) || c.ValueKind != JsonValueKind.Object) return new(StringComparer.OrdinalIgnoreCase);
             var result = new Dictionary<string,ApiConnectionProfile>(StringComparer.OrdinalIgnoreCase);
-            foreach (var p in c.EnumerateObject()) result[p.Name] = p.Value.Deserialize<ApiConnectionProfile>(Json) ?? new();
+            foreach (var p in c.EnumerateObject())
+            {
+                var profile = p.Value.Deserialize<ApiConnectionProfile>(Json) ?? new();
+                profile.name = string.IsNullOrWhiteSpace(profile.name) ? p.Name : profile.name;
+                profile.models ??= new();
+                profile.headers ??= new(StringComparer.OrdinalIgnoreCase);
+                if (profile.models.Count == 0 && !string.IsNullOrWhiteSpace(profile.model))
+                {
+                    profile.models.Add(new ApiDiscoveredModel {
+                        id = profile.model!,
+                        displayName = profile.model!,
+                        supportsTools = !string.Equals(profile.toolMode,"text",StringComparison.OrdinalIgnoreCase)
+                    });
+                }
+                result[p.Name] = profile;
+            }
             return result;
         }
         catch { return new(StringComparer.OrdinalIgnoreCase); }
     }
+
     public static void Save(Dictionary<string,ApiConnectionProfile> connections)
     {
         Directory.CreateDirectory(AppStore.Root);
-        var root = new JsonObject { ["schemaVersion"] = 1, ["connections"] = JsonSerializer.SerializeToNode(connections, Json) };
+        var root = new JsonObject { ["schemaVersion"] = 2, ["connections"] = JsonSerializer.SerializeToNode(connections, Json) };
         var tmp = Path + ".tmp";
         File.WriteAllText(tmp, root.ToJsonString(Json), new UTF8Encoding(false));
         File.Move(tmp, Path, true);
     }
+
     public static string Protect(string value) => Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null, DataProtectionScope.CurrentUser));
     public static string? Unprotect(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
         try { return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(value), null, DataProtectionScope.CurrentUser)); }
         catch { return null; }
+    }
+
+    public static string? ResolveKey(ApiConnectionProfile p)
+    {
+        if (!string.IsNullOrWhiteSpace(p.apiKeyEnv)) return Environment.GetEnvironmentVariable(p.apiKeyEnv!);
+        return Unprotect(p.apiKeyProtected);
+    }
+}
+
+sealed record ApiConnectionTestResult(bool Success,string Message,List<ApiDiscoveredModel> Models);
+
+static class ApiConnectionTester
+{
+    public static async Task<ApiConnectionTestResult> TestAndDiscoverAsync(ApiConnectionProfile p,string? rawKey=null)
+    {
+        try
+        {
+            using var h = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+            var key = !string.IsNullOrWhiteSpace(rawKey) ? rawKey : ApiConnectionStore.ResolveKey(p);
+            if (!string.IsNullOrWhiteSpace(key)) h.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key);
+            foreach (var x in p.headers) h.DefaultRequestHeaders.TryAddWithoutValidation(x.Key,x.Value);
+
+            var baseUrl = InferencePresets.Expand(p.baseUrl,p.accountId).TrimEnd('/');
+            var modelsPath = InferencePresets.Expand(p.modelsPath,p.accountId);
+            var url = Uri.TryCreate(modelsPath,UriKind.Absolute,out var absolute)
+                ? absolute.ToString()
+                : baseUrl + "/" + modelsPath.TrimStart('/');
+
+            using var r = await h.GetAsync(url);
+            var body = await r.Content.ReadAsStringAsync();
+            if (!r.IsSuccessStatusCode)
+            {
+                var detail = body.Length > 800 ? body[..800] + "…" : body;
+                return new(false,$"HTTP {(int)r.StatusCode} {r.ReasonPhrase}\r\n{url}\r\n{detail}",new());
+            }
+
+            using var d = JsonDocument.Parse(body);
+            var models = ParseModels(d.RootElement,p.discoveryKind);
+            if (models.Count == 0)
+                return new(false,$"The API authenticated successfully but returned no discoverable models from {url}.",new());
+
+            return new(true,$"Authenticated. Discovered {models.Count:N0} model(s).",models);
+        }
+        catch(Exception ex) { return new(false,ex.Message,new()); }
+    }
+
+    static List<ApiDiscoveredModel> ParseModels(JsonElement root,string kind)
+    {
+        JsonElement list = default;
+        var found = false;
+        if (root.ValueKind == JsonValueKind.Array) { list=root; found=true; }
+        else if (root.ValueKind == JsonValueKind.Object)
+        {
+            if (root.TryGetProperty("data",out var data) && data.ValueKind==JsonValueKind.Array) { list=data; found=true; }
+            else if (root.TryGetProperty("result",out var result))
+            {
+                if (result.ValueKind==JsonValueKind.Array) { list=result; found=true; }
+                else if (result.ValueKind==JsonValueKind.Object && result.TryGetProperty("data",out var nested) && nested.ValueKind==JsonValueKind.Array) { list=nested; found=true; }
+            }
+        }
+        if (!found) return new();
+
+        var output = new List<ApiDiscoveredModel>();
+        foreach (var x in list.EnumerateArray())
+        {
+            if (x.ValueKind != JsonValueKind.Object) continue;
+            var id = Str(x,"id") ?? Str(x,"name") ?? Str(x,"model");
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            var display = Str(x,"display_name") ?? Str(x,"displayName") ?? Str(x,"name") ?? id;
+            long? context = Long(x,"context_length") ?? Long(x,"max_context_length");
+            bool? tools = Bool(x,"supports_tools");
+            if (tools is null && x.TryGetProperty("capabilities",out var caps) && caps.ValueKind==JsonValueKind.Object)
+                tools = Bool(caps,"function_calling");
+            bool? free = Bool(x,"is_free");
+            double? input = null, outputPrice = null;
+            if (x.TryGetProperty("pricing",out var pricing) && pricing.ValueKind==JsonValueKind.Object)
+            {
+                input = Double(pricing,"input");
+                outputPrice = Double(pricing,"output");
+                if (free is null && input == 0d && outputPrice == 0d) free=true;
+            }
+            if (free is null && id.EndsWith(":free",StringComparison.OrdinalIgnoreCase)) free=true;
+            output.Add(new ApiDiscoveredModel {
+                id=id, displayName=display ?? id, ownedBy=Str(x,"owned_by") ?? "",
+                contextLength=context, supportsTools=tools, isFree=free, inputPrice=input, outputPrice=outputPrice
+            });
+        }
+        return output.OrderBy(x=>x.displayName,StringComparer.OrdinalIgnoreCase).ThenBy(x=>x.id,StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    static string? Str(JsonElement x,string name) => x.TryGetProperty(name,out var v) && v.ValueKind==JsonValueKind.String ? v.GetString() : null;
+    static long? Long(JsonElement x,string name) => x.TryGetProperty(name,out var v) && v.TryGetInt64(out var n) ? n : null;
+    static bool? Bool(JsonElement x,string name) => x.TryGetProperty(name,out var v) ? v.ValueKind switch { JsonValueKind.True=>true, JsonValueKind.False=>false, _=>null } : null;
+    static double? Double(JsonElement x,string name)
+    {
+        if (!x.TryGetProperty(name,out var v)) return null;
+        if (v.ValueKind==JsonValueKind.Number && v.TryGetDouble(out var n)) return n;
+        if (v.ValueKind==JsonValueKind.String && double.TryParse(v.GetString(),System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out n)) return n;
+        return null;
     }
 }
 
@@ -81,148 +222,268 @@ static class ApiConnectionsUiBootstrap
 
 sealed class ApiConnectionsPage : TabPage
 {
-    readonly DataGridView _grid = new();
-    readonly TextBox _openRouterKey = new();
-    readonly Label _openRouterStatus = new();
+    readonly DataGridView _connections = new();
+    readonly DataGridView _models = new();
+    readonly Label _summary = new();
     Dictionary<string,ApiConnectionProfile> _profiles = new(StringComparer.OrdinalIgnoreCase);
 
-    public ApiConnectionsPage() : base("API Connections")
+    public ApiConnectionsPage() : base("Connections")
     {
-        Padding = new Padding(12); BackColor = Theme.Back; ForeColor = Theme.Text;
-        var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1 };
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        Padding=new Padding(12); BackColor=Theme.Back; ForeColor=Theme.Text;
+        var rows=new TableLayoutPanel{Dock=DockStyle.Fill,RowCount=5,ColumnCount=1};
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
+        rows.RowStyles.Add(new RowStyle(SizeType.Percent,42));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute,32));
+        rows.RowStyles.Add(new RowStyle(SizeType.Percent,58));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
 
-        rows.Controls.Add(new Label { Text="OPENROUTER", Dock=DockStyle.Fill, TextAlign=ContentAlignment.BottomLeft, ForeColor=Theme.Muted, Font=new Font("Segoe UI Semibold",8,FontStyle.Bold)},0,0);
-        var openRouter = new TableLayoutPanel { Dock=DockStyle.Fill, ColumnCount=4, RowCount=1 };
-        openRouter.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-        openRouter.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        openRouter.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 135));
-        openRouter.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 135));
-        openRouter.Controls.Add(new Label { Text="OpenRouter API Key", Dock=DockStyle.Fill, TextAlign=ContentAlignment.MiddleLeft, ForeColor=Theme.Text },0,0);
-        _openRouterKey.Dock=DockStyle.Fill; _openRouterKey.UseSystemPasswordChar=true; _openRouterKey.PlaceholderText="sk-or-v1-..."; _openRouterKey.Margin=new Padding(0,7,8,7); openRouter.Controls.Add(_openRouterKey,1,0);
-        openRouter.Controls.Add(Make("Save key", SaveOpenRouterKey, 125),2,0);
-        openRouter.Controls.Add(Make("Test key", TestOpenRouterKey, 125),3,0);
-        rows.Controls.Add(openRouter,0,1);
+        var bar=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
+        bar.Controls.Add(Make("Add connection",Add,125));
+        bar.Controls.Add(Make("Edit",Edit,80));
+        bar.Controls.Add(Make("Test & refresh",TestSelected,120));
+        bar.Controls.Add(Make("Remove",Remove,85));
+        bar.Controls.Add(Make("Setup help",SetupHelp,95));
+        _summary.AutoSize=true;_summary.Margin=new Padding(12,11,0,0);_summary.ForeColor=Theme.Muted;bar.Controls.Add(_summary);
+        rows.Controls.Add(bar,0,0);
 
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill };
-        foreach (var b in new[] { Make("Add custom", Add), Make("Edit", Edit), Make("Remove", Remove), Make("Test", Test), Make("Add backend to active project", AddBackend, 220) }) bar.Controls.Add(b);
-        _openRouterStatus.AutoSize=true; _openRouterStatus.Margin=new Padding(12,11,0,0); _openRouterStatus.ForeColor=Theme.Muted; bar.Controls.Add(_openRouterStatus);
-        rows.Controls.Add(bar,0,2);
-        rows.Controls.Add(new Label { Text="MACHINE-LOCAL DIRECT INFERENCE CONNECTIONS", Dock=DockStyle.Fill, TextAlign=ContentAlignment.BottomLeft, ForeColor=Theme.Muted, Font=new Font("Segoe UI Semibold",8,FontStyle.Bold)},0,3);
+        ConfigureConnectionGrid(); rows.Controls.Add(_connections,0,1);
+        rows.Controls.Add(SectionLabel("DISCOVERED MODELS — select models to make project endpoints"),0,2);
+        ConfigureModelGrid(); rows.Controls.Add(_models,0,3);
 
-        _grid.Dock=DockStyle.Fill; _grid.ReadOnly=true; _grid.AllowUserToAddRows=false; _grid.RowHeadersVisible=false; _grid.SelectionMode=DataGridViewSelectionMode.FullRowSelect; _grid.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
-        _grid.Columns.Add("id","Connection"); _grid.Columns.Add("protocol","Protocol"); _grid.Columns.Add("url","Base URL"); _grid.Columns.Add("model","Model"); _grid.Columns.Add("tools","Tools"); _grid.Columns.Add("auth","Auth"); rows.Controls.Add(_grid,0,4);
+        var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
+        bottom.Controls.Add(Make("Add selected endpoints to active project",AddEndpoints,260));
+        var note=new Label{Text="Connections are machine-local. Endpoints are project-local model + connection targets.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
+        bottom.Controls.Add(note);rows.Controls.Add(bottom,0,4);
+
         Controls.Add(rows); Theme.Apply(this); Reload();
     }
 
-    static Button Make(string text, EventHandler click, int width=130) { var b=new Button{Text=text,Width=width,Height=32,Margin=new Padding(0,4,8,0),FlatStyle=FlatStyle.Flat,BackColor=Theme.Surface2,ForeColor=Theme.Text}; b.Click+=click; return b; }
-    string? SelectedId => _grid.SelectedRows.Count>0 ? _grid.SelectedRows[0].Cells[0].Value?.ToString() : null;
-    static bool IsManagedOpenRouter(string id) => OpenRouterFreeModels.All.Any(x=>string.Equals(x.ConnectionId,id,StringComparison.OrdinalIgnoreCase));
+    static Label SectionLabel(string text)=>new(){Text=text,Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,ForeColor=Theme.Muted,Font=new Font("Segoe UI Semibold",8,FontStyle.Bold)};
+    static Button Make(string text,EventHandler click,int width=130){var b=new Button{Text=text,Width=width,Height=32,Margin=new Padding(0,4,8,0)};b.Click+=click;return b;}
 
-    void Reload()
+    void ConfigureConnectionGrid()
     {
-        _profiles=ApiConnectionStore.Load(); _grid.Rows.Clear();
-        foreach(var p in _profiles.OrderBy(x=>x.Key,StringComparer.OrdinalIgnoreCase)) _grid.Rows.Add(p.Key,p.Value.protocol,p.Value.baseUrl,p.Value.model,p.Value.toolMode,string.IsNullOrWhiteSpace(p.Value.apiKeyEnv)?(string.IsNullOrWhiteSpace(p.Value.apiKeyProtected)?"none":"DPAPI"):"env:"+p.Value.apiKeyEnv);
-        var ready=OpenRouterFreeModels.All.Count(x=>_profiles.TryGetValue(x.ConnectionId,out var p)&&!string.IsNullOrWhiteSpace(p.apiKeyProtected));
-        _openRouterStatus.Text=ready==OpenRouterFreeModels.All.Length?$"OpenRouter: {ready} free models ready":ready>0?$"OpenRouter: {ready}/{OpenRouterFreeModels.All.Length} presets ready":"OpenRouter: not configured";
-        _openRouterKey.PlaceholderText=ready>0?"saved securely  -  paste a new key to replace":"sk-or-v1-...";
+        _connections.Dock=DockStyle.Fill;_connections.ReadOnly=true;_connections.AllowUserToAddRows=false;_connections.RowHeadersVisible=false;_connections.SelectionMode=DataGridViewSelectionMode.FullRowSelect;_connections.MultiSelect=false;_connections.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
+        _connections.Columns.Add("id","Connection");_connections.Columns.Add("preset","Service");_connections.Columns.Add("url","Base URL");_connections.Columns.Add("models","Models");_connections.Columns.Add("health","Health");_connections.Columns.Add("tested","Last tested");
+        _connections.SelectionChanged+=(_,_)=>LoadModels();
     }
 
-    void SaveOpenRouterKey(object? s, EventArgs e)
+    void ConfigureModelGrid()
     {
-        var key=_openRouterKey.Text.Trim();
-        if(string.IsNullOrWhiteSpace(key)){MessageBox.Show(FindForm(),"Paste an OpenRouter API key first.","OpenRouter",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
-        var protectedKey=ApiConnectionStore.Protect(key);
-        foreach(var model in OpenRouterFreeModels.All)
+        _models.Dock=DockStyle.Fill;_models.AllowUserToAddRows=false;_models.RowHeadersVisible=false;_models.SelectionMode=DataGridViewSelectionMode.FullRowSelect;_models.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
+        _models.Columns.Add(new DataGridViewCheckBoxColumn{Name="use",HeaderText="Add",Width=48,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});
+        _models.Columns.Add("name","Model");_models.Columns.Add("id","Model ID");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");_models.Columns.Add("free","Free");
+        foreach(DataGridViewColumn c in _models.Columns) if(c.Name!="use") c.ReadOnly=true;
+    }
+
+    string? SelectedId=>_connections.SelectedRows.Count>0?_connections.SelectedRows[0].Cells["id"].Value?.ToString():null;
+
+    void Reload(string? select=null)
+    {
+        _profiles=ApiConnectionStore.Load();_connections.Rows.Clear();
+        foreach(var kv in _profiles.OrderBy(x=>x.Key,StringComparer.OrdinalIgnoreCase))
         {
-            var p=_profiles.TryGetValue(model.ConnectionId,out var current)?current:new ApiConnectionProfile();
-            p.name=model.ConnectionId;p.protocol="openai-chat";p.baseUrl=OpenRouterFreeModels.BaseUrl;p.model=model.ModelId;p.toolMode=model.ToolMode;p.apiKeyEnv=null;p.apiKeyProtected=protectedKey;
-            _profiles[model.ConnectionId]=p;
+            var p=kv.Value;var preset=InferencePresets.Get(p.presetId);
+            var i=_connections.Rows.Add(kv.Key,preset.DisplayName,p.baseUrl,p.models.Count,p.health,p.lastTestAt is null?"—":FormatTime(p.lastTestAt));
+            _connections.Rows[i].Tag=p;
+            if(string.Equals(p.health,"healthy",StringComparison.OrdinalIgnoreCase))_connections.Rows[i].Cells["health"].Style.ForeColor=Theme.Good;
+            else if(string.Equals(p.health,"failed",StringComparison.OrdinalIgnoreCase))_connections.Rows[i].Cells["health"].Style.ForeColor=Theme.Error;
         }
-        ApiConnectionStore.Save(_profiles);_openRouterKey.Clear();Reload();
-        MessageBox.Show(FindForm(),$"OpenRouter key saved for the current Windows user. {OpenRouterFreeModels.All.Length} free-model connections are ready.","OpenRouter ready",MessageBoxButtons.OK,MessageBoxIcon.Information);
-    }
-
-    string? ResolveOpenRouterKey()
-    {
-        var typed=_openRouterKey.Text.Trim();if(!string.IsNullOrWhiteSpace(typed))return typed;
-        foreach(var model in OpenRouterFreeModels.All) if(_profiles.TryGetValue(model.ConnectionId,out var p)){var key=ApiConnectionStore.Unprotect(p.apiKeyProtected);if(!string.IsNullOrWhiteSpace(key))return key;}
-        return null;
-    }
-
-    async void TestOpenRouterKey(object? s, EventArgs e)
-    {
-        var key=ResolveOpenRouterKey();if(string.IsNullOrWhiteSpace(key)){MessageBox.Show(FindForm(),"No OpenRouter key is saved or entered.","OpenRouter",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
-        try
+        _summary.Text=$"{_profiles.Count} connection(s)";
+        if(_connections.Rows.Count>0)
         {
-            using var h=new HttpClient{Timeout=TimeSpan.FromSeconds(15)};h.DefaultRequestHeaders.Authorization=new AuthenticationHeaderValue("Bearer",key);
-            using var r=await h.GetAsync(OpenRouterFreeModels.BaseUrl+"/key");var body=await r.Content.ReadAsStringAsync();
-            var detail="";try{using var d=JsonDocument.Parse(body);if(d.RootElement.TryGetProperty("data",out var data)){var label=data.TryGetProperty("label",out var l)?l.GetString():null;var remaining=data.TryGetProperty("limit_remaining",out var rem)?rem.ToString():null;detail=$"\nKey: {label??"valid"}"+(remaining is null?"":$"\nLimit remaining: {remaining}");}}catch{}
-            MessageBox.Show(FindForm(),$"HTTP {(int)r.StatusCode} {r.ReasonPhrase}{detail}",r.IsSuccessStatusCode?"OpenRouter key valid":"OpenRouter key rejected",MessageBoxButtons.OK,r.IsSuccessStatusCode?MessageBoxIcon.Information:MessageBoxIcon.Warning);
-        } catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"OpenRouter test failed",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+            var row=_connections.Rows.Cast<DataGridViewRow>().FirstOrDefault(x=>string.Equals(x.Cells["id"].Value?.ToString(),select,StringComparison.OrdinalIgnoreCase))??_connections.Rows[0];
+            row.Selected=true;
+        }
+        LoadModels();
     }
 
-    void Add(object? s, EventArgs e) { using var d=new ApiConnectionDialog(); if(d.ShowDialog(FindForm())!=DialogResult.OK)return; _profiles[d.ConnectionId]=d.Profile; ApiConnectionStore.Save(_profiles); Reload(); }
-    void Edit(object? s, EventArgs e)
+    static string FormatTime(string text)=>DateTimeOffset.TryParse(text,out var dto)?dto.ToLocalTime().ToString("MM-dd HH:mm"):"—";
+
+    void LoadModels()
     {
-        var id=SelectedId; if(id is null||!_profiles.TryGetValue(id,out var previous))return;
-        if(IsManagedOpenRouter(id)){MessageBox.Show(FindForm(),"This is a managed OpenRouter free-model preset. Change the shared key in the OpenRouter field above; model/base URL/tool mode are maintained by the preset catalog.");return;}
-        using var d=new ApiConnectionDialog(id,previous); if(d.ShowDialog(FindForm())!=DialogResult.OK)return;
-        if(string.IsNullOrWhiteSpace(d.Profile.apiKeyProtected) && string.Equals(d.Profile.apiKeyEnv, previous.apiKeyEnv, StringComparison.OrdinalIgnoreCase)) d.Profile.apiKeyProtected=previous.apiKeyProtected;
-        _profiles.Remove(id); _profiles[d.ConnectionId]=d.Profile; ApiConnectionStore.Save(_profiles); Reload();
+        _models.Rows.Clear();var id=SelectedId;if(id is null||!_profiles.TryGetValue(id,out var p))return;
+        foreach(var m in p.models)
+        {
+            var context=m.contextLength.HasValue?m.contextLength.Value.ToString("N0"):"—";
+            var free=m.isFree==true?"yes":m.isFree==false?"no":"?";
+            _models.Rows.Add(false,m.displayName,m.id,m.supportsTools==false?"text":"native",context,free);
+        }
     }
-    void Remove(object? s, EventArgs e) { var id=SelectedId;if(id is null)return;if(MessageBox.Show(FindForm(),$"Remove API connection '{id}'?"+(IsManagedOpenRouter(id)?" Saving the OpenRouter key again will recreate it.":""),"Remove connection",MessageBoxButtons.YesNo)!=DialogResult.Yes)return;_profiles.Remove(id);ApiConnectionStore.Save(_profiles);Reload(); }
-    async void Test(object? s, EventArgs e)
+
+    void Add(object? s,EventArgs e)
+    {
+        using var d=new ApiConnectionDialog();
+        if(d.ShowDialog(FindForm())!=DialogResult.OK)return;
+        _profiles[d.ConnectionId]=d.Profile;ApiConnectionStore.Save(_profiles);Reload(d.ConnectionId);
+    }
+
+    void Edit(object? s,EventArgs e)
     {
         var id=SelectedId;if(id is null||!_profiles.TryGetValue(id,out var p))return;
-        try
-        {
-            if(!string.Equals(p.protocol,"openai-chat",StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"No connection test adapter exists yet for protocol '{p.protocol}'.");
-            using var h=new HttpClient{Timeout=TimeSpan.FromSeconds(15)}; var key=string.IsNullOrWhiteSpace(p.apiKeyEnv)?ApiConnectionStore.Unprotect(p.apiKeyProtected):Environment.GetEnvironmentVariable(p.apiKeyEnv!); if(!string.IsNullOrWhiteSpace(key))h.DefaultRequestHeaders.Authorization=new AuthenticationHeaderValue("Bearer",key); foreach(var x in p.headers)h.DefaultRequestHeaders.TryAddWithoutValidation(x.Key,x.Value);
-            var url=p.baseUrl.TrimEnd('/')+"/models"; using var r=await h.GetAsync(url); MessageBox.Show(FindForm(),$"HTTP {(int)r.StatusCode} {r.ReasonPhrase}\n{url}",r.IsSuccessStatusCode?"Connection available":"Connection responded",MessageBoxButtons.OK,r.IsSuccessStatusCode?MessageBoxIcon.Information:MessageBoxIcon.Warning);
-        } catch(Exception ex) { MessageBox.Show(FindForm(),ex.Message,"Connection test failed",MessageBoxButtons.OK,MessageBoxIcon.Error); }
+        using var d=new ApiConnectionDialog(id,p);
+        if(d.ShowDialog(FindForm())!=DialogResult.OK)return;
+        _profiles.Remove(id);_profiles[d.ConnectionId]=d.Profile;ApiConnectionStore.Save(_profiles);Reload(d.ConnectionId);
     }
-    void AddBackend(object? s, EventArgs e)
+
+    async void TestSelected(object? s,EventArgs e)
     {
-        var id=SelectedId;if(id is null)return;var pointer=AppStore.ActiveProjectPointer;if(!File.Exists(pointer)){MessageBox.Show(FindForm(),"Select an active project first.");return;}var project=File.ReadAllText(pointer).Trim();var path=System.IO.Path.Combine(project,".statefulclanker","config.json");if(!File.Exists(path)){MessageBox.Show(FindForm(),"Active project has no StatefulClanker config.");return;}
-        var backend=PromptText(FindForm(),"Add direct API backend","Project backend name:",id);if(string.IsNullOrWhiteSpace(backend))return;
+        var id=SelectedId;if(id is null||!_profiles.TryGetValue(id,out var p))return;
+        _summary.Text="Testing and discovering models…";
+        var result=await ApiConnectionTester.TestAndDiscoverAsync(p);
+        p.lastTestAt=DateTimeOffset.UtcNow.ToString("O");p.health=result.Success?"healthy":"failed";p.lastError=result.Success?null:result.Message;
+        if(result.Success)p.models=result.Models;
+        _profiles[id]=p;ApiConnectionStore.Save(_profiles);Reload(id);
+        MessageBox.Show(FindForm(),result.Message,result.Success?"Connection healthy":"Connection test failed",MessageBoxButtons.OK,result.Success?MessageBoxIcon.Information:MessageBoxIcon.Warning);
+    }
+
+    void Remove(object? s,EventArgs e)
+    {
+        var id=SelectedId;if(id is null)return;
+        if(MessageBox.Show(FindForm(),$"Remove machine connection '{id}'? Project endpoints that reference it will become unavailable until changed.","Remove connection",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
+        _profiles.Remove(id);ApiConnectionStore.Save(_profiles);Reload();
+    }
+
+    void SetupHelp(object? s,EventArgs e)
+    {
+        var id=SelectedId;if(id is null||!_profiles.TryGetValue(id,out var p))return;var preset=InferencePresets.Get(p.presetId);
+        var choice=MessageBox.Show(FindForm(),$"{preset.FreeLabel}\r\n\r\n{preset.Instructions}\r\n\r\nOpen the provider setup page?","Setup: "+preset.DisplayName,MessageBoxButtons.YesNo,MessageBoxIcon.Information);
+        if(choice==DialogResult.Yes&&!string.IsNullOrWhiteSpace(preset.SetupUrl))try{Process.Start(new ProcessStartInfo(preset.SetupUrl){UseShellExecute=true});}catch{}
+    }
+
+    void AddEndpoints(object? s,EventArgs e)
+    {
+        var connection=SelectedId;if(connection is null)return;
+        var selected=_models.Rows.Cast<DataGridViewRow>().Where(r=>Convert.ToBoolean(r.Cells["use"].Value??false)).Select(r=>r.Cells["id"].Value?.ToString()).Where(x=>!string.IsNullOrWhiteSpace(x)).Cast<string>().ToList();
+        if(selected.Count==0){MessageBox.Show(FindForm(),"Select at least one discovered model.");return;}
+        var pointer=AppStore.ActiveProjectPointer;if(!File.Exists(pointer)){MessageBox.Show(FindForm(),"Select an active project first.");return;}
+        var project=File.ReadAllText(pointer).Trim();var path=System.IO.Path.Combine(project,".statefulclanker","config.json");if(!File.Exists(path)){MessageBox.Show(FindForm(),"Active project has no StatefulClanker config.");return;}
         try
         {
-            var root=JsonNode.Parse(File.ReadAllText(path))?.AsObject() ?? throw new Exception("Invalid project config.");var providers=root["providers"] as JsonObject ?? new JsonObject();root["providers"]=providers;providers[backend]=new JsonObject{{"type","api"},{"connection",id}};
+            var root=JsonNode.Parse(File.ReadAllText(path))?.AsObject()??throw new Exception("Invalid project config.");
+            var endpoints=root["providers"] as JsonObject??new JsonObject();root["providers"]=endpoints;
+            var nextPriority=endpoints.Count==0?10:endpoints.Select(x=>(x.Value as JsonObject)?["priority"]?.GetValue<int>()??100:100).DefaultIfEmpty(0).Max()+10;
+            var added=0;
+            foreach(var modelId in selected)
+            {
+                if(endpoints.Any(x=>x.Value is JsonObject o&&o["type"]?.ToString()=="api"&&o["connection"]?.ToString()==connection&&o["model"]?.ToString()==modelId))continue;
+                var model=_profiles[connection].models.FirstOrDefault(x=>x.id==modelId);
+                var baseName=SafeId(connection+"-"+modelId);
+                var name=baseName;var suffix=2;while(endpoints.ContainsKey(name))name=baseName+"-"+suffix++;
+                endpoints[name]=new JsonObject{
+                    ["type"]="api",["connection"]=connection,["model"]=modelId,
+                    ["toolMode"]=model?.supportsTools==false?"text":"native",["priority"]=nextPriority
+                };
+                nextPriority+=10;added++;
+            }
             var tmp=path+".tmp";File.WriteAllText(tmp,root.ToJsonString(new JsonSerializerOptions{WriteIndented=true}),new UTF8Encoding(false));File.Move(tmp,path,true);
-            MessageBox.Show(FindForm(),$"Added backend '{backend}' using connection '{id}'. Route tasks to it from the Providers/project config.");
-        } catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not update project",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+            MessageBox.Show(FindForm(),$"Added {added} endpoint(s) to the active project. Configure their preference and failover order on Endpoints & Routing.");
+        }
+        catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not add endpoints",MessageBoxButtons.OK,MessageBoxIcon.Error);}
     }
-    static string? PromptText(IWin32Window? owner,string title,string label,string initial)
+
+    static string SafeId(string text)
     {
-        using var f=new Form{Text=title,Width=460,Height=160,StartPosition=FormStartPosition.CenterParent,BackColor=Theme.Back,ForeColor=Theme.Text};var l=new Label{Text=label,Left=12,Top=14,Width=420};var t=new TextBox{Text=initial,Left=12,Top=40,Width=420};var ok=new Button{Text="OK",DialogResult=DialogResult.OK,Left=250,Top=75,Width=85};var cancel=new Button{Text="Cancel",DialogResult=DialogResult.Cancel,Left=347,Top=75,Width=85};f.Controls.AddRange(new Control[]{l,t,ok,cancel});f.AcceptButton=ok;f.CancelButton=cancel;Theme.Apply(f);return f.ShowDialog(owner)==DialogResult.OK?t.Text.Trim():null;
+        var sb=new StringBuilder();foreach(var ch in text.ToLowerInvariant()){if(char.IsLetterOrDigit(ch))sb.Append(ch);else if(sb.Length>0&&sb[^1]!='-')sb.Append('-');}
+        var s=sb.ToString().Trim('-');if(s.Length>55)s=s[..55].TrimEnd('-');return string.IsNullOrWhiteSpace(s)?"endpoint":s;
     }
 }
 
 sealed class ApiConnectionDialog : Form
 {
-    readonly TextBox _id=new(), _url=new(), _model=new(), _key=new(), _env=new(), _headers=new(); readonly ComboBox _preset=new(), _protocol=new(), _tools=new(); readonly NumericUpDown _steps=new(){Minimum=1,Maximum=100,Value=24};
-    public string ConnectionId => _id.Text.Trim(); public ApiConnectionProfile Profile { get; private set; } = new();
-    public ApiConnectionDialog(string? id=null, ApiConnectionProfile? current=null)
+    readonly ComboBox _preset=new(){DropDownStyle=ComboBoxStyle.DropDownList};
+    readonly TextBox _id=new(),_url=new(),_account=new(),_key=new(),_env=new(),_headers=new(),_instructions=new(),_status=new();
+    readonly DataGridView _models=new();
+    readonly Button _save=new(){Text="Save connection",Width=120,Enabled=false},_test=new(){Text="Test & discover",Width=120};
+    readonly ApiConnectionProfile? _previous;
+    ApiConnectionProfile? _tested;
+
+    public string ConnectionId=>_id.Text.Trim();
+    public ApiConnectionProfile Profile=>_tested??throw new InvalidOperationException("Connection was not validated.");
+
+    public ApiConnectionDialog(string? id=null,ApiConnectionProfile? current=null)
     {
-        Text=id is null?"Add API connection":"Edit API connection";Width=680;Height=640;StartPosition=FormStartPosition.CenterParent;BackColor=Theme.Back;ForeColor=Theme.Text;
-        var t=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=11,Padding=new Padding(14)};t.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,150));t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        Add(t,0,"Preset",_preset);_preset.Items.AddRange(new object[]{"Custom OpenAI-compatible","Ollama (local)","LM Studio (local)","vLLM (local)"});_preset.SelectedIndex=0;_preset.SelectedIndexChanged+=(_,_)=>ApplyPreset();
-        Add(t,1,"Connection id",_id);Add(t,2,"Protocol",_protocol);_protocol.Items.Add("openai-chat");_protocol.SelectedIndex=0;Add(t,3,"Base URL",_url);Add(t,4,"Model",_model);Add(t,5,"Tool protocol",_tools);_tools.Items.AddRange(new object[]{"native","text"});_tools.SelectedIndex=0;Add(t,6,"API key",_key);_key.UseSystemPasswordChar=true;Add(t,7,"API key env",_env);Add(t,8,"Extra headers",_headers);_headers.PlaceholderText="Header: value; Header2: value";Add(t,9,"Max agent steps",_steps);
-        var bar=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft};var ok=new Button{Text="Save",DialogResult=DialogResult.OK,Width=100};var cancel=new Button{Text="Cancel",DialogResult=DialogResult.Cancel,Width=100};bar.Controls.Add(ok);bar.Controls.Add(cancel);t.Controls.Add(bar,0,10);t.SetColumnSpan(bar,2);Controls.Add(t);AcceptButton=ok;CancelButton=cancel;ok.Click+=Save;
-        if(current is not null){_id.Text=id;_protocol.SelectedItem=string.IsNullOrWhiteSpace(current.protocol)?"openai-chat":current.protocol;_url.Text=current.baseUrl;_model.Text=current.model;_tools.SelectedItem=current.toolMode;_env.Text=current.apiKeyEnv??"";_steps.Value=Math.Clamp(current.maxSteps,1,100);_headers.Text=string.Join("; ",current.headers.Select(x=>$"{x.Key}: {x.Value}"));}
+        _previous=current;Text=current is null?"Add inference connection":"Edit inference connection";Width=820;Height=720;MinimumSize=new Size(720,620);StartPosition=FormStartPosition.CenterParent;
+        var root=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(14)};
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute,325));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.Absolute,46));
+
+        var form=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=8};form.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,155));form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        foreach(var p in InferencePresets.All)_preset.Items.Add(p);_preset.DisplayMember=nameof(InferencePreset.DisplayName);
+        Add(form,0,"Service preset",_preset);Add(form,1,"Connection name",_id);Add(form,2,"Base URL",_url);Add(form,3,"Account ID",_account);Add(form,4,"API key",_key);_key.UseSystemPasswordChar=true;Add(form,5,"API key env",_env);Add(form,6,"Extra headers",_headers);_headers.PlaceholderText="Header: value; Header2: value";
+        _instructions.Multiline=true;_instructions.ReadOnly=true;_instructions.ScrollBars=ScrollBars.Vertical;_instructions.Height=82;Add(form,7,"Setup instructions",_instructions,82);
+        root.Controls.Add(form,0,0);
+
+        _models.Dock=DockStyle.Fill;_models.ReadOnly=true;_models.AllowUserToAddRows=false;_models.RowHeadersVisible=false;_models.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
+        _models.Columns.Add("name","Discovered model");_models.Columns.Add("id","Model ID");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");root.Controls.Add(_models,0,1);
+
+        var bar=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};
+        var cancel=new Button{Text="Cancel",DialogResult=DialogResult.Cancel,Width=90};_save.DialogResult=DialogResult.OK;bar.Controls.Add(cancel);bar.Controls.Add(_save);bar.Controls.Add(_test);
+        _status.ReadOnly=true;_status.BorderStyle=BorderStyle.None;_status.Width=350;_status.Margin=new Padding(0,9,10,0);bar.Controls.Add(_status);root.Controls.Add(bar,0,2);
+        Controls.Add(root);AcceptButton=_save;CancelButton=cancel;
+
+        _preset.SelectedIndexChanged+=(_,_)=>ApplyPreset();
+        _test.Click+=async(_,_)=>await TestAsync();
+        _save.Click+=(_,e)=>{if(_tested is null){DialogResult=DialogResult.None;MessageBox.Show(this,"Test and discover models before saving.");}};
+        foreach(Control c in new Control[]{_id,_url,_account,_key,_env,_headers}) c.TextChanged+=(_,_)=>InvalidateTest();
+
+        if(current is null){_preset.SelectedItem=InferencePresets.All[0];ApplyPreset();}
+        else
+        {
+            _preset.SelectedItem=InferencePresets.Get(current.presetId);_id.Text=id??current.name;_url.Text=current.baseUrl;_account.Text=current.accountId??"";_env.Text=current.apiKeyEnv??"";_headers.Text=string.Join("; ",current.headers.Select(x=>$"{x.Key}: {x.Value}"));ApplyPreset(false);
+            _instructions.Text=InferencePresets.Get(current.presetId).Instructions;
+        }
         Theme.Apply(this);
     }
-    static void Add(TableLayoutPanel t,int row,string label,Control c){t.RowStyles.Add(new RowStyle(SizeType.Absolute,row==8?66:46));t.Controls.Add(new Label{Text=label,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Theme.Muted},0,row);c.Dock=DockStyle.Fill;c.Margin=new Padding(0,6,0,6);t.Controls.Add(c,1,row);}
-    void ApplyPreset(){switch(_preset.SelectedItem?.ToString()){case "Ollama (local)":_url.Text="http://127.0.0.1:11434/v1";break;case "LM Studio (local)":_url.Text="http://127.0.0.1:1234/v1";break;case "vLLM (local)":_url.Text="http://127.0.0.1:8000/v1";break;}}
-    void Save(object? s,EventArgs e)
+
+    static void Add(TableLayoutPanel t,int row,string label,Control c,int height=40)
     {
-        if(string.IsNullOrWhiteSpace(_id.Text)||string.IsNullOrWhiteSpace(_url.Text)||string.IsNullOrWhiteSpace(_model.Text)){MessageBox.Show(this,"Connection id, base URL, and model are required.");DialogResult=DialogResult.None;return;}
-        var h=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);foreach(var part in _headers.Text.Split(';',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)){var i=part.IndexOf(':');if(i>0)h[part[..i].Trim()]=part[(i+1)..].Trim();}
-        Profile=new ApiConnectionProfile{name=_id.Text.Trim(),protocol=_protocol.SelectedItem?.ToString()??"openai-chat",baseUrl=_url.Text.Trim().TrimEnd('/'),model=_model.Text.Trim(),toolMode=_tools.SelectedItem?.ToString()??"native",apiKeyEnv=string.IsNullOrWhiteSpace(_env.Text)?null:_env.Text.Trim(),apiKeyProtected=string.IsNullOrWhiteSpace(_key.Text)?null:ApiConnectionStore.Protect(_key.Text),headers=h,maxSteps=(int)_steps.Value};
+        t.RowStyles.Add(new RowStyle(SizeType.Absolute,height));t.Controls.Add(new Label{Text=label,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,ForeColor=Theme.Muted},0,row);c.Dock=DockStyle.Fill;c.Margin=new Padding(0,5,0,5);t.Controls.Add(c,1,row);
+    }
+
+    void ApplyPreset(bool overwrite=true)
+    {
+        if(_preset.SelectedItem is not InferencePreset p)return;
+        if(overwrite||string.IsNullOrWhiteSpace(_url.Text))_url.Text=p.BaseUrlTemplate;
+        _account.Enabled=p.RequiresAccountId;_account.PlaceholderText=p.RequiresAccountId?"required":"not required";
+        _key.PlaceholderText=p.RequiresApiKey?p.KeyPlaceholder:"optional / not required";
+        _instructions.Text=$"{p.FreeLabel}\r\n\r\n{p.Instructions}";
+        InvalidateTest();
+    }
+
+    void InvalidateTest(){_tested=null;_save.Enabled=false;_status.Text="Not validated";_status.ForeColor=Theme.Muted;}
+
+    ApiConnectionProfile BuildProfile()
+    {
+        if(_preset.SelectedItem is not InferencePreset preset)throw new Exception("Select a service preset.");
+        if(string.IsNullOrWhiteSpace(_id.Text))throw new Exception("Connection name is required.");
+        if(string.IsNullOrWhiteSpace(_url.Text))throw new Exception("Base URL is required.");
+        if(preset.RequiresAccountId&&string.IsNullOrWhiteSpace(_account.Text))throw new Exception("This service requires an Account ID.");
+        var headers=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        foreach(var part in _headers.Text.Split(';',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)){var i=part.IndexOf(':');if(i>0)headers[part[..i].Trim()]=part[(i+1)..].Trim();}
+        var p=new ApiConnectionProfile{
+            name=_id.Text.Trim(),presetId=preset.Id,protocol="openai-chat",baseUrl=_url.Text.Trim().TrimEnd('/'),
+            modelsPath=preset.ModelsPathTemplate,discoveryKind=preset.DiscoveryKind,accountId=string.IsNullOrWhiteSpace(_account.Text)?null:_account.Text.Trim(),
+            apiKeyEnv=string.IsNullOrWhiteSpace(_env.Text)?null:_env.Text.Trim(),headers=headers,toolModeDefault="native"
+        };
+        if(!string.IsNullOrWhiteSpace(_key.Text))p.apiKeyProtected=ApiConnectionStore.Protect(_key.Text.Trim());
+        else if(_previous is not null)p.apiKeyProtected=_previous.apiKeyProtected;
+        return p;
+    }
+
+    async Task TestAsync()
+    {
+        ApiConnectionProfile p;try{p=BuildProfile();}catch(Exception ex){MessageBox.Show(this,ex.Message);return;}
+        _test.Enabled=false;_status.Text="Authenticating and discovering models…";_status.ForeColor=Theme.Accent;
+        var raw=string.IsNullOrWhiteSpace(_key.Text)?null:_key.Text.Trim();
+        var result=await ApiConnectionTester.TestAndDiscoverAsync(p,raw);
+        p.lastTestAt=DateTimeOffset.UtcNow.ToString("O");p.health=result.Success?"healthy":"failed";p.lastError=result.Success?null:result.Message;
+        _models.Rows.Clear();
+        if(result.Success)
+        {
+            p.models=result.Models;_tested=p;_save.Enabled=true;_status.Text=result.Message;_status.ForeColor=Theme.Good;
+            foreach(var m in result.Models)_models.Rows.Add(m.displayName,m.id,m.supportsTools==false?"text":"native",m.contextLength?.ToString("N0")??"—");
+        }
+        else{_tested=null;_save.Enabled=false;_status.Text="Test failed";_status.ForeColor=Theme.Error;MessageBox.Show(this,result.Message,"Connection test failed",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
+        _test.Enabled=true;
     }
 }
