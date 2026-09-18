@@ -807,15 +807,71 @@ static class Theme
     public static readonly Color Back = Color.FromArgb(16, 22, 29), Surface = Color.FromArgb(24, 33, 43), Surface2 = Color.FromArgb(31, 42, 54), Border = Color.FromArgb(52, 69, 86), Text = Color.FromArgb(232, 239, 245), Muted = Color.FromArgb(135, 153, 171), Accent = Color.FromArgb(85, 198, 232), Good = Color.FromArgb(73, 217, 145), Warn = Color.FromArgb(255, 174, 74), Error = Color.FromArgb(255, 85, 85);
     public static void Apply(Control root)
     {
-        root.BackColor = Back; root.ForeColor = Text;
+        root.BackColor = Back;
+        root.ForeColor = Text;
+        NativeUiTheme.Attach(root);
+
+        if (root is Form form)
+        {
+            form.Font = new Font("Segoe UI", 9f);
+        }
+
         foreach (Control c in root.Controls)
         {
-            if (c is Button b) { b.FlatStyle = FlatStyle.Flat; b.FlatAppearance.BorderColor = Border; b.BackColor = Surface2; b.ForeColor = Text; }
-            else if (c is TextBox tb) { tb.BackColor = Surface; tb.ForeColor = Text; }
-            else if (c is ComboBox cb) { cb.BackColor = Surface; cb.ForeColor = Text; cb.FlatStyle = FlatStyle.Flat; }
-            else if (c is NumericUpDown nud) { nud.BackColor = Surface; nud.ForeColor = Text; }
-            else if (c is TreeView tv) { tv.BackColor = Surface; tv.ForeColor = Text; tv.BorderStyle = BorderStyle.FixedSingle; }
-            else if (c is DataGridView dg) { dg.BackgroundColor = Surface; dg.GridColor = Border; dg.BorderStyle = BorderStyle.None; dg.DefaultCellStyle.BackColor = Surface; dg.DefaultCellStyle.ForeColor = Text; dg.DefaultCellStyle.SelectionBackColor = Surface2; dg.DefaultCellStyle.SelectionForeColor = Text; dg.ColumnHeadersDefaultCellStyle.BackColor = Surface2; dg.ColumnHeadersDefaultCellStyle.ForeColor = Text; dg.EnableHeadersVisualStyles = false; }
+            if (c is Button b)
+            {
+                b.FlatStyle = FlatStyle.Flat;
+                b.FlatAppearance.BorderColor = Border;
+                b.FlatAppearance.BorderSize = 1;
+                b.FlatAppearance.MouseOverBackColor = Color.FromArgb(42, 55, 69);
+                b.FlatAppearance.MouseDownBackColor = Color.FromArgb(31, 43, 55);
+                b.BackColor = Surface2;
+                b.ForeColor = Text;
+            }
+            else if (c is TextBox tb)
+            {
+                tb.BackColor = Surface;
+                tb.ForeColor = Text;
+                if (!tb.Multiline) tb.BorderStyle = BorderStyle.FixedSingle;
+            }
+            else if (c is ComboBox cb)
+            {
+                cb.BackColor = Surface;
+                cb.ForeColor = Text;
+                cb.FlatStyle = FlatStyle.Flat;
+            }
+            else if (c is NumericUpDown nud)
+            {
+                nud.BackColor = Surface;
+                nud.ForeColor = Text;
+                nud.BorderStyle = BorderStyle.FixedSingle;
+            }
+            else if (c is TreeView tv)
+            {
+                tv.BackColor = Surface;
+                tv.ForeColor = Text;
+                tv.BorderStyle = BorderStyle.None;
+            }
+            else if (c is TabControl tabs)
+            {
+                tabs.BackColor = Back;
+                tabs.ForeColor = Text;
+            }
+            else if (c is DataGridView dg)
+            {
+                dg.BackgroundColor = Surface;
+                dg.GridColor = Border;
+                dg.BorderStyle = BorderStyle.None;
+                dg.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+                dg.DefaultCellStyle.BackColor = Surface;
+                dg.DefaultCellStyle.ForeColor = Text;
+                dg.DefaultCellStyle.SelectionBackColor = Surface2;
+                dg.DefaultCellStyle.SelectionForeColor = Text;
+                dg.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
+                dg.ColumnHeadersDefaultCellStyle.BackColor = Surface2;
+                dg.ColumnHeadersDefaultCellStyle.ForeColor = Text;
+                dg.EnableHeadersVisualStyles = false;
+            }
             Apply(c);
         }
     }
