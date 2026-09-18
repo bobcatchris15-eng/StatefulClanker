@@ -1551,9 +1551,12 @@ sealed class MainForm : Form
     readonly TabControl _tabs = new();
     readonly Label _header = new(), _mcpState = new(), _intent = new(), _goal = new();
     readonly Label[] _metrics = Enumerable.Range(0, 5).Select(_ => new Label()).ToArray();
-    readonly TextBox _usage = new(), _overviewActivity = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new(), _activeProvidersText = new();
+    readonly TextBox _usage = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new(), _activeProvidersText = new();
     readonly BlinkenRack _blinkenRack = new();
     readonly TaskBoardPanel _taskBoard = new();
+    readonly RecentActivityPanel _recentActivity = new();
+    readonly OrchestratorStatusPanel _orchestratorStatus = new();
+    readonly EmbeddedTerminalPanel _terminal = new();
     readonly DataGridView _integrations = new(), _providers = new();
     readonly Label _autofillStatus = new();
     readonly Button _btnAutofillToggle = Btn("Start Autofill", 115);
@@ -1586,29 +1589,60 @@ sealed class MainForm : Form
     void BuildUi()
     {
         var shell = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = Theme.Back };
-        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270)); shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 300)); Controls.Add(shell);
-        var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0) };
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 38)); left.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); for (var i = 0; i < 3; i++) left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270));
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 300));
+        Controls.Add(shell);
+
+        // Left rail: projects over a compact recent-activity feed.
+        var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 7, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0), BackColor = Theme.Back };
+        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        left.RowStyles.Add(new RowStyle(SizeType.Percent, 56));
+        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        left.RowStyles.Add(new RowStyle(SizeType.Percent, 44));
         left.Controls.Add(new Label { Text = "STATEFULCLANKER", Dock = DockStyle.Fill, Font = new Font("Segoe UI Semibold", 12, FontStyle.Bold), ForeColor = Theme.Accent, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
-        _projects.Dock = DockStyle.Fill; _projects.HideSelection = false; _projects.AfterSelect += (_, _) => SelectProject(); left.Controls.Add(_projects, 0, 1);
+        _projects.Dock = DockStyle.Fill; _projects.HideSelection = false; _projects.BorderStyle = BorderStyle.None; _projects.ShowLines = false; _projects.ShowPlusMinus = false; _projects.FullRowSelect = true; _projects.ItemHeight = 28;
+        _projects.AfterSelect += (_, _) => SelectProject(); left.Controls.Add(_projects, 0, 1);
         var add = Btn("+ Add / open project", 210); add.Dock = DockStyle.Fill; add.Click += (_, _) => AddProject(); left.Controls.Add(add, 0, 2);
         var remove = Btn("Remove from list", 210); remove.Dock = DockStyle.Fill; remove.Click += (_, _) => RemoveProject(); left.Controls.Add(remove, 0, 3);
-        var explorer = Btn("Open in Explorer", 210); explorer.Dock = DockStyle.Fill; explorer.Click += (_, _) => OpenExplorer(); left.Controls.Add(explorer, 0, 4); shell.Controls.Add(left, 0, 0);
+        var explorer = Btn("Open in Explorer", 210); explorer.Dock = DockStyle.Fill; explorer.Click += (_, _) => OpenExplorer(); left.Controls.Add(explorer, 0, 4);
+        left.Controls.Add(Section("RECENT ACTIVITY"), 0, 5);
+        _recentActivity.OpenActivityRequested += () => _tabs.SelectedIndex = 1;
+        left.Controls.Add(_recentActivity, 0, 6);
+        shell.Controls.Add(left, 0, 0);
 
-        var right = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(14) }; right.RowStyles.Add(new RowStyle(SizeType.Absolute, 52)); right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 }; top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); top.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
-        _header.Dock = DockStyle.Fill; _header.Font = new Font("Segoe UI Semibold", 15, FontStyle.Bold); _header.TextAlign = ContentAlignment.MiddleLeft; _mcpState.Dock = DockStyle.Fill; _mcpState.TextAlign = ContentAlignment.MiddleCenter; _mcpState.Font = new Font("Segoe UI Semibold", 9, FontStyle.Bold); top.Controls.Add(_header, 0, 0); top.Controls.Add(_mcpState, 1, 0); right.Controls.Add(top, 0, 0);
-        _tabs.Dock = DockStyle.Fill; _tabs.TabPages.Add(BuildOverview()); _tabs.TabPages.Add(BuildActivity()); _tabs.TabPages.Add(BuildIntegrations()); _tabs.TabPages.Add(BuildProviders()); right.Controls.Add(_tabs, 0, 1); right.Margin = new Padding(0); shell.Controls.Add(right, 1, 0);
+        var right = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(14), Margin = new Padding(0) };
+        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
+        _header.Dock = DockStyle.Fill; _header.Font = new Font("Segoe UI Semibold", 15, FontStyle.Bold); _header.TextAlign = ContentAlignment.MiddleLeft;
+        _mcpState.Dock = DockStyle.Fill; _mcpState.TextAlign = ContentAlignment.MiddleCenter; _mcpState.Font = new Font("Cascadia Mono", 8.5f, FontStyle.Bold);
+        top.Controls.Add(_header, 0, 0); top.Controls.Add(_mcpState, 1, 0); right.Controls.Add(top, 0, 0);
 
-        // Task rail: persistent across every tab, full window height, roughly
-        // mirroring the project pane's width on the opposite side. ACTIVE AGENTS
-        // up top, the scrollable per-task lamp board filling the rest.
-        var taskRail = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0) };
+        _tabs.Dock = DockStyle.Fill;
+        _tabs.Appearance = TabAppearance.FlatButtons;
+        _tabs.ItemSize = new Size(118, 30);
+        _tabs.SizeMode = TabSizeMode.Fixed;
+        _tabs.TabPages.Add(BuildOverview());
+        _tabs.TabPages.Add(BuildActivity());
+        _tabs.TabPages.Add(BuildIntegrations());
+        _tabs.TabPages.Add(BuildProviders());
+        right.Controls.Add(_tabs, 0, 1);
+        shell.Controls.Add(right, 1, 0);
+
+        // Persistent task rail. The Overview itself now owns the live worker
+        // blinkenlights and orchestration status, while this rail remains the
+        // durable task-state view on every tab.
+        var taskRail = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0), BackColor = Theme.Back };
         taskRail.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         taskRail.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _metrics[0].Dock = DockStyle.Fill; _metrics[0].Margin = new Padding(0); _metrics[0].TextAlign = ContentAlignment.MiddleLeft;
-        _metrics[0].Font = new Font("Cascadia Mono", 11, FontStyle.Bold);
-        _metrics[0].Text = "ACTIVE AGENTS: —";
+        _metrics[0].Font = new Font("Cascadia Mono", 10, FontStyle.Bold); _metrics[0].Text = "TASK STATE";
         taskRail.Controls.Add(_metrics[0], 0, 0);
         _taskBoard.Dock = DockStyle.Fill; _taskBoard.Margin = new Padding(0);
         _taskBoard.InspectRequested += task => ShowTaskDetails(task);
@@ -1621,78 +1655,76 @@ sealed class MainForm : Form
 
     TabPage BuildOverview()
     {
-        var p = Page("Overview"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 12, ColumnCount = 1 };
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 110));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 74));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        var p = Page("Overview");
+        var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 7, ColumnCount = 1 };
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 128));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 98));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
         rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        // ACTIVE AGENTS and the per-task status board now live in the persistent
-        // full-height task rail (see BuildUi) so they're visible on every tab, not
-        // just here. This is just the compact rollup, kept small and top-left.
-        var smallStatsNames = new[] { "WORKER SESSIONS", "COMMITS", "VALIDATOR RUNS", "TASKS COMPLETE" };
-        var smallStatsIndex = new[] { 1, 2, 3, 4 };
-        var statPanel = new Panel { Dock = DockStyle.Left, Width = 230, BackColor = Theme.Surface, Margin = new Padding(5, 2, 5, 2), Padding = new Padding(10, 8, 6, 8) };
-        var statStack = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = smallStatsNames.Length };
-        for (var i = 0; i < smallStatsNames.Length; i++)
-        {
-            statStack.RowStyles.Add(new RowStyle(SizeType.Percent, 100f / smallStatsNames.Length));
-            var lbl = _metrics[smallStatsIndex[i]];
-            lbl.Dock = DockStyle.Fill; lbl.Margin = new Padding(0); lbl.TextAlign = ContentAlignment.MiddleLeft;
-            lbl.Font = new Font("Cascadia Mono", 9, FontStyle.Bold);
-            lbl.Text = $"{smallStatsNames[i]}: —";
-            statStack.Controls.Add(lbl, 0, i);
-        }
-        statPanel.Controls.Add(statStack);
+        var topDeck = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
+        topDeck.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270));
+        topDeck.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        topDeck.Controls.Add(_orchestratorStatus, 0, 0);
+        _blinkenRack.Dock = DockStyle.Fill; _blinkenRack.Margin = new Padding(8, 0, 0, 0);
+        topDeck.Controls.Add(_blinkenRack, 1, 0);
 
-        _blinkenRack.Dock = DockStyle.Fill; _blinkenRack.Margin = new Padding(5,2,5,2);
-
-        var autofillBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        var autofillBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, BackColor = Theme.Surface, Padding = new Padding(8, 5, 4, 4) };
         _btnAutofillToggle.Click += (_, _) => ToggleAutofill();
         _btnAutofillPause.Click += (_, _) => ToggleAutofillPause();
         _btnAutofillTrigger.Click += (_, _) => TriggerAutofill();
         _numMaxConcurrent.ValueChanged += (_, _) => OnMaxConcurrentChanged();
         var maxLbl = new Label { Text = "Max:", AutoSize = true, Margin = new Padding(4, 8, 4, 0), ForeColor = Theme.Muted };
-        _autofillStatus.AutoSize = true;
-        _autofillStatus.Margin = new Padding(12, 8, 4, 0);
-        _autofillStatus.Font = new Font("Cascadia Mono", 9, FontStyle.Bold);
-        _autofillStatus.ForeColor = Theme.Muted;
-        _autofillStatus.Text = "Autofill stopped";
+        _autofillStatus.AutoSize = true; _autofillStatus.Margin = new Padding(12, 8, 4, 0); _autofillStatus.Font = new Font("Cascadia Mono", 8.5f, FontStyle.Bold); _autofillStatus.ForeColor = Theme.Muted;
         autofillBar.Controls.AddRange(new Control[] { _btnAutofillToggle, _btnAutofillPause, _btnAutofillTrigger, maxLbl, _numMaxConcurrent, _autofillStatus });
 
-        _usage.Dock = DockStyle.Fill; _usage.Multiline = true; _usage.ReadOnly = true; _usage.ScrollBars = ScrollBars.Vertical; _usage.WordWrap = false; _usage.Font = new Font("Cascadia Mono", 8.5f);
-        var authority = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12), BackColor = Theme.Surface }; _intent.Dock = DockStyle.Top; _intent.Height = 26; _intent.ForeColor = Theme.Accent; _intent.Font = new Font("Cascadia Mono", 9, FontStyle.Bold); _goal.Dock = DockStyle.Fill; authority.Controls.Add(_goal); authority.Controls.Add(_intent);
-        _overviewActivity.Dock = DockStyle.Fill; _overviewActivity.Multiline = true; _overviewActivity.ReadOnly = true; _overviewActivity.ScrollBars = ScrollBars.Vertical; _overviewActivity.Font = new Font("Cascadia Mono", 8.5f);
+        var infoGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
+        infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
 
+        var providersCard = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(10), Margin = new Padding(0, 0, 4, 0) };
         _activeProvidersText.Dock = DockStyle.Fill; _activeProvidersText.ReadOnly = true; _activeProvidersText.BackColor = Theme.Surface; _activeProvidersText.BorderStyle = BorderStyle.None; _activeProvidersText.Font = new Font("Cascadia Mono", 9f, FontStyle.Bold); _activeProvidersText.ForeColor = Theme.Accent;
-        
-        rows.Controls.Add(statPanel, 0, 0);
-        rows.Controls.Add(_blinkenRack, 0, 1);
-        rows.Controls.Add(Section("AUTONOMOUS AUTOFILL & WORKER SLOTS"), 0, 2);
-        rows.Controls.Add(autofillBar, 0, 3);
-        rows.Controls.Add(Section("ACTIVE PROVIDERS"), 0, 4);
-        rows.Controls.Add(_activeProvidersText, 0, 5);
-        rows.Controls.Add(Section("MODEL / TOKEN USAGE"), 0, 6);
-        rows.Controls.Add(_usage, 0, 7);
-        rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 8);
-        rows.Controls.Add(authority, 0, 9);
-        rows.Controls.Add(Section("RECENT ACTIVITY"), 0, 10);
-        rows.Controls.Add(_overviewActivity, 0, 11);
+        providersCard.Controls.Add(_activeProvidersText);
+
+        var usageCard = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(10), Margin = new Padding(4, 0, 0, 0) };
+        _usage.Dock = DockStyle.Fill; _usage.Multiline = true; _usage.ReadOnly = true; _usage.ScrollBars = ScrollBars.None; _usage.WordWrap = true; _usage.BorderStyle = BorderStyle.None; _usage.Font = new Font("Cascadia Mono", 8.25f);
+        usageCard.Controls.Add(_usage);
+        infoGrid.Controls.Add(providersCard, 0, 0);
+        infoGrid.Controls.Add(usageCard, 1, 0);
+
+        var authority = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12), BackColor = Theme.Surface };
+        _intent.Dock = DockStyle.Top; _intent.Height = 26; _intent.ForeColor = Theme.Accent; _intent.Font = new Font("Cascadia Mono", 9, FontStyle.Bold);
+        _goal.Dock = DockStyle.Fill; _goal.Font = new Font("Segoe UI", 9.25f);
+        authority.Controls.Add(_goal); authority.Controls.Add(_intent);
+
+        rows.Controls.Add(topDeck, 0, 0);
+        rows.Controls.Add(autofillBar, 0, 1);
+        rows.Controls.Add(Section("PROJECT ROUTING / USAGE"), 0, 2);
+        rows.Controls.Add(infoGrid, 0, 3);
+        rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 4);
+        rows.Controls.Add(authority, 0, 5);
+        rows.Controls.Add(_terminal, 0, 6);
         p.Controls.Add(rows);
         return p;
     }
 
     TabPage BuildActivity()
     {
-        var p = Page("Activity"); _allActivity.Dock = DockStyle.Fill; _allActivity.Multiline = true; _allActivity.ReadOnly = true; _allActivity.ScrollBars = ScrollBars.Both; _allActivity.WordWrap = false; _allActivity.Font = new Font("Cascadia Mono", 9); p.Controls.Add(_allActivity); return p;
+        var p = Page("Activity & Telemetry");
+        var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1 };
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        rows.Controls.Add(Section("DURABLE EVENT STREAM / WORKER TELEMETRY"), 0, 0);
+        _allActivity.Dock = DockStyle.Fill; _allActivity.Multiline = true; _allActivity.ReadOnly = true; _allActivity.ScrollBars = ScrollBars.Both; _allActivity.WordWrap = false; _allActivity.BorderStyle = BorderStyle.None; _allActivity.Font = new Font("Cascadia Mono", 8.75f);
+        rows.Controls.Add(_allActivity, 0, 1);
+        var hint = new Label { Dock = DockStyle.Fill, Text = "Worker lifecycle, reviews, context faults and durable project events. Task-specific diagnostics remain available from the task rail.", ForeColor = Theme.Muted, Font = new Font("Segoe UI", 8.5f), TextAlign = ContentAlignment.MiddleLeft };
+        rows.Controls.Add(hint, 0, 2);
+        p.Controls.Add(rows);
+        return p;
     }
 
     TabPage BuildIntegrations()
@@ -1968,7 +2000,13 @@ sealed class MainForm : Form
 
     void SetActiveProject(string? path)
     {
-        _settings.ActiveProjectPath = path; AppStore.Save(_settings); AppStore.SetActiveProject(path); _header.Text = path is null ? "No active project" : (SelectedProject?.Name ?? new DirectoryInfo(path).Name); Text = path is null ? "StatefulClanker" : $"StatefulClanker — {_header.Text}"; _ = RefreshAllAsync();
+        _settings.ActiveProjectPath = path;
+        AppStore.Save(_settings);
+        AppStore.SetActiveProject(path);
+        _header.Text = path is null ? "No active project" : (SelectedProject?.Name ?? new DirectoryInfo(path).Name);
+        Text = path is null ? "StatefulClanker" : $"StatefulClanker — {_header.Text}";
+        _terminal.SetProject(path);
+        _ = RefreshAllAsync();
     }
 
     void AddProject()
@@ -2031,7 +2069,9 @@ sealed class MainForm : Form
         {
             SetMetrics(snapshot.Project);
             SetAutofillUi(snapshot.Autofill, snapshot.Project, true);
-            _overviewActivity.Text = _allActivity.Text = snapshot.Project.Activity;
+            _allActivity.Text = snapshot.Project.Activity;
+            _recentActivity.SetActivity(snapshot.Project.Activity);
+            _orchestratorStatus.SetState(snapshot.Project, snapshot.Autofill, d is not null, true);
             var active = snapshot.Providers.Where(p => !p.Disabled).OrderBy(p => p.Priority).Select(p => p.Name).ToList();
             _activeProvidersText.Text = active.Count > 0 ? string.Join(", ", active) : "None (All disabled)";
         }
@@ -2039,7 +2079,9 @@ sealed class MainForm : Form
         {
             SetMetrics(new());
             SetAutofillUi(snapshot.Autofill, new(), false);
-            _overviewActivity.Text = _allActivity.Text = "Select a project at left. StatefulClanker does not silently substitute a default project.";
+            _allActivity.Text = "Select a project at left. StatefulClanker does not silently substitute a default project.";
+            _recentActivity.SetActivity("");
+            _orchestratorStatus.SetState(new(), snapshot.Autofill, d is not null, false);
         }
         _integrations.SuspendLayout();
         try
@@ -2302,7 +2344,7 @@ sealed class MainForm : Form
     void OpenConfig() { var path = _settings.ActiveProjectPath; if (string.IsNullOrWhiteSpace(path)) return; var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json"); if (File.Exists(cfg)) try { Process.Start(new ProcessStartInfo("notepad.exe") { UseShellExecute = true, ArgumentList = { cfg } }); } catch { } }
     static void Copy(string text) { if (!string.IsNullOrWhiteSpace(text)) Clipboard.SetText(text); }
     void ShowFromTray() { Show(); WindowState = FormWindowState.Normal; Activate(); }
-    void HandleFormClosing(object? sender, FormClosingEventArgs e) { if (!_reallyExit) { e.Cancel = true; Hide(); return; } _timer.Stop(); _autofill.Dispose(); _mcp.Dispose(); _notify.Visible = false; _notify.Dispose(); }
+    void HandleFormClosing(object? sender, FormClosingEventArgs e) { if (!_reallyExit) { e.Cancel = true; Hide(); return; } _timer.Stop(); _terminal.StopSession(); _autofill.Dispose(); _mcp.Dispose(); _notify.Visible = false; _notify.Dispose(); }
 
     void ShowTaskDetails(TaskBoardEntry task)
     {
