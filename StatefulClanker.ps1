@@ -16,7 +16,7 @@ $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
 $runtimeRef='95f1f40d20532e9132165e41fca0e363bd481375'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.CapabilityTasks.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.Autofill.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerPolicy.ps1','StatefulClanker.WorkerRuntime.ps1','StatefulClanker.WorkerRuntime.Windows.ps1')
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.CapabilityTasks.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.Autofill.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerPolicy.ps1','StatefulClanker.McpDiscovery.ps1','StatefulClanker.WorkerRuntime.ps1','StatefulClanker.WorkerRuntime.Windows.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -51,6 +51,13 @@ switch($Command.ToLowerInvariant()){
 'context'{Show-SCContext $Subcommand $CompilationId;break}
 'progress'{Show-SCProgress $Subcommand;break}
 'review'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='history'};if($Subcommand.ToLowerInvariant()-eq'run'){Invoke-SCProjectReview 'manual' -Force|Out-Null}else{Show-SCProjectReviews $Subcommand $RunId};break}
+'mcp'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};switch($Subcommand.ToLowerInvariant()){
+    'discover'{$records=Invoke-SCMcpDiscoveryScan;$records|ForEach-Object{[pscustomobject]@{name=$_.name;harness=$_.harness;verified=$(if($_.verified){'yes'}else{'no'});probe=$(if($_.probeOk){"ok($($_.toolCount) tools)"}else{"fail: $($_.probeError)"});imported=$(if($_.imported){'yes'}else{'no'})}}|Format-Table -AutoSize;break}
+    'list'{$cache=Get-SCMcpDiscoveryCache;if($null-eq$cache-or-not$cache.PSObject.Properties['servers']-or@($cache.servers).Count-eq0){Write-Host "No cached MCP discovery results. Run: .\StatefulClanker.ps1 mcp discover";break};@($cache.servers)|ForEach-Object{[pscustomobject]@{name=$_.name;harness=$_.harness;verified=$(if($_.verified){'yes'}else{'no'});probe=$(if($_.probeOk){"ok($($_.toolCount) tools)"}else{"fail: $($_.probeError)"});imported=$(if(Test-SCMcpServerImported $_.name){'yes'}else{'no'})}}|Format-Table -AutoSize;break}
+    'import'{$name=if($TaskId){$TaskId}else{$Message};if([string]::IsNullOrWhiteSpace($name)){throw "-Message <server-name> required."};$result=Import-SCDiscoveredMcpServer $name;Write-Host "Imported '$name' ($($result.tools.Count) tools) — now available to workers.";break}
+    'remove'{$name=if($TaskId){$TaskId}else{$Message};if([string]::IsNullOrWhiteSpace($name)){throw "-Message <server-name> required."};$removed=Remove-SCImportedMcpServer $name;if($removed){Write-Host "Removed MCP source '$name'."}else{Write-Host "MCP source '$name' was not found."};break}
+    default{throw "Unknown mcp subcommand: $Subcommand"}
+};break}
 'hold'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){'clear'{Clear-SCProjectHold;break};'status'{$h=Get-SCProjectHold;if($h){Write-Host "HELD since $($h.since): $($h.reason) (review $($h.reviewId))"}else{Write-Host 'Not held.'};break};default{throw "Unknown hold subcommand: $Subcommand"}};break}
 default{throw "Unknown command: $Command"}
 }

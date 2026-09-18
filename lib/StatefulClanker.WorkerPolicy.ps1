@@ -2,6 +2,7 @@
 # Machine catalog declares what can exist. Named profiles/project/role/stage/task policy only tighten.
 
 $script:SCWorkerMcpSessions=@{}
+$script:SCWorkerMcpStdioProcesses=@{}
 
 function Get-SCWorkerPolicyMachinePath {
     $root=Join-Path $env:LOCALAPPDATA 'StatefulClanker'
@@ -101,14 +102,45 @@ function Initialize-SCMcpHttpSource([string]$SourceName,$Source) {
     $params=[ordered]@{protocolVersion='2025-06-18';capabilities=[ordered]@{};clientInfo=[ordered]@{name='StatefulClanker-worker';version='1'}}
     try{[void](Invoke-SCMcpHttpJsonRpc $SourceName $Source 'initialize' $params);if(-not$script:SCWorkerMcpSessions.ContainsKey($SourceName)){$script:SCWorkerMcpSessions[$SourceName]='stateless-legacy'}}catch{return}
 }
+function Get-SCMcpStdioProcess([string]$SourceName,$Source) {
+    if($script:SCWorkerMcpStdioProcesses.ContainsKey($SourceName)){$existing=$script:SCWorkerMcpStdioProcesses[$SourceName];if($existing-and-not$existing.HasExited){return $existing};$script:SCWorkerMcpStdioProcesses.Remove($SourceName)}
+    if(-not$Source.PSObject.Properties['command']-or[string]::IsNullOrWhiteSpace([string]$Source.command)){throw "MCP stdio source '$SourceName' requires command."}
+    $psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=[string]$Source.command;$psi.UseShellExecute=$false;$psi.RedirectStandardInput=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true;$psi.CreateNoWindow=$true
+    if($Source.PSObject.Properties['args']-and$Source.args){foreach($a in @($Source.args)){$psi.ArgumentList.Add([string]$a)}}
+    if($Source.PSObject.Properties['env']-and$Source.env){foreach($p in $Source.env.PSObject.Properties){$psi.Environment[$p.Name]=[string]$p.Value}}
+    $proc=New-Object Diagnostics.Process;$proc.StartInfo=$psi
+    try{[void]$proc.Start()}catch{throw "MCP stdio source '$SourceName' failed to start '$([string]$Source.command)': $($_.Exception.Message)"}
+    $script:SCWorkerMcpStdioProcesses[$SourceName]=$proc;return $proc
+}
+function Invoke-SCMcpStdioJsonRpc([string]$SourceName,$Source,[string]$Method,$Params=$null,[int]$TimeoutSeconds=15) {
+    $proc=Get-SCMcpStdioProcess $SourceName $Source
+    $id=[Guid]::NewGuid().ToString('N');$body=[ordered]@{jsonrpc='2.0';id=$id;method=$Method};if($null-ne$Params){$body.params=$Params};$json=$body|ConvertTo-Json -Depth 40 -Compress
+    try{$proc.StandardInput.WriteLine($json);$proc.StandardInput.Flush()}catch{$script:SCWorkerMcpStdioProcesses.Remove($SourceName);throw "MCP stdio call '$Method' failed to write to '$SourceName': $($_.Exception.Message)"}
+    $readTask=$proc.StandardOutput.ReadLineAsync();$timeoutTask=[Threading.Tasks.Task]::Delay([TimeSpan]::FromSeconds($TimeoutSeconds))
+    $won=[Threading.Tasks.Task]::WaitAny(@($readTask,$timeoutTask))
+    if($won-eq1-or$null-eq$readTask.Result){throw "MCP stdio call '$Method' timed out after ${TimeoutSeconds}s for source '$SourceName'."}
+    $line=[string]$readTask.Result;if([string]::IsNullOrWhiteSpace($line)){throw "MCP stdio call '$Method' returned empty response for source '$SourceName'."}
+    try{return $line|ConvertFrom-Json}catch{throw "MCP stdio call '$Method' returned non-JSON response for source '$SourceName': $line"}
+}
+function Initialize-SCMcpStdioSource([string]$SourceName,$Source) {
+    if($script:SCWorkerMcpSessions.ContainsKey($SourceName)){return}
+    $params=[ordered]@{protocolVersion='2025-06-18';capabilities=[ordered]@{};clientInfo=[ordered]@{name='StatefulClanker-worker';version='1'}}
+    try{[void](Invoke-SCMcpStdioJsonRpc $SourceName $Source 'initialize' $params);$script:SCWorkerMcpSessions[$SourceName]='stdio-ready'}catch{return}
+}
 function Get-SCMcpSourceTools([string]$SourceName) {
     $catalog=Get-SCWorkerCapabilityCatalog;$p=$catalog.sources.PSObject.Properties[$SourceName];if($null-eq$p){throw "Unknown worker MCP source '$SourceName'."};$source=$p.Value;$transport=if($source.PSObject.Properties['transport']){[string]$source.transport}else{'http'}
-    if(@('http','streamable-http')-notcontains$transport){throw "Worker MCP source '$SourceName' uses unsupported transport '$transport'. Current inherent-worker support is HTTP/Streamable HTTP."}
-    Initialize-SCMcpHttpSource $SourceName $source;$response=Invoke-SCMcpHttpJsonRpc $SourceName $source 'tools/list' ([ordered]@{});if($response.PSObject.Properties['error']-and$response.error){throw "MCP tools/list error from '$SourceName': $($response.error.message)"};if(-not$response.PSObject.Properties['result']){return @()};return @($response.result.tools)
+    if(@('http','streamable-http')-contains$transport){
+        Initialize-SCMcpHttpSource $SourceName $source;$response=Invoke-SCMcpHttpJsonRpc $SourceName $source 'tools/list' ([ordered]@{});if($response.PSObject.Properties['error']-and$response.error){throw "MCP tools/list error from '$SourceName': $($response.error.message)"};if(-not$response.PSObject.Properties['result']){return @()};return @($response.result.tools)
+    }elseif($transport-eq'stdio'){
+        Initialize-SCMcpStdioSource $SourceName $source;$response=Invoke-SCMcpStdioJsonRpc $SourceName $source 'tools/list' ([ordered]@{});if($response.PSObject.Properties['error']-and$response.error){throw "MCP tools/list error from '$SourceName': $($response.error.message)"};if(-not$response.PSObject.Properties['result']){return @()};return @($response.result.tools)
+    }else{throw "Worker MCP source '$SourceName' uses unsupported transport '$transport'. Current inherent-worker support is HTTP/Streamable HTTP/stdio."}
 }
 function Invoke-SCMcpSourceTool([string]$SourceName,[string]$ToolName,$Arguments) {
-    $catalog=Get-SCWorkerCapabilityCatalog;$p=$catalog.sources.PSObject.Properties[$SourceName];if($null-eq$p){throw "Unknown worker MCP source '$SourceName'."};$source=$p.Value
-    Initialize-SCMcpHttpSource $SourceName $source;$response=Invoke-SCMcpHttpJsonRpc $SourceName $source 'tools/call' ([ordered]@{name=$ToolName;arguments=if($Arguments){$Arguments}else{[ordered]@{}}});if($response.PSObject.Properties['error']-and$response.error){throw "MCP tool '$SourceName/$ToolName' failed: $($response.error.message)"};if(-not$response.PSObject.Properties['result']){return ''}
+    $catalog=Get-SCWorkerCapabilityCatalog;$p=$catalog.sources.PSObject.Properties[$SourceName];if($null-eq$p){throw "Unknown worker MCP source '$SourceName'."};$source=$p.Value;$transport=if($source.PSObject.Properties['transport']){[string]$source.transport}else{'http'}
+    $callParams=[ordered]@{name=$ToolName;arguments=if($Arguments){$Arguments}else{[ordered]@{}}}
+    if($transport-eq'stdio'){Initialize-SCMcpStdioSource $SourceName $source;$response=Invoke-SCMcpStdioJsonRpc $SourceName $source 'tools/call' $callParams}
+    else{Initialize-SCMcpHttpSource $SourceName $source;$response=Invoke-SCMcpHttpJsonRpc $SourceName $source 'tools/call' $callParams}
+    if($response.PSObject.Properties['error']-and$response.error){throw "MCP tool '$SourceName/$ToolName' failed: $($response.error.message)"};if(-not$response.PSObject.Properties['result']){return ''}
     $result=$response.result;if($result.PSObject.Properties['content']){$texts=@();foreach($item in @($result.content)){if($item.PSObject.Properties['text']){$texts+=,[string]$item.text}else{$texts+=,($item|ConvertTo-Json -Depth 20 -Compress)}};return ($texts-join"`n")};return ($result|ConvertTo-Json -Depth 30 -Compress)
 }
 function ConvertTo-SCWorkerMcpToolName([string]$Source,[string]$Tool) {$safeSource=($Source -replace '[^A-Za-z0-9_-]','_');$safeTool=($Tool -replace '[^A-Za-z0-9_-]','_');return "mcp__$safeSource`__$safeTool"}

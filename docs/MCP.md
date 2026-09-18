@@ -120,6 +120,23 @@ mcp.mempalace.lookup
 
 Registering a source does not itself grant all of its tools.
 
+## Discovering MCP servers from other harnesses
+
+StatefulClanker can scan this machine for MCP servers already configured in other AI harnesses (Claude Desktop, Cursor, VS Code, OpenCode, Claude Code CLI; Windsurf/Antigravity best-effort) and let a human opt a whole discovered server in for worker use, in one step, through the same `sources` machine catalog used by `worker_source_set`.
+
+Sources are marked `verified=true` when the config file location and shape are confirmed (Claude Desktop, Cursor, VS Code) or `verified=false` when the path is a best-effort guess (OpenCode, Claude Code CLI, Windsurf, Antigravity). A `verified=false` harness that yields nothing found is reported as "not found," never as an error, and CLI output always shows the verified/unverified distinction.
+
+```text
+StatefulClanker.ps1 mcp discover      # scan + probe every candidate, cache results
+StatefulClanker.ps1 mcp list          # print the cached results without rescanning
+StatefulClanker.ps1 mcp import -Message <name>   # opt a whole discovered server in (all its tools)
+StatefulClanker.ps1 mcp remove -Message <name>   # undo the import
+```
+
+`discover` probes each candidate server (spawning stdio processes or hitting HTTP `initialize`/`tools/list`, bounded to 15s) and reports name, harness, verified yes/no, probe result (ok with tool count, or fail with reason), and whether it is already imported. `import` writes the whole server into the machine catalog exactly as `worker_source_set` would, so its tools immediately flow through `Get-SCExternalWorkerToolRecords` as `mcp.<name>.<tool>` capabilities, gated by the same profile/project/role/stage/task policy layers as any manually-configured source. Import is per-server, not per-tool — granting a server grants all its current tools, subject to normal capability policy narrowing it later.
+
+Both `stdio` (`command`/`args`/`env`) and `http`/`streamable-http` (`url`/`headers`) transports are supported for imported sources.
+
 ## Task authoring over MCP
 
 `task_add` supports:
