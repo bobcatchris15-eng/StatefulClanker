@@ -1769,9 +1769,9 @@ sealed class MainForm : Form
         foreach (var (ts, type, message) in ReadNewEvents(eventsPath, ref _eventCursorTs))
         {
             var text = string.IsNullOrWhiteSpace(message) ? type : $"{type}: {message}";
-            // Injects into the live PTY input stream (see EmbeddedTerminalPanel.InjectNotice
-            // for the accepted-risk note, ledger D7) -- may interleave with in-progress input.
-            _terminal.InjectNotice($"# [StatefulClanker] {text}");
+            // Queues for immediate toast display and boundary-flush into the live PTY
+            // right after the user's next Enter keypress (see EmbeddedTerminalPanel.QueueNotice).
+            _terminal.QueueNotice($"# [StatefulClanker] {text}");
         }
     }
 

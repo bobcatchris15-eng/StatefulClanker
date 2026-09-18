@@ -22,6 +22,32 @@ sealed class EmbeddedTerminalPanel : UserControl
     readonly Button _stop = new();
     readonly Label _status = new();
     readonly Panel _hostPanel = new();
+    readonly Panel _toastPanel = new();
+    readonly Label _toastLabel = new();
+    readonly Button _toastClose = new();
+    readonly System.Windows.Forms.Timer _toastTimer = new() { Interval = 8000 };
+    readonly Queue<string> _pendingNotices = new();
+    NoticeMessageFilter? _noticeFilter;
+
+    sealed class NoticeMessageFilter : IMessageFilter
+    {
+        const int WM_KEYDOWN = 0x0100;
+        readonly EmbeddedTerminalPanel _owner;
+
+        public NoticeMessageFilter(EmbeddedTerminalPanel owner) => _owner = owner;
+
+        public bool PreFilterMessage(ref Message m)
+        {
+            if (m.Msg == WM_KEYDOWN && (Keys)m.WParam == Keys.Enter)
+            {
+                if (_owner._elementHost?.ContainsFocus == true)
+                {
+                    _ = _owner.FlushAfterEnterAsync();
+                }
+            }
+            return false;
+        }
+    }
 
     // ElementHost does not forward arrow/Tab WM_KEYDOWN messages into its hosted WPF
     // tree by default -- IsInputKey on the plain WinForms ElementHost returns false for
@@ -61,8 +87,9 @@ sealed class EmbeddedTerminalPanel : UserControl
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 1;
-        _layout.RowCount = 3;
+        _layout.RowCount = 4;
         _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
         _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         _layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -117,9 +144,32 @@ sealed class EmbeddedTerminalPanel : UserControl
         _hostPanel.BackColor = Color.FromArgb(8, 11, 15);
         _hostPanel.Padding = new Padding(1);
 
+        _toastPanel.Dock = DockStyle.Fill;
+        _toastPanel.BackColor = Theme.Surface2;
+        _toastPanel.Visible = false;
+        _toastPanel.Padding = new Padding(8, 0, 4, 0);
+
+        _toastLabel.Dock = DockStyle.Fill;
+        _toastLabel.TextAlign = ContentAlignment.MiddleLeft;
+        _toastLabel.ForeColor = Theme.Accent;
+        _toastLabel.Font = new Font("Cascadia Mono", 8.25f);
+        _toastLabel.AutoEllipsis = true;
+
+        _toastClose.Text = "x";
+        _toastClose.Width = 24;
+        _toastClose.Dock = DockStyle.Right;
+        _toastClose.FlatStyle = FlatStyle.Flat;
+        _toastClose.Click += (_, _) => HideToast();
+
+        _toastPanel.Controls.Add(_toastLabel);
+        _toastPanel.Controls.Add(_toastClose);
+
+        _toastTimer.Tick += (_, _) => { _toastTimer.Stop(); HideToast(); };
+
         _layout.Controls.Add(_toolbar, 0, 0);
-        _layout.Controls.Add(_status, 0, 1);
-        _layout.Controls.Add(_hostPanel, 0, 2);
+        _layout.Controls.Add(_toastPanel, 0, 1);
+        _layout.Controls.Add(_status, 0, 2);
+        _layout.Controls.Add(_hostPanel, 0, 3);
         Controls.Add(_layout);
 
         Theme.Apply(this);
@@ -228,6 +278,12 @@ sealed class EmbeddedTerminalPanel : UserControl
             _status.ForeColor = Theme.Good;
             _stop.Enabled = true;
 
+            if (_noticeFilter is null)
+            {
+                _noticeFilter = new NoticeMessageFilter(this);
+                Application.AddMessageFilter(_noticeFilter);
+            }
+
             // Let WPF create the terminal HWND and ConPTY before focusing it.
             await Task.Delay(150);
             try { _terminal.Focus(); } catch { }
@@ -288,14 +344,58 @@ sealed class EmbeddedTerminalPanel : UserControl
     /// in-progress input -- moving to a fresh line for display requires sending what the
     /// shell interprets as a newline/Enter, but no further automated action is taken.
     /// </summary>
-    public void InjectNotice(string text)
+    public void QueueNotice(string text)
     {
-        if (_terminal is null || string.IsNullOrWhiteSpace(text)) return;
+        if (string.IsNullOrWhiteSpace(text)) return;
+        _pendingNotices.Enqueue(text);
+        ShowToast(text);
+    }
+
+    void ShowToast(string latestText)
+    {
+        var extra = _pendingNotices.Count - 1;
+        _toastLabel.Text = extra > 0 ? $"{latestText}  (+{extra} more)" : latestText;
+        _toastPanel.Visible = true;
+        _layout.RowStyles[1] = new RowStyle(SizeType.Absolute, 24);
+        _toastTimer.Stop();
+        _toastTimer.Start();
+    }
+
+    void HideToast()
+    {
+        _toastPanel.Visible = false;
+        _layout.RowStyles[1] = new RowStyle(SizeType.Absolute, 0);
+    }
+
+    async Task FlushAfterEnterAsync()
+    {
+        await Task.Delay(200);
         try
         {
-            _terminal.ConPTYTerm?.WriteToTerm(("\r\n" + text + "\r\n").AsSpan());
+            if (IsHandleCreated && !IsDisposed)
+                BeginInvoke(new Action(FlushPendingNotices));
         }
         catch { }
+    }
+
+    void FlushPendingNotices()
+    {
+        if (_pendingNotices.Count == 0) return;
+        if (!HasActiveSession)
+        {
+            _pendingNotices.Clear();
+            return;
+        }
+        try
+        {
+            var joined = string.Join("\r\n", _pendingNotices);
+            _terminal!.ConPTYTerm?.WriteToTerm(("\r\n" + joined + "\r\n").AsSpan());
+        }
+        catch { }
+        finally
+        {
+            _pendingNotices.Clear();
+        }
     }
 
     public void StopSession()
@@ -312,6 +412,12 @@ sealed class EmbeddedTerminalPanel : UserControl
 
     void DisposeTerminal()
     {
+        if (_noticeFilter is not null)
+        {
+            try { Application.RemoveMessageFilter(_noticeFilter); } catch { }
+            _noticeFilter = null;
+        }
+
         try
         {
             if (_terminal is not null)
