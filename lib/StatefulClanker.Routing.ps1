@@ -139,7 +139,7 @@ function Register-SCRouteFailure([string]$Name,[string]$Class,[string]$Text) {
     if ($null -eq $old) { $h.endpoints | Add-Member -NotePropertyName $Name -NotePropertyValue ([pscustomobject]$value) -Force }
     else { $old.Value = [pscustomobject]$value }
     Save-SCRoutingHealth $h
-    Add-SCEvent 'routing.endpoint_degraded' "Endpoint $Name: $Class" @{ endpoint=$Name; reason=$Class; retryAfter=$retry; failures=$failures }
+    Add-SCEvent 'routing.endpoint_degraded' "Endpoint ${Name}: $Class" @{ endpoint=$Name; reason=$Class; retryAfter=$retry; failures=$failures }
     return [pscustomobject]$value
 }
 
