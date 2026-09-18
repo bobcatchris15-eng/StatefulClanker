@@ -362,7 +362,7 @@ sealed class ApiConnectionsPage : TabPage
         {
             var root=JsonNode.Parse(File.ReadAllText(path))?.AsObject()??throw new Exception("Invalid project config.");
             var endpoints=root["providers"] as JsonObject??new JsonObject();root["providers"]=endpoints;
-            var nextPriority=endpoints.Count==0?10:endpoints.Select(x=>(x.Value as JsonObject)?["priority"]?.GetValue<int>()??100:100).DefaultIfEmpty(0).Max()+10;
+            var nextPriority=endpoints.Count==0?10:endpoints.Select(x=>x.Value is JsonObject o && o["priority"] is JsonValue v && v.TryGetValue<int>(out var n) ? n : 100).DefaultIfEmpty(0).Max()+10;
             var added=0;
             foreach(var modelId in selected)
             {
