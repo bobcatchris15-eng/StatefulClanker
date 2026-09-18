@@ -225,7 +225,7 @@ sealed class EmbeddedTerminalPanel : UserControl
 
     static TerminalTheme BuildTerminalTheme()
     {
-        uint C(Color c) => EasyTerminalControl.ColorToVal(c);
+        uint C(System.Drawing.Color c) => BitConverter.ToUInt32(new byte[] { c.R, c.G, c.B, 0 }, 0);
         return new TerminalTheme
         {
             DefaultBackground = C(Color.FromArgb(8, 11, 15)),
