@@ -62,7 +62,7 @@ The normal product surface is a self-contained `.NET 8` WinForms tray applicatio
 - project telemetry/activity;
 - client integration management;
 - worker backend/routing visibility;
-- **API Connections** for local/OpenAI-compatible inference;
+- **Connections** for validated machine-local inference access and live model discovery;
 - **Worker Capabilities** for machine grants, reusable profiles, project policy, and external MCP tool sources.
 
 Machine-local state lives under `%LOCALAPPDATA%\StatefulClanker`. Project authority lives under `<project>\.statefulclanker`.
@@ -87,7 +87,7 @@ Points at a machine-local API connection and uses StatefulClanker's deliberately
 
 Connections support native function calling or a strict text-JSON fallback. Secrets remain machine/user state via DPAPI or environment variables.
 
-OpenRouter has a dedicated one-field setup: paste an **OpenRouter API Key** once and StatefulClanker generates the current built-in free-model connection catalog against `https://openrouter.ai/api/v1`. The managed catalog is machine-local; each model can be attached to a project backend without re-entering endpoint/model/key details. Models without advertised native tool calling may use the same bounded text-tool fallback.
+Connections are validation-first: choose a service preset, enter its credentials, then **Test & discover**. StatefulClanker authenticates against the live service and retrieves the models currently available there. Selected connection/model pairs become project **endpoints** on **Endpoints & Routing**; credentials remain machine-local and can be reused by many endpoints/projects.
 
 The inherent harness's actual tools are **policy-driven**, not hardcoded. Built-ins include read/search/write/replace, bounded PowerShell, git diff/status, and finish/escalation. Authorized workers may also receive separate read-only human/normalized Intent tools and external MCP tools such as Toaster or MemPalace.
 
