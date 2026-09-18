@@ -931,6 +931,12 @@ static class Theme
         {
             if (c is Button b)
             {
+                // UseVisualStyleBackColor defaults to true, which lets the OS theme
+                // engine paint its own (light/system-accent) chrome on top of/instead
+                // of FlatAppearance on Windows 11 -- that's the bright white/grey
+                // border that survives every other dark-theme setting here. Flat +
+                // this false is what actually hands the whole button to FlatAppearance.
+                b.UseVisualStyleBackColor = false;
                 b.FlatStyle = FlatStyle.Flat;
                 b.FlatAppearance.BorderColor = Border;
                 b.FlatAppearance.BorderSize = 1;
@@ -938,6 +944,8 @@ static class Theme
                 b.FlatAppearance.MouseDownBackColor = Color.FromArgb(31, 43, 55);
                 b.BackColor = Surface2;
                 b.ForeColor = Text;
+                if (b.Padding == Padding.Empty) b.Padding = new Padding(6, 0, 6, 0);
+                b.UseCompatibleTextRendering = false;
             }
             else if (c is TextBox tb)
             {
@@ -982,6 +990,18 @@ static class Theme
                 dg.ColumnHeadersDefaultCellStyle.BackColor = Surface2;
                 dg.ColumnHeadersDefaultCellStyle.ForeColor = Text;
                 dg.EnableHeadersVisualStyles = false;
+                dg.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
+                dg.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.True;
+                dg.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
+                dg.RowTemplate.MinimumHeight = 24;
+                dg.DefaultCellStyle.Padding = new Padding(4, 2, 4, 2);
+            }
+            else if (c is CheckBox chk)
+            {
+                chk.ForeColor = Text;
+                chk.BackColor = Color.Transparent;
+                chk.FlatStyle = FlatStyle.Flat;
+                chk.FlatAppearance.BorderColor = Border;
             }
             Apply(c);
         }
@@ -1865,7 +1885,7 @@ sealed class MainForm : Form
     }
 
     static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 32, Margin = new Padding(0, 4, 8, 0) };
-    static Label Section(string text) => new() { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.BottomLeft, Font = new Font("Segoe UI Semibold", 8, FontStyle.Bold), ForeColor = Theme.Muted };
+    static Label Section(string text) => new() { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.BottomLeft, Font = new Font("Segoe UI Semibold", 8, FontStyle.Bold), ForeColor = Theme.Muted, AutoEllipsis = true, Padding = new Padding(1, 0, 1, 3) };
     TabPage Page(string name) => new(name) { Padding = new Padding(12), BackColor = Theme.Back, ForeColor = Theme.Text };
 
     void BuildUi()
