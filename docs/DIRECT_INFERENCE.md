@@ -1,119 +1,128 @@
-# Direct inference and the inherent worker harness
+# Direct inference, connections, endpoints, and routing
 
-StatefulClanker supports two interchangeable worker backend types above the same Current Human Directives, reconciled Intent, task graph, freshness, critic/validator and event machinery.
+StatefulClanker separates machine access from project routing.
 
-## CLI backend
+## Connections
 
-A `cli` backend delegates the inner coding-agent loop to an installed provider/local harness such as Codex, Claude Code, OpenCode, Antigravity, Gemini CLI, or another configured command.
-
-## API backend
-
-An `api` backend points at a machine-local inference connection and uses StatefulClanker's intentionally small inherent harness.
-
-Machine connection profiles live at:
+A **Connection** is machine-local access to an inference service. It stores the service adapter, base URL, authentication, extra headers, health, and the last discovered model catalog in:
 
 ```text
 %LOCALAPPDATA%\StatefulClanker\connections.json
 ```
 
-The Windows **API Connections** page can add/edit/remove/test connections and attach them to the active project. Secrets are DPAPI-encrypted for the current Windows user or referenced by environment variable. Project state stores only a connection id.
+Secrets are DPAPI-encrypted for the current Windows user or referenced by environment variable. Projects never copy API keys.
 
-For OpenRouter, the app provides a single **OpenRouter API Key** field. Saving it generates the built-in free-model connection catalog with the official OpenRouter base URL; the same protected credential is reused across those managed profiles, so model selection does not require repeated key or endpoint setup.
+The Windows **Connections** page provides presets for OpenRouter, GroqCloud, Gemini / AI Studio, Cloudflare Workers AI, Mistral, Hugging Face Inference Providers, NVIDIA NIM, Cerebras, Ollama, LM Studio, vLLM, and arbitrary OpenAI-compatible services.
 
-## Protocol adapter
+Adding or editing a connection is validation-first:
 
-The implemented direct protocol is `openai-chat`, using OpenAI-compatible `/chat/completions`.
+1. choose a service preset;
+2. follow the displayed provider-specific setup instructions;
+3. enter the account/key details;
+4. select **Test & discover**;
+5. StatefulClanker authenticates against the API and retrieves its live model catalog;
+6. Save is enabled only after successful discovery.
 
-Primary intended targets include Ollama, LM Studio, vLLM, OpenRouter, and arbitrary compatible local/remote gateways. Profiles may override path/headers/request-body fields. Unsupported protocol names fail closed so another native API dialect can be added later without changing task semantics.
+The discovered catalog is cached only as convenience metadata. **Test & refresh** re-queries the service. This replaces the former hardcoded OpenRouter free-model snapshot.
 
-## Inherent harness responsibilities
+## Endpoints
 
-The inherent harness owns only the bounded inner execution loop. StatefulClanker already owns planning, durable authority, context compilation, routing and acceptance.
+An **Endpoint** is one executable inference target available to the active project:
 
-Built-in tool capabilities include:
+- API: one machine Connection + one discovered model;
+- CLI: one configured local command/harness.
 
-```text
-builtin.read_file
-builtin.search_text
-builtin.write_file
-builtin.replace_text
-builtin.run_command
-builtin.git_diff
-builtin.finish
-```
+Multiple endpoints may expose the same model through different connections. This is intentional: quota, rate limits, latency, credentials, and health belong to the route actually used.
 
-The actual tool list presented to a worker is **dynamic** and authorization-driven. It may additionally contain:
-
-```text
-intent.human.read
-intent.normalized.read
-mcp.<source>.<tool>
-```
-
-Denied capabilities are omitted from model-visible tool definitions and checked again on invocation.
-
-A task can select a named capability profile and narrow it further with task-local `tool-allow` / `tool-deny`. See `WORKER_CAPABILITIES.md`.
-
-## Tool interaction modes
-
-### `native`
-
-Uses OpenAI-compatible native tool calls.
-
-### `text`
-
-For local models/servers without reliable function calling, the model emits one compact JSON object per turn:
-
-```json
-{"tool":"read_file","arguments":{"path":"src/app.cs"}}
-```
-
-or finishes with:
-
-```json
-{"final":"Implemented the bounded task and verified the requested behavior."}
-```
-
-The available tool names are supplied from the same resolved capability registry used by native mode; text mode does not bypass authorization.
-
-## Authority visibility
-
-Direct workers receive Current Human Directives and reconciled Intent in their compiled truth packet. When policy permits they can independently inspect:
-
-- preserved verbatim human source evidence (`read_human_intent`);
-- the orchestrator's normalized Intent/current directive view (`read_normalized_intent`).
-
-This lets a worker verify interpretation without gaining write authority over either layer.
-
-## External MCP tools
-
-Machine-local services such as Toaster or MemPalace may be registered as worker MCP sources. Their tools become candidate capabilities like `mcp.toaster.search`; registration alone does not authorize them.
-
-This is especially useful for small/local models: the direct loop can expose a narrow repository/tool surface plus targeted durable expertise without importing a third-party coding harness system prompt or memory model.
-
-## Routing
-
-Routing names project backends rather than model brands:
+The **Connections** page can select one or many discovered models and add them to the active project. Project configuration continues to use the existing `providers` object for on-disk compatibility, but those entries are treated and displayed as endpoints:
 
 ```json
 {
-  "providerBySize": {
-    "tiny": "local-qwen",
-    "small": "local-qwen",
-    "medium": "opencode",
-    "large": "codex"
-  },
   "providers": {
-    "local-qwen": { "type": "api", "connection": "local-qwen" },
-    "opencode": { "type": "cli", "command": "opencode", "args": ["run"], "mode": "stdin" }
+    "gemini-or-primary": {
+      "type": "api",
+      "connection": "openrouter-primary",
+      "model": "google/example-model",
+      "toolMode": "native",
+      "priority": 10
+    },
+    "gemini-or-backup": {
+      "type": "api",
+      "connection": "openrouter-backup",
+      "model": "google/example-model",
+      "toolMode": "native",
+      "priority": 20
+    },
+    "codex": {
+      "type": "cli",
+      "command": "codex",
+      "mode": "stdin",
+      "priority": 30
+    }
   }
 }
 ```
 
-The same semantic task may move between API and CLI backends without changing project authority.
+## Endpoints & Routing
 
-## Security boundary
+The old **Providers** page is now **Endpoints & Routing**. It owns project-specific enable/disable state, priority, health, and preferred routes for:
 
-`builtin.run_command` is high-trust: it has the OS privileges of the worker process. External write/action MCP tools can be similarly powerful. Use machine deny rules, named profiles, project narrowing and task-local restrictions to keep ordinary local-model workers bounded.
+- default work;
+- critic review;
+- validator review;
+- tiny, small, medium, and large tasks.
 
-API transport does not weaken freshness. A direct worker cannot commit work compiled against superseded human/Intent/task authority merely because its inference path is local.
+Existing keys such as `defaultProvider`, `criticProvider`, `validatorProvider`, and `providerBySize` remain valid for compatibility. Their values now mean **preferred first endpoint**, not “this endpoint or fail.”
+
+An explicit operator `-Provider <name>` override remains strict and does not silently select another endpoint.
+
+## Failover and cooldowns
+
+Ordinary routed work builds an eligible candidate list. The preferred endpoint is tried first. For API endpoints, StatefulClanker next prefers another configured connection exposing the **same model** before changing models, then continues through project endpoint priority.
+
+Failures are normalized into routing classes including:
+
+- `rate_limited`;
+- `capacity`;
+- `timeout`;
+- `server_error`;
+- `auth`;
+- `model_unavailable`;
+- `context_too_large`;
+- `bad_request`;
+- `unknown`.
+
+Rate limits, capacity errors, transport failures, server failures, and temporarily unavailable models can fail over to another eligible endpoint. Bad requests and context-size failures are not sprayed across every service.
+
+Endpoint and shared-connection health is durable at:
+
+```text
+.statefulclanker\routing\health.json
+```
+
+A rate limit on one credentialed service connection cools that connection rather than repeatedly hammering every model attached to it. Server-provided retry timing is used when recognizable; otherwise StatefulClanker applies bounded cooldowns.
+
+A successful request clears the endpoint's circuit state. Expired cooldowns naturally become eligible again.
+
+If all eligible routes are unavailable, the task is blocked as an **inference-routing/infrastructure condition** rather than being misclassified as implementation rework. Critic and validator outages follow the same rule.
+
+## Direct API worker harness
+
+API endpoints use StatefulClanker's bounded inner coding/tool loop above the same Current Human Directives, reconciled Intent, task graph, freshness, critic/validator, and event machinery used by CLI endpoints.
+
+The implemented transport is OpenAI-compatible `/chat/completions`. The effective API request combines:
+
+- machine Connection transport/authentication;
+- project Endpoint model/tool-mode overrides.
+
+This lets one machine connection safely expose many project models without duplicating credentials.
+
+Built-in worker capabilities include file read/search/write/replace, bounded PowerShell execution, git diff, read-only Intent inspection, and finish. External MCP capabilities remain governed by the existing worker capability policy.
+
+## Free-source presets
+
+The preset catalog intentionally distinguishes ongoing free allocations from trials.
+
+As of 2026-09-18 the packaged presets include free or limited-free options such as OpenRouter's free-model pool, GroqCloud free developer limits, the Gemini API free tier, Cloudflare Workers AI's daily free allocation, Mistral Free mode/Labs models, Hugging Face's small monthly inference credit, NVIDIA's developer prototype endpoints, plus entirely local Ollama/LM Studio/vLLM.
+
+Cerebras is packaged for convenience but labeled as **trial credit**, not an ongoing free tier. Free allocations and model catalogs are external policy and can change; live connection/model discovery is therefore authoritative over documentation snapshots.
