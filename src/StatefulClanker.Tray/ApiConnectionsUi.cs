@@ -150,6 +150,7 @@ static class ApiConnectionTester
         else if (root.ValueKind == JsonValueKind.Object)
         {
             if (root.TryGetProperty("data",out var data) && data.ValueKind==JsonValueKind.Array) { list=data; found=true; }
+            else if (root.TryGetProperty("models",out var models) && models.ValueKind==JsonValueKind.Array) { list=models; found=true; }
             else if (root.TryGetProperty("result",out var result))
             {
                 if (result.ValueKind==JsonValueKind.Array) { list=result; found=true; }
