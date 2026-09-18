@@ -321,6 +321,40 @@ When a task changes public behavior, include regression/compatibility criteria w
 
 When a task is investigative, acceptance should require a durable finding/artifact sufficient for dependent tasks.
 
+## 6.5 Implications and proof obligations
+
+The current task record supports first-class `implications` and `proofObligations`. In `SCPLAN 1`, author these with repeatable:
+
+```text
+imply <consequence that follows from doing this task correctly>
+prove <observable evidence required to demonstrate that consequence>
+```
+
+Use these fields when the explicit task instruction has consequences that a worker or validator could otherwise miss.
+
+Think in two passes:
+
+1. **Implication pass:** "If this task is implemented as intended, what else must be true?"
+2. **Proof pass:** "What evidence would demonstrate each important implication rather than merely assert it?"
+
+Examples:
+
+- changing persistence semantics implies restart/reload behavior must preserve the new state;
+- changing a protocol implies old/unsupported protocol behavior must fail predictably;
+- adding a permission boundary implies denied operations must actually be unavailable;
+- changing a parser implies malformed, duplicate, and unknown inputs need defined behavior;
+- introducing parallel work implies stale/upstream invalidation must not permit unsafe acceptance.
+
+Do not duplicate ordinary `accept` criteria mechanically. Use `accept` for the task's direct pass conditions and `imply`/`prove` to capture second-order consequences and evidence obligations.
+
+These fields participate in the task-definition hash. Changing them makes older compiled work stale.
+
+The runtime also persists refinement lineage/status metadata such as `refinementStatus`, `refinementDepth`, `parentTaskId`, and `childTaskIds`. Treat those as orchestration metadata, not fields to hand-edit in project state.
+
+**Important current boundary:** the present implementation persists implication/proof/refinement metadata, but there is no generic automatic task-fanout/refinement MCP surface to assume. Do not hallucinate one. If the conversational harness or a future specialist pass performs refinement, it should preserve parent/child lineage and re-apply the resulting task graph through supported plan/task operations.
+
+When a task is too coarse, implication analysis reveals multiple independently implementable or independently verifiable outcomes, or proof obligations require materially different work, split the task semantically. Do not split merely because the implication list is long.
+
 ---
 
 # 7. Preferred task/plan format
@@ -338,6 +372,7 @@ A task should normally contain:
 - dependencies;
 - retrieval/evidence selectors;
 - acceptance criteria;
+- important implications and proof obligations where second-order behavior matters;
 - optional capability profile;
 - task-local tool narrowing;
 - human gate when required.
@@ -373,6 +408,8 @@ intent REQ-EXAMPLE
 capability-profile coding
 accept requested behavior is observable
 accept existing unrelated behavior remains unchanged
+imply the new behavior survives the relevant reload/restart boundary
+prove a restart/reload test observes the same intended behavior
 end
 \`\`\`
 
@@ -1088,6 +1125,8 @@ Before changing authority, dispatching, retrying, widening capabilities, clearin
 - Is the task ready, or merely present?
 - Are dependency outcomes current?
 - Is the task compiled against current directive/Intent/task hashes?
+- Are important second-order implications captured?
+- Are proof obligations observable rather than rhetorical?
 - Does the worker have exactly the capabilities it needs?
 - Would widening capability be broader than necessary?
 - Is external memory being treated as evidence rather than authority?
