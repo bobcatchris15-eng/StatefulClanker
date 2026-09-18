@@ -147,7 +147,19 @@ sealed class EmbeddedTerminalPanel : UserControl
         if (_preset.SelectedIndex < 0 || _preset.SelectedIndex >= Presets.Length) return ShellCommand();
         var selected = Presets[_preset.SelectedIndex];
         if (selected.name == "PowerShell") return ShellCommand();
-        return selected.name == "Custom" ? _custom.Text.Trim() : selected.command;
+        if (selected.name == "Custom") return ToolViaShell(_custom.Text.Trim());
+        return ToolViaShell(selected.command);
+    }
+
+    string ToolViaShell(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return "";
+        var pwsh = QuoteIfNeeded(Runtime.FindPowerShell());
+        var escaped = command.Replace("\"", "\\\"");
+        // Keep PowerShell alive after the TUI exits. This deliberately matches
+        // "open PowerShell in the project, then type agy/opencode" semantics and
+        // also lets PowerShell resolve .cmd/.ps1 shims or aliases.
+        return $"{pwsh} -NoLogo -NoExit -Command \"{escaped}\"";
     }
 
     void UpdateCustomVisibility()
@@ -237,13 +249,13 @@ sealed class EmbeddedTerminalPanel : UserControl
     public void StartAgy()
     {
         _preset.SelectedItem = "Antigravity (agy)";
-        _ = StartCommandAsync("agy", true);
+        _ = StartCommandAsync(ToolViaShell("agy"), true);
     }
 
     public void StartOpenCode()
     {
         _preset.SelectedItem = "OpenCode";
-        _ = StartCommandAsync("opencode", true);
+        _ = StartCommandAsync(ToolViaShell("opencode"), true);
     }
 
     public void StopSession()
