@@ -347,6 +347,18 @@ sealed class IntegrationStatus
     public string note { get; set; } = "";
 }
 
+sealed class McpServerStatus
+{
+    public string name { get; set; } = "";
+    public string harness { get; set; } = "";
+    public bool verified { get; set; }
+    public string transport { get; set; } = "";
+    public bool probeOk { get; set; }
+    public int toolCount { get; set; }
+    public string? probeError { get; set; }
+    public bool imported { get; set; }
+}
+
 sealed class ProviderStatus
 {
     public string Name = "", Backend = "", Target = "", Roles = "";
@@ -1712,7 +1724,8 @@ sealed class MainForm : Form
     readonly RecentActivityPanel _recentActivity = new();
     readonly OrchestratorStatusPanel _orchestratorStatus = new();
     readonly EmbeddedTerminalPanel _terminal = new();
-    readonly DataGridView _integrations = new(), _providers = new();
+    readonly DataGridView _integrations = new(), _providers = new(), _mcpImport = new();
+    readonly Button _btnMcpDiscover = Btn("Discover", 100);
     readonly Label _autofillStatus = new();
     readonly Button _btnAutofillToggle = Btn("Start Autofill", 115);
     readonly Button _btnAutofillPause = Btn("Pause", 80);
@@ -1721,6 +1734,7 @@ sealed class MainForm : Form
     bool _updatingAutofillUi;
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
     int _refreshing;
+    int _mcpDiscoveryRunning;
     readonly McpHost _mcp;
     readonly AutofillHost _autofill;
     readonly NotifyIcon _notify;
@@ -1786,6 +1800,7 @@ sealed class MainForm : Form
         _tabs.TabPages.Add(BuildOverview());
         _tabs.TabPages.Add(BuildActivity());
         _tabs.TabPages.Add(BuildIntegrations());
+        _tabs.TabPages.Add(BuildMcpImport());
         _tabs.TabPages.Add(BuildProviders());
         right.Controls.Add(_tabs, 0, 1);
         shell.Controls.Add(right, 1, 0);
@@ -1898,6 +1913,41 @@ sealed class MainForm : Form
         var bar = new FlowLayoutPanel { Dock = DockStyle.Fill }; var copyEndpoint = Btn("Copy endpoint"); copyEndpoint.Click += (_, _) => Copy(_endpoint.Text); var copyToken = Btn("Copy token"); copyToken.Click += (_, _) => Copy(_mcp.Details()?.token ?? ""); var register = Btn("Register selected"); register.Click += (_, _) => RegisterSelected(); var remove = Btn("Remove selected"); remove.Click += (_, _) => UnregisterSelected(); bar.Controls.AddRange(new Control[] { copyEndpoint, copyToken, register, remove }); rows.Controls.Add(bar, 0, 4);
         rows.Controls.Add(Section("CLIENT INTEGRATIONS"), 0, 5); _integrations.Dock = DockStyle.Fill; _integrations.ReadOnly = true; _integrations.AllowUserToAddRows = false; _integrations.RowHeadersVisible = false; _integrations.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _integrations.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _integrations.Columns.Add("client", "Client"); _integrations.Columns.Add("installed", "Installed"); _integrations.Columns.Add("registered", "Registered"); _integrations.Columns.Add("verified", "Path verified"); _integrations.Columns.Add("note", "Note"); rows.Controls.Add(_integrations, 0, 6);
         p.Controls.Add(rows); return p;
+    }
+
+    TabPage BuildMcpImport()
+    {
+        var p = Page("MCP Import"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1 };
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        _btnMcpDiscover.Click += async (_, _) => await DiscoverMcpServersAsync();
+        var refresh = Btn("Refresh", 85); refresh.Click += (_, _) => LoadMcpImportFromCache();
+        bar.Controls.AddRange(new Control[] { _btnMcpDiscover, refresh });
+        rows.Controls.Add(bar, 0, 0);
+
+        rows.Controls.Add(Section("MCP SERVERS DISCOVERED IN OTHER HARNESSES"), 0, 1);
+
+        _mcpImport.Dock = DockStyle.Fill; _mcpImport.AllowUserToAddRows = false; _mcpImport.RowHeadersVisible = false; _mcpImport.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _mcpImport.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _mcpImport.Columns.Add("name", "Server name");
+        _mcpImport.Columns.Add("harness", "Harness");
+        _mcpImport.Columns.Add("verified", "Path verified");
+        _mcpImport.Columns.Add("probe", "Probe result");
+        _mcpImport.Columns.Add(new DataGridViewCheckBoxColumn { Name = "imported", HeaderText = "Imported", Width = 70, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
+        foreach (DataGridViewColumn c in _mcpImport.Columns) if (c.Name != "imported") c.ReadOnly = true;
+        _mcpImport.CellValueChanged += (s, e) => {
+            if (e.RowIndex >= 0 && _mcpImport.Columns[e.ColumnIndex].Name == "imported") ToggleMcpImport(e.RowIndex, (bool)_mcpImport.Rows[e.RowIndex].Cells["imported"].Value);
+        };
+        _mcpImport.CurrentCellDirtyStateChanged += (s, e) => {
+            if (_mcpImport.IsCurrentCellDirty && _mcpImport.Columns[_mcpImport.CurrentCell.ColumnIndex].Name == "imported") _mcpImport.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
+        rows.Controls.Add(_mcpImport, 0, 2);
+
+        p.Controls.Add(rows);
+        p.HandleCreated += (_, _) => LoadMcpImportFromCache();
+        return p;
     }
 
     TabPage BuildProviders()
@@ -2472,6 +2522,65 @@ sealed class MainForm : Form
         var action = register ? "Register-SCIntegration $t $null (Get-SCInstallRoot) | ConvertTo-Json -Depth 6 -Compress" : "Unregister-SCIntegration $t | ConvertTo-Json -Compress";
         var cmd = $". '{module}'; $t=@(Get-SCIntegrationTargets | Where-Object {{ $_.id -eq '{safeId}' }})[0]; if($null -eq $t){{throw 'Integration not found'}}; {action}";
         var r = Runtime.RunPowerShell(_root, "-Command", cmd); if (r.code != 0) MessageBox.Show(this, (r.stdout + Environment.NewLine + r.stderr).Trim(), "Integration update failed", MessageBoxButtons.OK, MessageBoxIcon.Error); _ = RefreshAllAsync();
+    }
+
+    List<McpServerStatus> ReadMcpDiscoveryCache()
+    {
+        var module = System.IO.Path.Combine(_root, "lib", "StatefulClanker.McpDiscovery.ps1"); var escaped = module.Replace("'", "''");
+        var command = $". '{escaped}'; $c=Get-SCMcpDiscoveryCache; if($null -eq $c -or -not $c.PSObject.Properties['servers']){{'[]'}}else{{@($c.servers) | ConvertTo-Json -Depth 6 -Compress}}";
+        var r = Runtime.RunPowerShell(_root, "-Command", command); if (r.code != 0 || string.IsNullOrWhiteSpace(r.stdout)) return new();
+        try { return JsonSerializer.Deserialize<List<McpServerStatus>>(r.stdout, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new(); } catch { return new(); }
+    }
+
+    List<McpServerStatus> RunMcpDiscoveryScan()
+    {
+        var module = System.IO.Path.Combine(_root, "lib", "StatefulClanker.McpDiscovery.ps1"); var escaped = module.Replace("'", "''");
+        var command = $". '{escaped}'; @(Invoke-SCMcpDiscoveryScan) | ConvertTo-Json -Depth 6 -Compress";
+        var r = Runtime.RunPowerShell(_root, "-Command", command); if (r.code != 0 || string.IsNullOrWhiteSpace(r.stdout)) return new();
+        try { return JsonSerializer.Deserialize<List<McpServerStatus>>(r.stdout, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new(); } catch { return new(); }
+    }
+
+    void PopulateMcpImportGrid(List<McpServerStatus> servers)
+    {
+        _mcpImport.SuspendLayout();
+        try
+        {
+            _mcpImport.Rows.Clear();
+            foreach (var item in servers)
+            {
+                var probe = item.probeOk ? $"ok ({item.toolCount} tools)" : (item.probeError ?? "failed");
+                var i = _mcpImport.Rows.Add(item.name, item.harness, item.verified ? "yes" : "no", probe, item.imported);
+                _mcpImport.Rows[i].Tag = item;
+            }
+        }
+        finally { _mcpImport.ResumeLayout(); }
+    }
+
+    void LoadMcpImportFromCache() => PopulateMcpImportGrid(ReadMcpDiscoveryCache());
+
+    async Task DiscoverMcpServersAsync()
+    {
+        if (Interlocked.Exchange(ref _mcpDiscoveryRunning, 1) != 0) return;
+        _btnMcpDiscover.Enabled = false; _btnMcpDiscover.Text = "Discovering...";
+        try
+        {
+            var servers = await Task.Run(() => RunMcpDiscoveryScan());
+            if (IsDisposed || Disposing) return;
+            PopulateMcpImportGrid(servers);
+        }
+        catch (Exception ex) { MessageBox.Show(this, ex.Message, "MCP discovery failed", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        finally { _btnMcpDiscover.Enabled = true; _btnMcpDiscover.Text = "Discover"; Interlocked.Exchange(ref _mcpDiscoveryRunning, 0); }
+    }
+
+    void ToggleMcpImport(int rowIndex, bool import)
+    {
+        var tag = _mcpImport.Rows[rowIndex].Tag as McpServerStatus; if (tag is null) return;
+        var module = System.IO.Path.Combine(_root, "lib", "StatefulClanker.McpDiscovery.ps1").Replace("'", "''"); var safeName = tag.name.Replace("'", "''");
+        var action = import ? $"Import-SCDiscoveredMcpServer '{safeName}' | ConvertTo-Json -Depth 6 -Compress" : $"Remove-SCImportedMcpServer '{safeName}' | ConvertTo-Json -Depth 6 -Compress";
+        var cmd = $". '{module}'; {action}";
+        var r = Runtime.RunPowerShell(_root, "-Command", cmd);
+        if (r.code != 0) MessageBox.Show(this, (r.stdout + Environment.NewLine + r.stderr).Trim(), "MCP import update failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        LoadMcpImportFromCache();
     }
 
     List<ProviderStatus> ReadProviderStatus(string path)
