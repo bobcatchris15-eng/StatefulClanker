@@ -331,7 +331,7 @@ sealed class ProjectMetrics
     public List<TaskBoardEntry> TaskBoard = new();
     public long UsageReports, PromptTokens, CompletionTokens, TotalTokens;
     public Dictionary<string,long> ModelTokens = new(StringComparer.OrdinalIgnoreCase);
-    public string IntentRevision = "—", Goal = "", Activity = "";
+    public string IntentRevision = "—", Goal = "", Activity = "", Telemetry = "";
     public Dictionary<string, int> ActiveTypes = new(StringComparer.OrdinalIgnoreCase);
     public string ActiveTypesSummary = "";
     public List<ActiveAgentInfo> ActiveAgentList = new();
@@ -467,7 +467,106 @@ static class Inspector
         m.TaskBoard = m.TaskBoard.OrderBy(t => t.CreatedAt, StringComparer.Ordinal).ToList();
         try { m.Goal = JsonNode.Parse(File.ReadAllText(System.IO.Path.Combine(state, "state.json")))?["goal"]?.GetValue<string>() ?? ""; } catch { }
         try { m.IntentRevision = JsonNode.Parse(File.ReadAllText(System.IO.Path.Combine(state, "intent", "contract.json")))?["revision"]?.ToString() ?? "—"; } catch { }
-        m.Commits = CommitCount(project); m.Activity = Activity(System.IO.Path.Combine(state, "events.jsonl")); return m;
+        m.Commits = CommitCount(project);
+        m.Activity = Activity(System.IO.Path.Combine(state, "events.jsonl"));
+        m.Telemetry = Telemetry(state, active, runs);
+        return m;
+    }
+
+    static string Telemetry(string state, string[] active, string[] runs)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("ACTIVE WORKERS / REVIEWERS");
+        sb.AppendLine("──────────────────────────");
+
+        if (active.Length == 0)
+        {
+            sb.AppendLine("No active agent processes.");
+        }
+        else
+        {
+            foreach (var file in active.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    using var d = JsonDocument.Parse(File.ReadAllText(file));
+                    var r = d.RootElement;
+                    var id = r.TryGetProperty("agentId", out var aid) ? aid.GetString() : Path.GetFileNameWithoutExtension(file);
+                    var task = r.TryGetProperty("taskId", out var tid) ? tid.GetString() : "";
+                    var stage = r.TryGetProperty("stage", out var st) ? st.GetString() : "worker";
+                    var provider = r.TryGetProperty("provider", out var pv) ? pv.GetString() : "";
+                    var started = r.TryGetProperty("startedAt", out var sa) ? sa.GetString() : "";
+                    var clock = DateTimeOffset.TryParse(started, out var dto) ? dto.ToLocalTime().ToString("HH:mm:ss") : started;
+                    sb.AppendLine($"{clock,-9} {stage,-10} {task,-18} {provider,-12} {id}");
+                }
+                catch { }
+            }
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("RECENT WORKER TELEMETRY");
+        sb.AppendLine("───────────────────────");
+
+        var recent = runs
+            .Select(x => new FileInfo(x))
+            .OrderByDescending(x => x.LastWriteTimeUtc)
+            .Take(40)
+            .ToArray();
+
+        if (recent.Length == 0)
+        {
+            sb.AppendLine("No completed worker telemetry recorded.");
+        }
+        else
+        {
+            foreach (var fi in recent)
+            {
+                try
+                {
+                    using var d = JsonDocument.Parse(File.ReadAllText(fi.FullName));
+                    var x = d.RootElement;
+                    var task = x.TryGetProperty("taskId", out var tid) ? tid.GetString() : "";
+                    var stage = x.TryGetProperty("stage", out var st) ? st.GetString() : "worker";
+                    var provider = x.TryGetProperty("provider", out var pv) ? pv.GetString() : "";
+                    var verdict = x.TryGetProperty("verdict", out var vv) && vv.ValueKind == JsonValueKind.String ? vv.GetString() : "";
+                    var exit = x.TryGetProperty("exitCode", out var ec) && ec.TryGetInt32(out var eci) ? eci.ToString() : "—";
+                    var secs = x.TryGetProperty("durationSeconds", out var ds) && ds.TryGetDouble(out var dsv) ? $"{dsv:0.0}s" : "";
+                    var ended = x.TryGetProperty("endedAt", out var ea) ? ea.GetString() : "";
+                    var clock = DateTimeOffset.TryParse(ended, out var dto) ? dto.ToLocalTime().ToString("MM-dd HH:mm:ss") : ended;
+                    var outcome = string.IsNullOrWhiteSpace(verdict) ? $"exit {exit}" : verdict;
+                    sb.AppendLine($"{clock,-15} {stage,-10} {task,-18} {provider,-12} {outcome,-8} {secs,8}");
+                }
+                catch { }
+            }
+        }
+
+        var faults = System.IO.Path.Combine(state, "telemetry", "context-faults.jsonl");
+        if (File.Exists(faults))
+        {
+            var lines = File.ReadLines(faults).Where(x => !string.IsNullOrWhiteSpace(x)).TakeLast(20).ToArray();
+            if (lines.Length > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("RECENT CONTEXT FAULTS");
+                sb.AppendLine("─────────────────────");
+                foreach (var line in lines.Reverse())
+                {
+                    try
+                    {
+                        using var d = JsonDocument.Parse(line);
+                        var x = d.RootElement;
+                        var task = x.TryGetProperty("taskId", out var tid) ? tid.GetString() : "";
+                        var req = x.TryGetProperty("request", out var rq) ? rq.GetString() : "";
+                        var ts = x.TryGetProperty("ts", out var tp) ? tp.GetString() : "";
+                        var clock = DateTimeOffset.TryParse(ts, out var dto) ? dto.ToLocalTime().ToString("MM-dd HH:mm:ss") : ts;
+                        sb.AppendLine($"{clock}  {task}  {req}");
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        return sb.ToString();
     }
 
     public static AutofillSnapshot Autofill(string project)
@@ -1607,7 +1706,7 @@ sealed class MainForm : Form
     readonly TabControl _tabs = new();
     readonly Label _header = new(), _mcpState = new(), _intent = new(), _goal = new();
     readonly Label[] _metrics = Enumerable.Range(0, 5).Select(_ => new Label()).ToArray();
-    readonly TextBox _usage = new(), _allActivity = new(), _endpoint = new(), _stdio = new(), _integrationNote = new(), _activeProvidersText = new();
+    readonly TextBox _usage = new(), _allActivity = new(), _workerTelemetry = new(), _endpoint = new(), _stdio = new(), _integrationNote = new(), _activeProvidersText = new();
     readonly BlinkenRack _blinkenRack = new();
     readonly TaskBoardPanel _taskBoard = new();
     readonly RecentActivityPanel _recentActivity = new();
@@ -1770,15 +1869,23 @@ sealed class MainForm : Form
     TabPage BuildActivity()
     {
         var p = Page("Activity & Telemetry");
-        var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1 };
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        rows.Controls.Add(Section("DURABLE EVENT STREAM / WORKER TELEMETRY"), 0, 0);
-        _allActivity.Dock = DockStyle.Fill; _allActivity.Multiline = true; _allActivity.ReadOnly = true; _allActivity.ScrollBars = ScrollBars.Both; _allActivity.WordWrap = false; _allActivity.BorderStyle = BorderStyle.None; _allActivity.Font = new Font("Cascadia Mono", 8.75f);
-        rows.Controls.Add(_allActivity, 0, 1);
-        var hint = new Label { Dock = DockStyle.Fill, Text = "Worker lifecycle, reviews, context faults and durable project events. Task-specific diagnostics remain available from the task rail.", ForeColor = Theme.Muted, Font = new Font("Segoe UI", 8.5f), TextAlign = ContentAlignment.MiddleLeft };
-        rows.Controls.Add(hint, 0, 2);
+        var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1 };
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+
+        rows.Controls.Add(Section("WORKER TELEMETRY / CONTEXT FAULTS"), 0, 0);
+        _workerTelemetry.Dock = DockStyle.Fill; _workerTelemetry.Multiline = true; _workerTelemetry.ReadOnly = true; _workerTelemetry.ScrollBars = ScrollBars.Both; _workerTelemetry.WordWrap = false; _workerTelemetry.BorderStyle = BorderStyle.None; _workerTelemetry.Font = new Font("Cascadia Mono", 8.5f);
+        rows.Controls.Add(_workerTelemetry, 0, 1);
+
+        rows.Controls.Add(Section("DURABLE RECENT ACTIVITY"), 0, 2);
+        _allActivity.Dock = DockStyle.Fill; _allActivity.Multiline = true; _allActivity.ReadOnly = true; _allActivity.ScrollBars = ScrollBars.Both; _allActivity.WordWrap = false; _allActivity.BorderStyle = BorderStyle.None; _allActivity.Font = new Font("Cascadia Mono", 8.5f);
+        rows.Controls.Add(_allActivity, 0, 3);
+
+        var hint = new Label { Dock = DockStyle.Fill, Text = "Click a task in the right rail for its run / critique / validation receipts and operator actions.", ForeColor = Theme.Muted, Font = new Font("Segoe UI", 8.25f), TextAlign = ContentAlignment.MiddleLeft };
+        rows.Controls.Add(hint, 0, 4);
         p.Controls.Add(rows);
         return p;
     }
@@ -2126,6 +2233,7 @@ sealed class MainForm : Form
             SetMetrics(snapshot.Project);
             SetAutofillUi(snapshot.Autofill, snapshot.Project, true);
             _allActivity.Text = snapshot.Project.Activity;
+            _workerTelemetry.Text = snapshot.Project.Telemetry;
             _recentActivity.SetActivity(snapshot.Project.Activity);
             _orchestratorStatus.SetState(snapshot.Project, snapshot.Autofill, d is not null, true);
             var active = snapshot.Providers.Where(p => !p.Disabled).OrderBy(p => p.Priority).Select(p => p.Name).ToList();
@@ -2136,6 +2244,7 @@ sealed class MainForm : Form
             SetMetrics(new());
             SetAutofillUi(snapshot.Autofill, new(), false);
             _allActivity.Text = "Select a project at left. StatefulClanker does not silently substitute a default project.";
+            _workerTelemetry.Text = "Select a project to inspect worker telemetry.";
             _recentActivity.SetActivity("");
             _orchestratorStatus.SetState(new(), snapshot.Autofill, d is not null, false);
         }
