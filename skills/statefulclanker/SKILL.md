@@ -2,7 +2,7 @@
 
 Use this skill whenever a conversational model is asked to **operate, inspect, resume, plan, supervise, troubleshoot, or change work through StatefulClanker**.
 
-This is the canonical field manual for the human-facing conversational harness. The separate \`statefulclanker-planner\` skill is the specialist for producing or revising semantic task graphs; use it when planning/decomposition is the main work, while this skill remains authoritative for the overall operating loop.
+This is the canonical field manual for the human-facing conversational harness. The separate `statefulclanker-planner` skill is the specialist for producing or revising semantic task graphs; use it when planning/decomposition is the main work, while this skill remains authoritative for the overall operating loop.
 
 ## Mission
 
@@ -28,7 +28,7 @@ The central invariant is:
 
 # 1. Mental model
 
-\`\`\`text
+```text
 human conversation / supplied evidence
     -> Current Human Directives
     -> reconciled Intent Contract
@@ -40,7 +40,7 @@ human conversation / supplied evidence
     -> validator
     -> freshness + authority gate
     -> accepted project state
-\`\`\`
+```
 
 Never rely on conversational memory for correctness when durable project state exists or can be created.
 
@@ -72,7 +72,7 @@ Do **not** invoke StatefulClanker just because a repository happens to contain S
 
 Authority order:
 
-\`\`\`text
+```text
 latest direct human authority
     -> Current Human Directives
     -> reconciled Intent
@@ -80,7 +80,7 @@ latest direct human authority
     -> task definition
     -> compiled packet
     -> worker output
-\`\`\`
+```
 
 Rules:
 
@@ -119,13 +119,13 @@ Headless mode:
 - an explicit project path may be supplied;
 - do not assume the resident app, active-project state, or resident autofill exists.
 
-Use \`project_status\` first when available.
+Use `project_status` first when available.
 
 If there is no active project, report that fact. Do not guess among projects.
 
-Use \`project_use\` only when the intended project is known from the human or is otherwise unambiguous.
+Use `project_use` only when the intended project is known from the human or is otherwise unambiguous.
 
-Use \`project_init\` only for deliberate initialization of a project not already managed.
+Use `project_init` only for deliberate initialization of a project not already managed.
 
 ## 4.2 Read authoritative state
 
@@ -158,25 +158,25 @@ Live subscription notifications are wake-up signals only.
 
 Correct resume behavior is:
 
-\`\`\`text
+```text
 control_events_since(last_consumed_sequence)
-\`\`\`
+```
 
 If the prior cursor is unavailable, use the safest available snapshot/history, report that the exact prior cursor was unavailable, and re-establish a cursor.
 
 Surface:
 
-- \`human_required\` immediately;
-- \`attention\` events when they affect progress, validity, failures, holds, retries, invalidation, or accepted milestones;
-- routine \`fyi\` events in batches or omit them unless useful.
+- `human_required` immediately;
+- `attention` events when they affect progress, validity, failures, holds, retries, invalidation, or accepted milestones;
+- routine `fyi` events in batches or omit them unless useful.
 
 A lost subscription does not imply no project changes occurred.
 
 ## 4.4 Determine execution ownership
 
-Inspect \`autofill_status\`.
+Inspect `autofill_status`.
 
-If resident autofill is active, normally **do not call \`run_start\` or \`run_parallel\` after every planning turn**. Build correct ready work and let autofill own dispatch.
+If resident autofill is active, normally **do not call `run_start` or `run_parallel` after every planning turn**. Build correct ready work and let autofill own dispatch.
 
 If autofill is stopped, disabled, or absent in headless operation, manual run tools may be appropriate.
 
@@ -227,9 +227,9 @@ For every material human decision:
 
 ## 5.2 Source vs directive
 
-Use \`source_add\` for durable evidence/reference material.
+Use `source_add` for durable evidence/reference material.
 
-Use \`directive_set\` for active human authority.
+Use `directive_set` for active human authority.
 
 A source does not automatically become a directive.
 
@@ -239,7 +239,7 @@ A directive should preserve or point back to direct human wording where possible
 
 # 6. Planning and decomposition
 
-When planning is substantial, use the companion \`statefulclanker-planner\` skill.
+When planning is substantial, use the companion `statefulclanker-planner` skill.
 
 The conversational control plane still owns the decision to plan, replan, split, merge, invalidate, or escalate work.
 
@@ -273,26 +273,26 @@ Do not split tightly coupled work merely to make every task small.
 
 Use:
 
-- \`tiny\` — mechanical/local change or bounded inspection;
-- \`small\` — one bounded concern suitable for disposable fast workers;
-- \`medium\` — coherent multi-file or nontrivial reasoning;
-- \`large\` — tightly coupled work that resisted useful decomposition.
+- `tiny` — mechanical/local change or bounded inspection;
+- `small` — one bounded concern suitable for disposable fast workers;
+- `medium` — coherent multi-file or nontrivial reasoning;
+- `large` — tightly coupled work that resisted useful decomposition.
 
 Size is a routing hint, not a vendor/model name.
 
 ## 6.3 Dependencies vs semantic relations
 
-Use \`depends\` only when another task must be accepted first.
+Use `depends` only when another task must be accepted first.
 
 Use relations for non-blocking graph meaning, such as:
 
-- \`derived_from\`;
-- \`evidence_for\`;
-- \`supersedes\`;
-- \`invalidated_by\`;
-- \`conflicts_with\`;
-- \`related\`;
-- \`discovered_from\`.
+- `derived_from`;
+- `evidence_for`;
+- `supersedes`;
+- `invalidated_by`;
+- `conflicts_with`;
+- `related`;
+- `discovered_from`.
 
 Do not serialize execution merely because two tasks are conceptually related.
 
@@ -359,7 +359,7 @@ When a task is too coarse, implication analysis reveals multiple independently i
 
 # 7. Preferred task/plan format
 
-Prefer \`SCPLAN 1\` for repeated model/human consumption.
+Prefer `SCPLAN 1` for repeated model/human consumption.
 
 A task should normally contain:
 
@@ -379,7 +379,7 @@ A task should normally contain:
 
 Example:
 
-\`\`\`text
+```text
 SCPLAN 1
 plan example
 summary Add a bounded capability without losing current intent.
@@ -411,7 +411,7 @@ accept existing unrelated behavior remains unchanged
 imply the new behavior survives the relevant reload/restart boundary
 prove a restart/reload test observes the same intended behavior
 end
-\`\`\`
+```
 
 Never give workers conversation-dependent instructions such as "continue from before" or "as discussed earlier."
 
@@ -423,37 +423,54 @@ Tool availability can vary by protocol/version. Prefer discovery/current MCP ins
 
 ## Project and authority
 
-- \`project_status\` — first bootstrap/diagnostic read.
-- \`project_init\` — initialize management state deliberately.
-- \`project_use\` — select a known intended project.
-- \`goal_set\` — change project-level goal only when the human actually changes it.
-- \`directive_set/list/get/history/retire\` — manage current direct human authority.
-- \`intent_apply\` — commit fully reconciled normalized Intent.
-- \`source_add/get/list\` — manage durable supporting evidence/provenance.
+- `project_status` — first bootstrap/diagnostic read.
+- `project_init` — initialize management state deliberately.
+- `project_use` — select a known intended project.
+- `goal_set` — change project-level goal only when the human actually changes it.
+- `directive_set/list/get/history/retire` — manage current direct human authority.
+- `intent_apply` — commit fully reconciled normalized Intent.
+- `source_add/get/list` — manage durable supporting evidence/provenance.
 
 ## Planning and tasks
 
-- \`plan_apply\` — preferred SCPLAN application.
-- \`plan_import\` — compatibility/import path.
-- \`task_list/show/add\` — inspect/add bounded work.
-- \`task_retry\` — explicitly retry/reopen with normal invalidation/freshness semantics.
-- \`task_block\` — stop wrong/unsafe work and preserve control-plane truth.
+- `plan_apply` — preferred SCPLAN application.
+- `plan_import` — compatibility/import path.
+- `task_list/show/add` — inspect/add bounded work.
+- `task_retry` — explicitly retry/reopen with normal invalidation/freshness semantics.
+- `task_block` — stop wrong/unsafe work and preserve control-plane truth.
 
 Do not manually complete tasks merely to unblock the graph unless the human explicitly intends to exercise a human-authority shortcut and the server is configured to permit it.
 
 ## Execution
 
-- \`autofill_status/control\` — preferred resident scheduler control.
-- \`run_start\` / \`run_parallel\` — manual/headless execution when autofill is not the dispatch owner.
-- \`run_status\` — inspect active/recent execution.
-- \`project_review\` — project-level review when appropriate.
+- `autofill_status/control` — preferred resident scheduler control.
+- `run_start` / `run_parallel` — manual/headless execution when autofill is not the dispatch owner.
+- `run_status` — inspect active/recent execution.
+- `project_review` — project-level critic/validator over the whole project. A failing project review can halt dispatch and create human-gated remediation work; treat that as a control-plane event, not an ordinary task failure.
+
+## Plan approval and human-authority shortcuts
+
+Project configuration may require explicit human approval of a newly applied/imported plan before tasks become runnable.
+
+If tasks exist but remain unready, inspect whether plan approval is the missing gate before changing dependencies or retrying tasks.
+
+`plan_approve` is **human authority** and is disabled over MCP by default unless `mcp.allowHumanAuthorityTools` is enabled. A conversational model must not silently approve its own plan merely because the tool becomes available.
+
+When approval is required:
+
+- present the plan's material scope, assumptions, human gates, side effects, and notable decomposition choices to the human;
+- ask for approval if it has not already been explicitly granted;
+- use the configured human-authority path only after that approval;
+- do not reinterpret ordinary enthusiasm or an unrelated instruction as approval of a materially different plan.
+
+Likewise, `task_complete` is a human-authority shortcut that bypasses critic/validator review. Do not use it as a routine repair mechanism.
 
 ## Awareness and diagnostics
 
 Use the available equivalents of:
 
-- \`control_snapshot\`;
-- \`control_events_since\`;
+- `control_snapshot`;
+- `control_events_since`;
 - telemetry active/history/run;
 - context-fault inspection;
 - compilation inspection;
@@ -466,9 +483,9 @@ Use the narrowest evidence that answers the question, but do not diagnose stale/
 
 Use:
 
-- \`worker_policy_get/apply\`;
-- \`worker_profile_set/remove\`;
-- \`worker_source_set/remove/tools\`.
+- `worker_policy_get/apply`;
+- `worker_profile_set/remove`;
+- `worker_source_set/remove/tools`.
 
 Only modify these when execution authority/tooling is actually relevant.
 
@@ -513,14 +530,14 @@ Capability policy is execution authority, not project specification.
 
 Effective authorization narrows through:
 
-\`\`\`text
+```text
 machine grants
     -> optional named capability profile
     -> project policy
     -> role policy
     -> stage policy
     -> task-local allow/deny
-\`\`\`
+```
 
 Lower layers are tighten-only. Deny wins.
 
@@ -528,7 +545,7 @@ A missing named profile fails closed.
 
 Typical built-ins include:
 
-\`\`\`text
+```text
 builtin.read_file
 builtin.search_text
 builtin.write_file
@@ -538,13 +555,13 @@ builtin.git_diff
 builtin.finish
 intent.human.read
 intent.normalized.read
-\`\`\`
+```
 
 External tools use:
 
-\`\`\`text
+```text
 mcp.<source>.<tool>
-\`\`\`
+```
 
 ## Capability practice
 
@@ -568,12 +585,12 @@ Treat Toaster/MemPalace-style systems as **candidate context**, not authority.
 
 Preferred pattern:
 
-\`\`\`text
+```text
 retrieve external lesson
     -> check relevance/freshness
     -> reconstruct project-specific guidance
     -> compile as bounded context
-\`\`\`
+```
 
 Separate read/search from mutation/ingestion capabilities wherever possible.
 
@@ -608,19 +625,19 @@ Do not solve missing context by dumping the whole repository into every task. Pr
 
 Workers may emit:
 
-\`\`\`text
+```text
 CONTEXT_REQUEST: <specific missing state>
 INTENT_QUESTION: <specific ambiguity>
 INTENT_CONFLICT: <specific contradiction>
-\`\`\`
+```
 
 These are **non-advancing** outcomes.
 
 Response:
 
-- \`CONTEXT_REQUEST\` — fix retrieval, task boundary, prerequisite evidence, persisted design state, backend/tool choice, or capability access.
-- \`INTENT_QUESTION\` — return to current authority/human clarification.
-- \`INTENT_CONFLICT\` — compare current directive wording and normalized Intent; reconcile rather than guess.
+- `CONTEXT_REQUEST` — fix retrieval, task boundary, prerequisite evidence, persisted design state, backend/tool choice, or capability access.
+- `INTENT_QUESTION` — return to current authority/human clarification.
+- `INTENT_CONFLICT` — compare current directive wording and normalized Intent; reconcile rather than guess.
 
 Never tell a worker to "use best judgment" for a material unresolved product decision merely to keep throughput high.
 
@@ -768,7 +785,7 @@ Consider:
 
 ## Capability denied / missing profile
 
-Inspect \`worker_policy_get\`.
+Inspect `worker_policy_get`.
 
 Do not broaden machine authority casually. Prefer the minimum profile/policy change required.
 
@@ -829,11 +846,11 @@ Reconcile them into task/context state or ask the human if their authority is un
 
 # 17. Protocol/version edge cases
 
-StatefulClanker supports both legacy handshake-era MCP and modern \`2026-07-28\` behavior.
+StatefulClanker supports both legacy handshake-era MCP and modern `2026-07-28` behavior.
 
-Modern mode is stateless and may use \`server/discover\`; do not assume an \`initialize\` handshake.
+Modern mode is stateless and may use `server/discover`; do not assume an `initialize` handshake.
 
-Legacy clients use \`initialize\`.
+Legacy clients use `initialize`.
 
 Do not hardcode transport behavior into project semantics.
 
@@ -883,7 +900,7 @@ Do not accidentally run a second competing scheduler against a resident project.
 
 Never persist secrets into:
 
-- \`.statefulclanker\`;
+- `.statefulclanker`;
 - repository config;
 - directives;
 - human-source text;
@@ -966,7 +983,7 @@ A failing unrelated test is not automatically proof the task failed, but it must
 
 A passing test suite is not sufficient if Current Human Directives or Intent are violated.
 
-For changes to StatefulClanker itself, preserve the structural invariants in \`docs/STATE_CONTROL.md\`, including:
+For changes to StatefulClanker itself, preserve the structural invariants in `docs/STATE_CONTROL.md`, including:
 
 - no model session is required to remember project history;
 - worker input is reconstructible from durable objects;
@@ -1037,7 +1054,7 @@ Before reporting completion:
 
 # 26. Safe mutation rules
 
-Never edit \`.statefulclanker\` internals directly as a shortcut when a supported CLI/MCP operation exists.
+Never edit `.statefulclanker` internals directly as a shortcut when a supported CLI/MCP operation exists.
 
 Never bypass:
 
@@ -1117,6 +1134,7 @@ Before changing authority, dispatching, retrying, widening capabilities, clearin
 - Is this definitely the correct project?
 - Is the resident app or headless mode authoritative here?
 - Is autofill the current dispatch owner?
+- Is plan approval required and, if so, actually granted by the human?
 - Are directives reconciled with Intent?
 - Could the latest human wording supersede an older rule?
 - Is the requested action reversible?
