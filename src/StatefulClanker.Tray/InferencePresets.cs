@@ -1,0 +1,63 @@
+namespace StatefulClanker.Tray;
+
+sealed record InferencePreset(
+    string Id,
+    string DisplayName,
+    string BaseUrlTemplate,
+    string ModelsPathTemplate,
+    string DiscoveryKind,
+    bool RequiresAccountId,
+    bool RequiresApiKey,
+    string FreeLabel,
+    string KeyPlaceholder,
+    string SetupUrl,
+    string Instructions);
+
+static class InferencePresets
+{
+    public static readonly InferencePreset[] All =
+    {
+        new("openrouter","OpenRouter","https://openrouter.ai/api/v1","/models","openai",false,true,
+            "Ongoing free-model pool","sk-or-v1-...","https://openrouter.ai/settings/keys",
+            "Create an OpenRouter account, open Settings > Keys, create a key, and paste it here. OpenRouter publishes free model variants and the openrouter/free router; model availability changes, so StatefulClanker discovers the live catalog instead of shipping a fixed list."),
+        new("groq","GroqCloud","https://api.groq.com/openai/v1","/models","openai",false,true,
+            "Free rate-limited developer access","gsk_...","https://console.groq.com/keys",
+            "Create a GroqCloud account, create an API key in the Groq console, and paste it here. The free developer limits vary by model and are returned/enforced by Groq."),
+        new("gemini","Google Gemini API / AI Studio","https://generativelanguage.googleapis.com/v1beta/openai","/models","openai",false,true,
+            "Gemini API free tier","AIza...","https://aistudio.google.com/apikey",
+            "Open Google AI Studio, create a Gemini API key, and paste it here. StatefulClanker uses Google's OpenAI-compatible endpoint and discovers the models enabled for that key."),
+        new("cloudflare","Cloudflare Workers AI","https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1","https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/models/search?format=openrouter&per_page=1000","cloudflare",true,true,
+            "10,000 neurons/day free allocation","Cloudflare API token","https://dash.cloudflare.com/",
+            "In the Cloudflare dashboard open Workers AI > Use REST API. Copy the Account ID and create a Workers AI API token with Workers AI Read/Edit permission. Enter both below. The free allocation resets daily."),
+        new("mistral","Mistral La Plateforme","https://api.mistral.ai/v1","/models","openai",false,true,
+            "Free mode included usage; Labs models may be $0","MISTRAL_API_KEY","https://console.mistral.ai/api-keys",
+            "Create a Mistral account, enable Free mode, create an API key, and paste it here. Current included usage is account-specific; Labs models marked free by Mistral can also be selected."),
+        new("huggingface","Hugging Face Inference Providers","https://router.huggingface.co/v1","/models","openai",false,true,
+            "Small monthly free inference credit","hf_...","https://huggingface.co/settings/tokens",
+            "Create a fine-grained Hugging Face token with permission to make calls to Inference Providers. Free accounts currently receive a small monthly inference credit. The catalog may route one model through several underlying providers."),
+        new("nvidia","NVIDIA NIM / build.nvidia.com","https://integrate.api.nvidia.com/v1","/models","openai",false,true,
+            "Free developer-program prototype endpoints","nvapi-...","https://build.nvidia.com/",
+            "Join the free NVIDIA Developer Program, open a model on build.nvidia.com, choose Prototype / API, and generate an API key. Free endpoint availability is intended for development and experimentation."),
+        new("cerebras","Cerebras Inference","https://api.cerebras.ai/v1","/models","openai",false,true,
+            "$5 free trial credit (not ongoing free tier)","csk-...","https://cloud.cerebras.ai/",
+            "Create a Cerebras Inference account and API key. Cerebras currently advertises $5 of free trial credit; StatefulClanker labels this as trial rather than ongoing free inference."),
+        new("ollama","Ollama (local)","http://127.0.0.1:11434/v1","/models","openai",false,false,
+            "Free local inference","","https://ollama.com/",
+            "Install Ollama and pull at least one model. Leave the API key blank. StatefulClanker connects to the local OpenAI-compatible endpoint and discovers installed models."),
+        new("lmstudio","LM Studio (local)","http://127.0.0.1:1234/v1","/models","openai",false,false,
+            "Free local inference","","https://lmstudio.ai/",
+            "Install LM Studio, download a model, and start the Local Server with its OpenAI-compatible API enabled. Leave the API key blank."),
+        new("vllm","vLLM (local / LAN)","http://127.0.0.1:8000/v1","/models","openai",false,false,
+            "Free self-hosted inference","","https://docs.vllm.ai/",
+            "Start vLLM's OpenAI-compatible server and enter its reachable base URL. If you configured API-key authentication, provide that key; otherwise leave it blank."),
+        new("custom","Custom OpenAI-compatible","https://","/models","openai",false,false,
+            "Depends on service","","",
+            "Enter an OpenAI-compatible base URL. StatefulClanker will authenticate if a key is supplied, call the model-list endpoint, and only save the connection after a successful discovery.")
+    };
+
+    public static InferencePreset Get(string? id) =>
+        All.FirstOrDefault(x => string.Equals(x.Id,id,StringComparison.OrdinalIgnoreCase)) ?? All[^1];
+
+    public static string Expand(string template,string? accountId) =>
+        template.Replace("{accountId}", accountId?.Trim() ?? "", StringComparison.OrdinalIgnoreCase);
+}
