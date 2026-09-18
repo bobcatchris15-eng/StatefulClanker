@@ -103,9 +103,9 @@ Example routing:
 
 The task's semantic size is assigned by the conversational planner. The runtime only uses that declared size as a routing hint. CLI and API backends can be mixed freely for workers, critics, and validators.
 
-## Configure API connections
+## Configure inference connections
 
-Open the **API Connections** tab in the Windows app.
+Open the **Connections** tab in the Windows app. Choose a service preset, follow its setup instructions, enter any required account/key values, then use **Test & discover**. Save is enabled only after the service authenticates and returns a model catalog.
 
 A connection profile contains:
 
@@ -126,7 +126,7 @@ vLLM       http://127.0.0.1:8000/v1
 OpenRouter https://openrouter.ai/api/v1
 ```
 
-Use **Custom OpenAI-compatible** for any other compatible provider or gateway. OpenCode can remain a CLI harness using its own provider catalogue; direct endpoints behind that ecosystem can also be entered here when they expose an OpenAI-compatible API.
+Select discovered models and add them to the active project as endpoints, then use **Endpoints & Routing** to set priority and preferred worker/critic/validator/size routes. Use **Custom OpenAI-compatible** for any other compatible provider or gateway. OpenCode can remain a CLI endpoint using its own provider catalogue.
 
 API keys typed into the app are encrypted with Windows DPAPI for the current Windows user. Alternatively specify an environment variable such as `OPENROUTER_API_KEY` and leave the key field empty.
 
