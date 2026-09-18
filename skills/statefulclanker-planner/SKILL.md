@@ -153,6 +153,8 @@ intent REQ-ACTIVE-PROJECT
 capability-profile coding
 accept existing last active project is restored
 accept missing project never causes silent substitution
+imply restoration preserves exact project identity rather than nearest-match behavior
+prove restart with the prior project unavailable produces no-active-project state
 end
 ```
 
@@ -177,6 +179,29 @@ Good criteria are observable: a command/test passes, an interface exists, a repr
 Avoid `looks good`, `be robust`, `finish it`, or `understand the code`.
 
 Passing local criteria is insufficient if the result violates Current Human Directives or reconciled Intent.
+
+## Implications and proof obligations
+
+Current task records support repeatable `imply` and `prove` fields.
+
+Use an implication pass after drafting each nontrivial task:
+
+1. ask what else must be true if the task is implemented correctly;
+2. record material second-order consequences with `imply`;
+3. turn important consequences into observable evidence obligations with `prove`;
+4. split the task only when those implications reveal independently implementable or independently verifiable work.
+
+Example:
+
+```text
+accept active project is restored after restart
+imply a missing saved project cannot silently select another project
+prove a restart test with the saved path removed leaves no active project
+```
+
+Do not mechanically duplicate every `accept` line. `accept` states direct task success; `imply` captures downstream/second-order consequences; `prove` states evidence required to establish them.
+
+These fields participate in task-definition freshness. Refinement lineage/status is runtime metadata; do not hand-edit it or assume an automatic fanout tool exists unless the active control plane actually exposes one.
 
 ## Backend routing
 
