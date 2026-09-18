@@ -35,7 +35,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\desktop\StatefulClanke
 The resident cockpit is organized around three persistent regions:
 
 - left rail: project list above a compact recent-activity feed;
-- center: Overview, Activity & Telemetry, Integrations, and Providers tabs;
+- center: Overview, Activity & Telemetry, Integrations, Endpoints & Routing, and Connections tabs;
 - right rail: durable task state and task-level diagnostics/actions.
 
 Overview keeps the live orchestration state visible: Clanker status, worker/reviewer blinkenlights, autofill controls, routing/usage, project authority, and an embedded project terminal. The full durable event stream, active/recent worker telemetry, and context faults live on the Activity & Telemetry tab. Clicking the recent-activity rail jumps to that tab.
