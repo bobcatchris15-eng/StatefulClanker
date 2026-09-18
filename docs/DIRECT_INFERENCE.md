@@ -12,7 +12,7 @@ A **Connection** is machine-local access to an inference service. It stores the 
 
 Secrets are DPAPI-encrypted for the current Windows user or referenced by environment variable. Projects never copy API keys.
 
-The Windows **Connections** page provides presets for OpenRouter, GroqCloud, Gemini / AI Studio, Cloudflare Workers AI, Mistral, Hugging Face Inference Providers, NVIDIA NIM, Cerebras, Ollama, LM Studio, vLLM, and arbitrary OpenAI-compatible services.
+The Windows **Connections** page provides presets for OpenRouter, GroqCloud, Gemini / AI Studio, Cloudflare Workers AI, Mistral, Hugging Face Inference Providers, NVIDIA NIM, Cohere, Kilo AI Gateway, Vercel AI Gateway, Cerebras, Ollama, LM Studio, vLLM, and arbitrary OpenAI-compatible services.
 
 Adding or editing a connection is validation-first:
 
@@ -123,6 +123,6 @@ Built-in worker capabilities include file read/search/write/replace, bounded Pow
 
 The preset catalog intentionally distinguishes ongoing free allocations from trials.
 
-As of 2026-09-18 the packaged presets include free or limited-free options such as OpenRouter's free-model pool, GroqCloud free developer limits, the Gemini API free tier, Cloudflare Workers AI's daily free allocation, Mistral Free mode/Labs models, Hugging Face's small monthly inference credit, NVIDIA's developer prototype endpoints, plus entirely local Ollama/LM Studio/vLLM.
+As of 2026-09-18 the packaged presets include free or limited-free options such as OpenRouter's free-model pool, GroqCloud free developer limits, the Gemini API free tier, Cloudflare Workers AI's daily free allocation, Mistral Free mode/Labs models, Hugging Face's small monthly inference credit, Cohere evaluation keys, Kilo's anonymous/free-model gateway, Vercel AI Gateway's monthly included credit, NVIDIA's developer prototype endpoints, plus entirely local Ollama/LM Studio/vLLM.
 
 Cerebras is packaged for convenience but labeled as **trial credit**, not an ongoing free tier. Free allocations and model catalogs are external policy and can change; live connection/model discovery is therefore authoritative over documentation snapshots.
