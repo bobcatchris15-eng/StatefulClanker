@@ -1,5 +1,5 @@
 # Terminal/MCP-import/escalation — orchestrator ledger
-Updated: 2026-09-18 | HEAD: beac16b | Graph: n/a (no graphify build for this repo)
+Updated: 2026-09-18 | HEAD: 0145247 | Graph: n/a (no graphify build for this repo)
 
 ## Prior effort (archived)
 "MCP control plane" effort (2026-09-14) — DONE. Stood up mcp/ dual-host MCP server
@@ -44,21 +44,40 @@ Three independent fixes/features to the Windows tray app + PowerShell harness:
   both touch EmbeddedTerminalPanel.cs — parallel worktrees would conflict on merge
   for the exact class this whole effort is centered on. Sequencing removes the
   conflict instead of resolving it after the fact.
-- D5 2026-09-18: Task order is T1 -> T2 -> T3 -> T4 -> T5. T1 first because it's the
+- D5 2026-09-18: Task order is T1 -> T2 -> T3 -> T4+T5. T1 first because it's the
   narrowest, highest-confidence fix and unblocks the human's daily driver
-  immediately. T2 before T3 (backend before the UI that calls it). T4 before T5
-  (bridge endpoint before the terminal-injection call site that hits it) and both
-  after T1 so T5's terminal-injection code lands on the post-fix input-handling path,
-  not before it.
+  immediately. T2 before T3 (backend before the UI that calls it).
+- D6 2026-09-18: Collapsed T4 (bridge/backend) into T5. Investigated
+  lib/StatefulClanker.Execution.ps1 and ProjectReview.ps1 before dispatching T4:
+  the failure signal already exists as events in events.jsonl (`run.failed`,
+  `critic.error`, `validator.error`, `project.hold.set`, `project.review.failed`),
+  each with human-readable text via the existing Add-SCEvent(Type,Text,Data) calls.
+  No new PowerShell plumbing needed. The only real work is on the tray side: track
+  a read cursor over events.jsonl (it's already polled for the Activity panel, see
+  Program.cs:684 `Activity(path)`, but that renders to a display string, not
+  structured events a caller can filter/cursor) and inject NEW matching events into
+  the live terminal. Avoided writing a duplicate escalation-queue file — reusing the
+  existing event stream matches "don't add abstractions beyond what the task
+  requires."
+- D7 2026-09-18: Terminal injection writes to the pty's INPUT stream (only way to put
+  text in front of a live ConPTY session with this control), prefixed with CRLF to
+  start on a fresh line, NOT auto-submitted (no trailing Enter) so a human or an
+  agy/opencode composer mid-edit is not corrupted or made to auto-act on it. This is
+  the disruption risk D2 flagged. Exact write API depends on what
+  EasyWindowsTerminalControl 1.0.38 / Microsoft.Terminal.Wpf actually expose --
+  dispatched task must verify via inspection, not assume a method name exists.
 
 ## Tasks
 | id | targets | status | attempts | last return line |
 |----|---------|--------|----------|------------------|
-| t1 | src/StatefulClanker.Tray/EmbeddedTerminalPanel.cs, src/StatefulClanker.Tray/Program.cs | TODO | 0 | - |
-| t2 | lib/StatefulClanker.McpDiscovery.ps1 (new), lib/StatefulClanker.WorkerPolicy.ps1, StatefulClanker.ps1, docs/MCP.md | TODO | 0 | - |
-| t3 | src/StatefulClanker.Tray/Program.cs (or new panel file), tray Integrations-style tab | TODO | 0 | - |
-| t4 | lib/StatefulClanker.ProjectReview.ps1, lib/StatefulClanker.Execution.ps1, mcp/StatefulClanker.McpHttp.ps1 | TODO | 0 | - |
-| t5 | src/StatefulClanker.Tray/EmbeddedTerminalPanel.cs, src/StatefulClanker.Tray/Program.cs | TODO | 0 | - |
+| t1 | EmbeddedTerminalPanel.cs | DONE | 1 | TerminalElementHost.IsInputKey override; build clean; 7a1f462 |
+| t2 | McpDiscovery.ps1(new), WorkerPolicy.ps1, StatefulClanker.ps1, docs/MCP.md | DONE | 1 | discover/list/import/remove CLI; stdio+http transport; smoke green; 9542fe2 |
+| t3 | Program.cs | DONE | 1 | MCP Import tab, checkbox = imported; build clean; b26faf6 |
+| t4+t5 | EmbeddedTerminalPanel.cs, Program.cs | DONE | 1 | ConPTYTerm.WriteToTerm + event cursor; build clean; 0145247 |
+
+## Effort complete
+All 3 objectives shipped: t1 (arrow keys), t2+t3 (MCP import backend+UI), t4+t5
+(failure escalation). Nothing outstanding for this effort.
 
 ## Unverified assumptions
 - T2/T3: whether ChatGPT/Gemini/other connector-style clients expose a locally
