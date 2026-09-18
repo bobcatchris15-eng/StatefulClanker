@@ -1,5 +1,5 @@
 # Terminal/MCP-import/escalation — orchestrator ledger
-Updated: 2026-09-18 | HEAD: c618fd6 | Graph: n/a (no graphify build for this repo)
+Updated: 2026-09-18 | HEAD: 63bc1c2 | Graph: n/a (no graphify build for this repo)
 
 ## Prior effort (archived)
 "MCP control plane" effort (2026-09-14) — DONE. Stood up mcp/ dual-host MCP server
@@ -98,8 +98,29 @@ the notice but only at a safe moment.
 |----|---------|--------|----------|------------------|
 | t6 | EmbeddedTerminalPanel.cs, Program.cs | DONE | 1 | toast + MessageFilter Enter-boundary flush; build clean; c618fd6 |
 
-## Effort complete (again)
-t6 closes the D7 disruption gap. Nothing outstanding.
+## Effort complete (again) -- reopened for t7
+- D9 2026-09-18: user wants auto-send as the DEFAULT, not Enter-gated. Replaced
+  "wait for Enter" with "flush immediately unless the human is actively typing":
+  NoticeMessageFilter now timestamps every WM_KEYDOWN (not just Enter) while the
+  terminal has focus; QueueNotice tries an immediate flush (idle since start, or
+  idle >= 900ms, sends right away); a 400ms _idleFlushTimer keeps checking so a
+  notice queued mid-typing still auto-sends the moment typing pauses, without
+  requiring Enter at all. Enter is kept as an additional immediate trigger (a
+  submitted line is inherently a safe boundary) but is no longer the only one.
+- D10 2026-09-18: user also wants the ACTUAL failure reason, not just "rejected".
+  Found the gap: `state.proposal_rejected` (fired by Reject-SCProposal on a
+  critic/validator FAIL verdict -- the everyday rejection path) was not even in
+  EscalatedEventTypes, and its message was the generic "critic rejected worker
+  result" with no excerpt of what the reviewer actually said. Added
+  Get-SCReasonExcerpt (lib/StatefulClanker.Execution.ps1) pulling the last few
+  non-VERDICT lines of the critic/validator's own stdout (capped ~240 chars) into
+  both the task's blockReason and Reject-SCProposal's event message, and added
+  state.proposal_rejected to the tray's escalation whitelist.
+
+## Tasks (continued again)
+| id | targets | status | attempts | last return line |
+|----|---------|--------|----------|------------------|
+| t7 | Execution.ps1, EmbeddedTerminalPanel.cs, Program.cs | DONE | 1 | reason excerpt + auto-send-unless-typing; build clean, smoke pending |
 
 ## Unverified assumptions
 - T2/T3: whether ChatGPT/Gemini/other connector-style clients expose a locally

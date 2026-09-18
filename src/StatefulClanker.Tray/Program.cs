@@ -1818,7 +1818,8 @@ sealed class MainForm : Form
     string? _eventCursorTs = DateTimeOffset.UtcNow.ToString("o");
     static readonly HashSet<string> EscalatedEventTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "run.failed", "critic.error", "validator.error", "project.hold.set", "project.review.failed"
+        "run.failed", "critic.error", "validator.error", "project.hold.set", "project.review.failed",
+        "state.proposal_rejected"
     };
     int _refreshing;
     int _mcpDiscoveryRunning;

@@ -26,7 +26,13 @@ sealed class EmbeddedTerminalPanel : UserControl
     readonly Label _toastLabel = new();
     readonly Button _toastClose = new();
     readonly System.Windows.Forms.Timer _toastTimer = new() { Interval = 8000 };
+    // Polls for a quiet gap in typing so a queued notice can be auto-sent without
+    // waiting on an Enter keypress that may never come (e.g. the human just reads a
+    // response and doesn't submit anything for a while).
+    readonly System.Windows.Forms.Timer _idleFlushTimer = new() { Interval = 400 };
+    static readonly TimeSpan IdleThreshold = TimeSpan.FromMilliseconds(900);
     readonly Queue<string> _pendingNotices = new();
+    DateTime _lastKeyUtc = DateTime.MinValue;
     NoticeMessageFilter? _noticeFilter;
 
     sealed class NoticeMessageFilter : IMessageFilter
@@ -38,10 +44,13 @@ sealed class EmbeddedTerminalPanel : UserControl
 
         public bool PreFilterMessage(ref Message m)
         {
-            if (m.Msg == WM_KEYDOWN && (Keys)m.WParam == Keys.Enter)
+            if (m.Msg == WM_KEYDOWN && _owner._elementHost?.ContainsFocus == true)
             {
-                if (_owner._elementHost?.ContainsFocus == true)
+                _owner._lastKeyUtc = DateTime.UtcNow;
+                if ((Keys)m.WParam == Keys.Enter)
                 {
+                    // A submitted line is itself a safe, immediate boundary -- don't
+                    // wait for the idle timer to catch up to it.
                     _ = _owner.FlushAfterEnterAsync();
                 }
             }
@@ -165,6 +174,8 @@ sealed class EmbeddedTerminalPanel : UserControl
         _toastPanel.Controls.Add(_toastClose);
 
         _toastTimer.Tick += (_, _) => { _toastTimer.Stop(); HideToast(); };
+        _idleFlushTimer.Tick += (_, _) => TryFlushIfIdle();
+        _idleFlushTimer.Start();
 
         _layout.Controls.Add(_toolbar, 0, 0);
         _layout.Controls.Add(_toastPanel, 0, 1);
@@ -349,6 +360,19 @@ sealed class EmbeddedTerminalPanel : UserControl
         if (string.IsNullOrWhiteSpace(text)) return;
         _pendingNotices.Enqueue(text);
         ShowToast(text);
+        TryFlushIfIdle();
+    }
+
+    // Auto-sends whenever the human isn't actively typing (D9): if no keystroke has
+    // ever been observed, or the last one is older than IdleThreshold, flush right
+    // away instead of waiting for an Enter that may not come. _idleFlushTimer covers
+    // the case where a notice arrives mid-typing -- it keeps checking every tick and
+    // flushes the moment typing pauses.
+    void TryFlushIfIdle()
+    {
+        if (_pendingNotices.Count == 0) return;
+        if (_lastKeyUtc == DateTime.MinValue || DateTime.UtcNow - _lastKeyUtc >= IdleThreshold)
+            FlushPendingNotices();
     }
 
     void ShowToast(string latestText)
@@ -440,7 +464,12 @@ sealed class EmbeddedTerminalPanel : UserControl
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) DisposeTerminal();
+        if (disposing)
+        {
+            DisposeTerminal();
+            _idleFlushTimer.Dispose();
+            _toastTimer.Dispose();
+        }
         base.Dispose(disposing);
     }
 }

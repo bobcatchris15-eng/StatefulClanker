@@ -148,6 +148,20 @@ function Capture-SCContextRequests($Task,$Run,$Compilation) {
    FAIL and then discusses a PASS must not flip the gate open. Ambiguity fails. #>
 function Get-SCVerdict([string]$Text,[int]$ExitCode) { if($ExitCode-ne 0){return 'ERROR'};$seen=@();foreach($line in @($Text-split"`r?`n")){$trimmed=$line.Trim();if($trimmed-match'^[\s>*_#`~\-\[\]()."'':]*VERDICT\s*:\s*(PASS|FAIL|ERROR)[\s*_`~.!,:;''"\[\]()]*$'){$seen+=$Matches[1].ToUpperInvariant()}};if($seen-contains'ERROR'){return 'ERROR'};if($seen-contains'FAIL'){return 'FAIL'};if($seen-contains'PASS'){return 'PASS'};return 'FAIL' }
 function Set-SCTelemetryVerdict([string]$AgentId,[string]$Verdict) { $path=Get-SCPath ("telemetry/runs/{0}.json"-f$AgentId);$record=Read-SCJson $path;if($record){$record.verdict=$Verdict;Write-SCJson $path $record} }
+# Pulls a short, human-readable excerpt out of a critic/validator's raw stdout so a
+# rejection reads as "why" and not just "rejected" -- strips the VERDICT: line itself
+# (it's redundant with the task status) and blank lines, keeps the last non-empty
+# lines (a reviewer's explanation usually lands right before its verdict line), and
+# caps length so it stays terminal/event-log friendly.
+function Get-SCReasonExcerpt([string]$Text,[int]$MaxLen=240) {
+    if([string]::IsNullOrWhiteSpace($Text)){return ''}
+    $lines=@($Text-split"`r?`n"|Where-Object{$_.Trim()-and$_.Trim()-notmatch'^[\s>*_#`~\-\[\]()."'':]*VERDICT\s*:'})
+    if($lines.Count-eq0){return ''}
+    $excerpt=($lines|Select-Object -Last 3)-join' '
+    $excerpt=$excerpt.Trim()
+    if($excerpt.Length-gt$MaxLen){$excerpt=$excerpt.Substring(0,$MaxLen).TrimEnd()+'...'}
+    return $excerpt
+}
 function Invoke-SCReview($Task,$Run,$Compilation,[string]$Stage) {
     Add-SCEvent "$Stage.started" "$Stage review started for $($Task.id)" @{taskId=$Task.id;stage=$Stage;compilationId=$Compilation.id}
     $receipt=Invoke-SCProvider $Task (New-SCReviewPrompt $Task $Run $Compilation $Stage) $Stage $null $Run.agentId $Compilation;$receipt.verdict=Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode);Set-SCTelemetryVerdict $receipt.agentId $receipt.verdict;$dir=if($Stage-eq'critic'){'critiques'}else{'validations'};Write-SCJson (Get-SCPath ("{0}/{1}.json"-f$dir,$receipt.id)) $receipt;Add-SCEvent "$Stage.finished" "$Stage review finished for $($Task.id): $($receipt.verdict)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$receipt.verdict;compilationId=$Compilation.id};return $receipt
@@ -157,7 +171,7 @@ function New-SCCompletionProposal($Task,$Run,$Compilation) {
     Write-SCJson (Get-SCPath ("proposals/{0}.json"-f$proposal.id)) $proposal;Set-SCProperty $Task 'latestProposalId' $proposal.id;Save-SCTask $Task;Add-SCEvent 'state.proposed' "Proposed completion for $($Task.id)." @{taskId=$Task.id;proposalId=$proposal.id;compilationId=$Compilation.id};return $proposal
 }
 function Save-SCProposal($Proposal){Write-SCJson (Get-SCPath ("proposals/{0}.json"-f$Proposal.id)) $Proposal}
-function Reject-SCProposal($Proposal,$Reasons) {$Proposal.status='rejected';$Proposal.rejectedAt=(Get-Date).ToUniversalTime().ToString('o');$Proposal.rejectionReasons=@($Reasons);Save-SCProposal $Proposal;Add-SCEvent 'state.proposal_rejected' "Rejected $($Proposal.id)." @{taskId=$Proposal.taskId;proposalId=$Proposal.id;reasons=@($Reasons)}}
+function Reject-SCProposal($Proposal,$Reasons) {$Proposal.status='rejected';$Proposal.rejectedAt=(Get-Date).ToUniversalTime().ToString('o');$Proposal.rejectionReasons=@($Reasons);Save-SCProposal $Proposal;Add-SCEvent 'state.proposal_rejected' "Rejected $($Proposal.id): $(@($Reasons)-join'; ')" @{taskId=$Proposal.taskId;proposalId=$Proposal.id;reasons=@($Reasons)}}
 function Add-SCProgressRecord($Task,$Compilation,[bool]$Advanced,[string]$Outcome,[string]$Reason) {
     $record=[ordered]@{schemaVersion=1;id=New-SCId 'progress';ts=(Get-Date).ToUniversalTime().ToString('o');taskId=$Task.id;compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};advanced=$Advanced;outcome=$Outcome;reason=$Reason;taskStatus=$Task.status;attemptCount=if($Task.PSObject.Properties['attemptCount']){$Task.attemptCount}else{$null}}
     Write-SCJson (Get-SCPath ("progress/{0}.json"-f$record.id)) $record
@@ -228,9 +242,11 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
             return
         }
         if($critique.verdict-ne'PASS'){
-            Reject-SCProposal $proposal @('critic rejected worker result')
+            $reasonExcerpt=Get-SCReasonExcerpt ([string]$critique.stdout)
+            $reason=if($reasonExcerpt){"critic rejected worker result: $reasonExcerpt"}else{'critic rejected worker result'}
+            Reject-SCProposal $proposal @($reason)
             $task.status='needs_rework'
-            $task.blockReason='Critic rejected worker result.'
+            $task.blockReason=if($reasonExcerpt){"Critic rejected worker result: $reasonExcerpt"}else{'Critic rejected worker result.'}
             Save-SCTask $task
             Add-SCProgressRecord $task $compilation $false 'critic-rejected' $task.blockReason|Out-Null
             Write-Warning $task.blockReason
@@ -260,9 +276,11 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
             return
         }
         if($validation.verdict-ne'PASS'){
-            Reject-SCProposal $proposal @('validator rejected worker result')
+            $reasonExcerpt=Get-SCReasonExcerpt ([string]$validation.stdout)
+            $reason=if($reasonExcerpt){"validator rejected worker result: $reasonExcerpt"}else{'validator rejected worker result'}
+            Reject-SCProposal $proposal @($reason)
             $task.status='needs_rework'
-            $task.blockReason='Validator rejected worker result.'
+            $task.blockReason=if($reasonExcerpt){"Validator rejected worker result: $reasonExcerpt"}else{'Validator rejected worker result.'}
             Save-SCTask $task
             Add-SCProgressRecord $task $compilation $false 'validator-rejected' $task.blockReason|Out-Null
             Write-Warning $task.blockReason
