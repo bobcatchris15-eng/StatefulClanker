@@ -213,7 +213,7 @@ sealed class EndpointsRoutingPanel : UserControl
     {
         using var d=new CliEndpointDialog();if(d.ShowDialog(_owner)!=DialogResult.OK)return;var root=LoadConfig();if(root is null)return;var eps=root["providers"] as JsonObject??new JsonObject();root["providers"]=eps;
         if(eps.ContainsKey(d.EndpointName)){MessageBox.Show(_owner,"An endpoint with that name already exists.");return;}
-        var next=eps.Select(x=>(x.Value as JsonObject)?["priority"]?.GetValue<int>()??100:100).DefaultIfEmpty(0).Max()+10;
+        var next=eps.Select(x=>x.Value is JsonObject o && o["priority"] is JsonValue v && v.TryGetValue<int>(out var n) ? n : 100).DefaultIfEmpty(0).Max()+10;
         var obj=new JsonObject{{"type","cli"},{"command",d.Command},{"mode",d.Mode},{"priority",next}};var args=new JsonArray();foreach(var a in d.Arguments)args.Add(a);obj["args"]=args;eps[d.EndpointName]=obj;SaveConfig(root);
     }
 
