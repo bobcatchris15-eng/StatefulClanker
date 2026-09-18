@@ -111,14 +111,8 @@ sealed class OrchestratorStatusPanel : Control
     {
         base.OnPaint(e);
         var g = e.Graphics;
-        g.Clear(Color.FromArgb(9, 13, 18));
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-
-        var border = new Rectangle(0, 0, Width - 1, Height - 1);
-        using var panel = new SolidBrush(Color.FromArgb(15, 21, 28));
-        using var borderPen = new Pen(Theme.Border);
-        g.FillRectangle(panel, border);
-        g.DrawRectangle(borderPen, border);
+        g.Clear(Parent?.BackColor ?? Theme.Back);
+        Theme.PaintCard(g, new Rectangle(0, 0, Width, Height), Color.FromArgb(20, 27, 35), 8);
 
         using var titleFont = new Font("Cascadia Mono", 9.25f, FontStyle.Bold);
         using var labelFont = new Font("Cascadia Mono", 8f, FontStyle.Bold);
@@ -149,8 +143,12 @@ sealed class OrchestratorStatusPanel : Control
             var y = top + row * 25;
             var item = rows[i];
 
+            using (var glow = new SolidBrush(Color.FromArgb(70, item.color)))
+                g.FillEllipse(glow, x - 2, y + 2, 12, 12);
             using var lamp = new SolidBrush(item.color);
             g.FillEllipse(lamp, x, y + 4, 8, 8);
+            using (var hot = new SolidBrush(Color.FromArgb(180, 255, 255, 255)))
+                g.FillEllipse(hot, x + 1.5f, y + 5, 3, 3);
             g.DrawString(item.label, labelFont, mutedBrush, x + 15, y);
             g.DrawString(item.value, valueFont, textBrush, x + 77, y);
         }

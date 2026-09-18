@@ -915,7 +915,7 @@ static class Inspector
 
 static class Theme
 {
-    public static readonly Color Back = Color.FromArgb(16, 22, 29), Surface = Color.FromArgb(24, 33, 43), Surface2 = Color.FromArgb(31, 42, 54), Border = Color.FromArgb(52, 69, 86), Text = Color.FromArgb(232, 239, 245), Muted = Color.FromArgb(135, 153, 171), Accent = Color.FromArgb(85, 198, 232), Good = Color.FromArgb(73, 217, 145), Warn = Color.FromArgb(255, 174, 74), Error = Color.FromArgb(255, 85, 85);
+    public static readonly Color Back = Color.FromArgb(23, 29, 38), Surface = Color.FromArgb(30, 40, 52), Surface2 = Color.FromArgb(38, 50, 64), Border = Color.FromArgb(64, 83, 103), BorderLight = Color.FromArgb(255, 255, 255, 22), Text = Color.FromArgb(232, 239, 245), Muted = Color.FromArgb(135, 153, 171), Accent = Color.FromArgb(85, 198, 232), Good = Color.FromArgb(73, 217, 145), Warn = Color.FromArgb(255, 174, 74), Error = Color.FromArgb(255, 85, 85);
     public static void Apply(Control root)
     {
         root.BackColor = Back;
@@ -985,6 +985,55 @@ static class Theme
             }
             Apply(c);
         }
+    }
+
+    // A slim, rounded, "chiseled" card border: a rounded-rect fill, a 1px outer
+    // border in Theme.Border, and a soft 1px highlight along the top-left edge to
+    // read as a light etched bevel instead of a flat OS rectangle.
+    public static System.Drawing.Drawing2D.GraphicsPath RoundedRect(Rectangle r, int radius)
+    {
+        var path = new System.Drawing.Drawing2D.GraphicsPath();
+        var d = radius * 2;
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    public static void PaintCard(Graphics g, Rectangle bounds, Color fill, int radius = 7)
+    {
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        var r = new Rectangle(bounds.X, bounds.Y, bounds.Width - 1, bounds.Height - 1);
+        using var path = RoundedRect(r, radius);
+        using var fillBrush = new SolidBrush(fill);
+        g.FillPath(fillBrush, path);
+        using var borderPen = new Pen(Border);
+        g.DrawPath(borderPen, path);
+        using var highlightPen = new Pen(BorderLight);
+        g.DrawArc(highlightPen, r.X, r.Y, radius * 2, radius * 2, 180, 90);
+        g.DrawLine(highlightPen, r.X + radius, r.Y, r.Right - radius, r.Y);
+    }
+}
+
+// A flat-modern rounded card, replacing plain rectangular Panels for the boxes
+// that group related controls (worker status, provider summary, etc).
+class CardPanel : Panel
+{
+    public int Radius { get; set; } = 7;
+    public Color Fill { get; set; } = Theme.Surface;
+
+    public CardPanel()
+    {
+        DoubleBuffered = true;
+        BackColor = Theme.Back;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Theme.PaintCard(e.Graphics, new Rectangle(0, 0, Width, Height), Fill, Radius);
+        base.OnPaint(e);
     }
 }
 
@@ -1061,7 +1110,8 @@ sealed class AgentBlinkenBank : Control
     {
         base.OnPaint(e);
         var g = e.Graphics;
-        g.Clear(Color.FromArgb(10, 14, 18));
+        g.Clear(Parent?.BackColor ?? Color.FromArgb(10, 14, 18));
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
 
@@ -1094,12 +1144,16 @@ sealed class AgentBlinkenBank : Control
         using var edgePen = new Pen(borderColor, IsActive ? 1.5f : 1.0f);
         using var innerPen = new Pen(Color.FromArgb(28, 36, 44));
 
-        g.FillRectangle(panelBrush, r);
-        g.DrawRectangle(edgePen, r);
+        using (var cardPath = Theme.RoundedRect(r, 6))
+        {
+            g.FillPath(panelBrush, cardPath);
+            g.DrawPath(edgePen, cardPath);
+        }
         if (IsActive)
         {
             using var glowPen = new Pen(Color.FromArgb(65, borderColor));
-            g.DrawRectangle(glowPen, r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2);
+            using var glowPath = Theme.RoundedRect(new Rectangle(r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2), 5);
+            g.DrawPath(glowPen, glowPath);
         }
 
         using var screwBrush = new SolidBrush(Color.FromArgb(70, 82, 94));
@@ -1138,18 +1192,26 @@ sealed class AgentBlinkenBank : Control
                 var litColor = baseColor;
                 var unlitColor = Color.FromArgb(Math.Max(12, baseColor.R / 7), Math.Max(14, baseColor.G / 7), Math.Max(16, baseColor.B / 7));
                 var c = on ? litColor : unlitColor;
-
-                using var b = new SolidBrush(c);
-                g.FillRectangle(b, x, y, ledW, ledH);
+                var d = Math.Min(ledW, ledH);
+                var cx = x + ledW / 2f - d / 2f;
+                var cy = y + ledH / 2f - d / 2f;
 
                 if (on)
                 {
-                    using var center = new SolidBrush(Color.FromArgb(200, 255, 255, 255));
-                    g.FillRectangle(center, x + 1, y + 1, Math.Max(1, ledW - 2), Math.Max(1, ledH - 2));
+                    using (var glow = new SolidBrush(Color.FromArgb(90, c)))
+                        g.FillEllipse(glow, cx - d * 0.35f, cy - d * 0.35f, d * 1.7f, d * 1.7f);
+                }
+                using (var b = new SolidBrush(c))
+                    g.FillEllipse(b, cx, cy, d, d);
+
+                if (on)
+                {
+                    using var hot = new SolidBrush(Color.FromArgb(190, 255, 255, 255));
+                    g.FillEllipse(hot, cx + d * 0.2f, cy + d * 0.15f, Math.Max(1, d * 0.35f), Math.Max(1, d * 0.35f));
                 }
                 else
                 {
-                    g.DrawRectangle(innerPen, x, y, ledW, ledH);
+                    g.DrawEllipse(innerPen, cx, cy, d, d);
                 }
             }
         }
@@ -1848,6 +1910,30 @@ sealed class MainForm : Form
         _tabs.Appearance = TabAppearance.FlatButtons;
         _tabs.ItemSize = new Size(118, 30);
         _tabs.SizeMode = TabSizeMode.Fixed;
+        // TabControl always paints its own tab strip with the native OS visual style,
+        // ignoring BackColor/ForeColor -- the only way to kill the resulting light band
+        // in a dark theme is to own the drawing entirely.
+        _tabs.DrawMode = TabDrawMode.OwnerDrawFixed;
+        _tabs.Padding = new Point(14, 6);
+        _tabs.DrawItem += (s, e) =>
+        {
+            var g = e.Graphics;
+            var tab = _tabs.TabPages[e.Index];
+            var selected = e.Index == _tabs.SelectedIndex;
+            var bounds = e.Bounds;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var back = new SolidBrush(selected ? Theme.Surface2 : Theme.Back);
+            g.FillRectangle(back, bounds);
+            using var text = new SolidBrush(selected ? Theme.Text : Theme.Muted);
+            using var font = new Font("Segoe UI Semibold", 9f, selected ? FontStyle.Bold : FontStyle.Regular);
+            var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            g.DrawString(tab.Text, font, text, bounds, sf);
+            if (selected)
+            {
+                using var accent = new SolidBrush(Theme.Accent);
+                g.FillRectangle(accent, bounds.X + 4, bounds.Bottom - 2, bounds.Width - 8, 2);
+            }
+        };
         _tabs.TabPages.Add(BuildOverview());
         _tabs.TabPages.Add(BuildActivity());
         _tabs.TabPages.Add(BuildIntegrations());
@@ -1906,17 +1992,17 @@ sealed class MainForm : Form
         infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
 
-        var providersCard = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(10), Margin = new Padding(0, 0, 4, 0) };
+        var providersCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(0, 0, 4, 0) };
         _activeProvidersText.Dock = DockStyle.Fill; _activeProvidersText.ReadOnly = true; _activeProvidersText.BackColor = Theme.Surface; _activeProvidersText.BorderStyle = BorderStyle.None; _activeProvidersText.Font = new Font("Cascadia Mono", 9f, FontStyle.Bold); _activeProvidersText.ForeColor = Theme.Accent;
         providersCard.Controls.Add(_activeProvidersText);
 
-        var usageCard = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(10), Margin = new Padding(4, 0, 0, 0) };
+        var usageCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(4, 0, 0, 0) };
         _usage.Dock = DockStyle.Fill; _usage.Multiline = true; _usage.ReadOnly = true; _usage.ScrollBars = ScrollBars.None; _usage.WordWrap = true; _usage.BorderStyle = BorderStyle.None; _usage.Font = new Font("Cascadia Mono", 8.25f);
         usageCard.Controls.Add(_usage);
         infoGrid.Controls.Add(providersCard, 0, 0);
         infoGrid.Controls.Add(usageCard, 1, 0);
 
-        var authority = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12), BackColor = Theme.Surface };
+        var authority = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(12) };
         _intent.Dock = DockStyle.Top; _intent.Height = 26; _intent.ForeColor = Theme.Accent; _intent.Font = new Font("Cascadia Mono", 9, FontStyle.Bold);
         _goal.Dock = DockStyle.Fill; _goal.Font = new Font("Segoe UI", 9.25f);
         authority.Controls.Add(_goal); authority.Controls.Add(_intent);
