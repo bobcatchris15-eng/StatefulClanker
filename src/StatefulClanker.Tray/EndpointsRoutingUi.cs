@@ -147,6 +147,8 @@ sealed class EndpointsRoutingPanel : UserControl
                 }
                 else if(!Runtime.CommandExists(cmd))health="missing command";
                 if(routeHealth.TryGetValue(p.Name,out var rh))health=rh;
+                if(type=="api" && !string.IsNullOrWhiteSpace(conn) && routeHealth.TryGetValue("connection:"+conn,out var connectionHealth) && connectionHealth!="ready")
+                    health=connectionHealth+" [connection]";
                 result.Add(new(){Name=p.Name,Type=type,Connection=conn,Model=model,Command=cmd,Disabled=disabled,Priority=pri,Roles=string.Join(", ",roles),Health=health});
             }
         }catch{}
