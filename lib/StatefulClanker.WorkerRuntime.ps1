@@ -179,7 +179,7 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
             $retryAfter=''
             try{if($ex.Exception.Response -and $ex.Exception.Response.Headers){$ra=$ex.Exception.Response.Headers.RetryAfter;if($ra){$retryAfter=" Retry-After: $ra"}}}catch{}
             $statusText=if($status-gt0){" HTTP $status"}else{''}
-            throw "Direct inference request failed$statusText: $($ex.Exception.Message)$retryAfter"
+            throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$retryAfter"
         }
     }
 }
