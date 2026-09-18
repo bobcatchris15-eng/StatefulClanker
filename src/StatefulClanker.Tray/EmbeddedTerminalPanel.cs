@@ -275,6 +275,29 @@ sealed class EmbeddedTerminalPanel : UserControl
         _ = StartCommandAsync(ToolViaShell("opencode"), true);
     }
 
+    /// <summary>
+    /// True while a terminal session is live and can accept injected notices.
+    /// </summary>
+    public bool HasActiveSession => _terminal is not null;
+
+    /// <summary>
+    /// Writes a short notice into the live PTY's input stream so it appears as text in
+    /// front of the running session (agy/opencode/pwsh). No-op if no session is running.
+    /// Deliberate accepted tradeoff (ledger D7): this writes into the same input stream
+    /// the human or an AI composer may be mid-typing into, so it can interleave with
+    /// in-progress input -- moving to a fresh line for display requires sending what the
+    /// shell interprets as a newline/Enter, but no further automated action is taken.
+    /// </summary>
+    public void InjectNotice(string text)
+    {
+        if (_terminal is null || string.IsNullOrWhiteSpace(text)) return;
+        try
+        {
+            _terminal.ConPTYTerm?.WriteToTerm(("\r\n" + text + "\r\n").AsSpan());
+        }
+        catch { }
+    }
+
     public void StopSession()
     {
         DisposeTerminal();

@@ -1733,6 +1733,11 @@ sealed class MainForm : Form
     readonly NumericUpDown _numMaxConcurrent = new() { Minimum = 1, Maximum = 16, Value = 3, Width = 55, Margin = new Padding(0, 4, 8, 0), Font = new Font("Segoe UI", 9) };
     bool _updatingAutofillUi;
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
+    string? _eventCursorTs = DateTimeOffset.UtcNow.ToString("o");
+    static readonly HashSet<string> EscalatedEventTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "run.failed", "critic.error", "validator.error", "project.hold.set", "project.review.failed"
+    };
     int _refreshing;
     int _mcpDiscoveryRunning;
     readonly McpHost _mcp;
@@ -1748,7 +1753,53 @@ sealed class MainForm : Form
         var menu = new ContextMenuStrip(); menu.Items.Add("Open StatefulClanker", null, (_, _) => ShowFromTray()); menu.Items.Add("Exit", null, (_, _) => { _reallyExit = true; Close(); });
         _notify = new NotifyIcon { Text = "StatefulClanker", Icon = Icon ?? SystemIcons.Application, Visible = true, ContextMenuStrip = menu }; _notify.DoubleClick += (_, _) => ShowFromTray();
         BuildUi(); RestoreProjects(); Theme.Apply(this); _ = RefreshAllAsync();
-        _timer.Tick += async (_, _) => await RefreshAllAsync(); _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
+        _timer.Tick += async (_, _) => { await RefreshAllAsync(); EscalateNewEvents(); }; _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
+    }
+
+    // Surfaces failure/hold events from the active project's event log directly into the
+    // live embedded terminal session, so the human (and any AI composer running in that
+    // session) sees them without switching tabs. Only escalates the 5 event types that
+    // indicate a real failure or halt -- routine events are never injected.
+    void EscalateNewEvents()
+    {
+        if (!_terminal.HasActiveSession) return;
+        var project = _settings.ActiveProjectPath;
+        if (string.IsNullOrWhiteSpace(project) || !Directory.Exists(project)) return;
+        var eventsPath = System.IO.Path.Combine(project, ".statefulclanker", "events.jsonl");
+        foreach (var (ts, type, message) in ReadNewEvents(eventsPath, ref _eventCursorTs))
+        {
+            var text = string.IsNullOrWhiteSpace(message) ? type : $"{type}: {message}";
+            // Injects into the live PTY input stream (see EmbeddedTerminalPanel.InjectNotice
+            // for the accepted-risk note, ledger D7) -- may interleave with in-progress input.
+            _terminal.InjectNotice($"# [StatefulClanker] {text}");
+        }
+    }
+
+    static List<(string ts, string type, string message)> ReadNewEvents(string path, ref string? cursorTs)
+    {
+        var results = new List<(string ts, string type, string message)>();
+        if (!File.Exists(path)) return results;
+        string? newCursor = cursorTs;
+        foreach (var line in File.ReadLines(path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var d = JsonDocument.Parse(line);
+                var r = d.RootElement;
+                var ts = r.TryGetProperty("ts", out var t) ? t.GetString() : null;
+                var type = r.TryGetProperty("type", out var ty) ? ty.GetString() : null;
+                if (string.IsNullOrEmpty(ts) || string.IsNullOrEmpty(type)) continue;
+                if (cursorTs is not null && string.CompareOrdinal(ts, cursorTs) <= 0) continue;
+                if (!EscalatedEventTypes.Contains(type)) { if (newCursor is null || string.CompareOrdinal(ts, newCursor) > 0) newCursor = ts; continue; }
+                var message = r.TryGetProperty("message", out var mm) ? mm.GetString() ?? "" : "";
+                results.Add((ts, type, message));
+                if (newCursor is null || string.CompareOrdinal(ts, newCursor) > 0) newCursor = ts;
+            }
+            catch { }
+        }
+        cursorTs = newCursor;
+        return results;
     }
 
     static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 32, Margin = new Padding(0, 4, 8, 0) };
