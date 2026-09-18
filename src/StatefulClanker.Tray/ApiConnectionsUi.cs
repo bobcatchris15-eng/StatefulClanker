@@ -461,7 +461,7 @@ sealed class ApiConnectionDialog : Form
         var headers=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
         foreach(var part in _headers.Text.Split(';',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)){var i=part.IndexOf(':');if(i>0)headers[part[..i].Trim()]=part[(i+1)..].Trim();}
         var p=new ApiConnectionProfile{
-            name=_id.Text.Trim(),presetId=preset.Id,protocol="openai-chat",baseUrl=_url.Text.Trim().TrimEnd('/'),
+            name=_id.Text.Trim(),presetId=preset.Id,protocol="openai-chat",baseUrl=InferencePresets.Expand(_url.Text.Trim().TrimEnd('/'), string.IsNullOrWhiteSpace(_account.Text)?null:_account.Text.Trim()),
             modelsPath=preset.ModelsPathTemplate,discoveryKind=preset.DiscoveryKind,accountId=string.IsNullOrWhiteSpace(_account.Text)?null:_account.Text.Trim(),
             apiKeyEnv=string.IsNullOrWhiteSpace(_env.Text)?null:_env.Text.Trim(),headers=headers,toolModeDefault="native"
         };
