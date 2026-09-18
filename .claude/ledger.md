@@ -1,5 +1,5 @@
 # Terminal/MCP-import/escalation — orchestrator ledger
-Updated: 2026-09-18 | HEAD: 099bff4 | Graph: n/a (no graphify build for this repo)
+Updated: 2026-09-18 | HEAD: c618fd6 | Graph: n/a (no graphify build for this repo)
 
 ## Prior effort (archived)
 "MCP control plane" effort (2026-09-14) — DONE. Stood up mcp/ dual-host MCP server
@@ -96,7 +96,10 @@ the notice but only at a safe moment.
 ## Tasks (continued)
 | id | targets | status | attempts | last return line |
 |----|---------|--------|----------|------------------|
-| t6 | EmbeddedTerminalPanel.cs, Program.cs | TODO | 0 | - |
+| t6 | EmbeddedTerminalPanel.cs, Program.cs | DONE | 1 | toast + MessageFilter Enter-boundary flush; build clean; c618fd6 |
+
+## Effort complete (again)
+t6 closes the D7 disruption gap. Nothing outstanding.
 
 ## Unverified assumptions
 - T2/T3: whether ChatGPT/Gemini/other connector-style clients expose a locally
