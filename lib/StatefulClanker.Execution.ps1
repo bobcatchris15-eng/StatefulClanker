@@ -191,7 +191,20 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
     if(-not$fresh.fresh){$task=Get-SCTask $task.id;$task.status='needs_rework';$task.blockReason='Compiled context became stale before dispatch.';Save-SCTask $task;Add-SCProgressRecord $task $compilation $false 'stale-before-dispatch' ($fresh.reasons -join '; ')|Out-Null;Add-SCEvent 'context.stale' $task.blockReason @{taskId=$task.id;compilationId=$compilation.id;reasons=@($fresh.reasons)};Write-Warning $task.blockReason;return}
     $run=Invoke-SCProvider $task (New-SCWorkerPrompt $compilation) 'run' $ProviderOverride $null $compilation;$contextRequests=@(Capture-SCContextRequests $task $run $compilation);Write-SCJson (Get-SCPath ("runs/{0}.json"-f$run.id)) $run;$task=Get-SCTask $task.id;$task.latestRunId=$run.id;Save-SCTask $task
     if(Stop-SCForStaleCompilation $task $compilation 'stale-after-worker' 'Compiled state became stale while the worker was running.'){return}
-    if([int]$run.exitCode-ne 0){$task=Get-SCTask $task.id;$task.status='failed';$task.blockReason="Worker exited $($run.exitCode)";Save-SCTask $task;Add-SCEvent 'run.failed' $task.blockReason @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;compilationId=$compilation.id};Add-SCProgressRecord $task $compilation $false 'worker-failed' $task.blockReason|Out-Null;Write-Warning $task.blockReason;return};Add-SCEvent 'run.finished' "Worker finished $($run.id)" @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;compilationId=$compilation.id}
+    if([int]$run.exitCode-ne 0){
+        $task=Get-SCTask $task.id
+        $routeUnavailable=($run.PSObject.Properties['routeDeferred'] -and [bool]$run.routeDeferred) -or ($run.PSObject.Properties['routeExhausted'] -and [bool]$run.routeExhausted)
+        if($routeUnavailable){
+            $task.status='blocked'
+            $task.blockReason=if($run.stderr){"Inference routing unavailable: "+([string]$run.stderr).Trim()}else{'Inference routing unavailable; all eligible endpoints failed or are cooling down.'}
+            Save-SCTask $task
+            Add-SCEvent 'routing.deferred' $task.blockReason @{taskId=$task.id;runId=$run.id;compilationId=$compilation.id;retryAfter=if($run.PSObject.Properties['retryAfter']){$run.retryAfter}else{$null};routeHistory=if($run.PSObject.Properties['routeHistory']){@($run.routeHistory)}else{@()}}
+            Add-SCProgressRecord $task $compilation $false 'routing-unavailable' $task.blockReason|Out-Null
+            Write-Warning $task.blockReason
+            return
+        }
+        $task.status='failed';$task.blockReason="Worker exited $($run.exitCode)";Save-SCTask $task;Add-SCEvent 'run.failed' $task.blockReason @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;compilationId=$compilation.id};Add-SCProgressRecord $task $compilation $false 'worker-failed' $task.blockReason|Out-Null;Write-Warning $task.blockReason;return
+    };Add-SCEvent 'run.finished' "Worker finished $($run.id)" @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;compilationId=$compilation.id}
     if($contextRequests.Count-gt 0){$task=Get-SCTask $task.id;$task.status='needs_rework';$task.blockReason='Worker requested missing context; completion was not proposed.';Save-SCTask $task;Add-SCProgressRecord $task $compilation $false 'context-fault' ($contextRequests -join '; ')|Out-Null;Write-Warning $task.blockReason;return}
     $task=Get-SCTask $task.id;$proposal=New-SCCompletionProposal $task $run $compilation
     if([bool]$cfg.criticEnabled){
@@ -205,8 +218,9 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
         Save-SCTask $task
         if($critique.verdict-eq'ERROR'){
             $errDetail=if($critique.stderr){$critique.stderr.Trim()}else{'Critic review encountered an infrastructure error.'}
-            $task.status='needs_rework'
-            $task.blockReason="Critic infrastructure error: $errDetail"
+            $routeUnavailable=($critique.PSObject.Properties['routeDeferred'] -and [bool]$critique.routeDeferred) -or ($critique.PSObject.Properties['routeExhausted'] -and [bool]$critique.routeExhausted)
+            $task.status=if($routeUnavailable){'blocked'}else{'needs_rework'}
+            $task.blockReason=if($routeUnavailable){"Critic inference routing unavailable: $errDetail"}else{"Critic infrastructure error: $errDetail"}
             Save-SCTask $task
             Add-SCProgressRecord $task $compilation $false 'critic-error' $task.blockReason|Out-Null
             Add-SCEvent 'critic.error' $task.blockReason @{taskId=$task.id;receiptId=$critique.id;error=$errDetail}
@@ -236,8 +250,9 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
         Save-SCTask $task
         if($validation.verdict-eq'ERROR'){
             $errDetail=if($validation.stderr){$validation.stderr.Trim()}else{'Validator review encountered an infrastructure error.'}
-            $task.status='needs_rework'
-            $task.blockReason="Validator infrastructure error: $errDetail"
+            $routeUnavailable=($validation.PSObject.Properties['routeDeferred'] -and [bool]$validation.routeDeferred) -or ($validation.PSObject.Properties['routeExhausted'] -and [bool]$validation.routeExhausted)
+            $task.status=if($routeUnavailable){'blocked'}else{'needs_rework'}
+            $task.blockReason=if($routeUnavailable){"Validator inference routing unavailable: $errDetail"}else{"Validator infrastructure error: $errDetail"}
             Save-SCTask $task
             Add-SCProgressRecord $task $compilation $false 'validator-error' $task.blockReason|Out-Null
             Add-SCEvent 'validator.error' $task.blockReason @{taskId=$task.id;receiptId=$validation.id;error=$errDetail}
