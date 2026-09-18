@@ -134,7 +134,7 @@ function Register-SCRouteFailure([string]$Name,[string]$Class,[string]$Text) {
     $retry = if ($seconds -gt 0) { [datetimeoffset]::UtcNow.AddSeconds($seconds).ToString('o') } else { $null }
     $value = [ordered]@{
         state=$state; reason=$Class; failures=$failures; retryAfter=$retry;
-        lastFailure=[datetimeoffset]::UtcNow.ToString('o'); lastSuccess=if($old){$old.Value.lastSuccess}else{$null}
+        lastFailure=[datetimeoffset]::UtcNow.ToString('o'); lastSuccess=if($old -and $old.Value.PSObject.Properties['lastSuccess']){$old.Value.lastSuccess}else{$null}
     }
     if ($null -eq $old) { $h.endpoints | Add-Member -NotePropertyName $Name -NotePropertyValue ([pscustomobject]$value) -Force }
     else { $old.Value = [pscustomobject]$value }
@@ -167,6 +167,17 @@ function Get-SCRoutePreferenceName($Task,[string]$Stage='worker') {
     return $null
 }
 
+function Test-SCRouteRecordAvailable($Record) {
+    if ($null -eq $Record) { return $false }
+    if (-not (Test-SCRouteAvailable ([string]$Record.name))) { return $false }
+    $cfg=$Record.config
+    $type=if($cfg.PSObject.Properties['type']){[string]$cfg.type}else{'cli'}
+    if($type-eq'api' -and $cfg.PSObject.Properties['connection'] -and $cfg.connection){
+        if(-not(Test-SCRouteAvailable ("connection:"+[string]$cfg.connection))){return $false}
+    }
+    return $true
+}
+
 function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker') {
     $cfg = Get-SCConfig
     $prioritized = @(Get-SCPrioritizedProviders $cfg)
@@ -179,16 +190,37 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
 
     $preferred = Get-SCRoutePreferenceName $Task $Stage
     $ordered = @()
+    $preferredRecord=$null
     if ($preferred) {
         $p = $prioritized | Where-Object { $_.Name -eq $preferred } | Select-Object -First 1
-        if ($p) { $ordered += [pscustomobject]@{ name=$p.Name; config=$p.Config; priority=$p.Priority; preferred=$true } }
+        if ($p) {
+            $preferredRecord=[pscustomobject]@{ name=$p.Name; config=$p.Config; priority=$p.Priority; preferred=$true }
+            $ordered += $preferredRecord
+        }
+    }
+
+    # Preserve model continuity where possible: after the preferred API endpoint,
+    # try the same model through another configured connection before changing models.
+    $sameModel=@()
+    $rest=@()
+    $preferredModel=$null
+    $preferredIsApi=$false
+    if($preferredRecord){
+        $ptype=if($preferredRecord.config.PSObject.Properties['type']){[string]$preferredRecord.config.type}else{'cli'}
+        $preferredIsApi=($ptype-eq'api')
+        if($preferredIsApi -and $preferredRecord.config.PSObject.Properties['model']){$preferredModel=[string]$preferredRecord.config.model}
     }
     foreach ($p in $prioritized) {
         if ($preferred -and $p.Name -eq $preferred) { continue }
-        $ordered += [pscustomobject]@{ name=$p.Name; config=$p.Config; priority=$p.Priority; preferred=$false }
+        $record=[pscustomobject]@{ name=$p.Name; config=$p.Config; priority=$p.Priority; preferred=$false }
+        $type=if($p.Config.PSObject.Properties['type']){[string]$p.Config.type}else{'cli'}
+        $model=if($p.Config.PSObject.Properties['model']){[string]$p.Config.model}else{$null}
+        if($preferredIsApi -and $type-eq'api' -and $preferredModel -and $model-eq$preferredModel){$sameModel+=$record}else{$rest+=$record}
     }
+    $ordered+=@($sameModel|Sort-Object priority,name)
+    $ordered+=@($rest|Sort-Object priority,name)
 
-    $available = @($ordered | Where-Object { Test-SCRouteAvailable ([string]$_.name) })
+    $available = @($ordered | Where-Object { Test-SCRouteRecordAvailable $_ })
     $max = 6
     if ($cfg.PSObject.Properties['routing'] -and $cfg.routing -and $cfg.routing.PSObject.Properties['maxRouteAttempts']) {
         try { $max = [Math]::Min(32,[Math]::Max(1,[int]$cfg.routing.maxRouteAttempts)) } catch {}
