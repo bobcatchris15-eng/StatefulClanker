@@ -33,10 +33,29 @@ function Get-SCIntentContract {
     $path=Get-SCPath 'intent/contract.json'
     $contract=Read-SCJson $path
     if($null-eq$contract){
-        $contract=New-SCIntentContract
-        Write-SCJson $path $contract
-        Write-SCJson (Get-SCPath 'intent/history/revision-0000.json') $contract
-        Add-SCEvent 'intent.initialized' 'Initialized authoritative intent contract.' @{revision=0;directiveRevision=$contract.directiveRevision;directiveHash=$contract.directiveHash}
+        # Concurrent cycles can all observe a missing contract at once. Bootstrap
+        # under the cross-process state lock and re-check after acquiring it, so
+        # only the first cycle writes the initial contract and every other cycle
+        # reads that same persisted copy instead of clobbering it with its own
+        # freshly time-stamped one (which would fail every sibling's freshness
+        # check on the intent hash).
+        #
+        # The returned value is always re-read from disk rather than handed back
+        # as the in-memory object that was just written. ConvertFrom-Json parses
+        # an ISO-8601 string like 'updatedAt' into a [DateTime], and ConvertTo-Json
+        # trims a trailing-zero fractional-second digit when serializing it back
+        # (".5811720Z" -> ".581172Z"). Handing back the pre-serialization string
+        # would let this cycle hash a byte sequence its own later re-read can never
+        # reproduce, so its own freshness check would fail against its own write.
+        Invoke-SCLocked {
+            $existing=Read-SCJson $path
+            if($null-ne$existing){return}
+            $created=New-SCIntentContract
+            Write-SCJson $path $created
+            Write-SCJson (Get-SCPath 'intent/history/revision-0000.json') $created
+            Add-SCEvent 'intent.initialized' 'Initialized authoritative intent contract.' @{revision=0;directiveRevision=$created.directiveRevision;directiveHash=$created.directiveHash}
+        } | Out-Null
+        $contract=Read-SCJson $path
     } else {
         # Migration metadata only: old contracts predate current-directive separation.
         # Do not create a semantic intent revision merely to add these fields.

@@ -56,9 +56,14 @@ function New-SCCompilation($Task) {
 }
 function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit') {
     $reasons=@()
-    try{$state=Read-SCJson (Get-SCPath 'state.json')}catch{$state=$null}
-    try{$task=Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$Compilation.taskId))}catch{$task=$null}
-    try{$intent=Read-SCJson (Get-SCPath 'intent/contract.json')}catch{$intent=$null}
+    <# These reads take the cross-process state lock, same as every writer, because
+       Write-SCJson's atomic replace is not instantaneous: an unlocked reader can
+       transiently observe the target missing mid-replace, which an unwrapped
+       Read-SCJson surfaces as a spurious "unavailable" rather than the current
+       (or previous) committed content. #>
+    try{$state=Invoke-SCLocked { Read-SCJson (Get-SCPath 'state.json') }}catch{$state=$null}
+    try{$task=Invoke-SCLocked { Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$Compilation.taskId)) }}catch{$task=$null}
+    try{$intent=Invoke-SCLocked { Read-SCJson (Get-SCPath 'intent/contract.json') }}catch{$intent=$null}
     if($null-eq$state){$reasons+='project state unavailable during freshness check';return [ordered]@{fresh=$false;mode=$Mode;checkedAt=(Get-Date).ToUniversalTime().ToString('o');reasons=@($reasons)}}
     if($null-eq$task){$reasons+='task unavailable during freshness check';return [ordered]@{fresh=$false;mode=$Mode;checkedAt=(Get-Date).ToUniversalTime().ToString('o');reasons=@($reasons)}}
     $planIntent=Get-SCActivePlanIntent $state
@@ -71,7 +76,7 @@ function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit') {
     if((Get-SCTaskControlRevision $task)-ne[int]$Compilation.readSet.taskControlRevision){$reasons+='human task control changed'}
     if((Get-SCTaskDefinitionHash $task)-ne[string]$Compilation.readSet.taskDefinitionHash){$reasons+='task definition changed'}
     foreach($depRead in @($Compilation.readSet.dependencies)){
-        try{$dep=Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$depRead.id))}catch{$dep=$null}
+        try{$dep=Invoke-SCLocked { Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$depRead.id)) }}catch{$dep=$null}
         if($null-eq$dep){$reasons+="dependency missing: $($depRead.id)";continue}
         if([string]$dep.status-ne[string]$depRead.status){$reasons+="dependency status changed: $($dep.id)"}
         if([string]$dep.latestRunId-ne[string]$depRead.latestRunId){$reasons+="dependency run changed: $($dep.id)"}
