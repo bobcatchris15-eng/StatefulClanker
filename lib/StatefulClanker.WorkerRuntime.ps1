@@ -51,9 +51,17 @@ function Get-SCApiKey($Connection) {
     if($Connection.PSObject.Properties['apiKeyProtected']-and$Connection.apiKeyProtected){return Unprotect-SCApiKey ([string]$Connection.apiKeyProtected)}
     return $null
 }
+function Get-SCConnectionProtocol($Connection) {
+    if($Connection.PSObject.Properties['protocol']-and$Connection.protocol){return [string]$Connection.protocol}
+    return 'openai-chat'
+}
 function Get-SCApiUri($Connection) {
     $base=[string]$Connection.baseUrl;if([string]::IsNullOrWhiteSpace($base)){throw 'API connection baseUrl is required.'}
     if($Connection.PSObject.Properties['chatPath']-and$Connection.chatPath){return $base.TrimEnd('/')+'/'+([string]$Connection.chatPath).TrimStart('/')}
+    if((Get-SCConnectionProtocol $Connection)-eq'anthropic-messages'){
+        if($base.TrimEnd('/') -match '/v1/messages$'){return $base.TrimEnd('/')}
+        return $base.TrimEnd('/')+'/v1/messages'
+    }
     if($base.TrimEnd('/') -match '/chat/completions$'){return $base.TrimEnd('/')}
     return $base.TrimEnd('/')+'/chat/completions'
 }
@@ -61,20 +69,34 @@ function ConvertTo-SCHashtable($Object) {
     $h=@{};if($null-eq$Object){return $h}
     foreach($p in $Object.PSObject.Properties){$h[$p.Name]=[string]$p.Value};return $h
 }
+function Get-SCProjectSessionId {
+    $root=[IO.Path]::GetFullPath((Get-SCStateRoot)).ToLowerInvariant().TrimEnd([char[]]'\/')
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try{$bytes=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($root))}finally{$sha.Dispose()}
+    $g=New-Object 'byte[]' 16
+    [Array]::Copy($bytes,$g,16)
+    $g[6]=[byte]((($g[6]-band 0x0f)-bor 0x50))
+    $g[8]=[byte]((($g[8]-band 0x3f)-bor 0x80))
+    return ([guid]$g).ToString()
+}
 function New-SCApiHeaders($Connection) {
     $headers=@{'Accept'='application/json'}
-    $key=Get-SCApiKey $Connection;if($key){$headers['Authorization']='Bearer '+$key}
+    $key=Get-SCApiKey $Connection
+    if($key){
+        # Anthropic's native Messages API authenticates with x-api-key, not a Bearer
+        # token -- everything else this project talks to (OpenAI-compatible gateways)
+        # uses Authorization: Bearer.
+        if((Get-SCConnectionProtocol $Connection)-eq'anthropic-messages'){$headers['x-api-key']=$key}
+        else{$headers['Authorization']='Bearer '+$key}
+    }
     if($Connection.PSObject.Properties['headers']-and$Connection.headers){foreach($k in (ConvertTo-SCHashtable $Connection.headers).Keys){$headers[$k]=(ConvertTo-SCHashtable $Connection.headers)[$k]}}
-    # OpenCode Zen/Go require x-opencode-session: a per-conversation id used for
-    # prompt-cache routing, not an auth token. A static value in the connection's
-    # stored headers (e.g. set once via the Connections UI) would make every call
-    # from this connection look like one endless conversation, which defeats the
-    # cache-routing purpose and could plausibly hit a per-session limit under this
-    # project's concurrent worker dispatch. Each worker call already carries full
-    # context in the prompt (no server-side conversation to preserve across calls),
-    # so a fresh id per outgoing request is the correct semantics here -- the
-    # connection's stored value is only a marker that this header is required.
-    if($headers.ContainsKey('x-opencode-session')){$headers['x-opencode-session']=[Guid]::NewGuid().ToString()}
+    # OpenCode Zen/Go require x-opencode-session. It is not an auth token: it is a
+    # per-project session id used server-side for prompt-cache routing. The stored
+    # value in the machine connection is only a marker that this header is required.
+    # The actual id is a stable UUID derived from the project root, so each project
+    # gets its own session (good cache reuse within a project) and different projects
+    # never share one (no cross-project cache bleed).
+    if($headers.ContainsKey('x-opencode-session')){$headers['x-opencode-session']=Get-SCProjectSessionId}
     return $headers
 }
 function Resolve-SCWorkerPath([string]$Path,[switch]$AllowMissing) {
@@ -165,13 +187,84 @@ function Get-SCWorkerMaxSteps($Connection,$Task,[string]$Stage='worker') {
         default{return 32}
     }
 }
+# StrictMode-safe field read for a value that may be a Hashtable (this project's
+# tool/message literals, e.g. @{role='assistant';tool_calls=...}) OR a
+# PSCustomObject (parsed JSON). $Obj.PSObject.Properties[$Name] does NOT see
+# Hashtable keys -- it only reflects a Hashtable's own .NET members (Keys,
+# Values, Count...) -- so that existence-check pattern silently reports a
+# present hashtable key as missing. Under this project's Set-StrictMode -Version
+# 2.0, a direct miss on either shape throws, so a real existence check is
+# required rather than just trying the dot-access.
+function Get-SCField($Obj,[string]$Name) {
+    if($null-eq$Obj){return $null}
+    if($Obj -is [System.Collections.IDictionary]){if($Obj.Contains($Name)){return $Obj[$Name]}else{return $null}}
+    $p=$Obj.PSObject.Properties[$Name];if($p){return $p.Value};return $null
+}
+function ConvertTo-SCAnthropicTools($Tools) {
+    $out=@()
+    foreach($t in @($Tools)){
+        $fn=Get-SCField $t 'function';if($null-eq$fn){continue}
+        $out+=,[ordered]@{name=[string](Get-SCField $fn 'name');description=[string](Get-SCField $fn 'description');input_schema=(Get-SCField $fn 'parameters')}
+    }
+    return @($out)
+}
+# Translates this project's canonical OpenAI-shaped message history (role:
+# system|user|assistant|tool, tool calls as assistant.tool_calls / role=tool
+# replies) into Anthropic's Messages API shape: system is a separate top-level
+# field, not a message; an assistant turn's tool calls become tool_use content
+# blocks; and tool RESULTS become tool_result blocks inside a user turn (merging
+# consecutive role=tool messages into one turn, since Anthropic expects all of a
+# turn's tool results together, not one message per call the way OpenAI does).
+function ConvertTo-SCAnthropicMessages($Messages) {
+    $system=@();$out=@();$pendingResults=$null
+    foreach($m in @($Messages)){
+        $role=[string]$m.role
+        if($role-eq'system'){$system+=,[string]$m.content;continue}
+        if($role-eq'tool'){
+            if($null-eq$pendingResults){$pendingResults=@()}
+            $pendingResults+=,[ordered]@{type='tool_result';tool_use_id=[string]$m.tool_call_id;content=[string]$m.content}
+            continue
+        }
+        if($pendingResults){$out+=,[ordered]@{role='user';content=@($pendingResults)};$pendingResults=$null}
+        if($role-eq'assistant'){
+            $blocks=@()
+            $mContent=Get-SCField $m 'content';if(-not[string]::IsNullOrWhiteSpace([string]$mContent)){$blocks+=,[ordered]@{type='text';text=[string]$mContent}}
+            $mToolCalls=Get-SCField $m 'tool_calls'
+            if($mToolCalls){
+                foreach($call in @($mToolCalls)){
+                    $callFn=Get-SCField $call 'function';$callArgs=if($callFn){Get-SCField $callFn 'arguments'}else{$null}
+                    $input=try{if([string]::IsNullOrWhiteSpace([string]$callArgs)){[pscustomobject]@{}}else{[string]$callArgs|ConvertFrom-Json}}catch{[pscustomobject]@{}}
+                    $blocks+=,[ordered]@{type='tool_use';id=[string](Get-SCField $call 'id');name=[string](Get-SCField $callFn 'name');input=$input}
+                }
+            }
+            $out+=,[ordered]@{role='assistant';content=@($blocks)}
+            continue
+        }
+        $out+=,[ordered]@{role='user';content=[string]$m.content}
+    }
+    if($pendingResults){$out+=,[ordered]@{role='user';content=@($pendingResults)}}
+    return [ordered]@{system=($system-join"`n`n");messages=@($out)}
+}
 function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
-    $body=[ordered]@{model=[string]$Connection.model;messages=@($Messages)}
-    if($ToolMode-ne'text'){$body.tools=$Tools;$body.tool_choice='auto'}
-    if($Connection.PSObject.Properties['temperature']-and$null-ne$Connection.temperature){$body.temperature=[double]$Connection.temperature}
-    if($Connection.PSObject.Properties['maxTokens']-and[int]$Connection.maxTokens-gt0){$body.max_tokens=[int]$Connection.maxTokens}
-    if((Get-SCApiUri $Connection)-match'(?i)openrouter\.ai'){$body.usage=[ordered]@{include=$true}}
-    if($Connection.PSObject.Properties['body']-and$Connection.body){foreach($p in $Connection.body.PSObject.Properties){$body[$p.Name]=$p.Value}}
+    $protocol=Get-SCConnectionProtocol $Connection
+    if($protocol-eq'anthropic-messages'){
+        $translated=ConvertTo-SCAnthropicMessages $Messages
+        $body=[ordered]@{model=[string]$Connection.model;messages=$translated.messages}
+        if($translated.system){$body.system=$translated.system}
+        if($ToolMode-ne'text'){$body.tools=ConvertTo-SCAnthropicTools $Tools}
+        # Anthropic requires max_tokens on every request; the other providers here
+        # default it server-side, so only Anthropic needs a client-side fallback.
+        $body.max_tokens=if($Connection.PSObject.Properties['maxTokens']-and[int]$Connection.maxTokens-gt0){[int]$Connection.maxTokens}else{4096}
+        if($Connection.PSObject.Properties['temperature']-and$null-ne$Connection.temperature){$body.temperature=[double]$Connection.temperature}
+        if($Connection.PSObject.Properties['body']-and$Connection.body){foreach($p in $Connection.body.PSObject.Properties){$body[$p.Name]=$p.Value}}
+    } else {
+        $body=[ordered]@{model=[string]$Connection.model;messages=@($Messages)}
+        if($ToolMode-ne'text'){$body.tools=$Tools;$body.tool_choice='auto'}
+        if($Connection.PSObject.Properties['temperature']-and$null-ne$Connection.temperature){$body.temperature=[double]$Connection.temperature}
+        if($Connection.PSObject.Properties['maxTokens']-and[int]$Connection.maxTokens-gt0){$body.max_tokens=[int]$Connection.maxTokens}
+        if((Get-SCApiUri $Connection)-match'(?i)openrouter\.ai'){$body.usage=[ordered]@{include=$true}}
+        if($Connection.PSObject.Properties['body']-and$Connection.body){foreach($p in $Connection.body.PSObject.Properties){$body[$p.Name]=$p.Value}}
+    }
     $json=$body|ConvertTo-Json -Depth 40 -Compress
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
     $uri=Get-SCApiUri $Connection
@@ -193,7 +286,23 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
         }
     }
 }
-function Get-SCAssistantMessage($Response) {
+function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
+    if($Protocol-eq'anthropic-messages'){
+        # Normalize Anthropic's content-block array into the same {content;tool_calls}
+        # shape OpenAI's choices[0].message already has, so the rest of the worker
+        # loop (Invoke-SCDirectWorkerLoop) never needs to know which protocol answered.
+        if($null-eq$Response-or-not$Response.PSObject.Properties['content']){throw 'Inference endpoint returned no content.'}
+        $textParts=@();$toolCalls=@()
+        foreach($block in @($Response.content)){
+            $type=[string]$block.type
+            if($type-eq'text'){$textParts+=,[string]$block.text}
+            elseif($type-eq'tool_use'){
+                $argsJson=($block.input|ConvertTo-Json -Depth 30 -Compress)
+                $toolCalls+=,[pscustomobject]@{id=[string]$block.id;type='function';function=[pscustomobject]@{name=[string]$block.name;arguments=$argsJson}}
+            }
+        }
+        return [pscustomobject]@{content=($textParts-join"`n");tool_calls=@($toolCalls)}
+    }
     if($null-eq$Response-or$null-eq$Response.choices-or@($Response.choices).Count-eq0){throw 'Inference endpoint returned no choices.'}
     return $Response.choices[0].message
 }
@@ -215,8 +324,9 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
     $maxSteps=Get-SCWorkerMaxSteps $Connection $Task $Stage
     $registry=@(Get-SCWorkerToolRecords $Task $Stage);if($registry.Count-eq0){throw 'No worker capabilities are authorized for this invocation.'}
     $messages=@(@{role='system';content=New-SCDirectWorkerSystemPrompt $toolMode $registry},@{role='user';content=$Prompt});$tools=@($registry|ForEach-Object{$_.definition})
+    $protocol=Get-SCConnectionProtocol $Connection
     for($step=1;$step-le$maxSteps;$step++){
-        $response=Invoke-SCApiChat $Connection $messages $tools $toolMode;Add-SCApiUsage $UsageAccumulator $response;$m=Get-SCAssistantMessage $response
+        $response=Invoke-SCApiChat $Connection $messages $tools $toolMode;Add-SCApiUsage $UsageAccumulator $response;$m=Get-SCAssistantMessage $response $protocol
         if($toolMode-eq'text'){
             $raw=[string]$m.content;try{$cmd=$raw|ConvertFrom-Json}catch{throw "Text-tool model returned invalid JSON at step ${step}: $raw"}
             if($cmd.PSObject.Properties['final']){return [string]$cmd.final}

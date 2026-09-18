@@ -11,7 +11,17 @@ sealed record InferencePreset(
     string FreeLabel,
     string KeyPlaceholder,
     string SetupUrl,
-    string Instructions);
+    string Instructions,
+    // Wire protocol this connection speaks. "openai-chat" (default) covers every
+    // OpenAI-compatible gateway below. "anthropic-messages" is Anthropic's native
+    // Messages API -- different auth header, different request/response shape --
+    // the PowerShell worker runtime (lib/StatefulClanker.WorkerRuntime.ps1)
+    // translates this project's canonical OpenAI-shaped message history to/from
+    // it automatically, so nothing above the connection layer needs to know.
+    string Protocol = "openai-chat",
+    // Headers a connection using this preset should start with (e.g. Anthropic's
+    // required anthropic-version), seeded into the Headers field on preset select.
+    string DefaultHeaders = "");
 
 static class InferencePresets
 {
@@ -20,6 +30,10 @@ static class InferencePresets
         new("openrouter","OpenRouter","https://openrouter.ai/api/v1","/models","openai",false,true,
             "Ongoing free-model pool","sk-or-v1-...","https://openrouter.ai/settings/keys",
             "Create an OpenRouter account, open Settings > Keys, create a key, and paste it here. OpenRouter publishes free model variants and the openrouter/free router; model availability changes, so StatefulClanker discovers the live catalog instead of shipping a fixed list."),
+        new("anthropic","Anthropic","https://api.anthropic.com","/v1/models","openai",false,true,
+            "No ongoing free tier; pay-as-you-go (new accounts may get limited trial credit)","sk-ant-...","https://console.anthropic.com/settings/keys",
+            "Create an Anthropic account, open Console > API Keys, create a key, and paste it here. This preset uses Anthropic's native Messages API (x-api-key authentication and the anthropic-version header, not OpenAI-style Bearer tokens) -- StatefulClanker translates the worker/critic/validator tool-calling loop to and from Anthropic's wire format automatically, so it's used exactly like any other endpoint once saved.",
+            "anthropic-messages","anthropic-version: 2023-06-01"),
         new("groq","GroqCloud","https://api.groq.com/openai/v1","/models","openai",false,true,
             "Free rate-limited developer access","gsk_...","https://console.groq.com/keys",
             "Create a GroqCloud account, create an API key in the Groq console, and paste it here. The free developer limits vary by model and are returned/enforced by Groq."),

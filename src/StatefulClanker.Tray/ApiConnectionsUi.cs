@@ -115,7 +115,15 @@ static class ApiConnectionTester
         {
             using var h = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
             var key = !string.IsNullOrWhiteSpace(rawKey) ? rawKey : ApiConnectionStore.ResolveKey(p);
-            if (!string.IsNullOrWhiteSpace(key)) h.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key);
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                // Anthropic's native API authenticates with x-api-key, not a Bearer
+                // token; everything else here is an OpenAI-compatible gateway.
+                if (string.Equals(p.protocol,"anthropic-messages",StringComparison.OrdinalIgnoreCase))
+                    h.DefaultRequestHeaders.TryAddWithoutValidation("x-api-key", key);
+                else
+                    h.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key);
+            }
             foreach (var x in p.headers) h.DefaultRequestHeaders.TryAddWithoutValidation(x.Key,x.Value);
 
             var baseUrl = InferencePresets.Expand(p.baseUrl,p.accountId).TrimEnd('/');
@@ -445,6 +453,7 @@ sealed class ApiConnectionDialog : Form
     {
         if(_preset.SelectedItem is not InferencePreset p)return;
         if(overwrite||string.IsNullOrWhiteSpace(_url.Text))_url.Text=p.BaseUrlTemplate;
+        if((overwrite||string.IsNullOrWhiteSpace(_headers.Text))&&!string.IsNullOrWhiteSpace(p.DefaultHeaders))_headers.Text=p.DefaultHeaders;
         _account.Enabled=p.RequiresAccountId;_account.PlaceholderText=p.RequiresAccountId?"required":"not required";
         _key.PlaceholderText=p.RequiresApiKey?p.KeyPlaceholder:"optional / not required";
         _instructions.Text=$"{p.FreeLabel}\r\n\r\n{p.Instructions}";
@@ -462,7 +471,7 @@ sealed class ApiConnectionDialog : Form
         var headers=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
         foreach(var part in _headers.Text.Split(';',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)){var i=part.IndexOf(':');if(i>0)headers[part[..i].Trim()]=part[(i+1)..].Trim();}
         var p=new ApiConnectionProfile{
-            name=_id.Text.Trim(),presetId=preset.Id,protocol="openai-chat",baseUrl=InferencePresets.Expand(_url.Text.Trim().TrimEnd('/'), string.IsNullOrWhiteSpace(_account.Text)?null:_account.Text.Trim()),
+            name=_id.Text.Trim(),presetId=preset.Id,protocol=preset.Protocol,baseUrl=InferencePresets.Expand(_url.Text.Trim().TrimEnd('/'), string.IsNullOrWhiteSpace(_account.Text)?null:_account.Text.Trim()),
             modelsPath=preset.ModelsPathTemplate,discoveryKind=preset.DiscoveryKind,accountId=string.IsNullOrWhiteSpace(_account.Text)?null:_account.Text.Trim(),
             apiKeyEnv=string.IsNullOrWhiteSpace(_env.Text)?null:_env.Text.Trim(),headers=headers,toolModeDefault="native"
         };
