@@ -1,5 +1,5 @@
 # Terminal/MCP-import/escalation — orchestrator ledger
-Updated: 2026-09-18 | HEAD: 0145247 | Graph: n/a (no graphify build for this repo)
+Updated: 2026-09-18 | HEAD: 099bff4 | Graph: n/a (no graphify build for this repo)
 
 ## Prior effort (archived)
 "MCP control plane" effort (2026-09-14) — DONE. Stood up mcp/ dual-host MCP server
@@ -75,9 +75,28 @@ Three independent fixes/features to the Windows tray app + PowerShell harness:
 | t3 | Program.cs | DONE | 1 | MCP Import tab, checkbox = imported; build clean; b26faf6 |
 | t4+t5 | EmbeddedTerminalPanel.cs, Program.cs | DONE | 1 | ConPTYTerm.WriteToTerm + event cursor; build clean; 0145247 |
 
-## Effort complete
-All 3 objectives shipped: t1 (arrow keys), t2+t3 (MCP import backend+UI), t4+t5
-(failure escalation). Nothing outstanding for this effort.
+## Effort complete (reopened)
+All 3 original objectives shipped: t1 (arrow keys), t2+t3 (MCP import backend+UI),
+t4+t5 (failure escalation). Reopened for t6: user found the D7 tradeoff (writing
+notices straight into the live pty input stream on every timer tick) genuinely
+disruptive to in-progress typing, and wants the orchestrator AI to still receive
+the notice but only at a safe moment.
+
+- D8 2026-09-18: t6 replaces immediate pty injection with QUEUE + BOUNDARY FLUSH
+  plus a visual toast. User explicitly chose "both, timed safely" over
+  visual-only or automatic-but-idle-timed. Flush trigger is the user's own Enter
+  keypress (a natural command/turn boundary) rather than an idle-timeout heuristic,
+  because idle-timeout can still fire mid-thought with no keystroke yet typed.
+  Detecting Enter without consuming it (so the existing Win32InputMode/ConPTY key
+  routing and the T1 arrow-key fix are undisturbed) needs an observing, non-
+  consuming hook — `Application.AddMessageFilter` snooping WM_KEYDOWN is the
+  standard WinForms technique for this. Revisit if that proves unreliable against
+  Win32InputMode's own key capture (untested combination).
+
+## Tasks (continued)
+| id | targets | status | attempts | last return line |
+|----|---------|--------|----------|------------------|
+| t6 | EmbeddedTerminalPanel.cs, Program.cs | TODO | 0 | - |
 
 ## Unverified assumptions
 - T2/T3: whether ChatGPT/Gemini/other connector-style clients expose a locally
