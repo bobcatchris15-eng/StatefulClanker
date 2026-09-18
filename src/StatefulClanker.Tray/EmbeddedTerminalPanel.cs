@@ -23,6 +23,23 @@ sealed class EmbeddedTerminalPanel : UserControl
     readonly Label _status = new();
     readonly Panel _hostPanel = new();
 
+    // ElementHost does not forward arrow/Tab WM_KEYDOWN messages into its hosted WPF
+    // tree by default -- IsInputKey on the plain WinForms ElementHost returns false for
+    // them, so they get eaten by WinForms dialog/focus navigation before the WPF
+    // EasyTerminalControl (and its Win32InputMode/InputCapture settings) ever sees them.
+    // This subclass claims those keys as "input" only while the terminal has focus, so
+    // normal Tab-navigation between other tray controls is unaffected.
+    sealed class TerminalElementHost : ElementHost
+    {
+        protected override bool IsInputKey(Keys keyData)
+        {
+            var key = keyData & Keys.KeyCode;
+            if (ContainsFocus && (key is Keys.Left or Keys.Right or Keys.Up or Keys.Down or Keys.Tab))
+                return true;
+            return base.IsInputKey(keyData);
+        }
+    }
+
     ElementHost? _elementHost;
     EasyTerminalControl? _terminal;
     string? _projectPath;
@@ -197,7 +214,7 @@ sealed class EmbeddedTerminalPanel : UserControl
                 Theme = BuildTerminalTheme()
             };
 
-            _elementHost = new ElementHost
+            _elementHost = new TerminalElementHost
             {
                 Dock = DockStyle.Fill,
                 Child = _terminal,
