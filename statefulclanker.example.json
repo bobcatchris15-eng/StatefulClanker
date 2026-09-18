@@ -8,6 +8,11 @@
     "medium": null,
     "large": null
   },
+  "routing": {
+    "selectionMode": "pinned",
+    "_comment": "'pinned' uses defaultProvider/providerBySize/criticProvider/validatorProvider as above. 'random' ignores all of those (an explicit per-task 'provider' field still pins that one task) and picks uniformly at random among enabled endpoints that are currently healthy -- useful once tasks are bounded/small enough that which model answers matters less than just getting one that's up.",
+    "maxRouteAttempts": 6
+  },
   "providers": {
     "codex": {
       "type": "cli",

@@ -143,16 +143,32 @@ function Register-SCRouteFailure([string]$Name,[string]$Class,[string]$Text) {
     return [pscustomobject]$value
 }
 
+function Get-SCTaskExplicitProvider($Task) {
+    if (-not $Task) { return $null }
+    if ($Task -is [System.Collections.IDictionary]) {
+        if ($Task.Contains('provider') -and $Task['provider']) { return [string]$Task['provider'] }
+        return $null
+    }
+    if ($Task.PSObject.Properties['provider'] -and $Task.provider) { return [string]$Task.provider }
+    return $null
+}
+
+function Get-SCRoutingSelectionMode($Config) {
+    if ($Config -and $Config.PSObject.Properties['routing'] -and $Config.routing -and $Config.routing.PSObject.Properties['selectionMode']) {
+        $mode = [string]$Config.routing.selectionMode
+        if ($mode -eq 'random') { return 'random' }
+    }
+    return 'pinned'
+}
+
 function Get-SCRoutePreferenceName($Task,[string]$Stage='worker') {
     $cfg = Get-SCConfig
-    $taskProvider = $null
+    $taskProvider = Get-SCTaskExplicitProvider $Task
     $taskSize = 'small'
     if ($Task) {
         if ($Task -is [System.Collections.IDictionary]) {
-            if ($Task.Contains('provider') -and $Task['provider']) { $taskProvider = [string]$Task['provider'] }
             if ($Task.Contains('size') -and $Task['size']) { $taskSize = [string]$Task['size'] }
         } else {
-            if ($Task.PSObject.Properties['provider'] -and $Task.provider) { $taskProvider = [string]$Task.provider }
             if ($Task.PSObject.Properties['size'] -and $Task.size) { $taskSize = [string]$Task.size }
         }
     }
@@ -188,7 +204,15 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
         return @([pscustomobject]@{ name=$Override; config=$property.Value; priority=-1; preferred=$true })
     }
 
-    $preferred = Get-SCRoutePreferenceName $Task $Stage
+    $mode = Get-SCRoutingSelectionMode $cfg
+    # In random mode, ambient pins (defaultProvider/providerBySize/criticProvider/
+    # validatorProvider) are ignored -- only an explicit per-task provider field
+    # still pins a route, since that's deliberate one-off intent rather than an
+    # always-on default. Everything else is chosen from whatever's enabled and
+    # currently healthy, in shuffled order, on the theory that with bounded task
+    # decomposition the specific model matters less than just getting an available
+    # one to respond.
+    $preferred = if ($mode -eq 'random') { Get-SCTaskExplicitProvider $Task } else { Get-SCRoutePreferenceName $Task $Stage }
     $ordered = @()
     $preferredRecord=$null
     if ($preferred) {
@@ -217,8 +241,13 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
         $model=if($p.Config.PSObject.Properties['model']){[string]$p.Config.model}else{$null}
         if($preferredIsApi -and $type-eq'api' -and $preferredModel -and $model-eq$preferredModel){$sameModel+=$record}else{$rest+=$record}
     }
-    $ordered+=@($sameModel|Sort-Object priority,name)
-    $ordered+=@($rest|Sort-Object priority,name)
+    if ($mode -eq 'random') {
+        $ordered += @($sameModel | Sort-Object { Get-Random })
+        $ordered += @($rest | Sort-Object { Get-Random })
+    } else {
+        $ordered += @($sameModel | Sort-Object priority,name)
+        $ordered += @($rest | Sort-Object priority,name)
+    }
 
     $available = @($ordered | Where-Object { Test-SCRouteRecordAvailable $_ })
     $max = 6
