@@ -65,6 +65,16 @@ function New-SCApiHeaders($Connection) {
     $headers=@{'Accept'='application/json'}
     $key=Get-SCApiKey $Connection;if($key){$headers['Authorization']='Bearer '+$key}
     if($Connection.PSObject.Properties['headers']-and$Connection.headers){foreach($k in (ConvertTo-SCHashtable $Connection.headers).Keys){$headers[$k]=(ConvertTo-SCHashtable $Connection.headers)[$k]}}
+    # OpenCode Zen/Go require x-opencode-session: a per-conversation id used for
+    # prompt-cache routing, not an auth token. A static value in the connection's
+    # stored headers (e.g. set once via the Connections UI) would make every call
+    # from this connection look like one endless conversation, which defeats the
+    # cache-routing purpose and could plausibly hit a per-session limit under this
+    # project's concurrent worker dispatch. Each worker call already carries full
+    # context in the prompt (no server-side conversation to preserve across calls),
+    # so a fresh id per outgoing request is the correct semantics here -- the
+    # connection's stored value is only a marker that this header is required.
+    if($headers.ContainsKey('x-opencode-session')){$headers['x-opencode-session']=[Guid]::NewGuid().ToString()}
     return $headers
 }
 function Resolve-SCWorkerPath([string]$Path,[switch]$AllowMissing) {
