@@ -31,8 +31,17 @@ sealed class EmbeddedTerminalPanel : UserControl
     // response and doesn't submit anything for a while).
     readonly System.Windows.Forms.Timer _idleFlushTimer = new() { Interval = 400 };
     static readonly TimeSpan IdleThreshold = TimeSpan.FromMilliseconds(900);
+    // Hard ceiling independent of typing detection. Observed in practice: idle
+    // detection here depends on this native ConPTY-hosted control reliably
+    // reporting focus/keystrokes to a plain WinForms message filter, which it does
+    // not always do -- notices were only ever delivered on an explicit Enter
+    // keypress, never automatically. Rather than debug that native-focus quirk
+    // further, cap how long a notice can sit queued: past this, it flushes no
+    // matter what the (possibly wrong) typing state says.
+    static readonly TimeSpan MaxQueueWait = TimeSpan.FromMilliseconds(2500);
     readonly Queue<string> _pendingNotices = new();
     DateTime _lastKeyUtc = DateTime.MinValue;
+    DateTime? _oldestPendingUtc;
     NoticeMessageFilter? _noticeFilter;
 
     sealed class NoticeMessageFilter : IMessageFilter
@@ -359,6 +368,7 @@ sealed class EmbeddedTerminalPanel : UserControl
     {
         if (string.IsNullOrWhiteSpace(text)) return;
         _pendingNotices.Enqueue(text);
+        _oldestPendingUtc ??= DateTime.UtcNow;
         ShowToast(text);
         TryFlushIfIdle();
     }
@@ -367,11 +377,16 @@ sealed class EmbeddedTerminalPanel : UserControl
     // ever been observed, or the last one is older than IdleThreshold, flush right
     // away instead of waiting for an Enter that may not come. _idleFlushTimer covers
     // the case where a notice arrives mid-typing -- it keeps checking every tick and
-    // flushes the moment typing pauses.
+    // flushes the moment typing pauses. MaxQueueWait is a backstop: it flushes
+    // regardless of the idle check once a notice has waited long enough, so a
+    // missed/unreliable keystroke observation never turns into "only sends when the
+    // human happens to press Enter."
     void TryFlushIfIdle()
     {
         if (_pendingNotices.Count == 0) return;
-        if (_lastKeyUtc == DateTime.MinValue || DateTime.UtcNow - _lastKeyUtc >= IdleThreshold)
+        var idle = _lastKeyUtc == DateTime.MinValue || DateTime.UtcNow - _lastKeyUtc >= IdleThreshold;
+        var overdue = _oldestPendingUtc.HasValue && DateTime.UtcNow - _oldestPendingUtc.Value >= MaxQueueWait;
+        if (idle || overdue)
             FlushPendingNotices();
     }
 
@@ -408,6 +423,7 @@ sealed class EmbeddedTerminalPanel : UserControl
         if (!HasActiveSession)
         {
             _pendingNotices.Clear();
+            _oldestPendingUtc = null;
             return;
         }
         try
@@ -419,6 +435,7 @@ sealed class EmbeddedTerminalPanel : UserControl
         finally
         {
             _pendingNotices.Clear();
+            _oldestPendingUtc = null;
         }
     }
 
