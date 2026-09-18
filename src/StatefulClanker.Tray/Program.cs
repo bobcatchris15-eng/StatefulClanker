@@ -313,6 +313,16 @@ sealed class TaskBoardEntry
     public string Title = "";
     public string Status = "";
     public string CreatedAt = "";
+    public string? BlockReason;
+    public int AttemptCount;
+    public string? LatestRunId;
+    public string? LatestCritiqueId;
+    public string? LatestValidationId;
+    public string? LatestProposalId;
+    public string? Role;
+    public string? Size;
+    public string? Provider;
+    public List<string> DependsOn = new();
 }
 
 sealed class ProjectMetrics
@@ -416,7 +426,41 @@ static class Inspector
                 if (string.IsNullOrEmpty(id)) id = System.IO.Path.GetFileNameWithoutExtension(file);
                 var title = root.TryGetProperty("title", out var titleProp) && titleProp.ValueKind == JsonValueKind.String ? (titleProp.GetString() ?? "") : "";
                 var createdAt = root.TryGetProperty("createdAt", out var caProp) && caProp.ValueKind == JsonValueKind.String ? (caProp.GetString() ?? "") : "";
-                m.TaskBoard.Add(new TaskBoardEntry { Id = id, Title = string.IsNullOrEmpty(title) ? id : title, Status = status, CreatedAt = createdAt });
+                var blockReason = root.TryGetProperty("blockReason", out var brProp) && brProp.ValueKind == JsonValueKind.String ? brProp.GetString() : null;
+                var attemptCount = root.TryGetProperty("attemptCount", out var acProp) && acProp.TryGetInt32(out var ac) ? ac : 0;
+                var latestRunId = root.TryGetProperty("latestRunId", out var lriProp) && lriProp.ValueKind == JsonValueKind.String ? lriProp.GetString() : null;
+                var latestCritiqueId = root.TryGetProperty("latestCritiqueId", out var lciProp) && lciProp.ValueKind == JsonValueKind.String ? lciProp.GetString() : null;
+                var latestValidationId = root.TryGetProperty("latestValidationId", out var lviProp) && lviProp.ValueKind == JsonValueKind.String ? lviProp.GetString() : null;
+                var latestProposalId = root.TryGetProperty("latestProposalId", out var lpiProp) && lpiProp.ValueKind == JsonValueKind.String ? lpiProp.GetString() : null;
+                var role = root.TryGetProperty("role", out var roleProp) && roleProp.ValueKind == JsonValueKind.String ? roleProp.GetString() : null;
+                var size = root.TryGetProperty("size", out var sizeProp) && sizeProp.ValueKind == JsonValueKind.String ? sizeProp.GetString() : null;
+                var provider = root.TryGetProperty("provider", out var provProp) && provProp.ValueKind == JsonValueKind.String ? provProp.GetString() : null;
+                var dependsOn = new List<string>();
+                if (root.TryGetProperty("dependsOn", out var depProp) && depProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var el in depProp.EnumerateArray())
+                    {
+                        if (el.ValueKind == JsonValueKind.String && el.GetString() is { } dep && !string.IsNullOrWhiteSpace(dep))
+                            dependsOn.Add(dep);
+                    }
+                }
+                m.TaskBoard.Add(new TaskBoardEntry
+                {
+                    Id = id,
+                    Title = string.IsNullOrEmpty(title) ? id : title,
+                    Status = status,
+                    CreatedAt = createdAt,
+                    BlockReason = blockReason,
+                    AttemptCount = attemptCount,
+                    LatestRunId = latestRunId,
+                    LatestCritiqueId = latestCritiqueId,
+                    LatestValidationId = latestValidationId,
+                    LatestProposalId = latestProposalId,
+                    Role = role,
+                    Size = size,
+                    Provider = provider,
+                    DependsOn = dependsOn
+                });
             }
             catch { }
         }
@@ -547,11 +591,220 @@ static class Inspector
         catch { }
         return sb.Length == 0 ? "No activity recorded." : sb.ToString();
     }
+
+    public static (string summary, string details) GetTaskDiagnostics(string project, TaskBoardEntry task)
+    {
+        var state = System.IO.Path.Combine(project, ".statefulclanker");
+        var sb = new StringBuilder();
+        string summary = task.BlockReason ?? (!string.IsNullOrEmpty(task.Status) ? $"Status: {task.Status}" : "No failure reason recorded.");
+
+        sb.AppendLine($"TASK ID:         {task.Id}");
+        sb.AppendLine($"TITLE:           {task.Title}");
+        sb.AppendLine($"STATUS:          {task.Status.ToUpperInvariant()}");
+        if (task.AttemptCount > 0) sb.AppendLine($"ATTEMPTS:        {task.AttemptCount}");
+        if (!string.IsNullOrEmpty(task.Role)) sb.AppendLine($"ROLE:            {task.Role}");
+        if (!string.IsNullOrEmpty(task.Size)) sb.AppendLine($"SIZE:            {task.Size}");
+        if (!string.IsNullOrEmpty(task.Provider)) sb.AppendLine($"PROVIDER:        {task.Provider}");
+        if (task.DependsOn.Count > 0) sb.AppendLine($"DEPENDS ON:      {string.Join(", ", task.DependsOn)}");
+
+        if (!string.IsNullOrWhiteSpace(task.BlockReason))
+        {
+            sb.AppendLine();
+            sb.AppendLine("================================================================================");
+            sb.AppendLine("PRIMARY FAILURE / BLOCK REASON:");
+            sb.AppendLine($"  {task.BlockReason}");
+            sb.AppendLine("================================================================================");
+        }
+
+        // 1. Critic Review Receipt / Diagnostics
+        if (!string.IsNullOrWhiteSpace(task.LatestCritiqueId))
+        {
+            var jsonPath = System.IO.Path.Combine(state, "critiques", $"{task.LatestCritiqueId}.json");
+            var stdoutPath = System.IO.Path.Combine(state, "critiques", $"{task.LatestCritiqueId}.stdout.txt");
+            sb.AppendLine();
+            sb.AppendLine($"[CRITIC REVIEW RECEIPT: {task.LatestCritiqueId}]");
+            if (File.Exists(jsonPath))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("verdict", out var v)) sb.AppendLine($"Verdict:    {v.GetString()}");
+                    if (root.TryGetProperty("provider", out var p)) sb.AppendLine($"Provider:   {p.GetString()}");
+                    if (root.TryGetProperty("exitCode", out var ec)) sb.AppendLine($"Exit Code:  {ec.GetInt32()}");
+                    if (root.TryGetProperty("gateReasons", out var gr) && gr.ValueKind == JsonValueKind.Array)
+                    {
+                        sb.AppendLine("Gate Violations:");
+                        foreach (var g in gr.EnumerateArray()) sb.AppendLine($"  - {g.GetString()}");
+                    }
+                    if (root.TryGetProperty("feedback", out var fb) && !string.IsNullOrWhiteSpace(fb.GetString()))
+                    {
+                        sb.AppendLine($"Critic Feedback:\n{fb.GetString()?.Trim()}");
+                    }
+                    if (root.TryGetProperty("error", out var err) && !string.IsNullOrWhiteSpace(err.GetString()))
+                    {
+                        sb.AppendLine($"Critic Error:\n{err.GetString()?.Trim()}");
+                    }
+                    if (root.TryGetProperty("stderr", out var se) && !string.IsNullOrWhiteSpace(se.GetString()))
+                    {
+                        sb.AppendLine($"Critic Stderr:\n{se.GetString()?.Trim()}");
+                    }
+                }
+                catch { }
+            }
+            if (File.Exists(stdoutPath))
+            {
+                try
+                {
+                    var stdout = File.ReadAllText(stdoutPath).Trim();
+                    if (!string.IsNullOrWhiteSpace(stdout)) sb.AppendLine($"Critique Output Log:\n{stdout}");
+                }
+                catch { }
+            }
+        }
+
+        // 2. Validation Receipt / Diagnostics
+        if (!string.IsNullOrWhiteSpace(task.LatestValidationId))
+        {
+            var jsonPath = System.IO.Path.Combine(state, "validations", $"{task.LatestValidationId}.json");
+            var stdoutPath = System.IO.Path.Combine(state, "validations", $"{task.LatestValidationId}.stdout.txt");
+            sb.AppendLine();
+            sb.AppendLine($"[VALIDATION RECEIPT: {task.LatestValidationId}]");
+            if (File.Exists(jsonPath))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("verdict", out var v)) sb.AppendLine($"Verdict:    {v.GetString()}");
+                    if (root.TryGetProperty("feedback", out var fb) && !string.IsNullOrWhiteSpace(fb.GetString()))
+                        sb.AppendLine($"Validation Feedback:\n{fb.GetString()?.Trim()}");
+                    if (root.TryGetProperty("error", out var err) && !string.IsNullOrWhiteSpace(err.GetString()))
+                        sb.AppendLine($"Validation Error:\n{err.GetString()?.Trim()}");
+                }
+                catch { }
+            }
+            if (File.Exists(stdoutPath))
+            {
+                try
+                {
+                    var stdout = File.ReadAllText(stdoutPath).Trim();
+                    if (!string.IsNullOrWhiteSpace(stdout)) sb.AppendLine($"Validation Output Log:\n{stdout}");
+                }
+                catch { }
+            }
+        }
+
+        // 3. Worker Run stderr / stdout / exit code
+        if (!string.IsNullOrWhiteSpace(task.LatestRunId))
+        {
+            var jsonPath = System.IO.Path.Combine(state, "runs", $"{task.LatestRunId}.json");
+            var stderrPath = System.IO.Path.Combine(state, "runs", $"{task.LatestRunId}.stderr.txt");
+            var stdoutPath = System.IO.Path.Combine(state, "runs", $"{task.LatestRunId}.stdout.txt");
+            sb.AppendLine();
+            sb.AppendLine($"[WORKER RUN EXECUTION: {task.LatestRunId}]");
+            if (File.Exists(jsonPath))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("exitCode", out var ec)) sb.AppendLine($"Exit Code:  {ec.GetInt32()}");
+                    if (root.TryGetProperty("provider", out var p)) sb.AppendLine($"Provider:   {p.GetString()}");
+                    if (root.TryGetProperty("startedAt", out var sa)) sb.AppendLine($"Started:    {sa.GetString()}");
+                    if (root.TryGetProperty("finishedAt", out var fa)) sb.AppendLine($"Finished:   {fa.GetString()}");
+                    if (root.TryGetProperty("durationSeconds", out var ds)) sb.AppendLine($"Duration:   {ds.GetDouble():F1}s");
+                }
+                catch { }
+            }
+            if (File.Exists(stderrPath))
+            {
+                try
+                {
+                    var stderr = File.ReadAllText(stderrPath).Trim();
+                    if (!string.IsNullOrWhiteSpace(stderr)) sb.AppendLine($"Worker Standard Error:\n{stderr}");
+                }
+                catch { }
+            }
+            if (File.Exists(stdoutPath))
+            {
+                try
+                {
+                    var stdout = File.ReadAllText(stdoutPath).Trim();
+                    if (!string.IsNullOrWhiteSpace(stdout))
+                    {
+                        var preview = stdout.Length > 2000 ? stdout.Substring(0, 2000) + "\n... [truncated]" : stdout;
+                        sb.AppendLine($"Worker Standard Output:\n{preview}");
+                    }
+                }
+                catch { }
+            }
+        }
+
+        // 4. Proposal info
+        if (!string.IsNullOrWhiteSpace(task.LatestProposalId))
+        {
+            var jsonPath = System.IO.Path.Combine(state, "proposals", $"{task.LatestProposalId}.json");
+            if (File.Exists(jsonPath))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+                    var root = doc.RootElement;
+                    sb.AppendLine();
+                    sb.AppendLine($"[COMPLETION PROPOSAL: {task.LatestProposalId}]");
+                    if (root.TryGetProperty("status", out var ps)) sb.AppendLine($"Proposal Status: {ps.GetString()}");
+                    if (root.TryGetProperty("rejectionReasons", out var rr) && rr.ValueKind == JsonValueKind.Array)
+                    {
+                        sb.AppendLine("Rejection Reasons:");
+                        foreach (var r in rr.EnumerateArray()) sb.AppendLine($"  - {r.GetString()}");
+                    }
+                }
+                catch { }
+            }
+        }
+
+        // 5. Recent events for this task
+        var eventsPath = System.IO.Path.Combine(state, "events.jsonl");
+        if (File.Exists(eventsPath))
+        {
+            try
+            {
+                var matching = new List<string>();
+                foreach (var line in File.ReadLines(eventsPath).Where(x => !string.IsNullOrWhiteSpace(x)).TakeLast(250))
+                {
+                    if (line.Contains($"\"{task.Id}\"") || line.Contains(task.Id))
+                    {
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(line);
+                            var root = doc.RootElement;
+                            var ts = root.TryGetProperty("ts", out var tp) ? tp.GetString() : "";
+                            var type = root.TryGetProperty("type", out var typ) ? typ.GetString() : "";
+                            var msg = root.TryGetProperty("message", out var mp) ? mp.GetString() : "";
+                            var clock = DateTimeOffset.TryParse(ts, out var dto) ? dto.ToLocalTime().ToString("MM-dd HH:mm:ss") : ts;
+                            matching.Add($"{clock}  [{type}] {msg}");
+                        }
+                        catch { }
+                    }
+                }
+                if (matching.Count > 0)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("[RECENT TASK EVENTS]");
+                    foreach (var ev in matching.TakeLast(10)) sb.AppendLine($"  {ev}");
+                }
+            }
+            catch { }
+        }
+
+        return (summary, sb.ToString());
+    }
 }
 
 static class Theme
 {
-    public static readonly Color Back = Color.FromArgb(16, 22, 29), Surface = Color.FromArgb(24, 33, 43), Surface2 = Color.FromArgb(31, 42, 54), Border = Color.FromArgb(52, 69, 86), Text = Color.FromArgb(232, 239, 245), Muted = Color.FromArgb(135, 153, 171), Accent = Color.FromArgb(85, 198, 232), Good = Color.FromArgb(73, 217, 145), Warn = Color.FromArgb(255, 174, 74);
+    public static readonly Color Back = Color.FromArgb(16, 22, 29), Surface = Color.FromArgb(24, 33, 43), Surface2 = Color.FromArgb(31, 42, 54), Border = Color.FromArgb(52, 69, 86), Text = Color.FromArgb(232, 239, 245), Muted = Color.FromArgb(135, 153, 171), Accent = Color.FromArgb(85, 198, 232), Good = Color.FromArgb(73, 217, 145), Warn = Color.FromArgb(255, 174, 74), Error = Color.FromArgb(255, 85, 85);
     public static void Apply(Control root)
     {
         root.BackColor = Back; root.ForeColor = Text;
@@ -559,6 +812,7 @@ static class Theme
         {
             if (c is Button b) { b.FlatStyle = FlatStyle.Flat; b.FlatAppearance.BorderColor = Border; b.BackColor = Surface2; b.ForeColor = Text; }
             else if (c is TextBox tb) { tb.BackColor = Surface; tb.ForeColor = Text; }
+            else if (c is ComboBox cb) { cb.BackColor = Surface; cb.ForeColor = Text; cb.FlatStyle = FlatStyle.Flat; }
             else if (c is NumericUpDown nud) { nud.BackColor = Surface; nud.ForeColor = Text; }
             else if (c is TreeView tv) { tv.BackColor = Surface; tv.ForeColor = Text; tv.BorderStyle = BorderStyle.FixedSingle; }
             else if (c is DataGridView dg) { dg.BackgroundColor = Surface; dg.GridColor = Border; dg.BorderStyle = BorderStyle.None; dg.DefaultCellStyle.BackColor = Surface; dg.DefaultCellStyle.ForeColor = Text; dg.DefaultCellStyle.SelectionBackColor = Surface2; dg.DefaultCellStyle.SelectionForeColor = Text; dg.ColumnHeadersDefaultCellStyle.BackColor = Surface2; dg.ColumnHeadersDefaultCellStyle.ForeColor = Text; dg.EnableHeadersVisualStyles = false; }
@@ -858,41 +1112,248 @@ sealed class LedIndicator : Control
     }
 }
 
-sealed class TaskBoardRow : TableLayoutPanel
+sealed class PromptDialog : Form
 {
-    public readonly LedIndicator Led = new();
-    readonly Label _title = new() { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Theme.Text, Font = new Font("Cascadia Mono", 8.75f), Margin = new Padding(2, 0, 4, 0) };
-    readonly Label _status = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Cascadia Mono", 8f, FontStyle.Bold), Margin = new Padding(0, 0, 8, 0) };
+    readonly TextBox _input = new() { Dock = DockStyle.Top, Font = new Font("Cascadia Mono", 9f) };
+    public string Value => _input.Text.Trim();
 
-    public TaskBoardRow()
+    public PromptDialog(string title, string prompt, string defaultValue = "")
     {
-        Dock = DockStyle.Top;
-        Height = 24;
-        ColumnCount = 3;
-        RowCount = 1;
-        BackColor = Color.FromArgb(14, 19, 25);
-        Margin = new Padding(0, 0, 0, 1);
-        ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 26));
-        ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
-        Controls.Add(Led, 0, 0);
-        Controls.Add(_title, 1, 0);
-        Controls.Add(_status, 2, 0);
+        Text = title;
+        Width = 480;
+        Height = 180;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        MaximizeBox = false;
+        MinimizeBox = false;
+
+        var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(14) };
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var lbl = new Label { Text = prompt, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 9f) };
+        _input.Text = defaultValue;
+
+        var btnBar = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
+        var btnCancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 85, Height = 28 };
+        var btnOk = new Button { Text = "OK", DialogResult = DialogResult.OK, Width = 85, Height = 28 };
+        btnBar.Controls.AddRange(new Control[] { btnCancel, btnOk });
+
+        panel.Controls.Add(lbl, 0, 0);
+        panel.Controls.Add(_input, 0, 1);
+        panel.Controls.Add(btnBar, 0, 2);
+        Controls.Add(panel);
+        AcceptButton = btnOk;
+        CancelButton = btnCancel;
+        Theme.Apply(this);
     }
 
-    public void SetTask(TaskBoardEntry t)
+    public static string? Prompt(Form parent, string title, string prompt, string defaultValue = "")
     {
-        _title.Text = string.IsNullOrEmpty(t.Title) ? t.Id : t.Title;
-        var (color, label) = StatusVisual(t.Status);
-        Led.OnColor = color;
-        _status.Text = label;
-        _status.ForeColor = color;
-        Led.Invalidate();
+        using var dlg = new PromptDialog(title, prompt, defaultValue);
+        return dlg.ShowDialog(parent) == DialogResult.OK ? dlg.Value : null;
+    }
+}
+
+sealed class TaskDetailDialog : Form
+{
+    readonly string _root;
+    readonly string _projectPath;
+    readonly TaskBoardEntry _task;
+    readonly List<string> _providers;
+    readonly Action _onChanged;
+
+    readonly Label _headerStatus = new() { AutoSize = true, Font = new Font("Cascadia Mono", 10.5f, FontStyle.Bold), Margin = new Padding(0, 2, 8, 0) };
+    readonly Label _taskId = new() { AutoSize = true, Font = new Font("Cascadia Mono", 12f, FontStyle.Bold), ForeColor = Theme.Accent, Margin = new Padding(0, 0, 8, 0) };
+    readonly Label _taskTitle = new() { Dock = DockStyle.Top, Font = new Font("Segoe UI", 9.5f), AutoEllipsis = true, Margin = new Padding(0, 4, 0, 4) };
+    readonly Label _meta = new() { Dock = DockStyle.Top, Font = new Font("Cascadia Mono", 8.5f), ForeColor = Theme.Muted, Margin = new Padding(0, 0, 0, 6) };
+    readonly TextBox _diagText = new() { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Font = new Font("Cascadia Mono", 8.5f) };
+    readonly ComboBox _cboProviders = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160, Margin = new Padding(0, 4, 6, 0), Font = new Font("Segoe UI", 9f) };
+    readonly Button _btnRetry = new() { Text = "🔄 Retry Task", Width = 115, Height = 32, Margin = new Padding(0, 4, 6, 0) };
+    readonly Button _btnOverride = new() { Text = "⚡ Override & Complete", Width = 175, Height = 32, Margin = new Padding(0, 4, 6, 0) };
+    readonly Button _btnRetryProvider = new() { Text = "Retry with Provider", Width = 150, Height = 32, Margin = new Padding(0, 4, 6, 0) };
+    readonly Button _btnBlock = new() { Text = "🚫 Block Task", Width = 110, Height = 32, Margin = new Padding(0, 4, 6, 0) };
+    readonly Button _btnCopy = new() { Text = "📋 Copy Report", Width = 120, Height = 32, Margin = new Padding(0, 4, 6, 0) };
+    readonly Button _btnClose = new() { Text = "Close", Width = 80, Height = 32, Margin = new Padding(0, 4, 0, 0) };
+    readonly Label _statusMsg = new() { AutoSize = true, ForeColor = Theme.Accent, Font = new Font("Cascadia Mono", 8.5f, FontStyle.Bold), Margin = new Padding(4, 10, 4, 0) };
+    readonly List<Button> _actionButtons = new();
+
+    public TaskDetailDialog(Form parent, string root, string projectPath, TaskBoardEntry task, List<string> providers, Action onChanged)
+    {
+        _root = root;
+        _projectPath = projectPath;
+        _task = task;
+        _providers = providers;
+        _onChanged = onChanged;
+
+        Text = $"Task Diagnostics: {task.Id}";
+        Width = 840;
+        Height = 640;
+        MinimumSize = new Size(680, 500);
+        StartPosition = FormStartPosition.CenterParent;
+
+        _actionButtons.AddRange(new[] { _btnRetry, _btnOverride, _btnRetryProvider, _btnBlock });
+
+        BuildUi();
+        LoadDiagnostics();
+        Theme.Apply(this);
     }
 
-    // Green: done. Blue: worker actively running. Amber: critic/validator review
-    // in flight (same lamp color as the per-task validator blinkenlight). Red:
-    // rejected or awaiting retry. Dark: not started yet.
+    void BuildUi()
+    {
+        var main = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(12) };
+        main.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+        main.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        main.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        main.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
+
+        // Header
+        var header = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(8, 6, 8, 6) };
+        var topRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 26, WrapContents = false };
+        var (statusColor, statusLabel) = StatusVisual(_task.Status);
+        _headerStatus.Text = $"[{statusLabel}]";
+        _headerStatus.ForeColor = statusColor;
+        _taskId.Text = _task.Id;
+        topRow.Controls.Add(_headerStatus);
+        topRow.Controls.Add(_taskId);
+
+        _taskTitle.Text = _task.Title;
+        var metaList = new List<string>();
+        if (_task.AttemptCount > 0) metaList.Add($"Attempts: {_task.AttemptCount}");
+        if (!string.IsNullOrEmpty(_task.Role)) metaList.Add($"Role: {_task.Role}");
+        if (!string.IsNullOrEmpty(_task.Size)) metaList.Add($"Size: {_task.Size}");
+        if (!string.IsNullOrEmpty(_task.Provider)) metaList.Add($"Provider: {_task.Provider}");
+        if (_task.DependsOn.Count > 0) metaList.Add($"DependsOn: [{string.Join(", ", _task.DependsOn)}]");
+        _meta.Text = metaList.Count > 0 ? string.Join("  |  ", metaList) : "No special constraints";
+
+        header.Controls.Add(_meta);
+        header.Controls.Add(_taskTitle);
+        header.Controls.Add(topRow);
+        main.Controls.Add(header, 0, 0);
+
+        // Section label
+        var isFailure = _task.Status is "failed" or "needs_rework";
+        var isBlocked = _task.Status is "blocked" or "stale";
+        var sectionColor = isFailure ? Theme.Error : (isBlocked ? Theme.Warn : Theme.Accent);
+        var secLabel = new Label
+        {
+            Text = isFailure ? "⚠ FAILURE DIAGNOSTICS & LOG OUTPUT" : (isBlocked ? "⚠ BLOCKER & REASON DETAILS" : "TASK DETAILS & EXECUTION HISTORY"),
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.BottomLeft,
+            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold),
+            ForeColor = sectionColor
+        };
+        main.Controls.Add(secLabel, 0, 1);
+
+        // Diag text
+        main.Controls.Add(_diagText, 0, 2);
+
+        // Action panel
+        var actionPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
+        actionPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        actionPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+
+        var bar1 = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        _btnRetry.Click += async (_, _) => await RunActionAsync("Retrying task...", () => {
+            var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
+            return Runtime.RunPowerShell(_projectPath, "-File", harness, "task", "retry", "-TaskId", _task.Id);
+        });
+
+        _btnOverride.Click += async (_, _) => {
+            if (MessageBox.Show(this, $"Override validation and manually mark task '{_task.Id}' as COMPLETE?\n\nThis records human authority and immediately unblocks dependent downstream tasks.", "Manual Completion Override", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                return;
+            await RunActionAsync("Overriding validation and marking complete...", () => {
+                var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
+                return Runtime.RunPowerShell(_projectPath, "-File", harness, "complete", "-TaskId", _task.Id);
+            });
+        };
+
+        _btnBlock.Click += async (_, _) => {
+            var reason = PromptDialog.Prompt(this, "Block Task", $"Enter reason for blocking task '{_task.Id}':", _task.BlockReason ?? "Blocked by operator");
+            if (string.IsNullOrWhiteSpace(reason)) return;
+            await RunActionAsync("Blocking task...", () => {
+                var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
+                return Runtime.RunPowerShell(_projectPath, "-File", harness, "block", "-TaskId", _task.Id, "-Reason", reason);
+            });
+        };
+
+        _btnCopy.Click += (_, _) => {
+            Clipboard.SetText(_diagText.Text);
+            _statusMsg.Text = "Copied full diagnostics report to clipboard!";
+            _statusMsg.ForeColor = Theme.Good;
+        };
+
+        _btnClose.Click += (_, _) => Close();
+
+        bar1.Controls.AddRange(new Control[] { _btnRetry, _btnOverride, _btnBlock, _btnCopy, _btnClose });
+        actionPanel.Controls.Add(bar1, 0, 0);
+
+        var bar2 = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        _cboProviders.Items.Clear();
+        foreach (var p in _providers) _cboProviders.Items.Add(p);
+        if (!string.IsNullOrEmpty(_task.Provider) && _providers.Contains(_task.Provider))
+            _cboProviders.SelectedItem = _task.Provider;
+        else if (_cboProviders.Items.Count > 0)
+            _cboProviders.SelectedIndex = 0;
+
+        _btnRetryProvider.Click += async (_, _) => {
+            var selectedProv = _cboProviders.SelectedItem?.ToString();
+            if (string.IsNullOrWhiteSpace(selectedProv)) return;
+            await RunActionAsync($"Setting provider to '{selectedProv}' and retrying...", () => {
+                var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
+                Runtime.RunPowerShell(_projectPath, "-File", harness, "task", "set", "-TaskId", _task.Id, "-Provider", selectedProv);
+                return Runtime.RunPowerShell(_projectPath, "-File", harness, "task", "retry", "-TaskId", _task.Id);
+            });
+        };
+
+        var provLbl = new Label { Text = "Override Provider:", AutoSize = true, Margin = new Padding(0, 10, 4, 0), ForeColor = Theme.Muted };
+        bar2.Controls.AddRange(new Control[] { provLbl, _cboProviders, _btnRetryProvider, _statusMsg });
+        actionPanel.Controls.Add(bar2, 0, 1);
+
+        main.Controls.Add(actionPanel, 0, 3);
+        Controls.Add(main);
+    }
+
+    void LoadDiagnostics()
+    {
+        var (_, details) = Inspector.GetTaskDiagnostics(_projectPath, _task);
+        _diagText.Text = details;
+        _diagText.SelectionStart = 0;
+        _diagText.SelectionLength = 0;
+    }
+
+    async Task RunActionAsync(string busyText, Func<(int code, string stdout, string stderr)> action)
+    {
+        _statusMsg.Text = busyText;
+        _statusMsg.ForeColor = Theme.Accent;
+        foreach (var btn in _actionButtons) btn.Enabled = false;
+        try
+        {
+            var result = await Task.Run(action);
+            if (result.code == 0)
+            {
+                _statusMsg.Text = "Command completed successfully.";
+                _statusMsg.ForeColor = Theme.Good;
+                _onChanged();
+                await Task.Delay(400);
+                if (!IsDisposed) Close();
+            }
+            else
+            {
+                _statusMsg.Text = "Failed: " + (string.IsNullOrWhiteSpace(result.stderr) ? result.stdout : result.stderr).Trim();
+                _statusMsg.ForeColor = Theme.Error;
+                foreach (var btn in _actionButtons) btn.Enabled = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _statusMsg.Text = "Error: " + ex.Message;
+            _statusMsg.ForeColor = Theme.Error;
+            foreach (var btn in _actionButtons) btn.Enabled = true;
+        }
+    }
+
     static (Color, string) StatusVisual(string status) => status switch
     {
         "complete" => (Color.FromArgb(65, 235, 95), "DONE"),
@@ -901,10 +1362,125 @@ sealed class TaskBoardRow : TableLayoutPanel
         "validating" => (Color.FromArgb(255, 220, 70), "VALIDATOR"),
         "needs_rework" => (Color.FromArgb(240, 60, 60), "REJECTED"),
         "failed" => (Color.FromArgb(240, 60, 60), "FAILED"),
-        "stale" => (Color.FromArgb(240, 60, 60), "STALE"),
-        "blocked" => (Color.FromArgb(60, 70, 80), "BLOCKED"),
-        "ready" => (Color.FromArgb(60, 70, 80), "READY"),
-        "pending" => (Color.FromArgb(48, 58, 68), "PENDING"),
+        "stale" => (Color.FromArgb(255, 140, 50), "STALE"),
+        "blocked" => (Color.FromArgb(180, 70, 70), "BLOCKED"),
+        "ready" => (Color.FromArgb(80, 170, 220), "READY"),
+        "pending" => (Color.FromArgb(75, 90, 105), "PENDING"),
+        "" => (Color.FromArgb(48, 58, 68), "—"),
+        _ => (Color.FromArgb(48, 58, 68), status.ToUpperInvariant())
+    };
+}
+
+sealed class TaskBoardRow : TableLayoutPanel
+{
+    public readonly LedIndicator Led = new();
+    readonly Label _title = new() { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Theme.Text, Font = new Font("Cascadia Mono", 8.75f), Margin = new Padding(2, 0, 4, 0) };
+    readonly Label _status = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Cascadia Mono", 8f, FontStyle.Bold), Margin = new Padding(0, 0, 8, 0) };
+    readonly ToolTip _tooltip = new() { InitialDelay = 200, ReshowDelay = 100, AutoPopDelay = 12000 };
+    TaskBoardEntry? _entry;
+    Color _defaultBg = Color.FromArgb(14, 19, 25);
+    Color _hoverBg = Color.FromArgb(28, 38, 50);
+
+    public event Action<TaskBoardEntry>? InspectRequested;
+    public event Action<TaskBoardEntry>? RetryRequested;
+    public event Action<TaskBoardEntry>? CompleteRequested;
+    public event Action<TaskBoardEntry>? BlockRequested;
+
+    public TaskBoardRow()
+    {
+        Dock = DockStyle.Top;
+        Height = 26;
+        ColumnCount = 3;
+        RowCount = 1;
+        BackColor = _defaultBg;
+        Margin = new Padding(0, 0, 0, 1);
+        Cursor = Cursors.Hand;
+        ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 26));
+        ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
+        Controls.Add(Led, 0, 0);
+        Controls.Add(_title, 1, 0);
+        Controls.Add(_status, 2, 0);
+
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("🔍 View Failure Reason & Diagnostics...", null, (_, _) => { if (_entry != null) InspectRequested?.Invoke(_entry); });
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("🔄 Retry Task (Reset to Ready)", null, (_, _) => { if (_entry != null) RetryRequested?.Invoke(_entry); });
+        menu.Items.Add("⚡ Override & Mark Complete", null, (_, _) => { if (_entry != null) CompleteRequested?.Invoke(_entry); });
+        menu.Items.Add("🚫 Block Task...", null, (_, _) => { if (_entry != null) BlockRequested?.Invoke(_entry); });
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("📋 Copy Task ID", null, (_, _) => { if (_entry != null) Clipboard.SetText(_entry.Id); });
+        menu.Items.Add("📋 Copy Failure Reason", null, (_, _) => { if (_entry != null && !string.IsNullOrEmpty(_entry.BlockReason)) Clipboard.SetText(_entry.BlockReason); });
+
+        ContextMenuStrip = menu;
+        Led.ContextMenuStrip = menu;
+        _title.ContextMenuStrip = menu;
+        _status.ContextMenuStrip = menu;
+
+        foreach (Control c in new Control[] { this, Led, _title, _status })
+        {
+            c.Cursor = Cursors.Hand;
+            c.MouseEnter += (_, _) => { BackColor = _hoverBg; };
+            c.MouseLeave += (_, _) => { BackColor = _defaultBg; };
+            c.MouseClick += (s, e) =>
+            {
+                if (e.Button == MouseButtons.Left && _entry != null)
+                {
+                    InspectRequested?.Invoke(_entry);
+                }
+            };
+            c.DoubleClick += (_, _) =>
+            {
+                if (_entry != null) InspectRequested?.Invoke(_entry);
+            };
+        }
+    }
+
+    public void SetTask(TaskBoardEntry t)
+    {
+        _entry = t;
+        _title.Text = string.IsNullOrEmpty(t.Title) ? t.Id : t.Title;
+        var (color, label) = StatusVisual(t.Status);
+        Led.OnColor = color;
+        _status.Text = label;
+        _status.ForeColor = color;
+
+        if (t.Status is "failed" or "needs_rework")
+            _defaultBg = Color.FromArgb(38, 16, 20);
+        else if (t.Status == "blocked")
+            _defaultBg = Color.FromArgb(28, 20, 22);
+        else if (t.Status == "stale")
+            _defaultBg = Color.FromArgb(32, 24, 16);
+        else
+            _defaultBg = Color.FromArgb(14, 19, 25);
+
+        _hoverBg = Color.FromArgb(Math.Min(255, _defaultBg.R + 22), Math.Min(255, _defaultBg.G + 22), Math.Min(255, _defaultBg.B + 28));
+        BackColor = _defaultBg;
+
+        var tip = $"[{t.Id}] {t.Title}\nStatus: {label}" + (t.AttemptCount > 0 ? $" (Attempt #{t.AttemptCount})" : "");
+        if (!string.IsNullOrWhiteSpace(t.BlockReason)) tip += $"\nReason: {t.BlockReason}";
+        tip += "\n\n(Click to inspect failure & override options)";
+
+        _tooltip.SetToolTip(this, tip);
+        _tooltip.SetToolTip(_title, tip);
+        _tooltip.SetToolTip(_status, tip);
+        _tooltip.SetToolTip(Led, tip);
+
+        Led.Invalidate();
+    }
+
+    static (Color, string) StatusVisual(string status) => status switch
+    {
+        "complete" => (Color.FromArgb(65, 235, 95), "DONE"),
+        "running" => (Color.FromArgb(70, 150, 255), "RUNNING"),
+        "reviewing" => (Color.FromArgb(255, 220, 70), "CRITIC"),
+        "validating" => (Color.FromArgb(255, 220, 70), "VALIDATOR"),
+        "needs_rework" => (Color.FromArgb(240, 60, 60), "REJECTED"),
+        "failed" => (Color.FromArgb(240, 60, 60), "FAILED"),
+        "stale" => (Color.FromArgb(255, 140, 50), "STALE"),
+        "blocked" => (Color.FromArgb(180, 70, 70), "BLOCKED"),
+        "ready" => (Color.FromArgb(80, 170, 220), "READY"),
+        "pending" => (Color.FromArgb(75, 90, 105), "PENDING"),
         "" => (Color.FromArgb(48, 58, 68), "—"),
         _ => (Color.FromArgb(48, 58, 68), status.ToUpperInvariant())
     };
@@ -914,6 +1490,11 @@ sealed class TaskBoardPanel : Panel
 {
     readonly TableLayoutPanel _list = new() { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     readonly Label _empty = new() { Dock = DockStyle.Top, Height = 24, Text = "No tasks yet.", ForeColor = Theme.Muted, Font = new Font("Cascadia Mono", 8.75f), TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(4, 4, 0, 0) };
+
+    public event Action<TaskBoardEntry>? InspectRequested;
+    public event Action<TaskBoardEntry>? RetryRequested;
+    public event Action<TaskBoardEntry>? CompleteRequested;
+    public event Action<TaskBoardEntry>? BlockRequested;
 
     public TaskBoardPanel()
     {
@@ -932,9 +1513,15 @@ sealed class TaskBoardPanel : Panel
         {
             while (_list.Controls.Count < tasks.Count)
             {
-                _list.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+                var row = new TaskBoardRow();
+                row.InspectRequested += t => InspectRequested?.Invoke(t);
+                row.RetryRequested += t => RetryRequested?.Invoke(t);
+                row.CompleteRequested += t => CompleteRequested?.Invoke(t);
+                row.BlockRequested += t => BlockRequested?.Invoke(t);
+
+                _list.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
                 _list.RowCount = _list.Controls.Count + 1;
-                _list.Controls.Add(new TaskBoardRow(), 0, _list.Controls.Count);
+                _list.Controls.Add(row, 0, _list.Controls.Count);
             }
             while (_list.Controls.Count > tasks.Count)
             {
@@ -1024,6 +1611,10 @@ sealed class MainForm : Form
         _metrics[0].Text = "ACTIVE AGENTS: —";
         taskRail.Controls.Add(_metrics[0], 0, 0);
         _taskBoard.Dock = DockStyle.Fill; _taskBoard.Margin = new Padding(0);
+        _taskBoard.InspectRequested += task => ShowTaskDetails(task);
+        _taskBoard.RetryRequested += task => RetryTask(task);
+        _taskBoard.CompleteRequested += task => OverrideCompleteTask(task);
+        _taskBoard.BlockRequested += task => BlockTask(task);
         taskRail.Controls.Add(_taskBoard, 0, 1);
         shell.Controls.Add(taskRail, 2, 0);
     }
@@ -1712,4 +2303,71 @@ sealed class MainForm : Form
     static void Copy(string text) { if (!string.IsNullOrWhiteSpace(text)) Clipboard.SetText(text); }
     void ShowFromTray() { Show(); WindowState = FormWindowState.Normal; Activate(); }
     void HandleFormClosing(object? sender, FormClosingEventArgs e) { if (!_reallyExit) { e.Cancel = true; Hide(); return; } _timer.Stop(); _autofill.Dispose(); _mcp.Dispose(); _notify.Visible = false; _notify.Dispose(); }
+
+    void ShowTaskDetails(TaskBoardEntry task)
+    {
+        var path = _settings.ActiveProjectPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        var providers = ReadProviderStatus(path).Where(p => !p.Disabled).Select(p => p.Name).ToList();
+        using var dlg = new TaskDetailDialog(this, _root, path, task, providers, () => _ = RefreshAllAsync());
+        dlg.ShowDialog(this);
+    }
+
+    void RetryTask(TaskBoardEntry task, string? provider = null)
+    {
+        var path = _settings.ActiveProjectPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
+        Task.Run(() =>
+        {
+            if (!string.IsNullOrWhiteSpace(provider))
+            {
+                Runtime.RunPowerShell(path, "-File", harness, "task", "set", "-TaskId", task.Id, "-Provider", provider);
+            }
+            var r = Runtime.RunPowerShell(path, "-File", harness, "task", "retry", "-TaskId", task.Id);
+            if (r.code != 0)
+            {
+                BeginInvoke(() => MessageBox.Show(this, (string.IsNullOrWhiteSpace(r.stderr) ? r.stdout : r.stderr).Trim(), "Task Retry Failed", MessageBoxButtons.OK, MessageBoxIcon.Error));
+            }
+            _ = RefreshAllAsync();
+        });
+    }
+
+    void OverrideCompleteTask(TaskBoardEntry task)
+    {
+        var path = _settings.ActiveProjectPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        if (MessageBox.Show(this, $"Override validation and manually mark task '{task.Id}' as COMPLETE?\n\nThis records human authority and immediately unblocks dependent downstream tasks.", "Manual Completion Override", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+            return;
+
+        var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
+        Task.Run(() =>
+        {
+            var r = Runtime.RunPowerShell(path, "-File", harness, "complete", "-TaskId", task.Id);
+            if (r.code != 0)
+            {
+                BeginInvoke(() => MessageBox.Show(this, (string.IsNullOrWhiteSpace(r.stderr) ? r.stdout : r.stderr).Trim(), "Task Complete Failed", MessageBoxButtons.OK, MessageBoxIcon.Error));
+            }
+            _ = RefreshAllAsync();
+        });
+    }
+
+    void BlockTask(TaskBoardEntry task)
+    {
+        var path = _settings.ActiveProjectPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        var reason = PromptDialog.Prompt(this, "Block Task", $"Enter reason for blocking task '{task.Id}':", task.BlockReason ?? "Blocked by operator");
+        if (string.IsNullOrWhiteSpace(reason)) return;
+
+        var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
+        Task.Run(() =>
+        {
+            var r = Runtime.RunPowerShell(path, "-File", harness, "block", "-TaskId", task.Id, "-Reason", reason);
+            if (r.code != 0)
+            {
+                BeginInvoke(() => MessageBox.Show(this, (string.IsNullOrWhiteSpace(r.stderr) ? r.stdout : r.stderr).Trim(), "Block Task Failed", MessageBoxButtons.OK, MessageBoxIcon.Error));
+            }
+            _ = RefreshAllAsync();
+        });
+    }
 }
