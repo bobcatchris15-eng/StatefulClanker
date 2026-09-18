@@ -22,6 +22,22 @@ function Get-SCMachineConnection([string]$Name) {
     if($null-eq$p){throw "Machine API connection '$Name' is not configured in $(Get-SCMachineConnectionsPath)."}
     return $p.Value
 }
+function Get-SCEffectiveApiConnection($ProviderRecord) {
+    $connectionName=[string]$ProviderRecord.config.connection
+    $base=Get-SCMachineConnection $connectionName
+    $copy=[ordered]@{}
+    foreach($p in $base.PSObject.Properties){$copy[$p.Name]=$p.Value}
+    foreach($name in @('model','toolMode','maxSteps','maxTokens','temperature','chatPath','body')){
+        if($ProviderRecord.config.PSObject.Properties[$name] -and $null-ne$ProviderRecord.config.$name){
+            $copy[$name]=$ProviderRecord.config.$name
+        }
+    }
+    if((-not$copy.Contains('model')) -or [string]::IsNullOrWhiteSpace([string]$copy.model)){
+        throw "API endpoint '$($ProviderRecord.name)' does not specify a model. Add a discovered model to the project endpoint."
+    }
+    if((-not$copy.Contains('toolMode')) -or [string]::IsNullOrWhiteSpace([string]$copy.toolMode)){$copy['toolMode']='native'}
+    return [pscustomobject]$copy
+}
 function Unprotect-SCApiKey([string]$Protected) {
     if([string]::IsNullOrWhiteSpace($Protected)){return $null}
     try{
@@ -144,33 +160,26 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
     if($ToolMode-ne'text'){$body.tools=$Tools;$body.tool_choice='auto'}
     if($Connection.PSObject.Properties['temperature']-and$null-ne$Connection.temperature){$body.temperature=[double]$Connection.temperature}
     if($Connection.PSObject.Properties['maxTokens']-and[int]$Connection.maxTokens-gt0){$body.max_tokens=[int]$Connection.maxTokens}
-    # OpenRouter can return exact usage accounting when explicitly requested.
-    # Keep this provider-specific so generic OpenAI-compatible endpoints do not receive an extension they may reject.
     if((Get-SCApiUri $Connection)-match'(?i)openrouter\.ai'){$body.usage=[ordered]@{include=$true}}
     if($Connection.PSObject.Properties['body']-and$Connection.body){foreach($p in $Connection.body.PSObject.Properties){$body[$p.Name]=$p.Value}}
     $json=$body|ConvertTo-Json -Depth 40 -Compress
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
     $uri=Get-SCApiUri $Connection
     $headers=New-SCApiHeaders $Connection
-
-    $maxAttempts=5
+    $maxAttempts=2
     for($attempt=1;$attempt-le$maxAttempts;$attempt++){
         try{
             return Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 300
         }catch{
-            $ex=$_
-            $status=0
-            if($ex.Exception -and $ex.Exception.PSObject.Properties['Response'] -and $ex.Exception.Response){
-                try{$status=[int]$ex.Exception.Response.StatusCode}catch{}
-            }
-            $isTransient=($status -in @(429, 408, 500, 502, 503, 504)) -or ($ex.Exception.Message -match '(?i)timeout|timed out|forcibly closed|connection refused|reset by peer|429|502|503|504')
-            if($attempt -lt $maxAttempts -and $isTransient){
-                $backoffSec=[Math]::Pow(2, $attempt) + (Get-Random -Minimum 0.1 -Maximum 0.9)
-                Write-Warning "Direct inference request transient error ($($ex.Exception.Message)); retrying in $([math]::Round($backoffSec,1))s (attempt $attempt/$maxAttempts)..."
-                Start-Sleep -Seconds ([int][Math]::Ceiling($backoffSec))
-                continue
-            }
-            throw "Direct inference request failed: $($ex.Exception.Message)"
+            $ex=$_;$status=0
+            if($ex.Exception -and $ex.Exception.PSObject.Properties['Response'] -and $ex.Exception.Response){try{$status=[int]$ex.Exception.Response.StatusCode}catch{}}
+            $network=$ex.Exception.Message -match '(?i)timeout|timed out|forcibly closed|connection refused|reset by peer|network is unreachable'
+            $sameEndpointRetry=($status -in @(408,500,502,503,504)) -or $network
+            if($attempt-lt$maxAttempts -and $sameEndpointRetry){Start-Sleep -Milliseconds (Get-Random -Minimum 900 -Maximum 1500);continue}
+            $retryAfter=''
+            try{if($ex.Exception.Response -and $ex.Exception.Response.Headers){$ra=$ex.Exception.Response.Headers.RetryAfter;if($ra){$retryAfter=" Retry-After: $ra"}}}catch{}
+            $statusText=if($status-gt0){" HTTP $status"}else{''}
+            throw "Direct inference request failed$statusText: $($ex.Exception.Message)$retryAfter"
         }
     }
 }
@@ -214,20 +223,56 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
     throw "Direct worker exceeded maxSteps=$maxSteps without finishing."
 }
 function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$ProviderRecord,[string]$ParentAgentId,$Compilation) {
-    $connectionName=[string]$ProviderRecord.config.connection;$connection=Get-SCMachineConnection $connectionName
+    $connectionName=[string]$ProviderRecord.config.connection
+    $connection=Get-SCEffectiveApiConnection $ProviderRecord
     $receiptId=New-SCId $Stage;$agentId=New-SCId 'agent';$promptPath=Get-SCPath ("prompts/{0}.txt"-f$receiptId);$Prompt|Set-Content -LiteralPath $promptPath -Encoding UTF8
     $stdoutPath=Get-SCPath ("runs/{0}.stdout.txt"-f$receiptId);$stderrPath=Get-SCPath ("runs/{0}.stderr.txt"-f$receiptId);$started=(Get-Date).ToUniversalTime();$compilationId=if($Compilation){$Compilation.id}else{$null};$fingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};$retrievedChars=0;if($Compilation-and$Compilation.ir.sources.retrieved){$retrievedChars=[int]$Compilation.ir.sources.retrieved.usedChars}
     $capabilities=@(Get-SCWorkerToolRecords $Task $Stage|ForEach-Object{[string]$_.capability})
     $usage=@{fallbackModel=[string]$connection.model;apiRequests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L;modelUsage=@{}}
-    $telemetry=[ordered]@{schemaVersion=3;agentId=$agentId;receiptId=$receiptId;parentAgentId=$ParentAgentId;taskId=$Task.id;taskTitle=$Task.title;stage=$Stage;role=$Task.role;provider=$ProviderRecord.name;backendType='api';connection=$connectionName;model=[string]$connection.model;actualModels=@();modelUsage=@();apiRequests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L;capabilities=$capabilities;lifecycle='running';processId=$PID;startedAt=$started.ToString('o');heartbeatAt=$started.ToString('o');endedAt=$null;durationSeconds=$null;promptChars=$Prompt.Length;retrievedChars=$retrievedChars;compilationId=$compilationId;inputFingerprint=$fingerprint;command='direct-api';args=@();exitCode=$null;verdict=$null;stdoutPath=$stdoutPath;stderrPath=$stderrPath;error=$null}
+    $telemetry=[ordered]@{schemaVersion=4;agentId=$agentId;receiptId=$receiptId;parentAgentId=$ParentAgentId;taskId=$Task.id;taskTitle=$Task.title;stage=$Stage;role=$Task.role;provider=$ProviderRecord.name;endpoint=$ProviderRecord.name;backendType='api';connection=$connectionName;model=[string]$connection.model;actualModels=@();modelUsage=@();apiRequests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L;capabilities=$capabilities;lifecycle='running';processId=$PID;startedAt=$started.ToString('o');heartbeatAt=$started.ToString('o');endedAt=$null;durationSeconds=$null;promptChars=$Prompt.Length;retrievedChars=$retrievedChars;compilationId=$compilationId;inputFingerprint=$fingerprint;command='direct-api';args=@();exitCode=$null;verdict=$null;stdoutPath=$stdoutPath;stderrPath=$stderrPath;error=$null}
     Save-SCActiveTelemetry $telemetry;Add-SCTelemetryEvent 'agent.started' $telemetry;$stdout='';$stderr='';$exitCode=-1
     try{$stdout=Invoke-SCDirectWorkerLoop $connection $Prompt $Task $Stage $usage;$stdout|Set-Content -LiteralPath $stdoutPath -Encoding UTF8;$exitCode=0}catch{$stderr=$_|Out-String;$stderr|Set-Content -LiteralPath $stderrPath -Encoding UTF8;$telemetry.error=$stderr;$exitCode=-1}
     $modelUsage=@($usage.modelUsage.Values|Sort-Object model);$telemetry.apiRequests=[long]$usage.apiRequests;$telemetry.usageReports=[long]$usage.usageReports;$telemetry.promptTokens=[long]$usage.promptTokens;$telemetry.completionTokens=[long]$usage.completionTokens;$telemetry.totalTokens=[long]$usage.totalTokens;$telemetry.modelUsage=$modelUsage;$telemetry.actualModels=@($modelUsage|ForEach-Object{[string]$_.model})
     $ended=(Get-Date).ToUniversalTime();$telemetry.lifecycle=if($exitCode-eq0){'completed'}else{'failed'};$telemetry.exitCode=$exitCode;$telemetry.endedAt=$ended.ToString('o');$telemetry.heartbeatAt=$telemetry.endedAt;$telemetry.durationSeconds=[math]::Round(($ended-$started).TotalSeconds,3);Complete-SCTelemetry $telemetry
-    return [pscustomobject][ordered]@{schemaVersion=3;id=$receiptId;agentId=$agentId;taskId=$Task.id;stage=$Stage;provider=$ProviderRecord.name;backendType='api';connection=$connectionName;model=[string]$connection.model;actualModels=@($telemetry.actualModels);modelUsage=@($telemetry.modelUsage);apiRequests=$telemetry.apiRequests;usageReports=$telemetry.usageReports;promptTokens=$telemetry.promptTokens;completionTokens=$telemetry.completionTokens;totalTokens=$telemetry.totalTokens;capabilities=$capabilities;compilationId=$compilationId;inputFingerprint=$fingerprint;command='direct-api';args=@();promptPath=$promptPath;startedAt=$started.ToString('o');endedAt=$ended.ToString('o');durationSeconds=$telemetry.durationSeconds;exitCode=$exitCode;stdout=$stdout;stderr=$stderr;verdict=$null}
+    return [pscustomobject][ordered]@{schemaVersion=4;id=$receiptId;agentId=$agentId;taskId=$Task.id;stage=$Stage;provider=$ProviderRecord.name;endpoint=$ProviderRecord.name;backendType='api';connection=$connectionName;model=[string]$connection.model;actualModels=@($telemetry.actualModels);modelUsage=@($telemetry.modelUsage);apiRequests=$telemetry.apiRequests;usageReports=$telemetry.usageReports;promptTokens=$telemetry.promptTokens;completionTokens=$telemetry.completionTokens;totalTokens=$telemetry.totalTokens;capabilities=$capabilities;compilationId=$compilationId;inputFingerprint=$fingerprint;command='direct-api';args=@();promptPath=$promptPath;startedAt=$started.ToString('o');endedAt=$ended.ToString('o');durationSeconds=$telemetry.durationSeconds;exitCode=$exitCode;stdout=$stdout;stderr=$stderr;verdict=$null}
 }
 function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null) {
-    $record=Resolve-SCProvider $Task $ProviderOverride $Stage;$type=if($record.config.PSObject.Properties['type']){[string]$record.config.type}else{'cli'}
-    if($type-eq'api'){return Invoke-SCDirectApiProvider $Task $Prompt $Stage $record $ParentAgentId $Compilation}
-    return (& $script:SCInvokeProviderCliBase $Task $Prompt $Stage $ProviderOverride $ParentAgentId $Compilation)
+    $history=@()
+    $candidates=@(Get-SCProviderCandidates $Task $ProviderOverride $Stage)
+    if($candidates.Count-eq0){
+        $next=Get-SCNextRouteAvailability
+        $message=if($next){"All eligible inference endpoints are cooling down until at least $($next.ToLocalTime().ToString('o'))."}else{'No eligible inference endpoint is available.'}
+        $now=(Get-Date).ToUniversalTime().ToString('o')
+        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$null;endpoint=$null;compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr=$message;routeDeferred=$true;retryAfter=if($next){$next.ToString('o')}else{$null};routeAttempts=0;routeHistory=@()}
+    }
+    $last=$null
+    foreach($record in $candidates){
+        $type=if($record.config.PSObject.Properties['type']){[string]$record.config.type}else{'cli'}
+        try{
+            if($type-eq'api'){$receipt=Invoke-SCDirectApiProvider $Task $Prompt $Stage $record $ParentAgentId $Compilation}
+            else{$receipt=& $script:SCInvokeProviderCliBase $Task $Prompt $Stage ([string]$record.name) $ParentAgentId $Compilation}
+        }catch{
+            $now=(Get-Date).ToUniversalTime().ToString('o')
+            $receipt=[pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=[string]$record.name;endpoint=[string]$record.name;compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-1;stdout='';stderr=($_|Out-String)}
+        }
+        $last=$receipt
+        $text=(([string]$receipt.stderr)+[Environment]::NewLine+([string]$receipt.stdout)).Trim()
+        if([int]$receipt.exitCode-eq0){
+            Register-SCRouteSuccess ([string]$record.name)
+            if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection){Register-SCRouteSuccess ("connection:"+[string]$record.config.connection)}
+            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='success';failureClass=$null}
+            Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
+            if($history.Count-gt1){Add-SCEvent 'routing.failover_succeeded' "Endpoint failover succeeded on $($record.name)." @{taskId=$Task.id;stage=$Stage;attempts=$history.Count;history=@($history)}}
+            return $receipt
+        }
+        $class=Get-SCRouteFailureClass ([int]$receipt.exitCode) $text
+        $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='failed';failureClass=$class}
+        Register-SCRouteFailure ([string]$record.name) $class $text|Out-Null
+        if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection -and @('rate_limited','auth','capacity','timeout','server_error')-contains$class){Register-SCRouteFailure ("connection:"+[string]$record.config.connection) $class $text|Out-Null}
+        Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
+        if(-not(Test-SCRouteFailureTransient $class) -and $class-ne'auth'){Add-SCEvent 'routing.failover_stopped' "Endpoint failure is not safe to replay: $class" @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class};return $receipt}
+        Add-SCEvent 'routing.failover' "Endpoint $($record.name) failed ($class); trying another endpoint." @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class;attempt=$history.Count}
+    }
+    if($last){Set-SCProperty $last 'routeAttempts' $history.Count;Set-SCProperty $last 'routeHistory' @($history);Set-SCProperty $last 'routeExhausted' $true;return $last}
+    throw 'Routing produced no endpoint receipt.'
 }
