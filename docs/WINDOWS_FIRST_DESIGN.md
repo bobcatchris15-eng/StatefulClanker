@@ -83,7 +83,7 @@ Project policy may narrow machine worker capabilities but cannot grant new machi
 
 ## Worker backends
 
-The Providers surface represents **worker backends**, not only CLIs.
+The **Endpoints & Routing** surface represents executable project endpoints, not only CLIs. API endpoints are one machine Connection + one discovered model; CLI endpoints remain configured commands.
 
 ### CLI backend
 
@@ -107,11 +107,11 @@ The Windows app exposes a **Worker Capabilities** page for machine-level executi
 
 Profiles and project/task policy are narrowing layers only. `run_command` and external write/action tools should be treated as high-trust capabilities.
 
-## API Connections
+## Connections and endpoints
 
-The **API Connections** page stores multiple machine-level inference profiles. Secrets are DPAPI-encrypted for the current Windows user or referenced via environment variables. Project backend configuration stores only the connection id.
+The **Connections** page stores machine-level inference access. Secrets are DPAPI-encrypted for the current Windows user or referenced via environment variables. Adding a connection authenticates against the service and retrieves its live model catalog before Save is enabled.
 
-OpenRouter is exposed as a first-class machine setup: one **OpenRouter API Key** field populates the managed free-model profiles, all sharing the same DPAPI-protected credential and fixed OpenRouter base URL. The generic custom-connection editor remains for other OpenAI-compatible endpoints.
+OpenRouter and the other packaged services are presets rather than hardcoded model snapshots. A project endpoint references a Connection plus one selected discovered model; multiple Connections may expose the same model for quota/failover diversity.
 
 ## MCP host
 
@@ -131,8 +131,8 @@ Current/expected top-level surfaces are:
 - **Overview** — active project authority and headline metrics;
 - **Activity** — durable project event activity;
 - **Integrations** — MCP endpoint/stdio bridge/client registration;
-- **Providers** — configured CLI/API worker backends and routing;
-- **API Connections** — direct inference connection profiles;
+- **Endpoints & Routing** — project CLI/API endpoints, health, priority, and route preferences;
+- **Connections** — machine inference credentials, validation, and discovered model catalogs;
 - **Worker Capabilities** — machine grants/profiles and external MCP tool sources.
 
 Planning remains conversational through MCP; the desktop app is primarily observation and configuration.
