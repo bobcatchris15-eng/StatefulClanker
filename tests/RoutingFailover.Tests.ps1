@@ -16,7 +16,7 @@ try {
     }
     function Add-SCEvent {}
 
-    . (Join-Path $repo 'libStatefulClanker.Routing.ps1')
+    . (Join-Path $repo 'lib/StatefulClanker.Routing.ps1')
 
     Assert-True ((Get-SCRouteFailureClass 1 'HTTP 429 Too Many Requests') -eq 'rate_limited') '429 was not classified as rate_limited.'
     Assert-True ((Get-SCRouteFailureClass 1 '503 service unavailable') -eq 'server_error') '503 was not classified as server_error.'
