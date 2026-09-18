@@ -24,17 +24,41 @@ Inspect from the CLI:
 
 A `CONTEXT_REQUEST:` is not merely informational telemetry: the corresponding worker cycle is non-advancing and does not create a completion proposal.
 
-## Lightweight desktop cockpit
+## Resident desktop cockpit
 
-The prototype cockpit is a native WinForms PowerShell app; there is nothing to install or build:
+The installed .NET 8 Windows host is now the primary resident cockpit. The older PowerShell cockpit remains useful as a lightweight fallback:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\desktop\StatefulClanker.Cockpit.ps1 -ProjectPath C:\path\to\your\project
 ```
 
-It shows active subagents, task state, recent events, historical subagent runs, and a Direction pane. `Record direction` invokes StatefulClanker's `event` command, which both writes the human direction into the durable event stream and advances the project direction revision. Any older in-flight compilation therefore becomes stale at its next freshness gate. `Run next task` invokes the engine.
+The resident cockpit is organized around three persistent regions:
 
-The cockpit is intentionally a thin control surface rather than a complete state debugger; compilation, proposal, context-fault, and progress inspection remain available through the CLI/MCP surfaces.
+- left rail: project list above a compact recent-activity feed;
+- center: Overview, Activity & Telemetry, Integrations, and Providers tabs;
+- right rail: durable task state and task-level diagnostics/actions.
+
+Overview keeps the live orchestration state visible: Clanker status, worker/reviewer blinkenlights, autofill controls, routing/usage, project authority, and an embedded project terminal. The full durable event stream, active/recent worker telemetry, and context faults live on the Activity & Telemetry tab. Clicking the recent-activity rail jumps to that tab.
+
+### Embedded project terminal
+
+The Overview terminal is a real ConPTY-backed terminal using the Windows Terminal renderer, not a simulated textbox console. Every session starts with the active project as its working directory.
+
+Presets include:
+
+- PowerShell;
+- Antigravity CLI (`agy`);
+- OpenCode (`opencode`);
+- OpenCode mini (`opencode mini`);
+- a custom command.
+
+Agent CLI presets deliberately launch through PowerShell and keep the shell alive after the TUI exits. This matches opening PowerShell in the project directory and manually entering `agy` or `opencode`, including PowerShell resolution of aliases, scripts, and command shims.
+
+The embedded terminal has the same local authority as the desktop user running StatefulClanker. It is **not** constrained by StatefulClanker's worker capability profiles. Commands entered there, and coding-agent TUIs launched there, can read/write/execute according to the user's Windows permissions and the CLI's own permission model. Treat it as an operator shell, not as a bounded worker.
+
+Changing projects terminates the previous embedded terminal and opens a fresh PowerShell session rooted in the newly active project. Closing the resident host also terminates the embedded terminal process tree.
+
+Task-specific run/critic/validation diagnostics remain available from the right task rail; deeper compilation/proposal/progress inspection remains available through CLI/MCP surfaces.
 
 ## MCP server
 
