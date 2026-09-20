@@ -168,11 +168,24 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
                 }else{
                     $stalled=@(Get-SCTasks|Where-Object{@('needs_rework','stale','blocked','failed')-contains[string]$_.status})
                     if($stalled.Count-gt0){
+                        $stalledDetails=@($stalled|ForEach-Object{
+                            [ordered]@{
+                                id=[string]$_.id;title=[string]$_.title;status=[string]$_.status
+                                humanGate=[bool]$_.humanGate
+                                attemptCount=if($_.PSObject.Properties['attemptCount']){[int]$_.attemptCount}else{0}
+                                criticRejectCount=if($_.PSObject.Properties['criticRejectCount']){[int]$_.criticRejectCount}else{0}
+                                blockReason=if($_.PSObject.Properties['blockReason']){[string]$_.blockReason}else{$null}
+                                latestRunId=if($_.PSObject.Properties['latestRunId']){$_.latestRunId}else{$null}
+                                latestProposalId=if($_.PSObject.Properties['latestProposalId']){$_.latestProposalId}else{$null}
+                                latestCritiqueId=if($_.PSObject.Properties['latestCritiqueId']){$_.latestCritiqueId}else{$null}
+                                latestValidationId=if($_.PSObject.Properties['latestValidationId']){$_.latestValidationId}else{$null}
+                            }
+                        })
                         $stalledNames=(@($stalled|Select-Object -First 3|ForEach-Object{"$($_.id) ($($_.status))"})) -join ', '
                         if($stalled.Count-gt3){$stalledNames+=" (+$($stalled.Count-3) more)"}
-                        $reason="no ready or retriable tasks; $($stalled.Count) task(s) require manual intervention: $stalledNames"
+                        $reason="CONTROL-PLANE RECOVERY REQUIRED: Autofill has no ready or retriable tasks; $($stalled.Count) task(s) are stalled: $stalledNames. Investigate and repair before asking the human. Read task_recovery_context for each affected task and inspect current project files/tests as needed. Repair actual implementation defects when present; otherwise repair stale/incorrect task scope, acceptance, retrieval, dependencies, or other task-graph metadata and retry. If concrete current evidence shows the requested work already satisfies current Human Directives and reconciled Intent but critic/validator bookkeeping is wrong, use task_recover_complete as the last resort. Never override a human-gated task or unresolved human intent. Ask the human only when a genuine authority/design decision remains after investigation. Trigger/resume Autofill after recovery."
                         $state='blocked'
-                        if($lastBlock-ne$reason){Add-SCEvent 'autofill.stalled' $reason @{stalledCount=$stalled.Count};$lastBlock=$reason}
+                        if($lastBlock-ne$reason){Add-SCEvent 'autofill.stalled' $reason @{stalledCount=$stalled.Count;stalledTasks=@($stalledDetails);recoveryPolicy='control-plane-first'};$lastBlock=$reason}
                     }else{
                         $state='idle'
                         $lastBlock=$null
