@@ -283,7 +283,7 @@ function Repair-SCOrphanedAgents {
 
 function Upgrade-SCStateLayout {
     Assert-SCInitialized
-    foreach($child in @('tasks','plans','runs','critiques','validations','prompts','compilations','proposals','progress','reviews','telemetry','telemetry/active','telemetry/runs')){$target=Get-SCPath $child;if(-not(Test-Path $target)){New-Item -ItemType Directory -Force -Path $target|Out-Null}}
+    foreach($child in @('tasks','plans','runs','critiques','validations','prompts','compilations','proposals','progress','reviews','worker-sessions','telemetry','telemetry/active','telemetry/runs')){$target=Get-SCPath $child;if(-not(Test-Path $target)){New-Item -ItemType Directory -Force -Path $target|Out-Null}}
     Ensure-SCTelemetryLayout
     $state=Get-SCState;$changed=$false
     if(-not$state.PSObject.Properties['schemaVersion']-or[int]$state.schemaVersion-lt 4){Set-SCProperty $state 'schemaVersion' 4;$changed=$true}
@@ -295,7 +295,7 @@ function Initialize-SC {
     $dir=Get-SCDir
     if(Test-Path (Join-Path $dir 'state.json')){Upgrade-SCStateLayout;Write-Host 'Already initialized; state layout checked.';return}
     New-Item -ItemType Directory -Force -Path $dir|Out-Null
-    foreach($child in @('tasks','plans','runs','critiques','validations','prompts','compilations','proposals','progress','reviews','telemetry','telemetry/active','telemetry/runs')){New-Item -ItemType Directory -Force -Path (Join-Path $dir $child)|Out-Null}
+    foreach($child in @('tasks','plans','runs','critiques','validations','prompts','compilations','proposals','progress','reviews','worker-sessions','telemetry','telemetry/active','telemetry/runs')){New-Item -ItemType Directory -Force -Path (Join-Path $dir $child)|Out-Null}
     $now=(Get-Date).ToUniversalTime().ToString('o')
     Write-SCJson (Join-Path $dir 'state.json') ([ordered]@{schemaVersion=4;revision=0;directionRevision=0;projectId=New-SCId 'project';projectRoot=Get-SCRoot;goal='';activePlanId=$null;planApproved=$false;createdAt=$now;updatedAt=$now})
     ''|Set-Content -LiteralPath (Join-Path $dir 'events.jsonl') -Encoding UTF8
@@ -327,7 +327,7 @@ function Set-SCGoal([string]$Text) { Assert-SCInitialized;if([string]::IsNullOrW
 function Add-SCDirection([string]$Text) { Assert-SCInitialized;if([string]::IsNullOrWhiteSpace($Text)){throw '-Message required.'};$state=Get-SCState;$current=if($state.PSObject.Properties['directionRevision']){[int]$state.directionRevision}else{0};Set-SCProperty $state 'directionRevision' ($current+1);Save-SCState $state;Add-SCEvent 'user.note' $Text @{directionRevision=$state.directionRevision};Write-Host 'Direction recorded.' }
 function New-SCTaskObject([string]$Id,[string]$TaskTitle,[string]$TaskInstruction,$TaskAcceptance,$TaskDepends,$TaskRelations,$TaskRetrieval,$TaskEvidence,[string]$TaskProvider,[string]$TaskRole,[bool]$TaskHumanGate) {
     $now=(Get-Date).ToUniversalTime().ToString('o')
-    return [ordered]@{schemaVersion=3;id=$Id;title=$TaskTitle;instruction=$TaskInstruction;acceptance=@($TaskAcceptance);dependsOn=@($TaskDepends);relations=@(ConvertTo-SCRelations $TaskRelations);retrieval=@($TaskRetrieval);evidence=@($TaskEvidence);provider=if($TaskProvider){$TaskProvider}else{$null};role=if($TaskRole){$TaskRole}else{'worker'};humanGate=$TaskHumanGate;status='pending';stateRevision=0;controlRevision=0;attemptCount=0;latestRunId=$null;latestCompilationId=$null;latestProposalId=$null;latestCritiqueId=$null;latestValidationId=$null;blockReason=$null;createdAt=$now;updatedAt=$now}
+    return [ordered]@{schemaVersion=4;id=$Id;title=$TaskTitle;instruction=$TaskInstruction;outputKind='change';acceptance=@($TaskAcceptance);dependsOn=@($TaskDepends);relations=@(ConvertTo-SCRelations $TaskRelations);retrieval=@($TaskRetrieval);evidence=@($TaskEvidence);provider=if($TaskProvider){$TaskProvider}else{$null};role=if($TaskRole){$TaskRole}else{'worker'};humanGate=$TaskHumanGate;status='pending';stateRevision=0;controlRevision=0;attemptCount=0;criticRejectCount=0;activeWorkerSessionId=$null;latestWorkerSessionId=$null;latestRunId=$null;latestCompilationId=$null;latestProposalId=$null;latestCritiqueId=$null;latestValidationId=$null;blockReason=$null;createdAt=$now;updatedAt=$now}
 }
 function Add-SCTask {
     if([string]::IsNullOrWhiteSpace($Title)){throw '-Title is required.'};if([string]::IsNullOrWhiteSpace($Instruction)){throw '-Instruction is required.'}
