@@ -47,6 +47,7 @@ try {
 
     Write-Host '  MCP MODERN 4b: repair-first recovery tools inspect, repair, and audited-complete a stalled task'
     $made=Get-ToolPayload (Call-Tool 61 'task_add' ([pscustomobject]@{taskId='mcp-recovery';title='Recovery tool task';instruction='Original recovery instruction';size='small';accept=@('old criterion')}));Assert-True ([string]$made.taskId-eq'mcp-recovery') 'Could not create MCP recovery task.'
+    $humanShortcut=Call-Tool 610 'task_complete' ([pscustomobject]@{taskId='mcp-recovery'});Assert-True ([bool]$humanShortcut.result.isError) 'Ordinary task_complete should remain human-authority gated.'
     [void](Get-ToolPayload (Call-Tool 62 'task_block' ([pscustomobject]@{taskId='mcp-recovery';reason='Simulated repeated validator rejection.'})))
     $ctx=Get-ToolPayload (Call-Tool 63 'task_recovery_context' ([pscustomobject]@{taskId='mcp-recovery'}));Assert-True ([string]$ctx.task.id-eq'mcp-recovery') 'Recovery context did not return task.'
     $repaired=Get-ToolPayload (Call-Tool 64 'task_repair' ([pscustomobject]@{taskId='mcp-recovery';reason='Acceptance metadata was stale.';evidence=@('Current project artifact demonstrates the intended behavior.');patch=[pscustomobject]@{instruction='Recovered instruction';acceptance=@('current observable criterion')}}));Assert-True ([string]$repaired.task.instruction-eq'Recovered instruction') 'task_repair MCP wrapper did not mutate task.'
