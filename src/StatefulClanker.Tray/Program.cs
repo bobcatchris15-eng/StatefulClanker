@@ -1940,7 +1940,7 @@ sealed class MainForm : Form
     static readonly HashSet<string> EscalatedEventTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "run.failed", "critic.error", "validator.error", "project.hold.set", "project.review.failed",
-        "state.proposal_rejected", "task.plan_repair_required", "clanker.evil", "clanker.evil.cleared"
+        "state.proposal_rejected", "task.plan_repair_required", "autofill.stalled", "clanker.evil", "clanker.evil.cleared"
     };
     int _refreshing;
     int _mcpDiscoveryRunning;
@@ -1963,8 +1963,9 @@ sealed class MainForm : Form
 
     // Surfaces failure/hold events from the active project's event log directly into the
     // live embedded terminal session, so the human (and any AI composer running in that
-    // session) sees them without switching tabs. Only escalates the 5 event types that
-    // indicate a real failure or halt -- routine events are never injected.
+    // session) sees them without switching tabs. Only escalates selected events that
+    // indicate a real failure, halt, or control-plane recovery request -- routine
+    // events are never injected.
     void EscalateNewEvents()
     {
         if (!_terminal.HasActiveSession) return;
