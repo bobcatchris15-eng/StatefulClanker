@@ -329,7 +329,7 @@ function Test-SCServiceFailureCorroboration([string]$Service,[string]$ExcludeCon
         if(-not$v.PSObject.Properties['lastFailure'] -or -not[datetimeoffset]::TryParse([string]$v.lastFailure,[ref]$when) -or $when-lt$cutoff){continue}
         if((Get-SCConnectionServiceName $conn)-eq$Service){$connections+=,$conn}
     }
-    return(@($connections|Select-Object -Unique).Count-ge1)
+    return (@($connections|Select-Object -Unique).Count-ge1)
 }
 
 function Register-SCRouteFailureForRecord($Record,[string]$Class,[string]$Text) {
@@ -502,7 +502,7 @@ function Get-SCNextRouteAvailability {
         if(-not$raw){continue};$dto=[datetimeoffset]::MinValue
         if([datetimeoffset]::TryParse($raw,[ref]$dto)){if($null-eq$next -or $dto-lt$next){$next=$dto}}
     }
-    return$next
+    return $next
 }
 
 function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
