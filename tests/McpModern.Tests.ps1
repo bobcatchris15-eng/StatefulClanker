@@ -30,7 +30,8 @@ try {
 
     Write-Host '  MCP MODERN 3: modern tools/resources carry server identity and capability authoring'
     $tools=Invoke-McpRpc ([pscustomobject]@{jsonrpc='2.0';id=2;method='tools/list';params=[pscustomobject]@{_meta=New-ModernMeta}});$names=@($tools.result.tools|ForEach-Object{[string]$_.name})
-    foreach($required in @('directive_set','directive_list','intent_apply','control_events_since','control_snapshot','worker_policy_get','worker_profile_set','autofill_status','autofill_control')){Assert-True ($names-contains$required) "Missing tool $required."}
+    foreach($required in @('directive_set','directive_list','intent_apply','control_events_since','control_snapshot','worker_policy_get','worker_profile_set','autofill_status','autofill_control','task_recovery_context','task_repair','task_recover_complete')){Assert-True ($names-contains$required) "Missing tool $required."}
+    Assert-True ([string]$discover.result.instructions-match'RECOVERY BEFORE HUMAN ESCALATION') 'Control-plane instructions do not define repair-first recovery.'
     Assert-True ($null-ne$tools.result._meta.'io.modelcontextprotocol/serverInfo') 'Modern tools/list lacks serverInfo response metadata.'
     $task=@($tools.result.tools|Where-Object { $_.name -eq 'task_add' }|Select-Object -First 1)[0];Assert-True ($null-ne$task.inputSchema.properties.capabilityProfile) 'task_add lacks capabilityProfile.';Assert-True ($null-ne$task.inputSchema.properties.toolAllow) 'task_add lacks toolAllow.'
     $wp=Get-ToolPayload (Call-Tool 21 'worker_policy_get' ([pscustomobject]@{}));Assert-True ($null-ne$wp.machine) 'worker_policy_get did not return machine policy.'
@@ -43,6 +44,14 @@ try {
     $snapshot=Get-ToolPayload (Call-Tool 5 'control_snapshot' ([pscustomobject]@{}));Assert-True ([bool]$snapshot.directiveReconciliationRequired) 'Snapshot did not show directive reconciliation gate.'
     $contract=[pscustomobject]@{objective='Exercise dual-era MCP intent and event flow.';requirements=@('REQ-PROJECT-RESTORE: restore exact last active project and never silently substitute another.');constraints=@();invariants=@();nonGoals=@();decisions=@();preferences=@();openQuestions=@();successDefinition='Project selection follows current human directive.'}
     $applied=Get-ToolPayload (Call-Tool 6 'intent_apply' ([pscustomobject]@{contract=$contract;reason='Reconciled direct human project-selection directive.'}));Assert-True ([bool]$applied.reconciliationCleared) 'intent_apply did not clear reconciliation gate.'
+
+    Write-Host '  MCP MODERN 4b: repair-first recovery tools inspect, repair, and audited-complete a stalled task'
+    $made=Get-ToolPayload (Call-Tool 61 'task_add' ([pscustomobject]@{taskId='mcp-recovery';title='Recovery tool task';instruction='Original recovery instruction';size='small';accept=@('old criterion')}));Assert-True ([string]$made.taskId-eq'mcp-recovery') 'Could not create MCP recovery task.'
+    [void](Get-ToolPayload (Call-Tool 62 'task_block' ([pscustomobject]@{taskId='mcp-recovery';reason='Simulated repeated validator rejection.'})))
+    $ctx=Get-ToolPayload (Call-Tool 63 'task_recovery_context' ([pscustomobject]@{taskId='mcp-recovery'}));Assert-True ([string]$ctx.task.id-eq'mcp-recovery') 'Recovery context did not return task.'
+    $repaired=Get-ToolPayload (Call-Tool 64 'task_repair' ([pscustomobject]@{taskId='mcp-recovery';reason='Acceptance metadata was stale.';evidence=@('Current project artifact demonstrates the intended behavior.');patch=[pscustomobject]@{instruction='Recovered instruction';acceptance=@('current observable criterion')}}));Assert-True ([string]$repaired.task.instruction-eq'Recovered instruction') 'task_repair MCP wrapper did not mutate task.'
+    [void](Get-ToolPayload (Call-Tool 65 'task_block' ([pscustomobject]@{taskId='mcp-recovery';reason='Simulated stale review bookkeeping after verification.'})))
+    $recovered=Get-ToolPayload (Call-Tool 66 'task_recover_complete' ([pscustomobject]@{taskId='mcp-recovery';reason='Concrete current verification proves work complete.';evidence=@('Current verification passes and artifact inspection satisfies current acceptance.')}));Assert-True ([string]$recovered.task.status-eq'complete') 'task_recover_complete MCP wrapper did not complete task.';Assert-True ([string]$recovered.authority-eq'control-plane-recovery') 'Recovery completion authority label is wrong.'
 
     Write-Host '  MCP MODERN 5: durable control events resume from a cursor'
     $events=Get-ToolPayload (Call-Tool 8 'control_events_since' ([pscustomobject]@{since=0;limit=200}));Assert-True ([long]$events.cursor-gt0) 'Control cursor did not advance.';Assert-True (@($events.events|Where-Object{$_.type-eq'directive.reconciliation_required'-and$_.level-eq'human_required'}).Count-ge1) 'Missing HUMAN_REQUIRED directive event.'
