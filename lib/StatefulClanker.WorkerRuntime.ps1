@@ -356,7 +356,46 @@ function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$Provid
     $ended=(Get-Date).ToUniversalTime();$telemetry.lifecycle=if($exitCode-eq0){'completed'}else{'failed'};$telemetry.exitCode=$exitCode;$telemetry.endedAt=$ended.ToString('o');$telemetry.heartbeatAt=$telemetry.endedAt;$telemetry.durationSeconds=[math]::Round(($ended-$started).TotalSeconds,3);Complete-SCTelemetry $telemetry
     return [pscustomobject][ordered]@{schemaVersion=4;id=$receiptId;agentId=$agentId;taskId=$Task.id;stage=$Stage;provider=$ProviderRecord.name;endpoint=$ProviderRecord.name;backendType='api';connection=$connectionName;model=[string]$connection.model;actualModels=@($telemetry.actualModels);modelUsage=@($telemetry.modelUsage);apiRequests=$telemetry.apiRequests;usageReports=$telemetry.usageReports;promptTokens=$telemetry.promptTokens;completionTokens=$telemetry.completionTokens;totalTokens=$telemetry.totalTokens;capabilities=$capabilities;compilationId=$compilationId;inputFingerprint=$fingerprint;command='direct-api';args=@();promptPath=$promptPath;startedAt=$started.ToString('o');endedAt=$ended.ToString('o');durationSeconds=$telemetry.durationSeconds;exitCode=$exitCode;stdout=$stdout;stderr=$stderr;verdict=$null}
 }
+
+function Invoke-SCRouteProbeRecord($Due) {
+    $records=@(Resolve-SCRouteProbeRecord ([string]$Due.name))
+    if($records.Count-eq0){throw "No target-pool model is available to probe $($Due.name)."}
+    $record=$records[0]
+    $connection=Get-SCEffectiveApiConnection $record
+    $copy=[ordered]@{}
+    foreach($p in $connection.PSObject.Properties){$copy[$p.Name]=$p.Value}
+    # Keep the probe deliberately tiny. Anthropic requires max_tokens; most
+    # OpenAI-compatible services are happier if we simply omit an artificial cap.
+    if((Get-SCConnectionProtocol $connection)-eq'anthropic-messages'){$copy['maxTokens']=16}
+    $probeConnection=[pscustomobject]$copy
+    $messages=@([ordered]@{role='user';content='Reply exactly OK.'})
+    $response=Invoke-SCApiChat $probeConnection $messages @() 'text'
+    $message=Get-SCAssistantMessage $response (Get-SCConnectionProtocol $probeConnection)
+    if($null-eq$message -or [string]::IsNullOrWhiteSpace([string]$message.content)){throw 'Route Doctor probe returned no content.'}
+    return [pscustomobject]@{name=[string]$Due.name;endpoint=[string]$record.name;connection=[string]$record.config.connection;model=[string]$record.config.model;reply=[string]$message.content}
+}
+
+function Invoke-SCRouteDoctor([int]$MaxProbes=1) {
+    $due=@(Get-SCRouteDoctorDue ([Math]::Max(1,$MaxProbes)))
+    $results=@()
+    foreach($item in $due){
+        Set-SCRouteProbing ([string]$item.name)
+        try{
+            $probe=Invoke-SCRouteProbeRecord $item
+            Register-SCRouteProbeSuccess ([string]$item.name)
+            $results+=,[ordered]@{name=[string]$item.name;recovered=$true;endpoint=$probe.endpoint;connection=$probe.connection;model=$probe.model}
+        }catch{
+            $text=$_|Out-String;$class=Get-SCRouteFailureClass -1 $text
+            if($class-eq'unknown'){$class=if([string]$item.reason){[string]$item.reason}else{'unknown'}}
+            Register-SCRouteProbeFailure ([string]$item.name) $class $text|Out-Null
+            $results+=,[ordered]@{name=[string]$item.name;recovered=$false;failureClass=$class}
+        }
+    }
+    return @($results)
+}
+
 function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null) {
+    try{Invoke-SCRouteDoctor 1|Out-Null}catch{}
     $history=@()
     $candidates=@(Get-SCProviderCandidates $Task $ProviderOverride $Stage)
     if($candidates.Count-eq0){
@@ -378,17 +417,21 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
         $last=$receipt
         $text=(([string]$receipt.stderr)+[Environment]::NewLine+([string]$receipt.stdout)).Trim()
         if([int]$receipt.exitCode-eq0){
-            Register-SCRouteSuccess ([string]$record.name)
-            if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection){Register-SCRouteSuccess ("connection:"+[string]$record.config.connection)}
-            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='success';failureClass=$null}
+            Register-SCRouteSuccess ([string]$record.name)|Out-Null
+            if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection){
+                $connectionName=[string]$record.config.connection
+                Register-SCRouteSuccess ("connection:"+$connectionName) 'connection'|Out-Null
+                $service=Get-SCConnectionServiceName $connectionName
+                if($service){Register-SCRouteSuccess ("service:"+$service) 'service'|Out-Null}
+            }
+            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='success';failureClass=$null;healthScope=$null}
             Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
             if($history.Count-gt1){Add-SCEvent 'routing.failover_succeeded' "Endpoint failover succeeded on $($record.name)." @{taskId=$Task.id;stage=$Stage;attempts=$history.Count;history=@($history)}}
             return $receipt
         }
         $class=Get-SCRouteFailureClass ([int]$receipt.exitCode) $text
-        $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='failed';failureClass=$class}
-        Register-SCRouteFailure ([string]$record.name) $class $text|Out-Null
-        if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection -and @('rate_limited','auth','capacity','timeout','server_error')-contains$class){Register-SCRouteFailure ("connection:"+[string]$record.config.connection) $class $text|Out-Null}
+        $domain=Register-SCRouteFailureForRecord $record $class $text
+        $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='failed';failureClass=$class;healthScope=[string]$domain.scope;healthKey=$domain.key}
         Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
         if(-not(Test-SCRouteFailureTransient $class) -and $class-ne'auth'){Add-SCEvent 'routing.failover_stopped' "Endpoint failure is not safe to replay: $class" @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class};return $receipt}
         Add-SCEvent 'routing.failover' "Endpoint $($record.name) failed ($class); trying another endpoint." @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class;attempt=$history.Count}
