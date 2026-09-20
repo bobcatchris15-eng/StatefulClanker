@@ -30,6 +30,16 @@ sealed class AppSettings
     public string? ActiveProjectPath { get; set; }
     public int HttpPort { get; set; } = 7337;
     public string? McpToken { get; set; }
+
+    // Cockpit geometry is operator state, not project state. Keep splitter positions
+    // here so every major pane is actually draggable without snapping back on restart.
+    public int LeftRailWidth { get; set; } = 235;
+    public int LeftProjectHeight { get; set; } = 330;
+    public int RightRailWidth { get; set; } = 265;
+    public int OverviewInfoHeight { get; set; } = 285;
+    public int OverviewStatusWidth { get; set; } = 255;
+    public int OverviewProviderWidth { get; set; } = 315;
+    public int ActivityTelemetryHeight { get; set; } = 300;
 }
 
 static class AppStore
@@ -915,7 +925,7 @@ static class Inspector
 
 static class Theme
 {
-    public static readonly Color Back = Color.FromArgb(23, 29, 38), Surface = Color.FromArgb(30, 40, 52), Surface2 = Color.FromArgb(38, 50, 64), Border = Color.FromArgb(64, 83, 103), BorderLight = Color.FromArgb(255, 255, 255, 22), Text = Color.FromArgb(232, 239, 245), Muted = Color.FromArgb(135, 153, 171), Accent = Color.FromArgb(85, 198, 232), Good = Color.FromArgb(73, 217, 145), Warn = Color.FromArgb(255, 174, 74), Error = Color.FromArgb(255, 85, 85);
+    public static readonly Color Back = Color.FromArgb(23, 29, 38), Surface = Color.FromArgb(30, 40, 52), Surface2 = Color.FromArgb(36, 47, 60), Border = Color.FromArgb(43, 55, 68), Separator = Color.FromArgb(16, 21, 28), Text = Color.FromArgb(232, 239, 245), Muted = Color.FromArgb(135, 153, 171), Accent = Color.FromArgb(85, 198, 232), Good = Color.FromArgb(73, 217, 145), Warn = Color.FromArgb(255, 174, 74), Error = Color.FromArgb(255, 85, 85);
     public static void Apply(Control root)
     {
         root.BackColor = Back;
@@ -938,8 +948,8 @@ static class Theme
                 // this false is what actually hands the whole button to FlatAppearance.
                 b.UseVisualStyleBackColor = false;
                 b.FlatStyle = FlatStyle.Flat;
-                b.FlatAppearance.BorderColor = Border;
-                b.FlatAppearance.BorderSize = 1;
+                b.FlatAppearance.BorderColor = Surface2;
+                b.FlatAppearance.BorderSize = 0;
                 b.FlatAppearance.MouseOverBackColor = Color.FromArgb(42, 55, 69);
                 b.FlatAppearance.MouseDownBackColor = Color.FromArgb(31, 43, 55);
                 b.BackColor = Surface2;
@@ -951,7 +961,7 @@ static class Theme
             {
                 tb.BackColor = Surface;
                 tb.ForeColor = Text;
-                if (!tb.Multiline) tb.BorderStyle = BorderStyle.FixedSingle;
+                if (!tb.Multiline) tb.BorderStyle = BorderStyle.None;
             }
             else if (c is ComboBox cb)
             {
@@ -963,7 +973,7 @@ static class Theme
             {
                 nud.BackColor = Surface;
                 nud.ForeColor = Text;
-                nud.BorderStyle = BorderStyle.FixedSingle;
+                nud.BorderStyle = BorderStyle.None;
             }
             else if (c is TreeView tv)
             {
@@ -1007,9 +1017,8 @@ static class Theme
         }
     }
 
-    // A slim, rounded, "chiseled" card border: a rounded-rect fill, a 1px outer
-    // border in Theme.Border, and a soft 1px highlight along the top-left edge to
-    // read as a light etched bevel instead of a flat OS rectangle.
+    // Cards are separated by tone and whitespace, not bevels or luminous outlines.
+    // The old etched highlight read as a thick bright bar on several Windows themes.
     public static System.Drawing.Drawing2D.GraphicsPath RoundedRect(Rectangle r, int radius)
     {
         var path = new System.Drawing.Drawing2D.GraphicsPath();
@@ -1029,11 +1038,6 @@ static class Theme
         using var path = RoundedRect(r, radius);
         using var fillBrush = new SolidBrush(fill);
         g.FillPath(fillBrush, path);
-        using var borderPen = new Pen(Border);
-        g.DrawPath(borderPen, path);
-        using var highlightPen = new Pen(BorderLight);
-        g.DrawArc(highlightPen, r.X, r.Y, radius * 2, radius * 2, 180, 90);
-        g.DrawLine(highlightPen, r.X + radius, r.Y, r.Right - radius, r.Y);
     }
 }
 
@@ -1054,6 +1058,52 @@ class CardPanel : Panel
     {
         Theme.PaintCard(e.Graphics, new Rectangle(0, 0, Width, Height), Fill, Radius);
         base.OnPaint(e);
+    }
+}
+
+sealed class QuietSplitContainer : SplitContainer
+{
+    public int ResetDistance { get; set; } = 240;
+    public int? ResetPanel2Width { get; set; }
+    public event EventHandler? SplitterReset;
+
+    public QuietSplitContainer(Orientation orientation)
+    {
+        Dock = DockStyle.Fill;
+        Orientation = orientation;
+        BorderStyle = BorderStyle.None;
+        SplitterWidth = 4;
+        BackColor = Theme.Separator;
+        Panel1.BackColor = Theme.Back;
+        Panel2.BackColor = Theme.Back;
+        TabStop = false;
+    }
+
+    int Extent => Orientation == Orientation.Vertical ? ClientSize.Width : ClientSize.Height;
+
+    public void RestoreDistance(int desired)
+    {
+        var max = Extent - Panel2MinSize - SplitterWidth;
+        if (max < Panel1MinSize) return;
+        SplitterDistance = Math.Clamp(desired, Panel1MinSize, max);
+    }
+
+    public void RestorePanel2Width(int desired)
+        => RestoreDistance(Extent - Math.Max(Panel2MinSize, desired) - SplitterWidth);
+
+    bool IsSplitter(Point point)
+    {
+        var axis = Orientation == Orientation.Vertical ? point.X : point.Y;
+        return axis >= SplitterDistance - 3 && axis <= SplitterDistance + SplitterWidth + 3;
+    }
+
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        base.OnMouseDoubleClick(e);
+        if (!IsSplitter(e.Location)) return;
+        if (ResetPanel2Width.HasValue) RestorePanel2Width(ResetPanel2Width.Value);
+        else RestoreDistance(ResetDistance);
+        SplitterReset?.Invoke(this, EventArgs.Empty);
     }
 }
 
@@ -1449,491 +1499,92 @@ sealed class TaskDetailDialog : Form
         Theme.Apply(this);
     }
 
-    void BuildUi()
+    void QueueLayoutSave()
     {
-        var main = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(12) };
-        main.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
-        main.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        main.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        main.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
-
-        // Header
-        var header = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(8, 6, 8, 6) };
-        var topRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 26, WrapContents = false };
-        var (statusColor, statusLabel) = StatusVisual(_task.Status);
-        _headerStatus.Text = $"[{statusLabel}]";
-        _headerStatus.ForeColor = statusColor;
-        _taskId.Text = _task.Id;
-        topRow.Controls.Add(_headerStatus);
-        topRow.Controls.Add(_taskId);
-
-        _taskTitle.Text = _task.Title;
-        var metaList = new List<string>();
-        if (_task.AttemptCount > 0) metaList.Add($"Attempts: {_task.AttemptCount}");
-        if (!string.IsNullOrEmpty(_task.Role)) metaList.Add($"Role: {_task.Role}");
-        if (!string.IsNullOrEmpty(_task.Size)) metaList.Add($"Size: {_task.Size}");
-        if (!string.IsNullOrEmpty(_task.Provider)) metaList.Add($"Provider: {_task.Provider}");
-        if (_task.DependsOn.Count > 0) metaList.Add($"DependsOn: [{string.Join(", ", _task.DependsOn)}]");
-        _meta.Text = metaList.Count > 0 ? string.Join("  |  ", metaList) : "No special constraints";
-
-        header.Controls.Add(_meta);
-        header.Controls.Add(_taskTitle);
-        header.Controls.Add(topRow);
-        main.Controls.Add(header, 0, 0);
-
-        // Section label
-        var isFailure = _task.Status is "failed" or "needs_rework";
-        var isBlocked = _task.Status is "blocked" or "stale";
-        var sectionColor = isFailure ? Theme.Error : (isBlocked ? Theme.Warn : Theme.Accent);
-        var secLabel = new Label
-        {
-            Text = isFailure ? "⚠ FAILURE DIAGNOSTICS & LOG OUTPUT" : (isBlocked ? "⚠ BLOCKER & REASON DETAILS" : "TASK DETAILS & EXECUTION HISTORY"),
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.BottomLeft,
-            Font = new Font("Segoe UI Semibold", 8.5f, FontStyle.Bold),
-            ForeColor = sectionColor
-        };
-        main.Controls.Add(secLabel, 0, 1);
-
-        // Diag text
-        main.Controls.Add(_diagText, 0, 2);
-
-        // Action panel
-        var actionPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
-        actionPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        actionPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-
-        var bar1 = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        _btnRetry.Click += async (_, _) => await RunActionAsync("Retrying task...", () => {
-            var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
-            return Runtime.RunPowerShell(_projectPath, "-File", harness, "task", "retry", "-TaskId", _task.Id);
-        });
-
-        _btnOverride.Click += async (_, _) => {
-            if (MessageBox.Show(this, $"Override validation and manually mark task '{_task.Id}' as COMPLETE?\n\nThis records human authority and immediately unblocks dependent downstream tasks.", "Manual Completion Override", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
-                return;
-            await RunActionAsync("Overriding validation and marking complete...", () => {
-                var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
-                return Runtime.RunPowerShell(_projectPath, "-File", harness, "complete", "-TaskId", _task.Id);
-            });
-        };
-
-        _btnBlock.Click += async (_, _) => {
-            var reason = PromptDialog.Prompt(this, "Block Task", $"Enter reason for blocking task '{_task.Id}':", _task.BlockReason ?? "Blocked by operator");
-            if (string.IsNullOrWhiteSpace(reason)) return;
-            await RunActionAsync("Blocking task...", () => {
-                var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
-                return Runtime.RunPowerShell(_projectPath, "-File", harness, "block", "-TaskId", _task.Id, "-Reason", reason);
-            });
-        };
-
-        _btnCopy.Click += (_, _) => {
-            Clipboard.SetText(_diagText.Text);
-            _statusMsg.Text = "Copied full diagnostics report to clipboard!";
-            _statusMsg.ForeColor = Theme.Good;
-        };
-
-        _btnClose.Click += (_, _) => Close();
-
-        bar1.Controls.AddRange(new Control[] { _btnRetry, _btnOverride, _btnBlock, _btnCopy, _btnClose });
-        actionPanel.Controls.Add(bar1, 0, 0);
-
-        var bar2 = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        _cboProviders.Items.Clear();
-        foreach (var p in _providers) _cboProviders.Items.Add(p);
-        if (!string.IsNullOrEmpty(_task.Provider) && _providers.Contains(_task.Provider))
-            _cboProviders.SelectedItem = _task.Provider;
-        else if (_cboProviders.Items.Count > 0)
-            _cboProviders.SelectedIndex = 0;
-
-        _btnRetryProvider.Click += async (_, _) => {
-            var selectedProv = _cboProviders.SelectedItem?.ToString();
-            if (string.IsNullOrWhiteSpace(selectedProv)) return;
-            await RunActionAsync($"Setting provider to '{selectedProv}' and retrying...", () => {
-                var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1");
-                Runtime.RunPowerShell(_projectPath, "-File", harness, "task", "set", "-TaskId", _task.Id, "-Provider", selectedProv);
-                return Runtime.RunPowerShell(_projectPath, "-File", harness, "task", "retry", "-TaskId", _task.Id);
-            });
-        };
-
-        var provLbl = new Label { Text = "Override Provider:", AutoSize = true, Margin = new Padding(0, 10, 4, 0), ForeColor = Theme.Muted };
-        bar2.Controls.AddRange(new Control[] { provLbl, _cboProviders, _btnRetryProvider, _statusMsg });
-        actionPanel.Controls.Add(bar2, 0, 1);
-
-        main.Controls.Add(actionPanel, 0, 3);
-        Controls.Add(main);
+        _layoutSaveTimer.Stop();
+        _layoutSaveTimer.Start();
     }
 
-    void LoadDiagnostics()
+    void TrackSplitter(QuietSplitContainer split, Action capture)
     {
-        var (_, details) = Inspector.GetTaskDiagnostics(_projectPath, _task);
-        _diagText.Text = details;
-        _diagText.SelectionStart = 0;
-        _diagText.SelectionLength = 0;
+        split.SplitterMoved += (_, _) => { capture(); QueueLayoutSave(); };
+        split.SplitterReset += (_, _) => { capture(); QueueLayoutSave(); };
     }
 
-    async Task RunActionAsync(string busyText, Func<(int code, string stdout, string stderr)> action)
+    void RestoreSplitterWhenShown(Action restore)
     {
-        _statusMsg.Text = busyText;
-        _statusMsg.ForeColor = Theme.Accent;
-        foreach (var btn in _actionButtons) btn.Enabled = false;
-        try
-        {
-            var result = await Task.Run(action);
-            if (result.code == 0)
-            {
-                _statusMsg.Text = "Command completed successfully.";
-                _statusMsg.ForeColor = Theme.Good;
-                _onChanged();
-                await Task.Delay(400);
-                if (!IsDisposed) Close();
-            }
-            else
-            {
-                _statusMsg.Text = "Failed: " + (string.IsNullOrWhiteSpace(result.stderr) ? result.stdout : result.stderr).Trim();
-                _statusMsg.ForeColor = Theme.Error;
-                foreach (var btn in _actionButtons) btn.Enabled = true;
-            }
-        }
-        catch (Exception ex)
-        {
-            _statusMsg.Text = "Error: " + ex.Message;
-            _statusMsg.ForeColor = Theme.Error;
-            foreach (var btn in _actionButtons) btn.Enabled = true;
-        }
+        Shown += (_, _) => BeginInvoke(new Action(restore));
     }
-
-    static (Color, string) StatusVisual(string status) => status switch
-    {
-        "complete" => (Color.FromArgb(65, 235, 95), "DONE"),
-        "running" => (Color.FromArgb(70, 150, 255), "RUNNING"),
-        "reviewing" => (Color.FromArgb(255, 220, 70), "CRITIC"),
-        "validating" => (Color.FromArgb(255, 220, 70), "VALIDATOR"),
-        "needs_rework" => (Color.FromArgb(240, 60, 60), "REJECTED"),
-        "failed" => (Color.FromArgb(240, 60, 60), "FAILED"),
-        "stale" => (Color.FromArgb(255, 140, 50), "STALE"),
-        "blocked" => (Color.FromArgb(180, 70, 70), "BLOCKED"),
-        "ready" => (Color.FromArgb(80, 170, 220), "READY"),
-        "pending" => (Color.FromArgb(75, 90, 105), "PENDING"),
-        "" => (Color.FromArgb(48, 58, 68), "—"),
-        _ => (Color.FromArgb(48, 58, 68), status.ToUpperInvariant())
-    };
-}
-
-sealed class TaskBoardRow : TableLayoutPanel
-{
-    public readonly LedIndicator Led = new();
-    readonly Label _title = new() { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Theme.Text, Font = new Font("Cascadia Mono", 8.75f), Margin = new Padding(2, 0, 4, 0) };
-    readonly Label _status = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Cascadia Mono", 8f, FontStyle.Bold), Margin = new Padding(0, 0, 8, 0) };
-    readonly ToolTip _tooltip = new() { InitialDelay = 200, ReshowDelay = 100, AutoPopDelay = 12000 };
-    TaskBoardEntry? _entry;
-    Color _defaultBg = Color.FromArgb(14, 19, 25);
-    Color _hoverBg = Color.FromArgb(28, 38, 50);
-
-    public event Action<TaskBoardEntry>? InspectRequested;
-    public event Action<TaskBoardEntry>? RetryRequested;
-    public event Action<TaskBoardEntry>? CompleteRequested;
-    public event Action<TaskBoardEntry>? BlockRequested;
-
-    public TaskBoardRow()
-    {
-        Dock = DockStyle.Top;
-        Height = 26;
-        ColumnCount = 3;
-        RowCount = 1;
-        BackColor = _defaultBg;
-        Margin = new Padding(0, 0, 0, 1);
-        Cursor = Cursors.Hand;
-        ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 26));
-        ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
-        Controls.Add(Led, 0, 0);
-        Controls.Add(_title, 1, 0);
-        Controls.Add(_status, 2, 0);
-
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("🔍 View Failure Reason & Diagnostics...", null, (_, _) => { if (_entry != null) InspectRequested?.Invoke(_entry); });
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("🔄 Retry Task (Reset to Ready)", null, (_, _) => { if (_entry != null) RetryRequested?.Invoke(_entry); });
-        menu.Items.Add("⚡ Override & Mark Complete", null, (_, _) => { if (_entry != null) CompleteRequested?.Invoke(_entry); });
-        menu.Items.Add("🚫 Block Task...", null, (_, _) => { if (_entry != null) BlockRequested?.Invoke(_entry); });
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("📋 Copy Task ID", null, (_, _) => { if (_entry != null) Clipboard.SetText(_entry.Id); });
-        menu.Items.Add("📋 Copy Failure Reason", null, (_, _) => { if (_entry != null && !string.IsNullOrEmpty(_entry.BlockReason)) Clipboard.SetText(_entry.BlockReason); });
-
-        ContextMenuStrip = menu;
-        Led.ContextMenuStrip = menu;
-        _title.ContextMenuStrip = menu;
-        _status.ContextMenuStrip = menu;
-
-        foreach (Control c in new Control[] { this, Led, _title, _status })
-        {
-            c.Cursor = Cursors.Hand;
-            c.MouseEnter += (_, _) => { BackColor = _hoverBg; };
-            c.MouseLeave += (_, _) => { BackColor = _defaultBg; };
-            c.MouseClick += (s, e) =>
-            {
-                if (e.Button == MouseButtons.Left && _entry != null)
-                {
-                    InspectRequested?.Invoke(_entry);
-                }
-            };
-            c.DoubleClick += (_, _) =>
-            {
-                if (_entry != null) InspectRequested?.Invoke(_entry);
-            };
-        }
-    }
-
-    public void SetTask(TaskBoardEntry t)
-    {
-        _entry = t;
-        _title.Text = string.IsNullOrEmpty(t.Title) ? t.Id : t.Title;
-        var (color, label) = StatusVisual(t.Status);
-        Led.OnColor = color;
-        _status.Text = label;
-        _status.ForeColor = color;
-
-        if (t.Status is "failed" or "needs_rework")
-            _defaultBg = Color.FromArgb(38, 16, 20);
-        else if (t.Status == "blocked")
-            _defaultBg = Color.FromArgb(28, 20, 22);
-        else if (t.Status == "stale")
-            _defaultBg = Color.FromArgb(32, 24, 16);
-        else
-            _defaultBg = Color.FromArgb(14, 19, 25);
-
-        _hoverBg = Color.FromArgb(Math.Min(255, _defaultBg.R + 22), Math.Min(255, _defaultBg.G + 22), Math.Min(255, _defaultBg.B + 28));
-        BackColor = _defaultBg;
-
-        var tip = $"[{t.Id}] {t.Title}\nStatus: {label}" + (t.AttemptCount > 0 ? $" (Attempt #{t.AttemptCount})" : "");
-        if (!string.IsNullOrWhiteSpace(t.BlockReason)) tip += $"\nReason: {t.BlockReason}";
-        tip += "\n\n(Click to inspect failure & override options)";
-
-        _tooltip.SetToolTip(this, tip);
-        _tooltip.SetToolTip(_title, tip);
-        _tooltip.SetToolTip(_status, tip);
-        _tooltip.SetToolTip(Led, tip);
-
-        Led.Invalidate();
-    }
-
-    static (Color, string) StatusVisual(string status) => status switch
-    {
-        "complete" => (Color.FromArgb(65, 235, 95), "DONE"),
-        "running" => (Color.FromArgb(70, 150, 255), "RUNNING"),
-        "reviewing" => (Color.FromArgb(255, 220, 70), "CRITIC"),
-        "validating" => (Color.FromArgb(255, 220, 70), "VALIDATOR"),
-        "needs_rework" => (Color.FromArgb(240, 60, 60), "REJECTED"),
-        "failed" => (Color.FromArgb(240, 60, 60), "FAILED"),
-        "stale" => (Color.FromArgb(255, 140, 50), "STALE"),
-        "blocked" => (Color.FromArgb(180, 70, 70), "BLOCKED"),
-        "ready" => (Color.FromArgb(80, 170, 220), "READY"),
-        "pending" => (Color.FromArgb(75, 90, 105), "PENDING"),
-        "" => (Color.FromArgb(48, 58, 68), "—"),
-        _ => (Color.FromArgb(48, 58, 68), status.ToUpperInvariant())
-    };
-}
-
-sealed class TaskBoardPanel : Panel
-{
-    readonly TableLayoutPanel _list = new() { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
-    readonly Label _empty = new() { Dock = DockStyle.Top, Height = 24, Text = "No tasks yet.", ForeColor = Theme.Muted, Font = new Font("Cascadia Mono", 8.75f), TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(4, 4, 0, 0) };
-
-    public event Action<TaskBoardEntry>? InspectRequested;
-    public event Action<TaskBoardEntry>? RetryRequested;
-    public event Action<TaskBoardEntry>? CompleteRequested;
-    public event Action<TaskBoardEntry>? BlockRequested;
-
-    public TaskBoardPanel()
-    {
-        Dock = DockStyle.Fill;
-        AutoScroll = true;
-        BackColor = Color.FromArgb(10, 14, 18);
-        Padding = new Padding(2);
-        Controls.Add(_empty);
-        Controls.Add(_list);
-    }
-
-    public void SetTasks(IReadOnlyList<TaskBoardEntry> tasks)
-    {
-        _list.SuspendLayout();
-        try
-        {
-            while (_list.Controls.Count < tasks.Count)
-            {
-                var row = new TaskBoardRow();
-                row.InspectRequested += t => InspectRequested?.Invoke(t);
-                row.RetryRequested += t => RetryRequested?.Invoke(t);
-                row.CompleteRequested += t => CompleteRequested?.Invoke(t);
-                row.BlockRequested += t => BlockRequested?.Invoke(t);
-
-                _list.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-                _list.RowCount = _list.Controls.Count + 1;
-                _list.Controls.Add(row, 0, _list.Controls.Count);
-            }
-            while (_list.Controls.Count > tasks.Count)
-            {
-                var last = _list.Controls[_list.Controls.Count - 1];
-                _list.Controls.Remove(last);
-                last.Dispose();
-                if (_list.RowStyles.Count > 0) _list.RowStyles.RemoveAt(_list.RowStyles.Count - 1);
-            }
-            for (var i = 0; i < tasks.Count; i++)
-            {
-                ((TaskBoardRow)_list.Controls[i]).SetTask(tasks[i]);
-            }
-            _empty.Visible = tasks.Count == 0;
-        }
-        finally
-        {
-            _list.ResumeLayout();
-        }
-    }
-}
-
-sealed class MainForm : Form
-{
-    readonly string _root = Runtime.FindRoot();
-    readonly AppSettings _settings = AppStore.Load();
-    readonly TreeView _projects = new();
-    readonly TabControl _tabs = new();
-    readonly Label _header = new(), _mcpState = new(), _intent = new(), _goal = new();
-    readonly Label[] _metrics = Enumerable.Range(0, 5).Select(_ => new Label()).ToArray();
-    readonly TextBox _usage = new(), _allActivity = new(), _workerTelemetry = new(), _endpoint = new(), _stdio = new(), _integrationNote = new(), _activeProvidersText = new();
-    readonly BlinkenRack _blinkenRack = new();
-    readonly TaskBoardPanel _taskBoard = new();
-    readonly RecentActivityPanel _recentActivity = new();
-    readonly OrchestratorStatusPanel _orchestratorStatus = new();
-    readonly EmbeddedTerminalPanel _terminal = new();
-    readonly DataGridView _integrations = new(), _providers = new(), _mcpImport = new();
-    readonly Button _btnMcpDiscover = Btn("Discover", 100);
-    readonly Label _autofillStatus = new();
-    readonly Button _btnAutofillToggle = Btn("Start Autofill", 115);
-    readonly Button _btnAutofillPause = Btn("Pause", 80);
-    readonly Button _btnAutofillTrigger = Btn("Trigger Now", 95);
-    readonly NumericUpDown _numMaxConcurrent = new() { Minimum = 1, Maximum = 16, Value = 3, Width = 55, Margin = new Padding(0, 4, 8, 0), Font = new Font("Segoe UI", 9) };
-    bool _updatingAutofillUi;
-    readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
-    string? _eventCursorTs = DateTimeOffset.UtcNow.ToString("o");
-    static readonly HashSet<string> EscalatedEventTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "run.failed", "critic.error", "validator.error", "project.hold.set", "project.review.failed",
-        "state.proposal_rejected", "task.plan_repair_required"
-    };
-    int _refreshing;
-    int _mcpDiscoveryRunning;
-    readonly McpHost _mcp;
-    readonly AutofillHost _autofill;
-    readonly NotifyIcon _notify;
-    bool _reallyExit;
-
-    public MainForm()
-    {
-        Text = "StatefulClanker"; Width = 1160; Height = 740; MinimumSize = new Size(920, 590); StartPosition = FormStartPosition.CenterScreen;
-        try { using var s = typeof(MainForm).Assembly.GetManifestResourceStream("StatefulClanker.ico"); if (s is not null) Icon = new Icon(s); } catch { }
-        _mcp = new McpHost(_root, _settings.HttpPort, _settings.McpToken); _mcp.EnsureStarted(); _autofill = new AutofillHost(_root);
-        var menu = new ContextMenuStrip(); menu.Items.Add("Open StatefulClanker", null, (_, _) => ShowFromTray()); menu.Items.Add("Exit", null, (_, _) => { _reallyExit = true; Close(); });
-        _notify = new NotifyIcon { Text = "StatefulClanker", Icon = Icon ?? SystemIcons.Application, Visible = true, ContextMenuStrip = menu }; _notify.DoubleClick += (_, _) => ShowFromTray();
-        BuildUi(); RestoreProjects(); Theme.Apply(this); _ = RefreshAllAsync();
-        _timer.Tick += async (_, _) => { await RefreshAllAsync(); EscalateNewEvents(); }; _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
-    }
-
-    // Surfaces failure/hold events from the active project's event log directly into the
-    // live embedded terminal session, so the human (and any AI composer running in that
-    // session) sees them without switching tabs. Only escalates the 5 event types that
-    // indicate a real failure or halt -- routine events are never injected.
-    void EscalateNewEvents()
-    {
-        if (!_terminal.HasActiveSession) return;
-        var project = _settings.ActiveProjectPath;
-        if (string.IsNullOrWhiteSpace(project) || !Directory.Exists(project)) return;
-        var eventsPath = System.IO.Path.Combine(project, ".statefulclanker", "events.jsonl");
-        foreach (var (ts, type, message) in ReadNewEvents(eventsPath, ref _eventCursorTs))
-        {
-            var text = string.IsNullOrWhiteSpace(message) ? type : $"{type}: {message}";
-            // Queues for immediate toast display and boundary-flush into the live PTY
-            // right after the user's next Enter keypress (see EmbeddedTerminalPanel.QueueNotice).
-            _terminal.QueueNotice($"# [StatefulClanker] {text}");
-        }
-    }
-
-    static List<(string ts, string type, string message)> ReadNewEvents(string path, ref string? cursorTs)
-    {
-        var results = new List<(string ts, string type, string message)>();
-        if (!File.Exists(path)) return results;
-        string? newCursor = cursorTs;
-        foreach (var line in File.ReadLines(path))
-        {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            try
-            {
-                using var d = JsonDocument.Parse(line);
-                var r = d.RootElement;
-                var ts = r.TryGetProperty("ts", out var t) ? t.GetString() : null;
-                var type = r.TryGetProperty("type", out var ty) ? ty.GetString() : null;
-                if (string.IsNullOrEmpty(ts) || string.IsNullOrEmpty(type)) continue;
-                if (cursorTs is not null && string.CompareOrdinal(ts, cursorTs) <= 0) continue;
-                if (!EscalatedEventTypes.Contains(type)) { if (newCursor is null || string.CompareOrdinal(ts, newCursor) > 0) newCursor = ts; continue; }
-                var message = r.TryGetProperty("message", out var mm) ? mm.GetString() ?? "" : "";
-                results.Add((ts, type, message));
-                if (newCursor is null || string.CompareOrdinal(ts, newCursor) > 0) newCursor = ts;
-            }
-            catch { }
-        }
-        cursorTs = newCursor;
-        return results;
-    }
-
-    static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 32, Margin = new Padding(0, 4, 8, 0) };
-    static Label Section(string text) => new() { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.BottomLeft, Font = new Font("Segoe UI Semibold", 8, FontStyle.Bold), ForeColor = Theme.Muted, AutoEllipsis = true, Padding = new Padding(1, 0, 1, 3) };
-    TabPage Page(string name) => new(name) { Padding = new Padding(12), BackColor = Theme.Back, ForeColor = Theme.Text };
 
     void BuildUi()
     {
-        var shell = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = Theme.Back };
-        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270));
-        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 300));
+        // Two nested splitters replace the old fixed 270/300 px table columns.
+        // All three major rails can now be dragged; the separator is deliberately
+        // dark and narrow so it reads as spacing, not a bright WinForms bar.
+        var shell = new QuietSplitContainer(Orientation.Vertical)
+        {
+            Panel1MinSize = 160,
+            Panel2MinSize = 540,
+            ResetDistance = 235
+        };
+        var workspace = new QuietSplitContainer(Orientation.Vertical)
+        {
+            Panel1MinSize = 430,
+            Panel2MinSize = 180,
+            ResetPanel2Width = 265
+        };
         Controls.Add(shell);
+        shell.Panel2.Controls.Add(workspace);
 
-        // Left rail: projects over a compact recent-activity feed.
-        var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 7, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0), BackColor = Theme.Back };
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        left.RowStyles.Add(new RowStyle(SizeType.Percent, 56));
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        left.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        left.RowStyles.Add(new RowStyle(SizeType.Percent, 44));
-        left.Controls.Add(new Label { Text = "STATEFULCLANKER", Dock = DockStyle.Fill, Font = new Font("Segoe UI Semibold", 12, FontStyle.Bold), ForeColor = Theme.Accent, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+        // Left rail: project controls over Recent Activity, with a horizontal
+        // splitter so either pane can be given the space it needs.
+        var leftRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0), BackColor = Theme.Back };
+        leftRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        leftRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        leftRoot.Controls.Add(new Label { Text = "STATEFULCLANKER", Dock = DockStyle.Fill, Font = new Font("Segoe UI Semibold", 12, FontStyle.Bold), ForeColor = Theme.Accent, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+
+        var leftBody = new QuietSplitContainer(Orientation.Horizontal)
+        {
+            Panel1MinSize = 145,
+            Panel2MinSize = 90,
+            ResetDistance = 330
+        };
+        var projectPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, Margin = new Padding(0), BackColor = Theme.Back };
+        projectPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        projectPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        projectPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        projectPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         _projects.Dock = DockStyle.Fill; _projects.HideSelection = false; _projects.BorderStyle = BorderStyle.None; _projects.ShowLines = false; _projects.ShowPlusMinus = false; _projects.FullRowSelect = true; _projects.ItemHeight = 28;
-        _projects.AfterSelect += (_, _) => SelectProject(); left.Controls.Add(_projects, 0, 1);
-        var add = Btn("+ Add / open project", 210); add.Dock = DockStyle.Fill; add.Click += (_, _) => AddProject(); left.Controls.Add(add, 0, 2);
-        var remove = Btn("Remove from list", 210); remove.Dock = DockStyle.Fill; remove.Click += (_, _) => RemoveProject(); left.Controls.Add(remove, 0, 3);
-        var explorer = Btn("Open in Explorer", 210); explorer.Dock = DockStyle.Fill; explorer.Click += (_, _) => OpenExplorer(); left.Controls.Add(explorer, 0, 4);
-        left.Controls.Add(Section("RECENT ACTIVITY"), 0, 5);
-        _recentActivity.OpenActivityRequested += () => _tabs.SelectedIndex = 1;
-        left.Controls.Add(_recentActivity, 0, 6);
-        shell.Controls.Add(left, 0, 0);
+        _projects.AfterSelect += (_, _) => SelectProject(); projectPanel.Controls.Add(_projects, 0, 0);
+        var add = Btn("+ Add / open project", 210); add.Dock = DockStyle.Fill; add.Click += (_, _) => AddProject(); projectPanel.Controls.Add(add, 0, 1);
+        var remove = Btn("Remove from list", 210); remove.Dock = DockStyle.Fill; remove.Click += (_, _) => RemoveProject(); projectPanel.Controls.Add(remove, 0, 2);
+        var explorer = Btn("Open in Explorer", 210); explorer.Dock = DockStyle.Fill; explorer.Click += (_, _) => OpenExplorer(); projectPanel.Controls.Add(explorer, 0, 3);
+        leftBody.Panel1.Controls.Add(projectPanel);
 
-        var right = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(14), Margin = new Padding(0) };
-        right.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
-        right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var recentPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(0), Padding = new Padding(0, 4, 0, 0), BackColor = Theme.Back };
+        recentPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        recentPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        recentPanel.Controls.Add(Section("RECENT ACTIVITY"), 0, 0);
+        _recentActivity.OpenActivityRequested += () => _tabs.SelectedIndex = 1;
+        recentPanel.Controls.Add(_recentActivity, 0, 1);
+        leftBody.Panel2.Controls.Add(recentPanel);
+        leftRoot.Controls.Add(leftBody, 0, 1);
+        shell.Panel1.Controls.Add(leftRoot);
+
+        var center = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(14), Margin = new Padding(0), BackColor = Theme.Back };
+        center.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        center.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
         _header.Dock = DockStyle.Fill; _header.Font = new Font("Segoe UI Semibold", 15, FontStyle.Bold); _header.TextAlign = ContentAlignment.MiddleLeft;
         _mcpState.Dock = DockStyle.Fill; _mcpState.TextAlign = ContentAlignment.MiddleCenter; _mcpState.Font = new Font("Cascadia Mono", 8.5f, FontStyle.Bold);
-        top.Controls.Add(_header, 0, 0); top.Controls.Add(_mcpState, 1, 0); right.Controls.Add(top, 0, 0);
+        top.Controls.Add(_header, 0, 0); top.Controls.Add(_mcpState, 1, 0); center.Controls.Add(top, 0, 0);
 
         _tabs.Dock = DockStyle.Fill;
         _tabs.Appearance = TabAppearance.FlatButtons;
         _tabs.ItemSize = new Size(118, 30);
         _tabs.SizeMode = TabSizeMode.Fixed;
-        // TabControl always paints its own tab strip with the native OS visual style,
-        // ignoring BackColor/ForeColor -- the only way to kill the resulting light band
-        // in a dark theme is to own the drawing entirely.
         _tabs.DrawMode = TabDrawMode.OwnerDrawFixed;
         _tabs.Padding = new Point(14, 6);
         _tabs.DrawItem += (s, e) =>
@@ -1947,27 +1598,23 @@ sealed class MainForm : Form
             g.FillRectangle(back, bounds);
             using var text = new SolidBrush(selected ? Theme.Text : Theme.Muted);
             using var font = new Font("Segoe UI Semibold", 9f, selected ? FontStyle.Bold : FontStyle.Regular);
-            var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
             g.DrawString(tab.Text, font, text, bounds, sf);
             if (selected)
             {
                 using var accent = new SolidBrush(Theme.Accent);
-                g.FillRectangle(accent, bounds.X + 4, bounds.Bottom - 2, bounds.Width - 8, 2);
+                g.FillRectangle(accent, bounds.X + 8, bounds.Bottom - 1, bounds.Width - 16, 1);
             }
         };
         _tabs.TabPages.Add(BuildOverview());
         _tabs.TabPages.Add(BuildActivity());
         _tabs.TabPages.Add(BuildIntegrations());
         _tabs.TabPages.Add(BuildMcpImport());
-        // Connection discovery + the project target pool now own inference setup.
-        // The old Providers/Endpoints & Routing page remains as compatibility code
-        // for older configs but is intentionally no longer exposed in the cockpit.
-        right.Controls.Add(_tabs, 0, 1);
-        shell.Controls.Add(right, 1, 0);
+        center.Controls.Add(_tabs, 0, 1);
+        workspace.Panel1.Controls.Add(center);
 
-        // Persistent task rail. The Overview itself now owns the live worker
-        // blinkenlights and orchestration status, while this rail remains the
-        // durable task-state view on every tab.
+        // Persistent task rail. Its width is now operator-controlled instead of
+        // a hard-coded 300 px column.
         var taskRail = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0), BackColor = Theme.Back };
         taskRail.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         taskRail.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -1980,29 +1627,53 @@ sealed class MainForm : Form
         _taskBoard.CompleteRequested += task => OverrideCompleteTask(task);
         _taskBoard.BlockRequested += task => BlockTask(task);
         taskRail.Controls.Add(_taskBoard, 0, 1);
-        shell.Controls.Add(taskRail, 2, 0);
+        workspace.Panel2.Controls.Add(taskRail);
+
+        TrackSplitter(shell, () => _settings.LeftRailWidth = shell.SplitterDistance);
+        TrackSplitter(leftBody, () => _settings.LeftProjectHeight = leftBody.SplitterDistance);
+        TrackSplitter(workspace, () => _settings.RightRailWidth = Math.Max(workspace.Panel2MinSize, workspace.Width - workspace.SplitterDistance - workspace.SplitterWidth));
+        RestoreSplitterWhenShown(() =>
+        {
+            shell.RestoreDistance(_settings.LeftRailWidth);
+            leftBody.RestoreDistance(_settings.LeftProjectHeight);
+            workspace.RestorePanel2Width(_settings.RightRailWidth);
+        });
     }
 
     TabPage BuildOverview()
     {
         var p = Page("Overview");
-        var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 7, ColumnCount = 1 };
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 128));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 98));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
-        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var topDeck = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
-        topDeck.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 270));
-        topDeck.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        topDeck.Controls.Add(_orchestratorStatus, 0, 0);
-        _blinkenRack.Dock = DockStyle.Fill; _blinkenRack.Margin = new Padding(8, 0, 0, 0);
-        topDeck.Controls.Add(_blinkenRack, 1, 0);
+        // The terminal is a real workspace, not the leftover row at the bottom of a
+        // dashboard. Drag this splitter almost all the way up when the TUI needs the
+        // screen; the compact status deck remains scrollable rather than clipping.
+        var overviewSplit = new QuietSplitContainer(Orientation.Horizontal)
+        {
+            Panel1MinSize = 70,
+            Panel2MinSize = 120,
+            ResetDistance = 285
+        };
 
-        var autofillBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, BackColor = Theme.Surface, Padding = new Padding(8, 5, 4, 4) };
+        var infoScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Back };
+        var rows = new TableLayoutPanel { Dock = DockStyle.Top, Height = 366, RowCount = 6, ColumnCount = 1, Margin = new Padding(0), BackColor = Theme.Back };
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+
+        var topDeck = new QuietSplitContainer(Orientation.Vertical)
+        {
+            Panel1MinSize = 180,
+            Panel2MinSize = 180,
+            ResetDistance = 255
+        };
+        topDeck.Panel1.Controls.Add(_orchestratorStatus);
+        _blinkenRack.Dock = DockStyle.Fill; _blinkenRack.Margin = new Padding(6, 0, 0, 0);
+        topDeck.Panel2.Controls.Add(_blinkenRack);
+
+        var autofillBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true, BackColor = Theme.Surface, Padding = new Padding(8, 5, 4, 4) };
         _btnAutofillToggle.Click += (_, _) => ToggleAutofill();
         _btnAutofillPause.Click += (_, _) => ToggleAutofillPause();
         _btnAutofillTrigger.Click += (_, _) => TriggerAutofill();
@@ -2011,57 +1682,84 @@ sealed class MainForm : Form
         _autofillStatus.AutoSize = true; _autofillStatus.Margin = new Padding(12, 8, 4, 0); _autofillStatus.Font = new Font("Cascadia Mono", 8.5f, FontStyle.Bold); _autofillStatus.ForeColor = Theme.Muted;
         autofillBar.Controls.AddRange(new Control[] { _btnAutofillToggle, _btnAutofillPause, _btnAutofillTrigger, maxLbl, _numMaxConcurrent, _autofillStatus });
 
-        var infoGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
-        infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        var poolSplit = new QuietSplitContainer(Orientation.Vertical)
+        {
+            Panel1MinSize = 180,
+            Panel2MinSize = 180,
+            ResetDistance = 315
+        };
 
-        var providersCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(0, 0, 4, 0) };
+        var providersCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(0, 0, 3, 0) };
         _activeProvidersText.Dock = DockStyle.Fill; _activeProvidersText.ReadOnly = true; _activeProvidersText.BackColor = Theme.Surface; _activeProvidersText.BorderStyle = BorderStyle.None; _activeProvidersText.Font = new Font("Cascadia Mono", 9f, FontStyle.Bold); _activeProvidersText.ForeColor = Theme.Accent;
         providersCard.Controls.Add(_activeProvidersText);
 
-        var usageCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(4, 0, 0, 0) };
-        _usage.Dock = DockStyle.Fill; _usage.Multiline = true; _usage.ReadOnly = true; _usage.ScrollBars = ScrollBars.None; _usage.WordWrap = true; _usage.BorderStyle = BorderStyle.None; _usage.Font = new Font("Cascadia Mono", 8.25f);
+        var usageCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(3, 0, 0, 0) };
+        _usage.Dock = DockStyle.Fill; _usage.Multiline = true; _usage.ReadOnly = true; _usage.ScrollBars = ScrollBars.Vertical; _usage.WordWrap = true; _usage.BorderStyle = BorderStyle.None; _usage.Font = new Font("Cascadia Mono", 8.25f);
         usageCard.Controls.Add(_usage);
-        infoGrid.Controls.Add(providersCard, 0, 0);
-        infoGrid.Controls.Add(usageCard, 1, 0);
+        poolSplit.Panel1.Controls.Add(providersCard);
+        poolSplit.Panel2.Controls.Add(usageCard);
 
         var authority = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(12) };
-        _intent.Dock = DockStyle.Top; _intent.Height = 26; _intent.ForeColor = Theme.Accent; _intent.Font = new Font("Cascadia Mono", 9, FontStyle.Bold);
+        _intent.Dock = DockStyle.Top; _intent.Height = 24; _intent.ForeColor = Theme.Accent; _intent.Font = new Font("Cascadia Mono", 9, FontStyle.Bold);
         _goal.Dock = DockStyle.Fill; _goal.Font = new Font("Segoe UI", 9.25f);
         authority.Controls.Add(_goal); authority.Controls.Add(_intent);
 
         rows.Controls.Add(topDeck, 0, 0);
         rows.Controls.Add(autofillBar, 0, 1);
         rows.Controls.Add(Section("TARGET POOL / USAGE"), 0, 2);
-        rows.Controls.Add(infoGrid, 0, 3);
+        rows.Controls.Add(poolSplit, 0, 3);
         rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 4);
         rows.Controls.Add(authority, 0, 5);
-        rows.Controls.Add(_terminal, 0, 6);
-        p.Controls.Add(rows);
+        infoScroll.Controls.Add(rows);
+
+        _terminal.Dock = DockStyle.Fill;
+        overviewSplit.Panel1.Controls.Add(infoScroll);
+        overviewSplit.Panel2.Controls.Add(_terminal);
+        p.Controls.Add(overviewSplit);
+
+        TrackSplitter(overviewSplit, () => _settings.OverviewInfoHeight = overviewSplit.SplitterDistance);
+        TrackSplitter(topDeck, () => _settings.OverviewStatusWidth = topDeck.SplitterDistance);
+        TrackSplitter(poolSplit, () => _settings.OverviewProviderWidth = poolSplit.SplitterDistance);
+        RestoreSplitterWhenShown(() =>
+        {
+            overviewSplit.RestoreDistance(_settings.OverviewInfoHeight);
+            topDeck.RestoreDistance(_settings.OverviewStatusWidth);
+            poolSplit.RestoreDistance(_settings.OverviewProviderWidth);
+        });
         return p;
     }
 
     TabPage BuildActivity()
     {
         var p = Page("Activity & Telemetry");
-        var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1 };
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        rows.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        var split = new QuietSplitContainer(Orientation.Horizontal)
+        {
+            Panel1MinSize = 110,
+            Panel2MinSize = 110,
+            ResetDistance = 300
+        };
 
-        rows.Controls.Add(Section("WORKER TELEMETRY / CONTEXT FAULTS"), 0, 0);
+        var telemetryPane = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(0), BackColor = Theme.Back };
+        telemetryPane.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        telemetryPane.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        telemetryPane.Controls.Add(Section("WORKER TELEMETRY / CONTEXT FAULTS"), 0, 0);
         _workerTelemetry.Dock = DockStyle.Fill; _workerTelemetry.Multiline = true; _workerTelemetry.ReadOnly = true; _workerTelemetry.ScrollBars = ScrollBars.Both; _workerTelemetry.WordWrap = false; _workerTelemetry.BorderStyle = BorderStyle.None; _workerTelemetry.Font = new Font("Cascadia Mono", 8.5f);
-        rows.Controls.Add(_workerTelemetry, 0, 1);
+        telemetryPane.Controls.Add(_workerTelemetry, 0, 1);
 
-        rows.Controls.Add(Section("DURABLE RECENT ACTIVITY"), 0, 2);
+        var activityPane = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Margin = new Padding(0), BackColor = Theme.Back };
+        activityPane.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        activityPane.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        activityPane.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        activityPane.Controls.Add(Section("DURABLE RECENT ACTIVITY"), 0, 0);
         _allActivity.Dock = DockStyle.Fill; _allActivity.Multiline = true; _allActivity.ReadOnly = true; _allActivity.ScrollBars = ScrollBars.Both; _allActivity.WordWrap = false; _allActivity.BorderStyle = BorderStyle.None; _allActivity.Font = new Font("Cascadia Mono", 8.5f);
-        rows.Controls.Add(_allActivity, 0, 3);
+        activityPane.Controls.Add(_allActivity, 0, 1);
+        activityPane.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "Click a task in the right rail for its run / critique / validation receipts and operator actions.", ForeColor = Theme.Muted, Font = new Font("Segoe UI", 8.25f), TextAlign = ContentAlignment.MiddleLeft }, 0, 2);
 
-        var hint = new Label { Dock = DockStyle.Fill, Text = "Click a task in the right rail for its run / critique / validation receipts and operator actions.", ForeColor = Theme.Muted, Font = new Font("Segoe UI", 8.25f), TextAlign = ContentAlignment.MiddleLeft };
-        rows.Controls.Add(hint, 0, 4);
-        p.Controls.Add(rows);
+        split.Panel1.Controls.Add(telemetryPane);
+        split.Panel2.Controls.Add(activityPane);
+        p.Controls.Add(split);
+        TrackSplitter(split, () => _settings.ActivityTelemetryHeight = split.SplitterDistance);
+        RestoreSplitterWhenShown(() => split.RestoreDistance(_settings.ActivityTelemetryHeight));
         return p;
     }
 
@@ -2778,7 +2476,18 @@ sealed class MainForm : Form
     void OpenConfig() { var path = _settings.ActiveProjectPath; if (string.IsNullOrWhiteSpace(path)) return; var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json"); if (File.Exists(cfg)) try { Process.Start(new ProcessStartInfo("notepad.exe") { UseShellExecute = true, ArgumentList = { cfg } }); } catch { } }
     static void Copy(string text) { if (!string.IsNullOrWhiteSpace(text)) Clipboard.SetText(text); }
     void ShowFromTray() { Show(); WindowState = FormWindowState.Normal; Activate(); }
-    void HandleFormClosing(object? sender, FormClosingEventArgs e) { if (!_reallyExit) { e.Cancel = true; Hide(); return; } _timer.Stop(); _terminal.StopSession(); _autofill.Dispose(); _mcp.Dispose(); _notify.Visible = false; _notify.Dispose(); }
+    void HandleFormClosing(object? sender, FormClosingEventArgs e)
+    {
+        _layoutSaveTimer.Stop();
+        AppStore.Save(_settings);
+        if (!_reallyExit) { e.Cancel = true; Hide(); return; }
+        _timer.Stop();
+        _terminal.StopSession();
+        _autofill.Dispose();
+        _mcp.Dispose();
+        _notify.Visible = false;
+        _notify.Dispose();
+    }
 
     void ShowTaskDetails(TaskBoardEntry task)
     {
