@@ -87,7 +87,7 @@ Every control event contains a monotonically increasing `sequence` and one of:
 
 - `fyi` — routine information that may be batched
 - `attention` — meaningful progress/failure/change that should normally be summarized
-- `human_required` — ambiguity/hold/reconciliation state that should return to the human rather than be guessed through
+- `human_required` — a genuine unresolved human-authority/Intent decision that should return to the human rather than be guessed through
 
 The cursor makes delivery resumable. Notification loss or session restart does not lose project state.
 
@@ -139,6 +139,29 @@ worker -> INTENT_QUESTION / INTENT_CONFLICT
 ```
 
 Independent work need not stop unless it depends on the changed authority, but no new compilation is allowed against an unreconciled directive set.
+
+## Control-plane recovery flow
+
+Mechanical stalls are deliberately different from human-authority ambiguity. An exhausted retry count, repeated critic/validator rejection, `task.plan_repair_required`, or `autofill.stalled` is emitted as an `attention` recovery request and may be injected into the live conversational session.
+
+The recovery path is:
+
+```text
+stalled task / repeated review rejection
+       -> autofill.stalled or task.plan_repair_required
+       -> live conversational control plane
+       -> task_recovery_context
+       -> inspect current artifact + current Directives/Intent + reviewer evidence
+       -> fix implementation and retry
+          OR task_repair task/graph metadata
+          OR, last resort, task_recover_complete with concrete evidence
+       -> downstream readiness recomputed
+       -> autofill resumed/triggered
+```
+
+`task_repair` and `task_recover_complete` are **control-plane recovery authority**, not human authority. They refuse active and human-gated tasks, require a written reason and concrete evidence, and write an audit event. Recovery completion explicitly records that the normal review gate was bypassed.
+
+The control plane returns to the human only when investigation reaches a decision it cannot legitimately make: unresolved intent/precedence, a human gate, a new product/design preference, or another explicit authority boundary.
 
 ## Why push and pull both exist
 
