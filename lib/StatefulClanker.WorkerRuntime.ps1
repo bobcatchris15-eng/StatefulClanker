@@ -379,7 +379,7 @@ function Invoke-SCRouteDoctor([int]$MaxProbes=1) {
     $due=@(Get-SCRouteDoctorDue ([Math]::Max(1,$MaxProbes)))
     $results=@()
     foreach($item in $due){
-        Set-SCRouteProbing ([string]$item.name)
+        if(-not(Set-SCRouteProbing ([string]$item.name))){continue}
         try{
             $probe=Invoke-SCRouteProbeRecord $item
             Register-SCRouteProbeSuccess ([string]$item.name)
