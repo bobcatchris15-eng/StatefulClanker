@@ -11,6 +11,83 @@ function Test-SCProviderEnabled($ProviderEntry) {
     return $true
 }
 
+function Get-SCTargetPoolPath {
+    $dir=Get-SCPath 'routing'
+    if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
+    return Join-Path $dir 'target-pool.json'
+}
+
+function Get-SCTargetPool {
+    $path=Get-SCTargetPoolPath
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return [pscustomobject]@{schemaVersion=1;entries=[pscustomobject]@{}}}
+    try{
+        $pool=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json
+        if(-not$pool.PSObject.Properties['entries']){$pool|Add-Member -NotePropertyName entries -NotePropertyValue ([pscustomobject]@{}) -Force}
+        return $pool
+    }catch{
+        Add-SCEvent 'routing.target_pool_invalid' 'Target pool JSON could not be parsed; falling back to legacy configured providers.' @{path=$path;error=$_.Exception.Message}
+        return [pscustomobject]@{schemaVersion=1;entries=[pscustomobject]@{}}
+    }
+}
+
+function Get-SCTargetPoolRecords {
+    $pool=Get-SCTargetPool
+    $records=@()
+    foreach($p in $pool.entries.PSObject.Properties){
+        $e=$p.Value
+        if($e.PSObject.Properties['enabled'] -and $null-ne$e.enabled -and -not[bool]$e.enabled){continue}
+        if(-not$e.PSObject.Properties['connection'] -or [string]::IsNullOrWhiteSpace([string]$e.connection)){continue}
+        if(-not$e.PSObject.Properties['model'] -or [string]::IsNullOrWhiteSpace([string]$e.model)){continue}
+        $toolMode=if($e.PSObject.Properties['toolMode'] -and $e.toolMode){[string]$e.toolMode}else{'native'}
+        $cfg=[pscustomobject]@{
+            type='api'
+            connection=[string]$e.connection
+            model=[string]$e.model
+            toolMode=$toolMode
+            disabled=$false
+        }
+        $records += [pscustomobject]@{
+            name=('pool:'+[string]$p.Name)
+            poolId=[string]$p.Name
+            config=$cfg
+            priority=100
+            preferred=$false
+            targetPool=$true
+        }
+    }
+    return @($records|Sort-Object name)
+}
+
+function Get-SCRoundRobinStatePath {
+    $dir=Get-SCPath 'routing'
+    if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
+    return Join-Path $dir 'round-robin.json'
+}
+
+function Get-SCRoundRobinOrdered($Records) {
+    $items=@($Records|Sort-Object name)
+    if($items.Count-le 1){return $items}
+    $mutexName='Local\StatefulClankerRoute-'+(Get-SCHashString (Get-SCRoot)).Substring(0,16)
+    $mutex=New-Object System.Threading.Mutex($false,$mutexName)
+    $locked=$false
+    try{
+        $locked=$mutex.WaitOne(5000)
+        $path=Get-SCRoundRobinStatePath
+        $state=$null
+        if(Test-Path -LiteralPath $path -PathType Leaf){try{$state=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json}catch{}}
+        $cursor=0
+        if($state-and$state.PSObject.Properties['cursor']){try{$cursor=[int]$state.cursor}catch{}}
+        $start=(($cursor % $items.Count)+$items.Count)%$items.Count
+        $ordered=@()
+        for($i=0;$i-lt$items.Count;$i++){$ordered+=,$items[($start+$i)%$items.Count]}
+        Write-SCJson $path ([ordered]@{schemaVersion=1;cursor=(($start+1)%$items.Count);lastDispatch=[datetimeoffset]::UtcNow.ToString('o');lastFirst=[string]$ordered[0].name})
+        return @($ordered)
+    }finally{
+        if($locked){try{$mutex.ReleaseMutex()}catch{}}
+        $mutex.Dispose()
+    }
+}
+
 function Get-SCPrioritizedProviders($Config) {
     if (-not $Config -or -not $Config.PSObject.Properties['providers'] -or -not $Config.providers) { return @() }
     $list = @()
@@ -195,66 +272,49 @@ function Test-SCRouteRecordAvailable($Record) {
 }
 
 function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker') {
-    $cfg = Get-SCConfig
-    $prioritized = @(Get-SCPrioritizedProviders $cfg)
-    if ($Override) {
-        $property = if ($cfg.providers) { $cfg.providers.PSObject.Properties[$Override] } else { $null }
-        if ($null -eq $property) { throw "Endpoint '$Override' not configured." }
-        if (-not (Test-SCProviderEnabled $property.Value)) { throw "Endpoint '$Override' is disabled." }
-        return @([pscustomobject]@{ name=$Override; config=$property.Value; priority=-1; preferred=$true })
+    $cfg=Get-SCConfig
+    $poolRecords=@(Get-SCTargetPoolRecords)
+
+    # Explicit operator/debug override remains strict. It may name a target-pool id,
+    # its pool:<id> route name, or a legacy configured provider. Normal task/provider
+    # role pins are deliberately ignored.
+    if($Override){
+        $poolMatch=$poolRecords|Where-Object{[string]$_.name-eq$Override -or [string]$_.poolId-eq$Override}|Select-Object -First 1
+        if($poolMatch){
+            if(-not(Test-SCRouteRecordAvailable $poolMatch)){throw "Target-pool route '$Override' is currently unavailable."}
+            return @($poolMatch)
+        }
+        $property=if($cfg.providers){$cfg.providers.PSObject.Properties[$Override]}else{$null}
+        if($null-eq$property){throw "Route '$Override' is not configured."}
+        if(-not(Test-SCProviderEnabled $property.Value)){throw "Route '$Override' is disabled."}
+        $record=[pscustomobject]@{name=$Override;config=$property.Value;priority=-1;preferred=$true;targetPool=$false}
+        if(-not(Test-SCRouteRecordAvailable $record)){throw "Route '$Override' is currently unavailable."}
+        return @($record)
     }
 
-    $mode = Get-SCRoutingSelectionMode $cfg
-    # In random mode, ambient pins (defaultProvider/providerBySize/criticProvider/
-    # validatorProvider) are ignored -- only an explicit per-task provider field
-    # still pins a route, since that's deliberate one-off intent rather than an
-    # always-on default. Everything else is chosen from whatever's enabled and
-    # currently healthy, in shuffled order, on the theory that with bounded task
-    # decomposition the specific model matters less than just getting an available
-    # one to respond.
-    $preferred = if ($mode -eq 'random') { Get-SCTaskExplicitProvider $Task } else { Get-SCRoutePreferenceName $Task $Stage }
-    $ordered = @()
-    $preferredRecord=$null
-    if ($preferred) {
-        $p = $prioritized | Where-Object { $_.Name -eq $preferred } | Select-Object -First 1
-        if ($p) {
-            $preferredRecord=[pscustomobject]@{ name=$p.Name; config=$p.Config; priority=$p.Priority; preferred=$true }
-            $ordered += $preferredRecord
+    # Once a target pool exists it is the automatic routing authority. Worker,
+    # critic and validator all draw from the same healthy workhorse pool; model
+    # identity is telemetry, not a role assignment.
+    $records=@()
+    if($poolRecords.Count-gt 0){
+        $records=@($poolRecords)
+    }else{
+        # Backward-compatible migration path for projects that have not created a
+        # target pool yet. Legacy providers still run, but role/default/size pins
+        # and priority ordering no longer affect automatic selection.
+        foreach($p in @(Get-SCPrioritizedProviders $cfg)){
+            $records += [pscustomobject]@{name=$p.Name;config=$p.Config;priority=100;preferred=$false;targetPool=$false}
         }
     }
 
-    # Preserve model continuity where possible: after the preferred API endpoint,
-    # try the same model through another configured connection before changing models.
-    $sameModel=@()
-    $rest=@()
-    $preferredModel=$null
-    $preferredIsApi=$false
-    if($preferredRecord){
-        $ptype=if($preferredRecord.config.PSObject.Properties['type']){[string]$preferredRecord.config.type}else{'cli'}
-        $preferredIsApi=($ptype-eq'api')
-        if($preferredIsApi -and $preferredRecord.config.PSObject.Properties['model']){$preferredModel=[string]$preferredRecord.config.model}
+    $available=@($records|Where-Object{Test-SCRouteRecordAvailable $_})
+    if($available.Count-eq 0){return @()}
+    $ordered=@(Get-SCRoundRobinOrdered $available)
+    $max=6
+    if($cfg.PSObject.Properties['routing'] -and $cfg.routing -and $cfg.routing.PSObject.Properties['maxRouteAttempts']){
+        try{$max=[Math]::Min(32,[Math]::Max(1,[int]$cfg.routing.maxRouteAttempts))}catch{}
     }
-    foreach ($p in $prioritized) {
-        if ($preferred -and $p.Name -eq $preferred) { continue }
-        $record=[pscustomobject]@{ name=$p.Name; config=$p.Config; priority=$p.Priority; preferred=$false }
-        $type=if($p.Config.PSObject.Properties['type']){[string]$p.Config.type}else{'cli'}
-        $model=if($p.Config.PSObject.Properties['model']){[string]$p.Config.model}else{$null}
-        if($preferredIsApi -and $type-eq'api' -and $preferredModel -and $model-eq$preferredModel){$sameModel+=$record}else{$rest+=$record}
-    }
-    if ($mode -eq 'random') {
-        $ordered += @($sameModel | Sort-Object { Get-Random })
-        $ordered += @($rest | Sort-Object { Get-Random })
-    } else {
-        $ordered += @($sameModel | Sort-Object priority,name)
-        $ordered += @($rest | Sort-Object priority,name)
-    }
-
-    $available = @($ordered | Where-Object { Test-SCRouteRecordAvailable $_ })
-    $max = 6
-    if ($cfg.PSObject.Properties['routing'] -and $cfg.routing -and $cfg.routing.PSObject.Properties['maxRouteAttempts']) {
-        try { $max = [Math]::Min(32,[Math]::Max(1,[int]$cfg.routing.maxRouteAttempts)) } catch {}
-    }
-    return @($available | Select-Object -First $max)
+    return @($ordered|Select-Object -First $max)
 }
 
 function Get-SCNextRouteAvailability {
@@ -277,6 +337,6 @@ function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
         return [ordered]@{ name=$candidates[0].name; config=$candidates[0].config }
     }
     $next = Get-SCNextRouteAvailability
-    if ($next) { throw "All enabled inference endpoints are cooling down. Next retry window: $($next.ToLocalTime().ToString('o'))" }
-    throw "No enabled inference endpoint is available. Configure or enable at least one endpoint."
+    if ($next) { throw "All eligible target-pool routes are cooling down. Next retry window: $($next.ToLocalTime().ToString('o'))" }
+    throw "No eligible inference route is available. Add/enable models in the project target pool or configure a fallback connection."
 }
