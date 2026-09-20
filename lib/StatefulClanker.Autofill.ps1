@@ -71,6 +71,7 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
     Add-SCEvent 'autofill.started' "Autofill supervisor started; interval ${interval}s." @{pid=$PID;intervalSeconds=$interval;maxConcurrent=$limit}
     try {
         while($true){
+            try{if(Get-Command Invoke-SCRouteDoctor -ErrorAction SilentlyContinue){Invoke-SCRouteDoctor 1|Out-Null}}catch{}
             $now=Get-Date;$results=@();$still=@()
             foreach($r in @($running)){
                 if($r.process.HasExited){try{$results+=,(Complete-SCParallelChild (Get-SCStateRoot) $r -NoMerge:$NoMerge)}catch{Write-Warning "Autofill could not finalize $($r.taskId): $($_.Exception.Message)"};try{$r.process.Dispose()}catch{}}
