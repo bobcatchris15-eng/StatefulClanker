@@ -569,7 +569,17 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
             if($WorkerSessionId){Add-SCWorkerMutationToolCall $WorkerSessionId $name}
             if($name-eq'finish'){
                 if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $args ([string]$result)}
-                $finished=$true;$finishResult=[string]$result;break
+                $finished=$true;$finishResult=[string]$result
+                $toolMessage=[ordered]@{role='tool';tool_call_id=[string]$call.id;content=("Candidate submitted for review: "+[string]$result)}
+                $messages+=$toolMessage
+                if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId $toolMessage}
+                continue
+            }
+            if($finished){
+                $toolMessage=[ordered]@{role='tool';tool_call_id=[string]$call.id;content='SKIPPED: a completion candidate was already submitted in this turn.'}
+                $messages+=$toolMessage
+                if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId $toolMessage}
+                continue
             }
             $toolMessage=[ordered]@{role='tool';tool_call_id=[string]$call.id;content=[string]$result}
             $messages+=$toolMessage
