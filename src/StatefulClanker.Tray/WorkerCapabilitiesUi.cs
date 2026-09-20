@@ -12,8 +12,8 @@ static class WorkerCapabilityStore
     public static string Path => System.IO.Path.Combine(AppStore.Root, "worker-capabilities.json");
     static JsonObject Defaults() => new()
     {
-        ["schemaVersion"] = 2,
-        ["allow"] = new JsonArray("builtin.*", "intent.human.read", "intent.normalized.read"),
+        ["schemaVersion"] = 3,
+        ["allow"] = new JsonArray("builtin.*", "intent.human.read", "intent.normalized.read", "rpk.*"),
         ["deny"] = new JsonArray(), ["profiles"] = new JsonObject(), ["sources"] = new JsonObject()
     };
     public static JsonObject Load()
