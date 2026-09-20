@@ -154,7 +154,7 @@ function Repair-SCTaskFromRecovery([string]$Id,[string]$PayloadPath,[string]$Why
     Update-SCReadiness
     $task=Get-SCTask $Id
     $afterHash=Get-SCTaskDefinitionHash $task
-    Add-SCEvent 'task.repaired.control_plane' "Control plane repaired stalled task $Id: $Why" @{
+    Add-SCEvent 'task.repaired.control_plane' "Control plane repaired stalled task ${Id}: $Why" @{
         taskId=$Id;previousStatus=$previousStatus;previousAttempts=$previousAttempts;changedFields=@($changed);
         reason=$Why;evidence=@($evidence);beforeDefinitionHash=$beforeHash;afterDefinitionHash=$afterHash;
         controlRevision=$task.controlRevision;recoveryCount=$recoveryCount;newStatus=$task.status
@@ -189,7 +189,7 @@ function Complete-SCTaskFromRecovery([string]$Id,[string]$PayloadPath,[string]$W
         kind='accepted-existing-work';ts=(Get-Date).ToUniversalTime().ToString('o');reason=$Why;evidence=@($evidence)
     })
     Save-SCTask $task
-    Add-SCEvent 'task.completed.control_plane_recovery' "Control plane accepted existing work for stalled task $Id: $Why" @{
+    Add-SCEvent 'task.completed.control_plane_recovery' "Control plane accepted existing work for stalled task ${Id}: $Why" @{
         taskId=$Id;previousStatus=$previousStatus;previousAttempts=$previousAttempts;reason=$Why;evidence=@($evidence);
         authority='control-plane-recovery';bypassedReviewGate=$true;controlRevision=$task.controlRevision;
         latestRunId=$task.latestRunId;latestProposalId=$task.latestProposalId;latestCritiqueId=$task.latestCritiqueId;latestValidationId=$task.latestValidationId;
