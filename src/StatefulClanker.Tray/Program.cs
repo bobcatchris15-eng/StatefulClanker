@@ -342,6 +342,7 @@ sealed class ProjectMetrics
     public long UsageReports, PromptTokens, CompletionTokens, TotalTokens;
     public Dictionary<string,long> ModelTokens = new(StringComparer.OrdinalIgnoreCase);
     public string IntentRevision = "—", Goal = "", Activity = "", Telemetry = "";
+    public bool Evil;
     public Dictionary<string, int> ActiveTypes = new(StringComparer.OrdinalIgnoreCase);
     public string ActiveTypesSummary = "";
     public List<ActiveAgentInfo> ActiveAgentList = new();
@@ -393,6 +394,7 @@ static class Inspector
     public static ProjectMetrics Project(string project)
     {
         var m = new ProjectMetrics(); var state = System.IO.Path.Combine(project, ".statefulclanker"); if (!Directory.Exists(state)) return m;
+        m.Evil = IsEvil(state);
         var active = JsonFiles(System.IO.Path.Combine(state, "telemetry", "active")).ToArray(); m.ActiveAgents = active.Length;
         foreach (var file in active) {
             try {
@@ -682,6 +684,39 @@ static class Inspector
         m.UsageReports+=Number(r,"usageReports");m.PromptTokens+=Number(r,"promptTokens");m.CompletionTokens+=Number(r,"completionTokens");m.TotalTokens+=Number(r,"totalTokens");
         if(r.TryGetProperty("modelUsage",out var usage) && usage.ValueKind==JsonValueKind.Array){foreach(var row in usage.EnumerateArray()){var model=row.TryGetProperty("model",out var x)&&x.ValueKind==JsonValueKind.String?x.GetString():null;PutModel(m,model,Number(row,"totalTokens"));}return;}
         AddModels(m,r);
+    }
+
+    static bool IsEvil(string state)
+    {
+        // This is deliberately explicit. Ordinary failures, rejected critiques, holds,
+        // or intent drift must never falsely trip the comedy doomsday indicator.
+        // A sentinel file is the durable/manual path; event state lets any subsystem
+        // raise and clear the condition through the normal event stream.
+        if (File.Exists(System.IO.Path.Combine(state, "EVIL"))) return true;
+
+        var eventsPath = System.IO.Path.Combine(state, "events.jsonl");
+        if (!File.Exists(eventsPath)) return false;
+
+        var evil = false;
+        try
+        {
+            foreach (var line in File.ReadLines(eventsPath))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try
+                {
+                    using var d = JsonDocument.Parse(line);
+                    var r = d.RootElement;
+                    if (!r.TryGetProperty("type", out var ty) || ty.ValueKind != JsonValueKind.String) continue;
+                    var type = ty.GetString();
+                    if (string.Equals(type, "clanker.evil", StringComparison.OrdinalIgnoreCase)) evil = true;
+                    else if (string.Equals(type, "clanker.evil.cleared", StringComparison.OrdinalIgnoreCase)) evil = false;
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return evil;
     }
 
     static int CommitCount(string project)
@@ -1113,6 +1148,7 @@ sealed class AgentBlinkenBank : Control
     public string TaskId { get; set; } = "";
     public string AgentType { get; set; } = "Standby";
     public bool IsActive { get; set; }
+    public bool EvilMode { get; set; }
 
     const int Rows = 4;
     const int Cols = 10;
@@ -1152,6 +1188,12 @@ sealed class AgentBlinkenBank : Control
 
     public void Step()
     {
+        if (EvilMode)
+        {
+            Array.Fill(_lamps, true);
+            Invalidate();
+            return;
+        }
         if (!IsActive)
         {
             Array.Clear(_lamps, 0, _lamps.Length);
@@ -1186,7 +1228,12 @@ sealed class AgentBlinkenBank : Control
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
 
         Color borderColor, headerColor;
-        switch (AgentType.ToLowerInvariant())
+        if (EvilMode)
+        {
+            borderColor = Color.FromArgb(255, 45, 45);
+            headerColor = Color.FromArgb(255, 75, 75);
+        }
+        else switch (AgentType.ToLowerInvariant())
         {
             case "project critic":
                 borderColor = IsActive ? Color.FromArgb(240, 60, 60) : Color.FromArgb(48, 58, 68);
@@ -1232,9 +1279,9 @@ sealed class AgentBlinkenBank : Control
         g.FillEllipse(screwBrush, r.Left + 2, r.Bottom - 5, 3, 3);
         g.FillEllipse(screwBrush, r.Right - 5, r.Bottom - 5, 3, 3);
 
-        var labelText = string.IsNullOrEmpty(TaskId) 
-            ? AgentType.ToUpperInvariant() 
-            : $"{AgentType.ToUpperInvariant()}: {TaskId}";
+        var labelText = EvilMode
+            ? (string.IsNullOrEmpty(TaskId) ? "EVIL" : $"EVIL: {TaskId}")
+            : (string.IsNullOrEmpty(TaskId) ? AgentType.ToUpperInvariant() : $"{AgentType.ToUpperInvariant()}: {TaskId}");
         using var font = new Font("Cascadia Mono", 7.5f, FontStyle.Bold);
         using var textBrush = new SolidBrush(headerColor);
         g.DrawString(labelText, font, textBrush, 8, 3);
@@ -1257,8 +1304,8 @@ sealed class AgentBlinkenBank : Control
                 var idx = row * Cols + col;
                 var x = r.X + padX + col * spacingX;
                 var y = r.Y + padY + row * spacingY;
-                var on = IsActive && _lamps[idx];
-                var baseColor = LampPalette[_lampColors[idx]];
+                var on = EvilMode || (IsActive && _lamps[idx]);
+                var baseColor = EvilMode ? Color.FromArgb(255, 35, 35) : LampPalette[_lampColors[idx]];
                 var litColor = baseColor;
                 var unlitColor = Color.FromArgb(Math.Max(12, baseColor.R / 7), Math.Max(14, baseColor.G / 7), Math.Max(16, baseColor.B / 7));
                 var c = on ? litColor : unlitColor;
@@ -1301,6 +1348,7 @@ sealed class BlinkenRack : Panel
     readonly System.Windows.Forms.Timer _pulse = new() { Interval = 110 };
     readonly List<AgentBlinkenBank> _banks = new();
     readonly AgentBlinkenBank _standbyBank = new(null, null, "Standby");
+    bool _evil;
 
     public BlinkenRack()
     {
@@ -1313,6 +1361,27 @@ sealed class BlinkenRack : Panel
             foreach (var b in _banks) b.Step();
         };
         _pulse.Start();
+    }
+
+    public void SetEvil(bool evil)
+    {
+        if (_evil == evil) return;
+        _evil = evil;
+        _standbyBank.EvilMode = evil;
+        foreach (var bank in _banks) bank.EvilMode = evil;
+        if (evil)
+        {
+            _standbyBank.IsActive = true;
+            _standbyBank.Step();
+            foreach (var bank in _banks) bank.Step();
+        }
+        else
+        {
+            _standbyBank.EvilMode = _evil;
+            _standbyBank.IsActive = _evil;
+            _standbyBank.Invalidate();
+            foreach (var bank in _banks) bank.Invalidate();
+        }
     }
 
     public void SyncAgents(List<ActiveAgentInfo> agents)
@@ -1342,10 +1411,11 @@ sealed class BlinkenRack : Panel
                     existing.TaskId = a.TaskId;
                     existing.AgentType = a.Type;
                     existing.IsActive = true;
+                    existing.EvilMode = _evil;
                 }
                 else
                 {
-                    var newBank = new AgentBlinkenBank(a.AgentId, a.TaskId, a.Type);
+                    var newBank = new AgentBlinkenBank(a.AgentId, a.TaskId, a.Type) { EvilMode = _evil };
                     _banks.Add(newBank);
                     _flow.Controls.Add(newBank);
                 }
@@ -1870,7 +1940,7 @@ sealed class MainForm : Form
     static readonly HashSet<string> EscalatedEventTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "run.failed", "critic.error", "validator.error", "project.hold.set", "project.review.failed",
-        "state.proposal_rejected", "task.plan_repair_required"
+        "state.proposal_rejected", "task.plan_repair_required", "clanker.evil", "clanker.evil.cleared"
     };
     int _refreshing;
     int _mcpDiscoveryRunning;
@@ -2784,6 +2854,7 @@ sealed class MainForm : Form
         _intent.Text = $"INTENT REVISION  {m.IntentRevision}";
         _goal.Text = string.IsNullOrWhiteSpace(m.Goal) ? "No project goal recorded." : m.Goal;
         _usage.Text = UsageText(m);
+        _blinkenRack.SetEvil(m.Evil);
         _blinkenRack.SyncAgents(m.ActiveAgentList);
         _taskBoard.SetTasks(m.TaskBoard);
     }
