@@ -1,10 +1,1 @@
-.statefulclanker/
-*.tmp
-*.log
-
-# Installer build output and generated icon
-install/output/
-install/publish/
-install/StatefulClanker.ico
-bin/
-obj/
+.statefulclanker/\n.clanker/\n*.tmp\n*.log\n\n# Installer build output and generated icon\ninstall/output/\ninstall/publish/\ninstall/StatefulClanker.ico\nbin/\nobj/\n
