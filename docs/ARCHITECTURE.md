@@ -1,5 +1,17 @@
 # StatefulClanker architecture
 
+## Resumable worker sessions
+
+StatefulClanker's direct-inference worker is a logical execution session owned by StatefulClanker, not by any one model/provider. The durable session record lives under `.statefulclanker/worker-sessions/` and carries the canonical message/tool transcript, provider/model history, candidate counter, no-artifact counter, and API-boundary checkpoints.
+
+A successful inference response is not automatically a valid completion candidate. For artifact-producing tasks (`outputKind=change|document|state-update`), a deterministic pre-critic gate compares the candidate worktree snapshot with the session baseline and checks any explicitly claimed artifact paths. A first no-artifact candidate is returned to the same session for one cheap correction without spending critic inference; a repeated no-artifact candidate abandons the session.
+
+Ordinary critic rejection does not throw away a resumable direct worker. The critic result is appended to the same logical worker session, which continues against the existing worktree and submits a replacement candidate. `attemptCount` therefore counts the outer task cycle while `candidateNumber` counts completion candidates inside that execution. Three actual critic rejections still escalate the task to plan-graph repair.
+
+Direct worker turns are checkpointed at API/tool boundaries. In Git worktrees, StatefulClanker writes hidden snapshot commits under `refs/statefulclanker/checkpoints/<session>/<sequence>` using a temporary index, so creating a checkpoint does not advance the worker branch or stage its real index. Checkpoints are currently recovery points rather than automatic transactions: the runtime can restore one explicitly, but does not yet decide on its own that a turn should be rolled back.
+
+The session is also the continuity boundary for inference failover. A provider/model can disappear between API calls and another compatible direct endpoint can continue the same session. Provider-owned remote session identifiers, when supported later, are subordinate optimizations attached to the StatefulClanker session rather than the source of truth.
+
 ## Purpose
 
 StatefulClanker is a **Windows-first durable orchestration runtime** for long-running agentic projects where project truth must survive disposable model contexts.
