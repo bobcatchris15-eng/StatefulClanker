@@ -6,7 +6,7 @@ function Get-SCRpkHost {
     if(Test-Path -LiteralPath $installed -PathType Leaf){return [pscustomobject]@{file=$installed;prefix=@()}}
     $project=Join-Path $script:StatefulClankerHome 'src\StatefulClanker.Tray\StatefulClanker.Tray.csproj'
     $dotnet=Get-Command dotnet -ErrorAction SilentlyContinue
-    if($dotnet-and(Test-Path -LiteralPath $project -PathType Leaf)){return [pscustomobject]@{file=$dotnet.Source;prefix=@('run','--project',$project,'--','--rpk')}}
+    if($dotnet -and (Test-Path -LiteralPath $project -PathType Leaf)) {return [pscustomobject]@{file=$dotnet.Source;prefix=@('run','--project',$project,'--','--rpk')}}
     return $null
 }
 function Invoke-SCRpk([string]$Command,[hashtable]$Arguments=@{},[switch]$AllowUnavailable) {
