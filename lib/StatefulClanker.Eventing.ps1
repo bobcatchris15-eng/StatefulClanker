@@ -20,6 +20,7 @@ function Ensure-SCControlEventLayout {
 function Get-SCControlEventLevel([string]$Type,$Data=$null) {
     if([string]::IsNullOrWhiteSpace($Type)){return 'fyi'}
     if($Type -match '^(intent\.escalated|directive\.reconciliation_required|project\.hold\.set|human\.required)'){return 'human_required'}
+    if($Type -match '^(autofill\.stalled|task\.plan_repair_required)'){return 'attention'}
     if($Data) {
         $verdict=$null;$passed=$null
         if($Data-is[System.Collections.IDictionary]) {if($Data.Contains('verdict')){$verdict=[string]$Data['verdict']};if($Data.Contains('passed')){$passed=$Data['passed']}}
