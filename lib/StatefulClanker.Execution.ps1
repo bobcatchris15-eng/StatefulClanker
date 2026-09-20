@@ -264,7 +264,18 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
         $preflight=$null
         if($resumable){
             $preflight=Get-SCWorkerCandidatePreflight $workerSessionId $task
-            Set-SCProperty $run 'candidatePreflight' $preflight
+            $preflightEvidence=[ordered]@{
+                material=[bool]$preflight.material
+                requiresArtifact=[bool]$preflight.requiresArtifact
+                reason=$preflight.reason
+                missingArtifacts=@($preflight.missingArtifacts)
+                candidateCheckpointId=$preflight.candidateCheckpointId
+                candidateNumber=[int]$preflight.candidateNumber
+            }
+            Set-SCProperty $run 'candidatePreflight' $preflightEvidence
+            if($preflight.session -and $preflight.session.PSObject.Properties['candidateClaim']){
+                Set-SCProperty $run 'candidateClaim' $preflight.session.candidateClaim
+            }
             Write-SCJson (Get-SCPath ("runs/{0}.json"-f$run.id)) $run
             if(-not[bool]$preflight.material){
                 $noArtifactCount=Add-SCWorkerNoArtifact $workerSessionId ([string]$preflight.reason)
@@ -287,7 +298,8 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
             Set-SCProperty $proposal.evidence 'workerSessionId' $workerSessionId
             Set-SCProperty $proposal.evidence 'candidateNumber' ([int]$preflight.candidateNumber)
             Set-SCProperty $proposal.evidence 'candidateCheckpointId' $preflight.candidateCheckpointId
-            Set-SCProperty $proposal.evidence 'candidatePreflight' ([ordered]@{material=[bool]$preflight.material;requiresArtifact=[bool]$preflight.requiresArtifact;missingArtifacts=@($preflight.missingArtifacts)})
+            Set-SCProperty $proposal.evidence 'candidatePreflight' $preflightEvidence
+            if($run.PSObject.Properties['candidateClaim']){Set-SCProperty $proposal.evidence 'candidateClaim' $run.candidateClaim}
             Save-SCProposal $proposal
         }
 
