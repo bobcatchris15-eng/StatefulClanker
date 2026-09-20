@@ -71,6 +71,12 @@ A task that has already failed critic or validator review is a decomposition sig
 Prefer plan_apply with SCPLAN 1 for substantial plans. Do not implement project work in the conversational thread when it belongs in a worker task. StatefulClanker compiles truth packets, invokes configured provider CLIs such as codex/agy/claude/opencode, persists receipts, and applies critic/validator gates.
 
 Workers must never weaken current human directives or the reconciled Intent Contract. INTENT_QUESTION and INTENT_CONFLICT are successful detection of specification uncertainty: surface them to the human rather than penalizing the worker or guessing.
+
+TARGET-POOL MAINTENANCE IS OPERATIONAL, NOT SEMANTIC AUTHORITY
+
+Automatic inference routing draws worker, critic, and validator calls from one project-local target pool using health-aware pseudo-round-robin. Do not assign models to permanent roles or rank them by presumed intelligence. The working hypothesis is that sufficiently capable workhorse models plus strong tooling/context/decomposition are interchangeable enough for these bounded tasks.
+
+Use connection_catalog to inspect the machine's live discovered catalogs and target_pool_list to inspect current project choices. When the pool is stale, sparse, or contains ambiguous free-tier entries, briefly research current provider/model availability and then use target_pool_upsert/target_pool_remove to maintain it. Prefer currently free or local chat/coding models with tool calling when available and enough context for the compiled packet. Record a compact rationale and researchedAt timestamp. Free-tier claims are time-sensitive operational facts, not durable Intent. Never copy credentials or secrets into project state.
 '@
 }
 
@@ -130,6 +136,77 @@ function Get-McpControlSnapshot([string]$Project) {
     }
 }
 
+
+function Get-McpConnectionCatalog([string]$Connection=$null) {
+    $path=Join-Path (Join-Path $env:LOCALAPPDATA 'StatefulClanker') 'connections.json'
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return @()}
+    try{$root=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json}catch{return @()}
+    if(-not$root-or-not$root.PSObject.Properties['connections']){return @()}
+    $rows=@()
+    foreach($p in $root.connections.PSObject.Properties){
+        if($Connection-and-not[string]::Equals($Connection,[string]$p.Name,[StringComparison]::OrdinalIgnoreCase)){continue}
+        $v=$p.Value
+        $models=@()
+        if($v.PSObject.Properties['models'] -and $v.models){
+            foreach($m in @($v.models)){
+                $models += [ordered]@{
+                    id=if($m.PSObject.Properties['id']){[string]$m.id}else{$null}
+                    displayName=if($m.PSObject.Properties['displayName']){[string]$m.displayName}else{$null}
+                    contextLength=if($m.PSObject.Properties['contextLength']){$m.contextLength}else{$null}
+                    supportsTools=if($m.PSObject.Properties['supportsTools']){$m.supportsTools}else{$null}
+                    isFree=if($m.PSObject.Properties['isFree']){$m.isFree}else{$null}
+                    inputPrice=if($m.PSObject.Properties['inputPrice']){$m.inputPrice}else{$null}
+                    outputPrice=if($m.PSObject.Properties['outputPrice']){$m.outputPrice}else{$null}
+                }
+            }
+        }
+        $rows += [ordered]@{
+            name=[string]$p.Name
+            presetId=if($v.PSObject.Properties['presetId']){[string]$v.presetId}else{'custom'}
+            protocol=if($v.PSObject.Properties['protocol']){[string]$v.protocol}else{'openai-chat'}
+            baseUrl=if($v.PSObject.Properties['baseUrl']){[string]$v.baseUrl}else{$null}
+            health=if($v.PSObject.Properties['health']){[string]$v.health}else{'unknown'}
+            lastTestAt=if($v.PSObject.Properties['lastTestAt']){$v.lastTestAt}else{$null}
+            models=@($models)
+        }
+    }
+    return @($rows)
+}
+
+function Get-McpTargetPoolPath([string]$Project) {
+    $dir=Join-Path (Get-McpStateDir $Project) 'routing'
+    if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
+    return Join-Path $dir 'target-pool.json'
+}
+
+function Get-McpTargetPool([string]$Project) {
+    $path=Get-McpTargetPoolPath $Project
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return [pscustomobject]@{schemaVersion=1;updatedAt=$null;entries=[pscustomobject]@{}}}
+    try{
+        $pool=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json
+        if(-not$pool.PSObject.Properties['entries']){$pool|Add-Member -NotePropertyName entries -NotePropertyValue ([pscustomobject]@{}) -Force}
+        return $pool
+    }catch{throw "Target pool is invalid JSON: $($_.Exception.Message)"}
+}
+
+function Save-McpTargetPool([string]$Project,$Pool) {
+    $path=Get-McpTargetPoolPath $Project
+    if(-not$Pool.PSObject.Properties['schemaVersion']){$Pool|Add-Member -NotePropertyName schemaVersion -NotePropertyValue 1 -Force}else{$Pool.schemaVersion=1}
+    if(-not$Pool.PSObject.Properties['updatedAt']){$Pool|Add-Member -NotePropertyName updatedAt -NotePropertyValue ([datetimeoffset]::UtcNow.ToString('o')) -Force}else{$Pool.updatedAt=[datetimeoffset]::UtcNow.ToString('o')}
+    $tmp=$path+'.tmp'
+    $json=$Pool|ConvertTo-Json -Depth 30
+    [IO.File]::WriteAllText($tmp,$json,(New-Object Text.UTF8Encoding($false)))
+    [IO.File]::Move($tmp,$path,$true)
+}
+
+function Find-McpCatalogModel([string]$Connection,[string]$Model) {
+    $catalog=@(Get-McpConnectionCatalog $Connection)
+    if($catalog.Count-eq 0){throw "Unknown machine connection '$Connection'."}
+    $match=@($catalog[0].models|Where-Object{[string]::Equals([string]$_.id,$Model,[StringComparison]::OrdinalIgnoreCase)}|Select-Object -First 1)
+    if($match.Count-eq 0){throw "Model '$Model' is not in the last discovered catalog for connection '$Connection'. Refresh the connection first."}
+    return $match[0]
+}
+
 function New-SCExtendedTools {
     @(
         @{name='plan_apply';description='Apply a compact SCPLAN 1 plan directly from text. Preferred for conversational planning because no intermediate local file is required.';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string';description='Complete SCPLAN 1 document.'}};required=@('text')}},
@@ -145,7 +222,11 @@ function New-SCExtendedTools {
         @{name='control_events_since';description='Read durable sequenced control-plane events after a cursor. Keep the returned cursor and use it next time; push notifications are only a wake-up signal.';inputSchema=@{type='object';properties=@{project=@{type='string'};since=@{type='integer';minimum=0};limit=@{type='integer';minimum=1;maximum=1000};minimumLevel=@{type='string';enum=@('fyi','attention','human_required')}}}},
         @{name='control_snapshot';description='Read the current human-facing project snapshot: goal, current directives, Intent, reconciliation gate, task counts, holds, active agents, and event cursor.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
         @{name='autofill_status';description='Inspect the resident autofill supervisor: state (running, paused, idle, blocked, draining, stopped), PID, slot availability, ready task count, and blocking reasons.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
-        @{name='autofill_control';description='Control the resident autofill supervisor: pause (suspend dispatch and allow manual runs), resume, stop (drain and exit), or trigger_now (immediate dispatch tick).';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('stop','pause','resume','trigger_now')}};required=@('action')}}
+        @{name='autofill_control';description='Control the resident autofill supervisor: pause (suspend dispatch and allow manual runs), resume, stop (drain and exit), or trigger_now (immediate dispatch tick).';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('stop','pause','resume','trigger_now')}};required=@('action')}},
+        @{name='connection_catalog';description='Read sanitized machine inference connections and their last discovered model catalogs. Secrets and custom headers are never returned. Use this before maintaining the project target pool.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string';description='Optional connection name to inspect.'}}}},
+        @{name='target_pool_list';description='Read the project-local workhorse model target pool used by automatic pseudo-round-robin routing.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
+        @{name='target_pool_upsert';description='Add or update one discovered connection/model in the automatic workhorse target pool. Record a short rationale and research date when Clanker has checked current suitability/free status.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'};displayName=@{type='string'};enabled=@{type='boolean'};workhorse=@{type='boolean'};free=@{type='boolean'};supportsTools=@{type='boolean'};contextLength=@{type='integer';minimum=1};toolMode=@{type='string';enum=@('native','text')};rationale=@{type='string'};researchedAt=@{type='string';description='ISO-8601 timestamp; defaults to now when rationale is supplied.'};source=@{type='string';description='Defaults to clanker.'}};required=@('connection','model')}},
+        @{name='target_pool_remove';description='Remove one connection/model from the project target pool without altering the machine connection or discovered catalog.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'}};required=@('connection','model')}}
     )
 }
 
@@ -197,6 +278,42 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
             $events=@(Get-McpControlEventsSince $project $since $limit $min);return New-McpTextResult ([ordered]@{since=$since;cursor=Get-McpControlCursor $project;events=$events})
         }
         'control_snapshot' {return New-McpTextResult (Get-McpControlSnapshot $project)}
+        'connection_catalog' {
+            $connection=Get-McpArgOptional $Arguments 'connection'
+            return New-McpTextResult ([ordered]@{connections=@(Get-McpConnectionCatalog $connection);note='Machine-local discovery metadata only; no credentials or custom headers are exposed.'})
+        }
+        'target_pool_list' {
+            $pool=Get-McpTargetPool $project
+            return New-McpTextResult ([ordered]@{project=$project;path=(Get-McpTargetPoolPath $project);updatedAt=$pool.updatedAt;entries=@($pool.entries.PSObject.Properties|ForEach-Object{$_.Value})})
+        }
+        'target_pool_upsert' {
+            $connection=Get-McpArgRequired $Arguments 'connection';$model=Get-McpArgRequired $Arguments 'model'
+            $catalogModel=Find-McpCatalogModel $connection $model
+            $pool=Get-McpTargetPool $project;$id="$connection::$model";$existing=$pool.entries.PSObject.Properties[$id]
+            $value=[ordered]@{
+                id=$id;connection=$connection;model=$model
+                displayName=if($Arguments.PSObject.Properties['displayName']-and$Arguments.displayName){[string]$Arguments.displayName}elseif($catalogModel.displayName){[string]$catalogModel.displayName}else{$model}
+                enabled=if($Arguments.PSObject.Properties['enabled']-and$null-ne$Arguments.enabled){[bool]$Arguments.enabled}else{$true}
+                workhorse=if($Arguments.PSObject.Properties['workhorse']-and$null-ne$Arguments.workhorse){[bool]$Arguments.workhorse}else{$true}
+                free=if($Arguments.PSObject.Properties['free']-and$null-ne$Arguments.free){[bool]$Arguments.free}else{$catalogModel.isFree}
+                supportsTools=if($Arguments.PSObject.Properties['supportsTools']-and$null-ne$Arguments.supportsTools){[bool]$Arguments.supportsTools}else{$catalogModel.supportsTools}
+                contextLength=if($Arguments.PSObject.Properties['contextLength']-and$Arguments.contextLength){[long]$Arguments.contextLength}else{$catalogModel.contextLength}
+                toolMode=if($Arguments.PSObject.Properties['toolMode']-and$Arguments.toolMode){[string]$Arguments.toolMode}elseif($catalogModel.supportsTools-eq$false){'text'}else{'native'}
+                source=if($Arguments.PSObject.Properties['source']-and$Arguments.source){[string]$Arguments.source}else{'clanker'}
+                rationale=if($Arguments.PSObject.Properties['rationale']){[string]$Arguments.rationale}elseif($existing-and$existing.Value.PSObject.Properties['rationale']){$existing.Value.rationale}else{$null}
+                researchedAt=if($Arguments.PSObject.Properties['researchedAt']-and$Arguments.researchedAt){[string]$Arguments.researchedAt}elseif($Arguments.PSObject.Properties['rationale']-and$Arguments.rationale){[datetimeoffset]::UtcNow.ToString('o')}elseif($existing-and$existing.Value.PSObject.Properties['researchedAt']){$existing.Value.researchedAt}else{$null}
+                updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+            }
+            if($existing){$existing.Value=[pscustomobject]$value}else{$pool.entries|Add-Member -NotePropertyName $id -NotePropertyValue ([pscustomobject]$value) -Force}
+            Save-McpTargetPool $project $pool
+            return New-McpTextResult ([ordered]@{updated=$true;entry=$value})
+        }
+        'target_pool_remove' {
+            $connection=Get-McpArgRequired $Arguments 'connection';$model=Get-McpArgRequired $Arguments 'model';$id="$connection::$model"
+            $pool=Get-McpTargetPool $project;$existed=$null-ne$pool.entries.PSObject.Properties[$id]
+            if($existed){$pool.entries.PSObject.Properties.Remove($id);Save-McpTargetPool $project $pool}
+            return New-McpTextResult ([ordered]@{removed=$existed;id=$id})
+        }
         'autofill_status' {
             $status=Invoke-McpHarness $project @('autofill','status')
             $sJson=Join-Path (Get-McpStateDir $project) 'autofill\supervisor.json'
