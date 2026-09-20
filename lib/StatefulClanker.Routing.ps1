@@ -383,6 +383,14 @@ function Set-SCRouteProbing([string]$Name) {
 
 function Resolve-SCRouteProbeRecord([string]$Name) {
     $records=@(Get-SCTargetPoolRecords)
+    $cfg=Get-SCConfig
+    if($cfg.PSObject.Properties['providers'] -and $cfg.providers){
+        foreach($p in $cfg.providers.PSObject.Properties){
+            $entry=$p.Value;$type=if($entry.PSObject.Properties['type']){[string]$entry.type}else{'cli'}
+            if($type-ne'api' -or -not(Test-SCProviderEnabled $entry)){continue}
+            if(@($records|Where-Object{[string]$_.name-eq[string]$p.Name}).Count-eq0){$records+=,[pscustomobject]@{name=[string]$p.Name;poolId=$null;config=$entry;targetPool=$false}}
+        }
+    }
     if($Name.StartsWith('connection:')){
         $connection=$Name.Substring('connection:'.Length);$usable=@($records|Where-Object{[string]$_.config.connection-eq$connection -and (Test-SCRouteAvailable ([string]$_.name))})
         if($usable.Count-eq0){$usable=@($records|Where-Object{[string]$_.config.connection-eq$connection})};return @($usable|Select-Object -First 1)
