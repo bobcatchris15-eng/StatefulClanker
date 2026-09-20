@@ -89,17 +89,23 @@ Example routing:
 
 ```json
 {
-  "defaultProvider": "opencode",
-  "criticProvider": "local-qwen",
-  "validatorProvider": "claude",
-  "providerBySize": {
-    "tiny": "local-qwen",
-    "small": "local-qwen",
-    "medium": "opencode",
-    "large": "claude"
+  "routing": {
+    "maxRouteAttempts": 6
+  },
+  "providers": {
+    "opencode": {
+      "type": "cli",
+      "command": "opencode",
+      "args": ["run"],
+      "mode": "stdin",
+      "disabled": false
+    }
   }
 }
 ```
+
+Automatic API inference is selected from `.statefulclanker/routing/target-pool.json`, maintained from the **Connections** page or through the Clanker's target-pool MCP tools. Worker, critic, validator, and task sizes do not pin particular models. The `providers` object above is retained for CLI/legacy compatibility and explicit operator overrides.
+
 
 The task's semantic size is assigned by the conversational planner. The runtime only uses that declared size as a routing hint. CLI and API backends can be mixed freely for workers, critics, and validators.
 
@@ -126,7 +132,7 @@ vLLM       http://127.0.0.1:8000/v1
 OpenRouter https://openrouter.ai/api/v1
 ```
 
-Select discovered models and add them to the active project as endpoints, then use **Endpoints & Routing** to set priority and preferred worker/critic/validator/size routes. Use **Custom OpenAI-compatible** for any other compatible provider or gateway. OpenCode can remain a CLI endpoint using its own provider catalogue.
+Select discovered models and add them to the active project as endpoints, then use **Connections / target pool** to set priority and preferred worker/critic/validator/size routes. Use **Custom OpenAI-compatible** for any other compatible provider or gateway. OpenCode can remain a CLI endpoint using its own provider catalogue.
 
 API keys typed into the app are encrypted with Windows DPAPI for the current Windows user. Alternatively specify an environment variable such as `OPENROUTER_API_KEY` and leave the key field empty.
 
