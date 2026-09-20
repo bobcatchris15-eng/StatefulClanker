@@ -290,18 +290,21 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
             $connection=Get-McpArgRequired $Arguments 'connection';$model=Get-McpArgRequired $Arguments 'model'
             $catalogModel=Find-McpCatalogModel $connection $model
             $pool=Get-McpTargetPool $project;$id="$connection::$model";$existing=$pool.entries.PSObject.Properties[$id]
+            $displayName=Get-McpArgOptional $Arguments 'displayName';$enabled=Get-McpArgOptional $Arguments 'enabled';$workhorse=Get-McpArgOptional $Arguments 'workhorse'
+            $free=Get-McpArgOptional $Arguments 'free';$supportsTools=Get-McpArgOptional $Arguments 'supportsTools';$contextLength=Get-McpArgOptional $Arguments 'contextLength'
+            $toolMode=Get-McpArgOptional $Arguments 'toolMode';$source=Get-McpArgOptional $Arguments 'source';$rationale=Get-McpArgOptional $Arguments 'rationale';$researchedAt=Get-McpArgOptional $Arguments 'researchedAt'
             $value=[ordered]@{
                 id=$id;connection=$connection;model=$model
-                displayName=if($Arguments.PSObject.Properties['displayName']-and$Arguments.displayName){[string]$Arguments.displayName}elseif($catalogModel.displayName){[string]$catalogModel.displayName}else{$model}
-                enabled=if($Arguments.PSObject.Properties['enabled']-and$null-ne$Arguments.enabled){[bool]$Arguments.enabled}else{$true}
-                workhorse=if($Arguments.PSObject.Properties['workhorse']-and$null-ne$Arguments.workhorse){[bool]$Arguments.workhorse}else{$true}
-                free=if($Arguments.PSObject.Properties['free']-and$null-ne$Arguments.free){[bool]$Arguments.free}else{$catalogModel.isFree}
-                supportsTools=if($Arguments.PSObject.Properties['supportsTools']-and$null-ne$Arguments.supportsTools){[bool]$Arguments.supportsTools}else{$catalogModel.supportsTools}
-                contextLength=if($Arguments.PSObject.Properties['contextLength']-and$Arguments.contextLength){[long]$Arguments.contextLength}else{$catalogModel.contextLength}
-                toolMode=if($Arguments.PSObject.Properties['toolMode']-and$Arguments.toolMode){[string]$Arguments.toolMode}elseif($catalogModel.supportsTools-eq$false){'text'}else{'native'}
-                source=if($Arguments.PSObject.Properties['source']-and$Arguments.source){[string]$Arguments.source}else{'clanker'}
-                rationale=if($Arguments.PSObject.Properties['rationale']){[string]$Arguments.rationale}elseif($existing-and$existing.Value.PSObject.Properties['rationale']){$existing.Value.rationale}else{$null}
-                researchedAt=if($Arguments.PSObject.Properties['researchedAt']-and$Arguments.researchedAt){[string]$Arguments.researchedAt}elseif($Arguments.PSObject.Properties['rationale']-and$Arguments.rationale){[datetimeoffset]::UtcNow.ToString('o')}elseif($existing-and$existing.Value.PSObject.Properties['researchedAt']){$existing.Value.researchedAt}else{$null}
+                displayName=if($displayName){[string]$displayName}elseif($catalogModel.displayName){[string]$catalogModel.displayName}else{$model}
+                enabled=if($null-ne$enabled){[bool]$enabled}else{$true}
+                workhorse=if($null-ne$workhorse){[bool]$workhorse}else{$true}
+                free=if($null-ne$free){[bool]$free}else{$catalogModel.isFree}
+                supportsTools=if($null-ne$supportsTools){[bool]$supportsTools}else{$catalogModel.supportsTools}
+                contextLength=if($contextLength){[long]$contextLength}else{$catalogModel.contextLength}
+                toolMode=if($toolMode){[string]$toolMode}elseif($catalogModel.supportsTools-eq$false){'text'}else{'native'}
+                source=if($source){[string]$source}else{'clanker'}
+                rationale=if($null-ne$rationale){[string]$rationale}elseif($existing-and$existing.Value.PSObject.Properties['rationale']){$existing.Value.rationale}else{$null}
+                researchedAt=if($researchedAt){[string]$researchedAt}elseif($rationale){[datetimeoffset]::UtcNow.ToString('o')}elseif($existing-and$existing.Value.PSObject.Properties['researchedAt']){$existing.Value.researchedAt}else{$null}
                 updatedAt=[datetimeoffset]::UtcNow.ToString('o')
             }
             if($existing){$existing.Value=[pscustomobject]$value}else{$pool.entries|Add-Member -NotePropertyName $id -NotePropertyValue ([pscustomobject]$value) -Force}
