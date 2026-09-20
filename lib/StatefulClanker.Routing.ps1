@@ -346,15 +346,39 @@ function Register-SCRouteFailureForRecord($Record,[string]$Class,[string]$Text) 
 function Get-SCRouteDoctorDue([int]$Limit=2) {
     $h=Get-SCRoutingHealth;$now=[datetimeoffset]::UtcNow;$rows=@()
     foreach($p in $h.endpoints.PSObject.Properties){
-        $v=$p.Value;$state=if($v.PSObject.Properties['state']){[string]$v.state}else{'healthy'};if($state-eq'healthy' -or $state-eq'probing'){continue};$at=$null
-        foreach($field in @('nextProbeAt','retryAfter')){if($v.PSObject.Properties[$field] -and $v.$field){$dto=[datetimeoffset]::MinValue;if([datetimeoffset]::TryParse([string]$v.$field,[ref]$dto)){$at=$dto;break}}}
+        $v=$p.Value;$state=if($v.PSObject.Properties['state']){[string]$v.state}else{'healthy'};if($state-eq'healthy'){continue};$at=$null
+        if($state-eq'probing'){
+            $last=[datetimeoffset]::MinValue
+            if($v.PSObject.Properties['lastProbe'] -and [datetimeoffset]::TryParse([string]$v.lastProbe,[ref]$last) -and $last-gt$now.AddMinutes(-10)){continue}
+            $at=$now
+        }else{
+            foreach($field in @('nextProbeAt','retryAfter')){if($v.PSObject.Properties[$field] -and $v.$field){$dto=[datetimeoffset]::MinValue;if([datetimeoffset]::TryParse([string]$v.$field,[ref]$dto)){$at=$dto;break}}}
+        }
         if($null-eq$at -or $at-le$now){$rows+=,[pscustomobject]@{name=[string]$p.Name;scope=if($v.PSObject.Properties['scope']){[string]$v.scope}else{'endpoint'};reason=if($v.PSObject.Properties['reason']){[string]$v.reason}else{'unknown'};dueAt=$at;entry=$v}}
     }
     return @($rows|Sort-Object @{Expression={if($_.dueAt){$_.dueAt}else{[datetimeoffset]::MinValue}}},name|Select-Object -First ([Math]::Max(1,$Limit)))
 }
 
 function Set-SCRouteProbing([string]$Name) {
-    $h=Get-SCRoutingHealth;$p=$h.endpoints.PSObject.Properties[$Name];if($null-eq$p){return};$p.Value.state='probing';Set-SCProperty $p.Value 'lastProbe' ([datetimeoffset]::UtcNow.ToString('o'));Save-SCRoutingHealth $h
+    $mutexName='Local\StatefulClankerRouteDoctor-'+(Get-SCHashString (Get-SCRoot)).Substring(0,16)
+    $mutex=New-Object System.Threading.Mutex($false,$mutexName);$locked=$false
+    try{
+        $locked=$mutex.WaitOne(5000);if(-not$locked){return $false}
+        $h=Get-SCRoutingHealth;$p=$h.endpoints.PSObject.Properties[$Name];if($null-eq$p){return $false}
+        $now=[datetimeoffset]::UtcNow;$state=if($p.Value.PSObject.Properties['state']){[string]$p.Value.state}else{'healthy'}
+        if($state-eq'healthy'){return $false}
+        if($state-eq'probing'){
+            $last=[datetimeoffset]::MinValue
+            if($p.Value.PSObject.Properties['lastProbe'] -and [datetimeoffset]::TryParse([string]$p.Value.lastProbe,[ref]$last) -and $last-gt$now.AddMinutes(-10)){return $false}
+        }else{
+            $raw=$null
+            if($p.Value.PSObject.Properties['nextProbeAt'] -and $p.Value.nextProbeAt){$raw=[string]$p.Value.nextProbeAt}elseif($p.Value.PSObject.Properties['retryAfter'] -and $p.Value.retryAfter){$raw=[string]$p.Value.retryAfter}
+            if($raw){$at=[datetimeoffset]::MinValue;if([datetimeoffset]::TryParse($raw,[ref]$at) -and $at-gt$now){return $false}}
+        }
+        $p.Value.state='probing';Set-SCProperty $p.Value 'lastProbe' $now.ToString('o');Save-SCRoutingHealth $h;return $true
+    }finally{
+        if($locked){try{$mutex.ReleaseMutex()}catch{}};$mutex.Dispose()
+    }
 }
 
 function Resolve-SCRouteProbeRecord([string]$Name) {
