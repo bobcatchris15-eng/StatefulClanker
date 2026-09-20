@@ -562,21 +562,25 @@ sealed class ApiConnectionDialog : Form
     public ApiConnectionDialog(string? id=null,ApiConnectionProfile? current=null)
     {
         _previous=current;Text=current is null?"Add inference connection":"Edit inference connection";Width=820;Height=720;MinimumSize=new Size(720,620);StartPosition=FormStartPosition.CenterParent;
-        var root=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(14)};
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute,325));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.Absolute,46));
+        var root=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Padding=new Padding(14)};
+        root.RowStyles.Add(new RowStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.Absolute,46));
 
-        var form=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=8};form.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,155));form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        var split=new QuietSplitContainer(Orientation.Horizontal){Panel1MinSize=150,Panel2MinSize=120,ResetDistance=350};
+        var setupScroll=new Panel{Dock=DockStyle.Fill,AutoScroll=true,BackColor=Theme.Back};
+        var form=new TableLayoutPanel{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=2,RowCount=8};form.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,155));form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
         foreach(var p in InferencePresets.All)_preset.Items.Add(p);_preset.DisplayMember=nameof(InferencePreset.DisplayName);
         Add(form,0,"Service preset",_preset);Add(form,1,"Connection name",_id);Add(form,2,"Base URL",_url);Add(form,3,"Account ID",_account);Add(form,4,"API key",_key);_key.UseSystemPasswordChar=true;Add(form,5,"API key env",_env);Add(form,6,"Extra headers",_headers);_headers.PlaceholderText="Header: value; Header2: value";
         _instructions.Multiline=true;_instructions.ReadOnly=true;_instructions.ScrollBars=ScrollBars.Vertical;_instructions.Height=82;Add(form,7,"Setup instructions",_instructions,82);
-        root.Controls.Add(form,0,0);
+        setupScroll.Controls.Add(form);split.Panel1.Controls.Add(setupScroll);
 
         _models.Dock=DockStyle.Fill;_models.ReadOnly=true;_models.AllowUserToAddRows=false;_models.RowHeadersVisible=false;_models.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
-        _models.Columns.Add("name","Discovered model");_models.Columns.Add("id","Model ID");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");root.Controls.Add(_models,0,1);
+        _models.Columns.Add("name","Discovered model");_models.Columns.Add("id","Model ID");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");split.Panel2.Controls.Add(_models);
+        root.Controls.Add(split,0,0);
+        Shown+=(_,_)=>BeginInvoke(new Action(()=>split.RestoreDistance(350)));
 
         var bar=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};
         var cancel=new Button{Text="Cancel",DialogResult=DialogResult.Cancel,Width=90};_save.DialogResult=DialogResult.OK;bar.Controls.Add(cancel);bar.Controls.Add(_save);bar.Controls.Add(_test);
-        _status.ReadOnly=true;_status.BorderStyle=BorderStyle.None;_status.Width=350;_status.Margin=new Padding(0,9,10,0);bar.Controls.Add(_status);root.Controls.Add(bar,0,2);
+        _status.ReadOnly=true;_status.BorderStyle=BorderStyle.None;_status.Width=350;_status.Margin=new Padding(0,9,10,0);bar.Controls.Add(_status);root.Controls.Add(bar,0,1);
         Controls.Add(root);AcceptButton=_save;CancelButton=cancel;
 
         _preset.SelectedIndexChanged+=(_,_)=>ApplyPreset();
