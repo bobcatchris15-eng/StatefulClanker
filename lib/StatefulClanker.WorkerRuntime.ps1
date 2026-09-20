@@ -533,7 +533,7 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
             if(-not$cmd.PSObject.Properties['tool']){throw "Text-tool model returned neither tool nor final at step $step."}
             $toolName=[string]$cmd.tool
             $result=try{Invoke-SCWorkerTool $toolName $cmd.arguments $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
-            if($WorkerSessionId){Add-SCWorkerMutationToolCall $WorkerSessionId $toolName}
+            if($WorkerSessionId -and -not([string]$result).StartsWith('TOOL_ERROR:')){Add-SCWorkerMutationToolCall $WorkerSessionId $toolName}
             if($toolName-eq'finish'){
                 if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $cmd.arguments ([string]$result);New-SCWorkerCheckpoint $WorkerSessionId 'candidate-submit' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null}
                 return [string]$result
@@ -567,7 +567,7 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
                 $args=if([string]::IsNullOrWhiteSpace([string]$call.function.arguments)){[pscustomobject]@{}}else{[string]$call.function.arguments|ConvertFrom-Json}
                 $result=try{Invoke-SCWorkerTool $name $args $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
             }catch{$args=[pscustomobject]@{};$result="TOOL_ERROR: malformed arguments: $($_.Exception.Message)"}
-            if($WorkerSessionId){Add-SCWorkerMutationToolCall $WorkerSessionId $name}
+            if($WorkerSessionId -and -not([string]$result).StartsWith('TOOL_ERROR:')){Add-SCWorkerMutationToolCall $WorkerSessionId $name}
             if($name-eq'finish'){
                 if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $args ([string]$result)}
                 $finished=$true;$finishResult=[string]$result
