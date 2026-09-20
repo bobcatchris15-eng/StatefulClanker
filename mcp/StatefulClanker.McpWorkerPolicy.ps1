@@ -8,7 +8,7 @@ $script:SCBaseControlInstructionsWorkerPolicy=(Get-Item Function:\Get-SCControlP
 function Get-McpWorkerMachinePolicyPath {
     $root=Join-Path $env:LOCALAPPDATA 'StatefulClanker';if(-not(Test-Path -LiteralPath $root)){New-Item -ItemType Directory -Force -Path $root|Out-Null};return Join-Path $root 'worker-capabilities.json'
 }
-function Get-McpWorkerDefaultCatalog { return [ordered]@{schemaVersion=1;allow=@('builtin.*','intent.human.read','intent.normalized.read');deny=@();sources=[ordered]@{}} }
+function Get-McpWorkerDefaultCatalog { return [ordered]@{schemaVersion=2;allow=@('builtin.*','intent.human.read','intent.normalized.read','rpk.*');deny=@();sources=[ordered]@{}} }
 function Read-McpWorkerJson([string]$Path,$Default=$null) {if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){return $Default};try{return Get-Content -Raw -LiteralPath $Path|ConvertFrom-Json}catch{throw "Invalid worker policy JSON: $Path"}}
 function Write-McpWorkerJson([string]$Path,$Value) {$dir=Split-Path -Parent $Path;if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null};$tmp=$Path+'.tmp';$Value|ConvertTo-Json -Depth 40|Set-Content -LiteralPath $tmp -Encoding UTF8;Move-Item -LiteralPath $tmp -Destination $Path -Force}
 function Get-McpWorkerCatalog {
