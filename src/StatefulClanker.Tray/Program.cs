@@ -1079,7 +1079,7 @@ sealed class QuietSplitContainer : SplitContainer
         TabStop = false;
     }
 
-    int Extent => Orientation == Orientation.Vertical ? ClientSize.Width : ClientSize.Height;
+    int Extent => this.Orientation == System.Windows.Forms.Orientation.Vertical ? ClientSize.Width : ClientSize.Height;
 
     public void RestoreDistance(int desired)
     {
@@ -1093,7 +1093,7 @@ sealed class QuietSplitContainer : SplitContainer
 
     bool IsSplitter(Point point)
     {
-        var axis = Orientation == Orientation.Vertical ? point.X : point.Y;
+        var axis = this.Orientation == System.Windows.Forms.Orientation.Vertical ? point.X : point.Y;
         return axis >= SplitterDistance - 3 && axis <= SplitterDistance + SplitterWidth + 3;
     }
 
