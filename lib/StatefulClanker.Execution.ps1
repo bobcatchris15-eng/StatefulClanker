@@ -306,7 +306,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
         if([bool]$cfg.criticEnabled){
             $task.status='reviewing';Save-SCTask $task
             $critique=Invoke-SCReview $task $run $compilation 'critic'
-            $proposal.evidence.criticId=$critique.id;$proposal.evidence.criticVerdict=$critique.verdict;Save-SCProposal $proposal
+            $proposal.evidence.criticId=$critique.id;$proposal.evidence.criticVerdict=$critique.verdict;Save-SCProposal $proposal\n            # A critic landing is the normalization boundary for project muscle-memory.\n            try{Update-SCRpkIndex|Out-Null;$norm=Normalize-SCRpk;if($norm-and[int]$norm.reviewRequired-gt0){Add-SCEvent 'rpk.normalized' \"RPK marked $($norm.reviewRequired) lesson(s) for re-check against the current graph.\" @{taskId=$task.id;critiqueId=$critique.id;reviewRequired=[int]$norm.reviewRequired}}}catch{Add-SCEvent 'rpk.normalize_failed' 'RPK normalization failed after critic; review continues without mutating canonical project state.' @{taskId=$task.id;critiqueId=$critique.id;error=$_.Exception.Message}}
             $task=Get-SCTask $task.id;$task.latestCritiqueId=$critique.id;Save-SCTask $task
 
             if($critique.verdict-eq'ERROR'){
