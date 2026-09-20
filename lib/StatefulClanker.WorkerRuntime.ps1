@@ -280,7 +280,16 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
             $sameEndpointRetry=($status -in @(408,500,502,503,504)) -or $network
             if($attempt-lt$maxAttempts -and $sameEndpointRetry){Start-Sleep -Milliseconds (Get-Random -Minimum 900 -Maximum 1500);continue}
             $retryAfter=''
-            try{if($ex.Exception.Response -and $ex.Exception.Response.Headers){$ra=$ex.Exception.Response.Headers.RetryAfter;if($ra){$retryAfter=" Retry-After: $ra"}}}catch{}
+            try{
+                if($ex.Exception.Response -and $ex.Exception.Response.Headers){
+                    $ra=$ex.Exception.Response.Headers.RetryAfter
+                    if($ra){
+                        if($ra.Delta){$retryAfter=" Retry-After: $([Math]::Max(1,[int][Math]::Ceiling($ra.Delta.TotalSeconds)))"}
+                        elseif($ra.Date){$retryAfter=" Retry-After: $($ra.Date.ToUniversalTime().ToString('R'))"}
+                        else{$retryAfter=" Retry-After: $ra"}
+                    }
+                }
+            }catch{}
             $statusText=if($status-gt0){" HTTP $status"}else{''}
             throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$retryAfter"
         }
