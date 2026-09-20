@@ -128,7 +128,7 @@ function Get-SCIntrinsicWorkerToolRecords($Task,[string]$Stage='worker') {
       (New-SCWorkerToolRecord 'builtin.git_diff' 'git_diff' 'Return git status and diff for the worker checkout.' @{type='object';properties=@{}}),
       (New-SCWorkerToolRecord 'intent.human.read' 'read_human_intent' 'Read an authoritative durable human/source artifact by human:<id> reference. Read-only.' @{type='object';properties=@{sourceRef=@{type='string';description='human:<id> optionally with #Lx-Ly'}};required=@('sourceRef')}),
       (New-SCWorkerToolRecord 'intent.normalized.read' 'read_normalized_intent' 'Read the current orchestrator-owned normalized Intent Contract plus current direct human directives. Read-only.' @{type='object';properties=@{}}),
-      (New-SCWorkerToolRecord 'builtin.finish' 'finish' 'Finish the bounded task. Use summary for final output, including VERDICT lines for reviews.' @{type='object';properties=@{summary=@{type='string'}};required=@('summary')})
+      (New-SCWorkerToolRecord 'builtin.finish' 'finish' 'Submit the current work as a completion candidate. summary is required; expectedArtifacts and verification are claims for the harness to verify independently. Reviews may still use VERDICT lines in summary.' @{type='object';properties=@{summary=@{type='string'};expectedArtifacts=@{type='array';items=@{type='string'}};verification=@{type='array';items=@{type='string'}}};required=@('summary')})
     )
     return @($candidates|Where-Object{Test-SCWorkerCapabilityAllowed ([string]$_.capability) $Task $Stage})
 }
@@ -328,6 +328,179 @@ function Add-SCApiUsage($Accumulator,$Response) {
     $Accumulator.apiRequests=[long]$Accumulator.apiRequests+1;if($reported){$Accumulator.usageReports=[long]$Accumulator.usageReports+1};$Accumulator.promptTokens=[long]$Accumulator.promptTokens+$prompt;$Accumulator.completionTokens=[long]$Accumulator.completionTokens+$completion;$Accumulator.totalTokens=[long]$Accumulator.totalTokens+$total
     if(-not[string]::IsNullOrWhiteSpace($model)){$map=$Accumulator.modelUsage;if(-not$map.ContainsKey($model)){$map[$model]=[ordered]@{model=$model;requests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L}};$row=$map[$model];$row.requests=[long]$row.requests+1;if($reported){$row.usageReports=[long]$row.usageReports+1};$row.promptTokens=[long]$row.promptTokens+$prompt;$row.completionTokens=[long]$row.completionTokens+$completion;$row.totalTokens=[long]$row.totalTokens+$total}
 }
+
+function Ensure-SCWorkerSessionLayout {
+    $dir=Get-SCPath 'worker-sessions'
+    if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
+    return $dir
+}
+function Get-SCWorkerSessionPath([string]$SessionId) {
+    if([string]::IsNullOrWhiteSpace($SessionId)){throw 'worker session id required'}
+    return Join-Path (Ensure-SCWorkerSessionLayout) ($SessionId+'.json')
+}
+function Get-SCWorkerSession([string]$SessionId) {
+    $path=Get-SCWorkerSessionPath $SessionId
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return $null}
+    return Read-SCJson $path
+}
+function Save-SCWorkerSession($Session) {
+    Set-SCProperty $Session 'updatedAt' ([datetimeoffset]::UtcNow.ToString('o'))
+    Write-SCJson (Get-SCWorkerSessionPath ([string]$Session.id)) $Session
+}
+function New-SCWorkerSession([string]$SessionId,$Task,$Compilation,[string]$Prompt,[string]$ToolMode,$Registry) {
+    if([string]::IsNullOrWhiteSpace($SessionId)){$SessionId=New-SCId 'wsess'}
+    $existing=Get-SCWorkerSession $SessionId
+    if($existing){return $existing}
+    $now=[datetimeoffset]::UtcNow.ToString('o')
+    $session=[pscustomobject][ordered]@{
+        schemaVersion=1;id=$SessionId;taskId=[string]$Task.id;status='active';backend='stateful-direct';
+        compilationId=if($Compilation){[string]$Compilation.id}else{$null};
+        inputFingerprint=if($Compilation){[string]$Compilation.inputFingerprint}else{$null};
+        toolMode=$ToolMode;candidateNumber=0;noArtifactCount=0;mutationToolCalls=0;turn=0;
+        createdAt=$now;updatedAt=$now;completedAt=$null;
+        providerHistory=@();appliedContinuations=@();messages=@(
+            [ordered]@{role='system';content=(New-SCDirectWorkerSystemPrompt $ToolMode $Registry)},
+            [ordered]@{role='user';content=$Prompt}
+        );
+        candidateClaim=$null;baselineCheckpointId=$null;latestCheckpointId=$null;checkpoints=@()
+    }
+    Save-SCWorkerSession $session
+    $baseline=New-SCWorkerCheckpoint $SessionId 'baseline' $null $null
+    $session=Get-SCWorkerSession $SessionId
+    if($baseline){Set-SCProperty $session 'baselineCheckpointId' ([string]$baseline.id);Set-SCProperty $session 'latestCheckpointId' ([string]$baseline.id);Save-SCWorkerSession $session}
+    Add-SCEvent 'worker.session_started' "Started worker session $SessionId for $($Task.id)." @{taskId=$Task.id;sessionId=$SessionId;compilationId=if($Compilation){$Compilation.id}else{$null}}
+    return (Get-SCWorkerSession $SessionId)
+}
+function Add-SCWorkerSessionProvider([string]$SessionId,[string]$Endpoint,[string]$Connection,[string]$Model) {
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return}
+    $history=@($s.providerHistory)
+    $history+=,[ordered]@{ts=[datetimeoffset]::UtcNow.ToString('o');endpoint=$Endpoint;connection=$Connection;model=$Model}
+    Set-SCProperty $s 'providerHistory' @($history);Save-SCWorkerSession $s
+}
+function Add-SCWorkerSessionContinuation([string]$SessionId,[string]$Text) {
+    if([string]::IsNullOrWhiteSpace($Text)){return}
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return}
+    $key=Get-SCHashString $Text
+    if(@($s.appliedContinuations)-contains$key){return}
+    $messages=@($s.messages);$messages+=,[ordered]@{role='user';content=$Text}
+    $applied=@($s.appliedContinuations)+$key
+    Set-SCProperty $s 'messages' @($messages);Set-SCProperty $s 'appliedContinuations' @($applied);Save-SCWorkerSession $s
+}
+function Add-SCWorkerSessionMessage([string]$SessionId,$Message) {
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return}
+    $messages=@($s.messages);$messages+=,$Message;Set-SCProperty $s 'messages' @($messages);Save-SCWorkerSession $s
+}
+function Set-SCWorkerCandidateClaim([string]$SessionId,$Args,[string]$FallbackSummary=$null) {
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return}
+    $summary=if($Args){[string](Get-SCArgValue $Args 'summary' $FallbackSummary)}else{$FallbackSummary}
+    $expected=if($Args){@(Get-SCArgValue $Args 'expectedArtifacts' @())}else{@()}
+    $verification=if($Args){@(Get-SCArgValue $Args 'verification' @())}else{@()}
+    $n=if($s.PSObject.Properties['candidateNumber']){[int]$s.candidateNumber+1}else{1}
+    Set-SCProperty $s 'candidateNumber' $n
+    Set-SCProperty $s 'candidateClaim' ([pscustomobject][ordered]@{candidateNumber=$n;summary=$summary;expectedArtifacts=@($expected);verification=@($verification);submittedAt=[datetimeoffset]::UtcNow.ToString('o')})
+    Save-SCWorkerSession $s
+}
+function Add-SCWorkerMutationToolCall([string]$SessionId,[string]$ToolName) {
+    if(@('write_file','replace_text','run_command')-notcontains$ToolName){return}
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return}
+    $n=if($s.PSObject.Properties['mutationToolCalls']){[int]$s.mutationToolCalls+1}else{1}
+    Set-SCProperty $s 'mutationToolCalls' $n;Save-SCWorkerSession $s
+}
+function Test-SCWorkerGitRepo {
+    try{
+        $inside=& git -C (Get-SCRoot) rev-parse --is-inside-work-tree 2>$null|Select-Object -First 1
+        return ([string]$inside).Trim()-eq'true'
+    }catch{return $false}
+}
+function New-SCWorkerGitSnapshot([string]$SessionId,[int]$Sequence,[string]$Kind) {
+    if(-not(Test-SCWorkerGitRepo)){return $null}
+    $root=Get-SCRoot;$tmp=Join-Path ([IO.Path]::GetTempPath()) ("sc-index-"+[guid]::NewGuid().ToString('N'))
+    $old=$env:GIT_INDEX_FILE
+    try{
+        $env:GIT_INDEX_FILE=$tmp
+        & git -C $root read-tree HEAD 2>$null
+        if($LASTEXITCODE-ne0){return $null}
+        & git -C $root add -A -- . 2>$null
+        if($LASTEXITCODE-ne0){return $null}
+        $tree=([string](& git -C $root write-tree 2>$null|Select-Object -First 1)).Trim()
+        $parent=([string](& git -C $root rev-parse HEAD 2>$null|Select-Object -First 1)).Trim()
+        if(-not$tree-or-not$parent){return $null}
+        $message="StatefulClanker checkpoint $SessionId/$Sequence ($Kind)"
+        $commit=([string](& git -C $root -c user.name=StatefulClanker -c user.email=statefulclanker@localhost commit-tree $tree -p $parent -m $message 2>$null|Select-Object -First 1)).Trim()
+        if(-not$commit){return $null}
+        $ref="refs/statefulclanker/checkpoints/$SessionId/$Sequence"
+        & git -C $root update-ref $ref $commit 2>$null
+        if($LASTEXITCODE-ne0){return $null}
+        return [pscustomobject][ordered]@{commit=$commit;tree=$tree;ref=$ref}
+    }finally{
+        if($null-eq$old){Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue}else{$env:GIT_INDEX_FILE=$old}
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+function New-SCWorkerCheckpoint([string]$SessionId,[string]$Kind,[string]$Endpoint,[string]$Model) {
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return $null}
+    $seq=@($s.checkpoints).Count
+    $git=New-SCWorkerGitSnapshot $SessionId $seq $Kind
+    $cp=[pscustomobject][ordered]@{
+        id="$SessionId-cp-$seq";sequence=$seq;kind=$Kind;createdAt=[datetimeoffset]::UtcNow.ToString('o');
+        endpoint=$Endpoint;model=$Model;git=($null-ne$git);
+        commit=if($git){$git.commit}else{$null};tree=if($git){$git.tree}else{$null};ref=if($git){$git.ref}else{$null}
+    }
+    $points=@($s.checkpoints)+$cp;Set-SCProperty $s 'checkpoints' @($points);Set-SCProperty $s 'latestCheckpointId' ([string]$cp.id);Save-SCWorkerSession $s
+    return $cp
+}
+function Restore-SCWorkerCheckpoint([string]$SessionId,[string]$CheckpointId) {
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){throw "Unknown worker session: $SessionId"}
+    $cp=@($s.checkpoints|Where-Object{[string]$_.id-eq$CheckpointId}|Select-Object -First 1)
+    if($cp.Count-eq0){throw "Unknown worker checkpoint: $CheckpointId"}
+    $cp=$cp[0];if(-not[bool]$cp.git-or-not$cp.commit){throw "Checkpoint $CheckpointId has no restorable Git snapshot."}
+    $root=Get-SCRoot
+    & git -C $root clean -fd 2>$null|Out-Null
+    & git -C $root restore --source ([string]$cp.commit) --staged --worktree -- . 2>$null
+    if($LASTEXITCODE-ne0){throw "Could not restore checkpoint $CheckpointId."}
+    Add-SCEvent 'worker.checkpoint_restored' "Restored worker checkpoint $CheckpointId." @{sessionId=$SessionId;checkpointId=$CheckpointId;taskId=$s.taskId}
+    return $cp
+}
+function Get-SCWorkerCandidatePreflight([string]$SessionId,$Task) {
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return [pscustomobject]@{material=$true;reason='no direct-session metadata';session=$null}}
+    $baseline=@($s.checkpoints|Where-Object{[string]$_.id-eq[string]$s.baselineCheckpointId}|Select-Object -First 1)
+    $candidate=New-SCWorkerCheckpoint $SessionId 'candidate' $null $null
+    $kind=if($Task.PSObject.Properties['outputKind'] -and $Task.outputKind){([string]$Task.outputKind).ToLowerInvariant()}else{'change'}
+    $requiresArtifact=@('research','diagnosis','answer','none','no-change')-notcontains$kind
+    $material=$true;$reason=$null
+    if($requiresArtifact){
+        if($baseline.Count-gt0 -and $baseline[0].tree -and $candidate -and $candidate.tree){
+            $material=([string]$baseline[0].tree-ne[string]$candidate.tree)
+            if(-not$material){$reason='candidate worktree tree is identical to the session baseline'}
+        }elseif([int]$s.mutationToolCalls-le0){
+            $material=$false;$reason='candidate produced no observed mutation tool calls and no Git snapshot comparison was available'
+        }
+    }
+    $missing=@()
+    if($s.candidateClaim -and $s.candidateClaim.PSObject.Properties['expectedArtifacts']){
+        foreach($rel in @($s.candidateClaim.expectedArtifacts)){
+            if([string]::IsNullOrWhiteSpace([string]$rel)){continue}
+            try{$p=Resolve-SCWorkerPath ([string]$rel) -AllowMissing;if(-not(Test-Path -LiteralPath $p)){$missing+=,[string]$rel}}catch{$missing+=,[string]$rel}
+        }
+    }
+    if($missing.Count-gt0){$material=$false;$reason="claimed artifacts are missing: $($missing-join', ')"}
+    return [pscustomobject][ordered]@{material=$material;requiresArtifact=$requiresArtifact;reason=$reason;missingArtifacts=@($missing);candidateCheckpointId=if($candidate){$candidate.id}else{$null};candidateNumber=[int]$s.candidateNumber;session=$s}
+}
+function Add-SCWorkerNoArtifact([string]$SessionId,[string]$Reason) {
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return 0}
+    $n=if($s.PSObject.Properties['noArtifactCount']){[int]$s.noArtifactCount+1}else{1}
+    Set-SCProperty $s 'noArtifactCount' $n;Save-SCWorkerSession $s
+    Add-SCEvent 'worker.candidate_no_artifact' "Worker session $SessionId submitted a candidate without required artifacts." @{sessionId=$SessionId;taskId=$s.taskId;count=$n;reason=$Reason}
+    return $n
+}
+function Close-SCWorkerSession([string]$SessionId,[string]$Status) {
+    if([string]::IsNullOrWhiteSpace($SessionId)){return}
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return}
+    Set-SCProperty $s 'status' $Status
+    if($Status-eq'completed'){Set-SCProperty $s 'completedAt' ([datetimeoffset]::UtcNow.ToString('o'))}
+    Save-SCWorkerSession $s
+}
+
 function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$Stage='worker',$UsageAccumulator=$null) {
     $toolMode=if($Connection.PSObject.Properties['toolMode']-and$Connection.toolMode){[string]$Connection.toolMode}else{'native'};if(@('native','text')-notcontains$toolMode){throw "Unsupported toolMode '$toolMode'."}
     $maxSteps=Get-SCWorkerMaxSteps $Connection $Task $Stage
