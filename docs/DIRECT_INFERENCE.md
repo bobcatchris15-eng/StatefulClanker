@@ -25,86 +25,39 @@ Adding or editing a connection is validation-first:
 
 The discovered catalog is cached only as convenience metadata. **Test & refresh** re-queries the service. This replaces the former hardcoded OpenRouter free-model snapshot.
 
-## Endpoints
+## Project target pool
 
-An **Endpoint** is one executable inference target available to the active project:
+Connections are machine-local credentials/transports plus their last discovered live model catalogs. The project does **not** copy credentials or every discovered model into project configuration.
 
-- API: one machine Connection + one discovered model;
-- CLI: one configured local command/harness.
+Instead, the active project owns a small workhorse table at:
 
-Multiple endpoints may expose the same model through different connections. This is intentional: quota, rate limits, latency, credentials, and health belong to the route actually used.
-
-The **Connections** page can select one or many discovered models and add them to the active project. Project configuration continues to use the existing `providers` object for on-disk compatibility, but those entries are treated and displayed as endpoints:
-
-```json
-{
-  "providers": {
-    "gemini-or-primary": {
-      "type": "api",
-      "connection": "openrouter-primary",
-      "model": "google/example-model",
-      "toolMode": "native",
-      "priority": 10
-    },
-    "gemini-or-backup": {
-      "type": "api",
-      "connection": "openrouter-backup",
-      "model": "google/example-model",
-      "toolMode": "native",
-      "priority": 20
-    },
-    "codex": {
-      "type": "cli",
-      "command": "codex",
-      "mode": "stdin",
-      "priority": 30
-    }
-  }
-}
+```text
+.statefulclanker\routing\target-pool.json
 ```
 
-## Endpoints & Routing
+Each target row names a machine connection + discovered model and records operational metadata such as tool support, context length, current free/local status, source, rationale, and the date Clanker last researched it. The Connections page can toggle individual discovered models into this table or conservatively seed likely free/local workhorses.
 
-The old **Providers** page is now **Endpoints & Routing**. It owns project-specific enable/disable state, priority, health, and preferred routes for:
+The table is also exposed to the conversational Clanker through `connection_catalog`, `target_pool_list`, `target_pool_upsert`, and `target_pool_remove`. Credentials and custom auth headers are never returned by those tools.
 
-- default work;
-- critic review;
-- validator review;
-- tiny, small, medium, and large tasks.
+## Automatic routing
 
-Existing keys such as `defaultProvider`, `criticProvider`, `validatorProvider`, and `providerBySize` remain valid for compatibility. Their values now mean **preferred first endpoint**, not “this endpoint or fail.”
+Normal worker, critic, and validator calls all draw from the same enabled target pool. There are no permanent model roles and no task-size pins. Healthy rows are selected with a durable pseudo-round-robin cursor so parallel dispatch naturally spreads work across the available pool instead of repeatedly picking the first model.
 
-An explicit operator `-Provider <name>` override remains strict and does not silently select another endpoint.
+An explicit operator `-Provider <name>` override remains strict as a debugging/diagnostic escape hatch. It is not normal plan metadata.
 
-## Failover and cooldowns
+Projects created before the target-pool design can still run: if the target pool is empty, enabled legacy `providers` entries are treated as a compatibility fallback. Their old default/critic/validator/size/priority fields do not influence normal automatic selection.
 
-Ordinary routed work builds an eligible candidate list. The preferred endpoint is tried first. For API endpoints, StatefulClanker next prefers another configured connection exposing the **same model** before changing models, then continues through project endpoint priority.
+## Failover and health
 
-Failures are normalized into routing classes including:
-
-- `rate_limited`;
-- `capacity`;
-- `timeout`;
-- `server_error`;
-- `auth`;
-- `model_unavailable`;
-- `context_too_large`;
-- `bad_request`;
-- `unknown`.
-
-Rate limits, capacity errors, transport failures, server failures, and temporarily unavailable models can fail over to another eligible endpoint. Bad requests and context-size failures are not sprayed across every service.
-
-Endpoint and shared-connection health is durable at:
+Route health remains durable under:
 
 ```text
 .statefulclanker\routing\health.json
 ```
 
-A rate limit on one credentialed service connection cools that connection rather than repeatedly hammering every model attached to it. Server-provided retry timing is used when recognizable; otherwise StatefulClanker applies bounded cooldowns.
+Endpoint/model health and shared connection health are separate. A connection-scoped failure can remove every child model on that credential/service from eligibility without rediscovering the same 429 on each model. Model-specific capacity/unavailability can cool only that target.
 
-A successful request clears the endpoint's circuit state. Expired cooldowns naturally become eligible again.
-
-If all eligible routes are unavailable, the task is blocked as an **inference-routing/infrastructure condition** rather than being misclassified as implementation rework. Critic and validator outages follow the same rule.
+Free inference is expected to be flaky. Routing failures are infrastructure telemetry and should preferentially rotate to another healthy target rather than changing task semantics. The broader recovery design uses small health probes at the failed scope (connection/service rather than every child model), honoring provider reset/Retry-After data when available and falling back to sparse probes.
 
 ## Direct API worker harness
 
@@ -113,9 +66,9 @@ API endpoints use StatefulClanker's bounded inner coding/tool loop above the sam
 The implemented transport is OpenAI-compatible `/chat/completions`. The effective API request combines:
 
 - machine Connection transport/authentication;
-- project Endpoint model/tool-mode overrides.
+- the selected project target-pool model/tool-mode row.
 
-This lets one machine connection safely expose many project models without duplicating credentials.
+This lets one machine connection safely expose many target-pool models without duplicating credentials.
 
 Built-in worker capabilities include file read/search/write/replace, bounded PowerShell execution, git diff, read-only Intent inspection, and finish. External MCP capabilities remain governed by the existing worker capability policy.
 
