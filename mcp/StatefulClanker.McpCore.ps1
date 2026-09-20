@@ -327,44 +327,14 @@ function Set-McpProvider([string]$Project, $Arguments) {
     $providerObj = [ordered]@{
         command = $command; args = $providerArgs; mode = $mode
     }
-    $priorityVal = Get-McpArgOptional $Arguments 'priority'
-    if ($null -ne $priorityVal) {
-        $providerObj['priority'] = [int]$priorityVal
-    }
     $disabledVal = Get-McpArgOptional $Arguments 'disabled'
     if ($null -ne $disabledVal) {
         $providerObj['disabled'] = [bool]$disabledVal
     }
     $cfg.providers | Add-Member -NotePropertyName $name -NotePropertyValue ([pscustomobject]$providerObj) -Force
 
-    $assigned = @()
-    foreach ($pair in @(@('setDefault', 'defaultProvider'), @('setCritic', 'criticProvider'), @('setValidator', 'validatorProvider'))) {
-        $v = Get-McpArgOptional $Arguments $pair[0]
-        if ($null -ne $v -and [bool]$v) {
-            $cfg | Add-Member -NotePropertyName $pair[1] -NotePropertyValue $name -Force
-            $assigned += $pair[1]
-        }
-    }
-
-    if (-not $cfg.PSObject.Properties['providerBySize'] -or $null -eq $cfg.providerBySize) {
-        $cfg | Add-Member -NotePropertyName providerBySize -NotePropertyValue ([pscustomobject]@{}) -Force
-    }
-    foreach ($sizeName in @('tiny', 'small', 'medium', 'large')) {
-        $flagName = "set$([char]::ToUpperInvariant($sizeName[0]))$($sizeName.Substring(1))"
-        $v = Get-McpArgOptional $Arguments $flagName
-        if ($null -ne $v -and [bool]$v) {
-            $cfg.providerBySize | Add-Member -NotePropertyName $sizeName -NotePropertyValue $name -Force
-            $assigned += $sizeName
-        }
-    }
-    $sizeArg = Get-McpArgOptional $Arguments 'size'
-    if ($sizeArg -and @('tiny', 'small', 'medium', 'large') -contains $sizeArg.ToLowerInvariant()) {
-        $cfg.providerBySize | Add-Member -NotePropertyName $sizeArg.ToLowerInvariant() -NotePropertyValue $name -Force
-        $assigned += $sizeArg.ToLowerInvariant()
-    }
-
     $cfg | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
-    return [ordered]@{ provider = $name; command = $command; args = $providerArgs; mode = $mode; assignedTo = $assigned; configPath = $cfgPath }
+    return [ordered]@{ provider = $name; command = $command; args = $providerArgs; mode = $mode; routing = 'compatibility backend only; automatic work uses target pool'; configPath = $cfgPath }
 }
 
 <# Dispatch a trivial prompt and report whether the provider is actually usable.
@@ -376,8 +346,12 @@ function Test-McpProvider([string]$Project, $Arguments) {
     $cfg = Read-McpJson (Join-Path (Get-McpStateDir $Project) 'config.json')
     $name = Get-McpArgOptional $Arguments 'name'
     if (-not $name) {
-        if (-not $cfg.PSObject.Properties['defaultProvider'] -or -not $cfg.defaultProvider) { throw 'No provider named and no defaultProvider configured.' }
-        $name = [string]$cfg.defaultProvider
+        $candidate=$null
+        if($cfg.PSObject.Properties['providers'] -and $cfg.providers){
+            $candidate=$cfg.providers.PSObject.Properties|Where-Object{-not($_.Value.PSObject.Properties['disabled'] -and [bool]$_.Value.disabled)}|Sort-Object Name|Select-Object -First 1
+        }
+        if(-not$candidate){throw 'No configured compatibility provider is available to probe.'}
+        $name=[string]$candidate.Name
     }
     if (-not $cfg.PSObject.Properties['providers'] -or -not $cfg.providers.PSObject.Properties[$name]) {
         throw "Provider '$name' is not configured. Use provider_set first."
@@ -795,24 +769,15 @@ function Get-McpToolList {
 
         # ---- observation ----
         @{ name = 'direction_add'; description = 'Record human direction durably and advance the project direction revision, staling older compilations.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ message = @{ type = 'string' } }); required = @('message') } },
-        @{ name = 'provider_list'; description = 'List configured worker providers and which one is default/critic/validator.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
-        @{ name = 'provider_set'; description = 'Add or update a worker provider (the CLI that actually does the work) and optionally make it the default/critic/validator or map to task sizes (tiny/small/medium/large). Required before the first run_start.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{
-            name        = @{ type = 'string'; description = 'Short id, e.g. claude, opencode, agy.' }
+        @{ name = 'provider_list'; description = 'List legacy/configured CLI worker backends. Automatic API inference is maintained through connection_catalog and the project target pool.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
+        @{ name = 'provider_set'; description = 'Add or update a legacy/configured CLI worker backend. It is not assigned to worker/critic/validator/task-size roles; automatic routing uses the project target pool.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{
+            name        = @{ type = 'string'; description = 'Short id, e.g. codex, opencode, agy.' }
             command     = @{ type = 'string'; description = 'Executable to run. Must be on PATH or a full path.' }
-            args        = @{ type = 'array'; items = @{ type = 'string' }; description = 'Arguments. MUST include {prompt} or {promptFile}. Also supports {projectRoot} and {taskId}.' }
-            mode        = @{ type = 'string'; enum = @('inline', 'prompt-file'); description = 'Inferred from the placeholder when omitted.' }
-            priority    = @{ type = 'integer'; minimum = 1; description = 'Routing priority (1 is highest priority).' }
-            disabled    = @{ type = 'boolean'; description = 'Temporarily disable this provider from automatic routing.' }
-            setDefault  = @{ type = 'boolean' }
-            setCritic   = @{ type = 'boolean' }
-            setValidator = @{ type = 'boolean' }
-            setTiny     = @{ type = 'boolean'; description = 'Route tiny tasks to this provider.' }
-            setSmall    = @{ type = 'boolean'; description = 'Route small tasks to this provider.' }
-            setMedium   = @{ type = 'boolean'; description = 'Route medium tasks to this provider.' }
-            setLarge    = @{ type = 'boolean'; description = 'Route large tasks to this provider.' }
-            size        = @{ type = 'string'; enum = @('tiny', 'small', 'medium', 'large'); description = 'Assign task size routing for this provider.' }
+            args        = @{ type = 'array'; items = @{ type = 'string' }; description = 'Arguments for the CLI backend. stdin mode is recommended; {promptFile}/{prompt} are supported for compatible CLIs.' }
+            mode        = @{ type = 'string'; enum = @('stdin','inline', 'prompt-file'); description = 'Defaults to stdin unless a prompt placeholder implies another mode.' }
+            disabled    = @{ type = 'boolean'; description = 'Temporarily disable this compatibility backend.' }
         }); required = @('name', 'command', 'args') } },
-        @{ name = 'provider_test'; description = 'Dispatch a trivial probe prompt to a provider and report whether it is actually usable. Catches expired logins and headless permission gates before a real cycle wastes an attempt.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ name = @{ type = 'string'; description = 'Defaults to the configured default provider.' }; timeoutSeconds = @{ type = 'integer'; minimum = 10; maximum = 300 } }) } },
+        @{ name = 'provider_test'; description = 'Dispatch a trivial probe prompt to one configured compatibility CLI provider and report whether it is usable. API workhorse routes are tested/discovered from Connections instead.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ name = @{ type = 'string'; description = 'Optional provider id; when omitted the first enabled configured provider is probed.' }; timeoutSeconds = @{ type = 'integer'; minimum = 10; maximum = 300 } }) } },
         @{ name = 'telemetry_active'; description = 'List currently active subagents.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
         @{ name = 'telemetry_history'; description = 'List historical subagent telemetry.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ limit = @{ type = 'integer'; minimum = 1; maximum = 500 } }) } },
         @{ name = 'telemetry_run'; description = 'Get one historical subagent run by agentId.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ agentId = @{ type = 'string' } }); required = @('agentId') } },
@@ -998,10 +963,6 @@ function Invoke-McpTool([string]$Name, $Arguments) {
                     }
                 } catch { }
             }
-            $defProvider = if ($cfg -and $cfg.PSObject.Properties['defaultProvider']) { [string]$cfg.defaultProvider } else { $null }
-            $critProvider = if ($cfg -and $cfg.PSObject.Properties['criticProvider']) { [string]$cfg.criticProvider } else { $null }
-            $valProvider = if ($cfg -and $cfg.PSObject.Properties['validatorProvider']) { [string]$cfg.validatorProvider } else { $null }
-            $bySize = if ($cfg -and $cfg.PSObject.Properties['providerBySize']) { $cfg.providerBySize } else { $null }
             $rows = @()
             if ($cfg -and $cfg.PSObject.Properties['providers'] -and $cfg.providers) {
                 foreach ($p in $cfg.providers.PSObject.Properties) {
@@ -1042,15 +1003,6 @@ function Invoke-McpTool([string]$Name, $Arguments) {
                         $status = 'disabled'
                         $errorMsg = 'Provider is disabled in config.json.'
                     }
-                    $roles = @()
-                    if ($p.Name -eq $defProvider) { $roles += 'default' }
-                    if ($p.Name -eq $critProvider) { $roles += 'critic' }
-                    if ($p.Name -eq $valProvider) { $roles += 'validator' }
-                    if ($bySize) {
-                        foreach ($szProp in $bySize.PSObject.Properties) {
-                            if ([string]$szProp.Value -eq $p.Name) { $roles += $szProp.Name }
-                        }
-                    }
                     $rows += [ordered]@{
                         name       = $p.Name
                         type       = $type
@@ -1061,13 +1013,12 @@ function Invoke-McpTool([string]$Name, $Arguments) {
                         priority   = $priority
                         ready      = $ready
                         status     = $status
-                        roles      = $roles
                         error      = $errorMsg
                     }
                 }
             }
-            $sortedRows = @($rows | Sort-Object { if ($null -ne $_.priority) { $_.priority } elseif ($_.name -eq $defProvider) { 0 } else { 100 } }, name)
-            return New-McpTextResult ([ordered]@{ defaultProvider = $defProvider; criticProvider = $critProvider; validatorProvider = $valProvider; providerBySize = $bySize; providers = $sortedRows })
+            $sortedRows = @($rows | Sort-Object name)
+            return New-McpTextResult ([ordered]@{ routing='Automatic routing uses the project target pool; these are compatibility backends only.'; providers=$sortedRows })
         }
         'provider_set' {
             return New-McpTextResult (Set-McpProvider $project $Arguments)
