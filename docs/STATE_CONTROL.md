@@ -44,19 +44,7 @@ Terminal cycles record whether accepted project state actually advanced. Repeate
 
 Critic and validator inspect the same compilation that drove the worker plus the worker receipt. They do not silently re-run retrieval against a potentially changed repository snapshot.
 
-## Deliberately outside the core for now
-
-### Cross-project experiential memory
-
-Reusable agent expertise belongs in a separate system such as Toaster. StatefulClanker may consume candidate lessons later, but project authority and reusable experience remain different state classes.
-
-A future memory integration should use:
-
-`retrieve lesson -> check current applicability/freshness -> reconstruct project-specific guidance -> compile as candidate context`
-
-not raw replay of historical instructions.
-
-### Learned context policy
+## Reflexive Project Knowledge\n\nProject-local experiential memory is implemented as RPK. A deterministic SQLite-backed file/symbol/reference graph is incrementally maintained under `.clanker`, and project-specific lessons are retrieved into compiled context as non-authoritative candidate knowledge. Critic completion triggers graph refresh and deterministic lesson normalization; lessons linked to changed files become `needs_review` until a worker checks current evidence and confirms or rejects them. See [REFLEXIVE_PROJECT_KNOWLEDGE.md](REFLEXIVE_PROJECT_KNOWLEDGE.md).\n\nCross-project reusable expertise remains a separate state class. External MCP sources such as Toaster or MemPalace remain available when knowledge genuinely belongs outside one project.\n\n### Learned context policy
 
 The current compiler is deterministic and inspectable. Learned retrieval/eviction/compression policy should wait until context-fault and progress telemetry provide a useful training/evaluation signal.
 
