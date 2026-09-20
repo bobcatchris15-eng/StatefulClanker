@@ -1,61 +1,44 @@
 {
-  "defaultProvider": "opencode",
-  "criticProvider": null,
-  "validatorProvider": null,
-  "providerBySize": {
-    "tiny": null,
-    "small": null,
-    "medium": null,
-    "large": null
-  },
   "routing": {
-    "selectionMode": "pinned",
-    "_comment": "'pinned' uses defaultProvider/providerBySize/criticProvider/validatorProvider as above. 'random' ignores all of those (an explicit per-task 'provider' field still pins that one task) and picks uniformly at random among enabled endpoints that are currently healthy -- useful once tasks are bounded/small enough that which model answers matters less than just getting one that's up.",
-    "maxRouteAttempts": 6
+    "maxRouteAttempts": 6,
+    "_comment": "Automatic worker/critic/validator routing uses .statefulclanker/routing/target-pool.json with persistent pseudo-round-robin over healthy rows. Configured providers are a migration/CLI fallback only when the target pool is empty. Explicit -Provider remains a strict operator/debug override."
   },
   "providers": {
     "codex": {
       "type": "cli",
       "command": "codex",
-      "args": ["exec"],
+      "args": [
+        "exec"
+      ],
       "mode": "stdin",
-      "priority": 1,
       "disabled": false
     },
     "claude": {
       "type": "cli",
       "command": "claude",
-      "args": ["-p"],
+      "args": [
+        "-p"
+      ],
       "mode": "stdin",
-      "priority": 2,
       "disabled": false
     },
     "agy": {
       "type": "cli",
       "command": "agy",
-      "args": ["--mode", "accept-edits"],
+      "args": [
+        "--mode",
+        "accept-edits"
+      ],
       "mode": "stdin",
-      "priority": 3,
       "disabled": false
     },
     "opencode": {
       "type": "cli",
       "command": "opencode",
-      "args": ["run"],
+      "args": [
+        "run"
+      ],
       "mode": "stdin",
-      "priority": 4,
-      "disabled": false
-    },
-    "local-qwen": {
-      "type": "api",
-      "connection": "local-qwen",
-      "priority": 5,
-      "disabled": false
-    },
-    "openrouter-coder": {
-      "type": "api",
-      "connection": "openrouter-coder",
-      "priority": 6,
       "disabled": false
     }
   },
