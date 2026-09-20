@@ -501,29 +501,90 @@ function Close-SCWorkerSession([string]$SessionId,[string]$Status) {
     Save-SCWorkerSession $s
 }
 
-function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$Stage='worker',$UsageAccumulator=$null) {
+function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$Stage='worker',$UsageAccumulator=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,$ProviderRecord=$null,$Compilation=$null) {
     $toolMode=if($Connection.PSObject.Properties['toolMode']-and$Connection.toolMode){[string]$Connection.toolMode}else{'native'};if(@('native','text')-notcontains$toolMode){throw "Unsupported toolMode '$toolMode'."}
     $maxSteps=Get-SCWorkerMaxSteps $Connection $Task $Stage
     $registry=@(Get-SCWorkerToolRecords $Task $Stage);if($registry.Count-eq0){throw 'No worker capabilities are authorized for this invocation.'}
-    $messages=@(@{role='system';content=New-SCDirectWorkerSystemPrompt $toolMode $registry},@{role='user';content=$Prompt});$tools=@($registry|ForEach-Object{$_.definition})
+    if($Stage-eq'run' -and $WorkerSessionId){
+        $session=New-SCWorkerSession $WorkerSessionId $Task $Compilation $Prompt $toolMode $registry
+        if([string]$session.toolMode-ne$toolMode){throw "Worker session $WorkerSessionId uses toolMode '$($session.toolMode)' and cannot resume on '$toolMode' without transcript conversion."}
+        Add-SCWorkerSessionContinuation $WorkerSessionId $ContinuationMessage
+        if($ProviderRecord){Add-SCWorkerSessionProvider $WorkerSessionId ([string]$ProviderRecord.name) ([string]$ProviderRecord.config.connection) ([string]$ProviderRecord.config.model)}
+        $session=Get-SCWorkerSession $WorkerSessionId
+        $messages=@($session.messages)
+    }else{
+        $messages=@(@{role='system';content=New-SCDirectWorkerSystemPrompt $toolMode $registry},@{role='user';content=$Prompt})
+    }
+    $tools=@($registry|ForEach-Object{$_.definition})
     $protocol=Get-SCConnectionProtocol $Connection
     for($step=1;$step-le$maxSteps;$step++){
-        $response=Invoke-SCApiChat $Connection $messages $tools $toolMode;Add-SCApiUsage $UsageAccumulator $response;$m=Get-SCAssistantMessage $response $protocol
+        $response=Invoke-SCApiChat $Connection $messages $tools $toolMode
+        Add-SCApiUsage $UsageAccumulator $response
+        $m=Get-SCAssistantMessage $response $protocol
         if($toolMode-eq'text'){
-            $raw=[string]$m.content;try{$cmd=$raw|ConvertFrom-Json}catch{throw "Text-tool model returned invalid JSON at step ${step}: $raw"}
-            if($cmd.PSObject.Properties['final']){return [string]$cmd.final}
+            $raw=[string]$m.content
+            if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId ([ordered]@{role='assistant';content=$raw})}
+            try{$cmd=$raw|ConvertFrom-Json}catch{throw ("Text-tool model returned invalid JSON at step {0}: {1}"-f$step,$raw)}
+            if($cmd.PSObject.Properties['final']){
+                if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $null ([string]$cmd.final);New-SCWorkerCheckpoint $WorkerSessionId 'candidate-submit' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null}
+                return [string]$cmd.final
+            }
             if(-not$cmd.PSObject.Properties['tool']){throw "Text-tool model returned neither tool nor final at step $step."}
-            $result=try{Invoke-SCWorkerTool ([string]$cmd.tool) $cmd.arguments $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
-            if([string]$cmd.tool-eq'finish'){return [string]$result}
-            $messages+=@{role='assistant';content=$raw};$messages+=@{role='user';content="TOOL_RESULT $($cmd.tool):`n$result"};continue
+            $toolName=[string]$cmd.tool
+            $result=try{Invoke-SCWorkerTool $toolName $cmd.arguments $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
+            if($WorkerSessionId){Add-SCWorkerMutationToolCall $WorkerSessionId $toolName}
+            if($toolName-eq'finish'){
+                if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $cmd.arguments ([string]$result);New-SCWorkerCheckpoint $WorkerSessionId 'candidate-submit' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null}
+                return [string]$result
+            }
+            $toolResult="TOOL_RESULT "+$toolName+":"+[Environment]::NewLine+[string]$result
+            $messages+=@{role='assistant';content=$raw};$messages+=@{role='user';content=$toolResult}
+            if($WorkerSessionId){
+                Add-SCWorkerSessionMessage $WorkerSessionId ([ordered]@{role='user';content=$toolResult})
+                New-SCWorkerCheckpoint $WorkerSessionId 'api-turn' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null
+                $session=Get-SCWorkerSession $WorkerSessionId;Set-SCProperty $session 'turn' ([int]$session.turn+1);Save-SCWorkerSession $session
+            }
+            continue
         }
         $calls=@();if($m.PSObject.Properties['tool_calls']-and$m.tool_calls){$calls=@($m.tool_calls)}
-        if($calls.Count-eq0){if(-not[string]::IsNullOrWhiteSpace([string]$m.content)){return [string]$m.content};throw "Model returned no content or tool call at step $step."}
-        $messages+=@{role='assistant';content=$m.content;tool_calls=@($calls)}
-        foreach($call in $calls){$name=[string]$call.function.name;try{$args=if([string]::IsNullOrWhiteSpace([string]$call.function.arguments)){[pscustomobject]@{}}else{[string]$call.function.arguments|ConvertFrom-Json};$result=try{Invoke-SCWorkerTool $name $args $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}}catch{$result="TOOL_ERROR: malformed arguments: $($_.Exception.Message)"};if($name-eq'finish'){return [string]$result};$messages+=@{role='tool';tool_call_id=[string]$call.id;content=[string]$result}}
+        if($calls.Count-eq0){
+            if(-not[string]::IsNullOrWhiteSpace([string]$m.content)){
+                $assistant=[ordered]@{role='assistant';content=[string]$m.content}
+                $messages+=$assistant
+                if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId $assistant;Set-SCWorkerCandidateClaim $WorkerSessionId $null ([string]$m.content);New-SCWorkerCheckpoint $WorkerSessionId 'candidate-submit' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null}
+                return [string]$m.content
+            }
+            throw "Model returned no content or tool call at step $step."
+        }
+        $assistant=[ordered]@{role='assistant';content=$m.content;tool_calls=@($calls)}
+        $messages+=$assistant
+        if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId $assistant}
+        $finished=$false;$finishResult=$null
+        foreach($call in $calls){
+            $name=[string]$call.function.name
+            try{
+                $args=if([string]::IsNullOrWhiteSpace([string]$call.function.arguments)){[pscustomobject]@{}}else{[string]$call.function.arguments|ConvertFrom-Json}
+                $result=try{Invoke-SCWorkerTool $name $args $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
+            }catch{$args=[pscustomobject]@{};$result="TOOL_ERROR: malformed arguments: $($_.Exception.Message)"}
+            if($WorkerSessionId){Add-SCWorkerMutationToolCall $WorkerSessionId $name}
+            if($name-eq'finish'){
+                if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $args ([string]$result)}
+                $finished=$true;$finishResult=[string]$result;break
+            }
+            $toolMessage=[ordered]@{role='tool';tool_call_id=[string]$call.id;content=[string]$result}
+            $messages+=$toolMessage
+            if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId $toolMessage}
+        }
+        if($WorkerSessionId){
+            $cpKind=if($finished){'candidate-submit'}else{'api-turn'}
+            New-SCWorkerCheckpoint $WorkerSessionId $cpKind ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null
+            $session=Get-SCWorkerSession $WorkerSessionId;Set-SCProperty $session 'turn' ([int]$session.turn+1);Save-SCWorkerSession $session
+        }
+        if($finished){return $finishResult}
     }
     throw "Direct worker exceeded maxSteps=$maxSteps without finishing."
 }
+
 function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$ProviderRecord,[string]$ParentAgentId,$Compilation) {
     $connectionName=[string]$ProviderRecord.config.connection
     $connection=Get-SCEffectiveApiConnection $ProviderRecord
