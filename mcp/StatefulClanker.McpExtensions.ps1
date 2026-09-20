@@ -207,6 +207,151 @@ function Find-McpCatalogModel([string]$Connection,[string]$Model) {
     return $match[0]
 }
 
+
+function Get-McpObjectValue($Object,[string]$Name) {
+    if($null-eq$Object){return $null}
+    if($Object-is[System.Collections.IDictionary]){if($Object.Contains($Name)){return $Object[$Name]};return $null}
+    $p=$Object.PSObject.Properties[$Name];if($p){return $p.Value};return $null
+}
+
+function Limit-McpRecoveryText($Value,[int]$MaxChars=12000) {
+    if($null-eq$Value){return $null}
+    $text=[string]$Value
+    if($text.Length-le$MaxChars){return $text}
+    return $text.Substring(0,$MaxChars)+[Environment]::NewLine+'...[truncated by task_recovery_context]'
+}
+
+function Get-McpTaskRecoveryContext([string]$Project,[string]$TaskId) {
+    Assert-McpInitialized $Project
+    if([string]::IsNullOrWhiteSpace($TaskId)){throw 'taskId required.'}
+    $stateDir=Get-McpStateDir $Project
+    $task=Read-McpJson (Join-Path $stateDir ("tasks\{0}.json"-f$TaskId))
+    if($null-eq$task){throw "Unknown task: $TaskId"}
+
+    $readById={
+        param([string]$Dir,$Id)
+        if($null-eq$Id-or[string]::IsNullOrWhiteSpace([string]$Id)){return $null}
+        return Read-McpJson (Join-Path $stateDir ("{0}\{1}.json"-f$Dir,[string]$Id))
+    }
+    $comp=&$readById 'compilations' (Get-McpObjectValue $task 'latestCompilationId')
+    $run=&$readById 'runs' (Get-McpObjectValue $task 'latestRunId')
+    $proposal=&$readById 'proposals' (Get-McpObjectValue $task 'latestProposalId')
+    $critique=&$readById 'critiques' (Get-McpObjectValue $task 'latestCritiqueId')
+    $validation=&$readById 'validations' (Get-McpObjectValue $task 'latestValidationId')
+
+    $compView=$null
+    if($comp){
+        $ir=Get-McpObjectValue $comp 'ir'
+        $compView=[ordered]@{
+            id=Get-McpObjectValue $comp 'id'
+            inputFingerprint=Get-McpObjectValue $comp 'inputFingerprint'
+            contextFingerprint=Get-McpObjectValue $comp 'contextFingerprint'
+            readSet=Get-McpObjectValue $comp 'readSet'
+            retrievalStats=Get-McpObjectValue $comp 'retrievalStats'
+            project=Get-McpObjectValue $ir 'project'
+            task=Get-McpObjectValue $ir 'task'
+            dependencies=Get-McpObjectValue $ir 'dependencies'
+            outputContract=Get-McpObjectValue $ir 'outputContract'
+        }
+    }
+    $runView=$null
+    if($run){
+        $runView=[ordered]@{
+            id=Get-McpObjectValue $run 'id';agentId=Get-McpObjectValue $run 'agentId'
+            workerSessionId=Get-McpObjectValue $run 'workerSessionId'
+            provider=Get-McpObjectValue $run 'provider';endpoint=Get-McpObjectValue $run 'endpoint';model=Get-McpObjectValue $run 'model'
+            exitCode=Get-McpObjectValue $run 'exitCode';startedAt=Get-McpObjectValue $run 'startedAt';endedAt=Get-McpObjectValue $run 'endedAt'
+            stdout=Limit-McpRecoveryText (Get-McpObjectValue $run 'stdout')
+            stderr=Limit-McpRecoveryText (Get-McpObjectValue $run 'stderr')
+            contextRequests=Get-McpObjectValue $run 'contextRequests'
+            candidatePreflight=Get-McpObjectValue $run 'candidatePreflight'
+            candidateClaim=Get-McpObjectValue $run 'candidateClaim'
+            routeHistory=Get-McpObjectValue $run 'routeHistory'
+        }
+    }
+    $reviewView={
+        param($r)
+        if($null-eq$r){return $null}
+        return [ordered]@{
+            id=Get-McpObjectValue $r 'id';agentId=Get-McpObjectValue $r 'agentId'
+            provider=Get-McpObjectValue $r 'provider';endpoint=Get-McpObjectValue $r 'endpoint';model=Get-McpObjectValue $r 'model'
+            verdict=Get-McpObjectValue $r 'verdict';exitCode=Get-McpObjectValue $r 'exitCode'
+            stdout=Limit-McpRecoveryText (Get-McpObjectValue $r 'stdout')
+            stderr=Limit-McpRecoveryText (Get-McpObjectValue $r 'stderr')
+            compilationId=Get-McpObjectValue $r 'compilationId'
+            inputFingerprint=Get-McpObjectValue $r 'inputFingerprint'
+        }
+    }
+
+    $progress=@(Read-McpJsonDir (Join-Path $stateDir 'progress')|
+        Where-Object{[string](Get-McpObjectValue $_ 'taskId')-eq$TaskId}|
+        Sort-Object ts -Descending|Select-Object -First 30)
+
+    $recentEvents=@()
+    $eventPath=Join-Path $stateDir 'events.jsonl'
+    if(Test-Path -LiteralPath $eventPath -PathType Leaf){
+        foreach($line in @(Get-Content -LiteralPath $eventPath|Where-Object{$_}|Select-Object -Last 400)){
+            try{$evt=$line|ConvertFrom-Json}catch{continue}
+            $data=Get-McpObjectValue $evt 'data'
+            $eventTask=Get-McpObjectValue $data 'taskId'
+            $message=[string](Get-McpObjectValue $evt 'message')
+            if(([string]$eventTask-eq$TaskId)-or(-not[string]::IsNullOrWhiteSpace($message)-and$message.Contains($TaskId))){
+                $recentEvents+=,$evt
+            }
+        }
+        if($recentEvents.Count-gt30){$recentEvents=@($recentEvents|Select-Object -Last 30)}
+    }
+
+    return [ordered]@{
+        task=$task
+        compilation=$compView
+        run=$runView
+        proposal=$proposal
+        critique=&$reviewView $critique
+        validation=&$reviewView $validation
+        progress=@($progress)
+        recentEvents=@($recentEvents)
+        recoveryRules=@{
+            investigateBeforeMutating=$true
+            humanGatedTasksMayNotBeRecovered=$true
+            activeTasksMayNotBeRecovered=$true
+            repairPreferredBeforeBypass=$true
+            recoverCompleteIsLastResort=$true
+            recoverCompleteRequiresConcreteEvidence=$true
+            unresolvedHumanIntentMustReturnToHuman=$true
+        }
+    }
+}
+
+function Invoke-McpRecoveryMutation([string]$Project,[string]$TaskId,[string]$Reason,$Evidence,$Patch=$null,[switch]$Complete) {
+    Assert-McpInitialized $Project
+    if([string]::IsNullOrWhiteSpace($TaskId)){throw 'taskId required.'}
+    if([string]::IsNullOrWhiteSpace($Reason)){throw 'reason required.'}
+    $items=@($Evidence|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})
+    if($items.Count-eq0){throw 'At least one concrete evidence item is required.'}
+    if(-not$Complete-and$null-eq$Patch){throw 'task_repair requires a patch object.'}
+
+    $payload=[ordered]@{evidence=@($items)}
+    if(-not$Complete){$payload['patch']=$Patch}
+    $temp=Join-Path ([IO.Path]::GetTempPath()) ("statefulclanker-recovery-{0}.json"-f[Guid]::NewGuid().ToString('N'))
+    try{
+        [IO.File]::WriteAllText($temp,($payload|ConvertTo-Json -Depth 30),(New-Object Text.UTF8Encoding($false)))
+        $sub=if($Complete){'recover'}else{'repair'}
+        $result=Invoke-McpHarness $Project @('task',$sub,'-TaskId',$TaskId,'-Path',$temp,'-Reason',$Reason)
+        $fresh=Read-McpJson (Join-Path (Get-McpStateDir $Project) ("tasks\{0}.json"-f$TaskId))
+        return [ordered]@{
+            taskId=$TaskId
+            action=if($Complete){'recover-complete'}else{'repair'}
+            authority='control-plane-recovery'
+            bypassedReviewGate=[bool]$Complete
+            evidence=@($items)
+            reason=$Reason
+            task=$fresh
+            output=$result.stdout
+        }
+    }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+}
+
 function New-SCExtendedTools {
     @(
         @{name='plan_apply';description='Apply a compact SCPLAN 1 plan directly from text. Preferred for conversational planning because no intermediate local file is required.';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string';description='Complete SCPLAN 1 document.'}};required=@('text')}},
@@ -223,6 +368,9 @@ function New-SCExtendedTools {
         @{name='control_snapshot';description='Read the current human-facing project snapshot: goal, current directives, Intent, reconciliation gate, task counts, holds, active agents, and event cursor.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
         @{name='autofill_status';description='Inspect the resident autofill supervisor: state (running, paused, idle, blocked, draining, stopped), PID, slot availability, ready task count, and blocking reasons.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
         @{name='autofill_control';description='Control the resident autofill supervisor: pause (suspend dispatch and allow manual runs), resume, stop (drain and exit), or trigger_now (immediate dispatch tick).';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('stop','pause','resume','trigger_now')}};required=@('action')}},
+        @{name='task_recovery_context';description='Read one stalled task recovery dossier: task state plus latest compilation, worker receipt, proposal, critic, validator, progress, and recent task events. Use this before asking the human about a mechanical/review stall.';inputSchema=@{type='object';properties=@{project=@{type='string'};taskId=@{type='string'}};required=@('taskId')}},
+        @{name='task_repair';description='CONTROL-PLANE RECOVERY: repair a stalled non-human-gated task definition/graph metadata after investigation, reset exhausted failure counters, and return it to readiness. Requires a reason, concrete evidence, and an explicit patch. Does not change Human Directives or Intent.';inputSchema=@{type='object';properties=@{project=@{type='string'};taskId=@{type='string'};reason=@{type='string'};evidence=@{type='array';items=@{type='string'}};patch=@{type='object';description='Supported fields include title, instruction, size, outputKind, acceptance, dependsOn, relations, retrieval, evidence, provider, role, sources, intentRefs, capabilityProfile, toolPolicy, implications, proofObligations, parentTaskId, childTaskIds.'}};required=@('taskId','reason','evidence','patch')}},
+        @{name='task_recover_complete';description='LAST-RESORT CONTROL-PLANE RECOVERY: mark a stalled non-human-gated task complete when concrete current evidence proves the work already satisfies current Human Directives and reconciled Intent despite a broken/repeated review loop. Audited as a review-gate bypass; never use for unresolved human intent.';inputSchema=@{type='object';properties=@{project=@{type='string'};taskId=@{type='string'};reason=@{type='string'};evidence=@{type='array';items=@{type='string'}}};required=@('taskId','reason','evidence')}},
         @{name='connection_catalog';description='Read sanitized machine inference connections and their last discovered model catalogs. Secrets and custom headers are never returned. Use this before maintaining the project target pool.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string';description='Optional connection name to inspect.'}}}},
         @{name='target_pool_list';description='Read the project-local workhorse model target pool used by automatic pseudo-round-robin routing.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
         @{name='target_pool_upsert';description='Add or update one discovered connection/model in the automatic workhorse target pool. Record a short rationale and research date when Clanker has checked current suitability/free status.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'};displayName=@{type='string'};enabled=@{type='boolean'};workhorse=@{type='boolean'};free=@{type='boolean'};supportsTools=@{type='boolean'};contextLength=@{type='integer';minimum=1};toolMode=@{type='string';enum=@('native','text')};rationale=@{type='string'};researchedAt=@{type='string';description='ISO-8601 timestamp; defaults to now when rationale is supplied.'};source=@{type='string';description='Defaults to clanker.'}};required=@('connection','model')}},
@@ -278,6 +426,23 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
             $events=@(Get-McpControlEventsSince $project $since $limit $min);return New-McpTextResult ([ordered]@{since=$since;cursor=Get-McpControlCursor $project;events=$events})
         }
         'control_snapshot' {return New-McpTextResult (Get-McpControlSnapshot $project)}
+        'task_recovery_context' {
+            $taskId=Get-McpArgRequired $Arguments 'taskId'
+            return New-McpTextResult (Get-McpTaskRecoveryContext $project $taskId)
+        }
+        'task_repair' {
+            $taskId=Get-McpArgRequired $Arguments 'taskId'
+            $reason=Get-McpArgRequired $Arguments 'reason'
+            $evidence=@(Get-McpArgArray $Arguments 'evidence')
+            $patch=Get-McpObjectValue $Arguments 'patch'
+            return New-McpTextResult (Invoke-McpRecoveryMutation $project $taskId $reason $evidence $patch)
+        }
+        'task_recover_complete' {
+            $taskId=Get-McpArgRequired $Arguments 'taskId'
+            $reason=Get-McpArgRequired $Arguments 'reason'
+            $evidence=@(Get-McpArgArray $Arguments 'evidence')
+            return New-McpTextResult (Invoke-McpRecoveryMutation $project $taskId $reason $evidence $null -Complete)
+        }
         'connection_catalog' {
             $connection=Get-McpArgOptional $Arguments 'connection'
             return New-McpTextResult ([ordered]@{connections=@(Get-McpConnectionCatalog $connection);note='Machine-local discovery metadata only; no credentials or custom headers are exposed.'})
