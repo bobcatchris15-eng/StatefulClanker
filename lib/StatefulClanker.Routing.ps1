@@ -245,19 +245,19 @@ function Reset-SCConnectionHealthIfConfigChanged([string]$ConnectionName) {
 
 function Get-SCRouteFailureClass([int]$ExitCode,[string]$Text) {
     $t=if($Text){$Text}else{''}
-    if($t-match'(?i)\b429\b|too many requests|rate.?limit|quota exceeded|resource exhausted'){return'rate_limited'}
-    if($t-match'(?i)\b401\b|\b403\b|unauthori[sz]ed|invalid api key|authentication|permission denied'){return'auth'}
-    if($t-match'(?i)context.{0,20}(too (large|long)|length|window)|maximum context|prompt too long'){return'context_too_large'}
-    if($t-match'(?i)model.{0,25}(not found|unavailable|disabled|unsupported)|unknown model'){return'model_unavailable'}
-    if($t-match'(?i)invalid json|malformed json|text-tool model returned invalid json|could not parse.*json'){return'malformed_response'}
-    if($t-match'(?i)returned no choices|returned no content|no content or tool call|empty response'){return'empty_response'}
-    if($t-match'(?i)protocol|unsupported response shape|unexpected response shape'){return'protocol_error'}
-    if($t-match'(?i)capacity|overloaded|busy|temporarily unavailable'){return'capacity'}
-    if($t-match'(?i)timeout|timed out|connection refused|connection reset|reset by peer|forcibly closed|network is unreachable|name or service not known|no such host'){return'timeout'}
-    if($t-match'(?i)\b50[0234]\b|internal server error|bad gateway|service unavailable|gateway timeout'){return'server_error'}
-    if($t-match'(?i)\b400\b|bad request|invalid request|unsupported parameter'){return'bad_request'}
-    if($ExitCode-eq-2){return'timeout'}
-    return'unknown'
+    if($t-match'(?i)\b429\b|too many requests|rate.?limit|quota exceeded|resource exhausted'){return 'rate_limited'}
+    if($t-match'(?i)\b401\b|\b403\b|unauthori[sz]ed|invalid api key|authentication|permission denied'){return 'auth'}
+    if($t-match'(?i)context.{0,20}(too (large|long)|length|window)|maximum context|prompt too long'){return 'context_too_large'}
+    if($t-match'(?i)model.{0,25}(not found|unavailable|disabled|unsupported)|unknown model'){return 'model_unavailable'}
+    if($t-match'(?i)invalid json|malformed json|text-tool model returned invalid json|could not parse.*json'){return 'malformed_response'}
+    if($t-match'(?i)returned no choices|returned no content|no content or tool call|empty response'){return 'empty_response'}
+    if($t-match'(?i)protocol|unsupported response shape|unexpected response shape'){return 'protocol_error'}
+    if($t-match'(?i)capacity|overloaded|busy|temporarily unavailable'){return 'capacity'}
+    if($t-match'(?i)timeout|timed out|connection refused|connection reset|reset by peer|forcibly closed|network is unreachable|name or service not known|no such host'){return 'timeout'}
+    if($t-match'(?i)\b50[0234]\b|internal server error|bad gateway|service unavailable|gateway timeout'){return 'server_error'}
+    if($t-match'(?i)\b400\b|bad request|invalid request|unsupported parameter'){return 'bad_request'}
+    if($ExitCode-eq-2){return 'timeout'}
+    return 'unknown'
 }
 
 function Test-SCRouteFailureTransient([string]$Class) {
@@ -313,15 +313,15 @@ function Register-SCRouteProbeSuccess([string]$Name) {
 
 function Get-SCFailureHealthScope($Record,[string]$Class) {
     $cfg=$Record.config;$type=if($cfg.PSObject.Properties['type']){[string]$cfg.type}else{'cli'}
-    if($type-ne'api'){return[ordered]@{scope='endpoint';key=[string]$Record.name;connection=$null;service=$null}}
+    if($type-ne'api'){return [ordered]@{scope='endpoint';key=[string]$Record.name;connection=$null;service=$null}}
     $connection=if($cfg.PSObject.Properties['connection']){[string]$cfg.connection}else{$null};$service=if($connection){Get-SCConnectionServiceName $connection}else{$null}
-    if(@('rate_limited','auth','timeout','server_error')-contains$Class -and $connection){return[ordered]@{scope='connection';key="connection:$connection";connection=$connection;service=$service}}
-    if(@('capacity','model_unavailable','malformed_response','empty_response','protocol_error')-contains$Class){return[ordered]@{scope='endpoint';key=[string]$Record.name;connection=$connection;service=$service}}
-    return[ordered]@{scope='request';key=$null;connection=$connection;service=$service}
+    if(@('rate_limited','auth','timeout','server_error')-contains$Class -and $connection){return [ordered]@{scope='connection';key="connection:$connection";connection=$connection;service=$service}}
+    if(@('capacity','model_unavailable','malformed_response','empty_response','protocol_error')-contains$Class){return [ordered]@{scope='endpoint';key=[string]$Record.name;connection=$connection;service=$service}}
+    return [ordered]@{scope='request';key=$null;connection=$connection;service=$service}
 }
 
 function Test-SCServiceFailureCorroboration([string]$Service,[string]$ExcludeConnection=$null) {
-    if([string]::IsNullOrWhiteSpace($Service)){return$false}
+    if([string]::IsNullOrWhiteSpace($Service)){return $false}
     $h=Get-SCRoutingHealth;$cutoff=[datetimeoffset]::UtcNow.AddMinutes(-10);$connections=@()
     foreach($p in $h.endpoints.PSObject.Properties){
         if(-not$p.Name.StartsWith('connection:')){continue};$conn=$p.Name.Substring('connection:'.Length);if($ExcludeConnection-and$conn-eq$ExcludeConnection){continue};$v=$p.Value
@@ -334,13 +334,13 @@ function Test-SCServiceFailureCorroboration([string]$Service,[string]$ExcludeCon
 
 function Register-SCRouteFailureForRecord($Record,[string]$Class,[string]$Text) {
     $domain=Get-SCFailureHealthScope $Record $Class
-    if($domain.scope-eq'request'){return$domain}
+    if($domain.scope-eq'request'){return $domain}
     Register-SCRouteFailure ([string]$domain.key) $Class $Text ([string]$domain.scope)|Out-Null
     if($domain.scope-eq'connection' -and @('timeout','server_error')-contains$Class -and $domain.service -and (Test-SCServiceFailureCorroboration ([string]$domain.service) ([string]$domain.connection))){
         $serviceKey="service:$($domain.service)";Register-SCRouteFailure $serviceKey $Class $Text 'service'|Out-Null
         Add-SCEvent 'routing.service_degraded' "Independent connections indicate service $($domain.service) is unavailable." @{service=$domain.service;failureClass=$Class}
     }
-    return$domain
+    return $domain
 }
 
 function Get-SCRouteDoctorDue([int]$Limit=2) {
@@ -350,7 +350,7 @@ function Get-SCRouteDoctorDue([int]$Limit=2) {
         foreach($field in @('nextProbeAt','retryAfter')){if($v.PSObject.Properties[$field] -and $v.$field){$dto=[datetimeoffset]::MinValue;if([datetimeoffset]::TryParse([string]$v.$field,[ref]$dto)){$at=$dto;break}}}
         if($null-eq$at -or $at-le$now){$rows+=,[pscustomobject]@{name=[string]$p.Name;scope=if($v.PSObject.Properties['scope']){[string]$v.scope}else{'endpoint'};reason=if($v.PSObject.Properties['reason']){[string]$v.reason}else{'unknown'};dueAt=$at;entry=$v}}
     }
-    return@($rows|Sort-Object @{Expression={if($_.dueAt){$_.dueAt}else{[datetimeoffset]::MinValue}}},name|Select-Object -First ([Math]::Max(1,$Limit)))
+    return @($rows|Sort-Object @{Expression={if($_.dueAt){$_.dueAt}else{[datetimeoffset]::MinValue}}},name|Select-Object -First ([Math]::Max(1,$Limit)))
 }
 
 function Set-SCRouteProbing([string]$Name) {
@@ -361,14 +361,14 @@ function Resolve-SCRouteProbeRecord([string]$Name) {
     $records=@(Get-SCTargetPoolRecords)
     if($Name.StartsWith('connection:')){
         $connection=$Name.Substring('connection:'.Length);$usable=@($records|Where-Object{[string]$_.config.connection-eq$connection -and (Test-SCRouteAvailable ([string]$_.name))})
-        if($usable.Count-eq0){$usable=@($records|Where-Object{[string]$_.config.connection-eq$connection})};return@($usable|Select-Object -First 1)
+        if($usable.Count-eq0){$usable=@($records|Where-Object{[string]$_.config.connection-eq$connection})};return @($usable|Select-Object -First 1)
     }
     if($Name.StartsWith('service:')){
         $service=$Name.Substring('service:'.Length);$usable=@()
         foreach($r in $records){$conn=[string]$r.config.connection;if((Get-SCConnectionServiceName $conn)-ne$service){continue};$connEntry=Get-SCRouteHealthEntry ("connection:$conn");if($connEntry-and[string]$connEntry.reason-eq'auth'){continue};$usable+=,$r}
-        return@($usable|Select-Object -First 1)
+        return @($usable|Select-Object -First 1)
     }
-    return@($records|Where-Object{[string]$_.name-eq$Name}|Select-Object -First 1)
+    return @($records|Where-Object{[string]$_.name-eq$Name}|Select-Object -First 1)
 }
 
 function Get-SCTaskExplicitProvider($Task) {
@@ -412,16 +412,16 @@ function Get-SCRoutePreferenceName($Task,[string]$Stage='worker') {
 }
 
 function Test-SCRouteRecordAvailable($Record) {
-    if($null-eq$Record){return$false}
-    if(-not(Test-SCRouteAvailable ([string]$Record.name))){return$false}
+    if($null-eq$Record){return $false}
+    if(-not(Test-SCRouteAvailable ([string]$Record.name))){return $false}
     $cfg=$Record.config;$type=if($cfg.PSObject.Properties['type']){[string]$cfg.type}else{'cli'}
     if($type-eq'api' -and $cfg.PSObject.Properties['connection'] -and $cfg.connection){
         $connection=[string]$cfg.connection;Reset-SCConnectionHealthIfConfigChanged $connection
-        if(-not(Test-SCRouteAvailable ("connection:"+$connection))){return$false}
+        if(-not(Test-SCRouteAvailable ("connection:"+$connection))){return $false}
         $service=Get-SCConnectionServiceName $connection
-        if($service -and -not(Test-SCRouteAvailable ("service:"+$service))){return$false}
+        if($service -and -not(Test-SCRouteAvailable ("service:"+$service))){return $false}
     }
-    return$true
+    return $true
 }
 
 function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker') {
