@@ -475,9 +475,8 @@ sealed class ApiConnectionsPage : TabPage
             foreach(var kv in _profiles)
             {
                 var connection=kv.Key;var p=kv.Value;var preset=InferencePresets.Get(p.presetId);
-                var providerEligible=preset.FreePoolProvider || p.presetId is "ollama" or "lmstudio" or "vllm";
                 var candidates=p.models
-                    .Where(m => (providerEligible || m.isFree==true) && IsLikelyWorkhorse(m))
+                    .Where(m => IsSafeFreeCandidate(preset,m) && IsLikelyWorkhorse(m))
                     .OrderByDescending(WorkhorseScore)
                     .ThenBy(m=>m.displayName,StringComparer.OrdinalIgnoreCase)
                     .Take(6)
@@ -502,6 +501,20 @@ sealed class ApiConnectionsPage : TabPage
             MessageBox.Show(FindForm(),$"Seeded {added} new target-pool row(s). Existing user/Clanker choices were preserved.");
         }
         catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not auto-target models",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+    }
+
+    static bool IsSafeFreeCandidate(InferencePreset preset,ApiDiscoveredModel model)
+    {
+        if(preset.Id is "ollama" or "lmstudio" or "vllm")return true;
+        if(model.isFree==true)return true;
+        if(model.isFree==false)return false;
+        var id=(model.id+" "+model.displayName).ToLowerInvariant();
+        if(id.Contains(":free")||id.Contains("/free")||id.Contains("auto:free")||id.Contains("free/"))return true;
+        // FreeLLMAPI intentionally exposes a curated free catalog. Pollinations'
+        // anonymous text catalog is also non-billable. Other providers with a
+        // free tier can expose mixed paid/free catalogs, so unknown cost stays out
+        // until model metadata or Clanker research positively identifies it.
+        return preset.Id is "freellmapi" or "pollinations";
     }
 
     static bool IsLikelyWorkhorse(ApiDiscoveredModel model)
