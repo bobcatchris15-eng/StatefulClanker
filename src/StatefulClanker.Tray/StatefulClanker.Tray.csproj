@@ -7,7 +7,7 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>StatefulClanker</AssemblyName>
     <RootNamespace>StatefulClanker.Tray</RootNamespace>
-    <ApplicationIcon>..\..\install\StatefulClanker.ico</ApplicationIcon>
+    <ApplicationIcon Condition="Exists('..\..\install\StatefulClanker.ico')">..\..\install\StatefulClanker.ico</ApplicationIcon>
     <Version>0.8.3</Version>
     <AssemblyVersion>0.8.3.0</AssemblyVersion>
     <FileVersion>0.8.3.0</FileVersion>
@@ -17,7 +17,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="..\..\install\StatefulClanker.ico" LogicalName="StatefulClanker.ico" />
+    <EmbeddedResource Include="..\..\install\StatefulClanker.ico" LogicalName="StatefulClanker.ico" Condition="Exists('..\..\install\StatefulClanker.ico')" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="EasyWindowsTerminalControl" Version="1.0.38" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" />
