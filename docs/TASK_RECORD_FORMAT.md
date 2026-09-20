@@ -184,3 +184,14 @@ Workers may inspect the human source and normalized interpretation when policy p
 - internal task persistence remains JSON;
 - CLI `task add` exposes matching `-CapabilityProfile`, `-ToolAllow`, and `-ToolDeny` parameters;
 - MCP `task_add` exposes matching `capabilityProfile`, `toolAllow`, and `toolDeny` properties.
+
+
+## Output kind and candidate materiality
+
+Tasks may declare `output-kind change`.
+
+Supported values are `change`, `document`, `state-update`, `research`, `diagnosis`, `answer`, `none`, and `no-change`.
+
+`change`, `document`, and `state-update` are artifact-producing tasks. StatefulClanker's direct worker candidate gate expects a material worktree delta before critic review. `research`, `diagnosis`, `answer`, `none`, and `no-change` explicitly permit a valid zero-diff result.
+
+The default is `change`. Use a non-mutating output kind deliberately for inspection/research tasks; otherwise a worker that merely describes what it would have changed receives one same-session correction and, if it repeats the phantom completion, the session is abandoned without spending critic inference.
