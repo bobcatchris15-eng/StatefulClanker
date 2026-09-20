@@ -407,12 +407,16 @@ function Retry-SCTask([string]$Id) {
                 $run = Read-SCJson (Get-SCPath ("runs/{0}.json" -f $task.latestRunId))
                 $comp = Read-SCJson (Get-SCPath ("compilations/{0}.json" -f $task.latestCompilationId))
                 if ($run -and $comp) {
-                    Write-Host "Running critic against previous failure before retrying $($task.id)..."
-                    $task.status='reviewing'; Save-SCTask $task
-                    $critique = Invoke-SCReview $task $run $comp 'critic'
-                    $task = Get-SCTask $task.id
-                    $task.latestCritiqueId = $critique.id
-                    Save-SCTask $task
+                    $preflightRejected=($run.PSObject.Properties['candidatePreflight'] -and $run.candidatePreflight -and -not[bool]$run.candidatePreflight.material)
+                    $successfulWorker=([int]$run.exitCode-eq0 -and -not($run.PSObject.Properties['routeDeferred'] -and [bool]$run.routeDeferred) -and -not($run.PSObject.Properties['routeExhausted'] -and [bool]$run.routeExhausted))
+                    if($successfulWorker -and -not$preflightRejected){
+                        Write-Host "Running critic against previous unreviewed candidate before retrying $($task.id)..."
+                        $task.status='reviewing'; Save-SCTask $task
+                        $critique = Invoke-SCReview $task $run $comp 'critic'
+                        $task = Get-SCTask $task.id
+                        $task.latestCritiqueId = $critique.id
+                        Save-SCTask $task
+                    }
                 }
             } catch {
                 Write-Warning "Failed to run critic during retry: $($_.Exception.Message)"
