@@ -198,7 +198,7 @@ function Commit-SCProposal($Task,$Proposal,$Compilation) {
     $Task=Get-SCTask ([string]$Task.id);$Proposal.status='committed';$Proposal.committedAt=(Get-Date).ToUniversalTime().ToString('o');Save-SCProposal $Proposal;$Task.status='complete';$Task.blockReason=$null;Save-SCTask $Task;Add-SCEvent 'state.committed' "Committed completion proposal $($Proposal.id)." @{taskId=$Task.id;proposalId=$Proposal.id;compilationId=$Compilation.id};Add-SCEvent 'task.completed' "Completed $($Task.id) after validated commit." @{taskId=$Task.id;runId=$Proposal.evidence.runId;proposalId=$Proposal.id};Add-SCProgressRecord $Task $Compilation $true 'committed' 'Validated proposal committed.'|Out-Null;Add-SCCompletedTaskCount|Out-Null;Update-SCReadiness;return $true
 }
 function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
-    Assert-SCInitialized;Assert-SCNotHeld;Update-SCReadiness
+    Assert-SCInitialized;Assert-SCNotHeld;Assert-SCNotEvil;Update-SCReadiness
     $state=Get-SCState;$cfg=Get-SCConfig
     if($state.activePlanId-and[bool]$cfg.requireHumanApprovalForPlan-and-not[bool]$state.planApproved){throw 'Active plan requires approval.'}
     $task=if($RequestedTaskId){Get-SCTask $RequestedTaskId}else{Get-SCTasks|Where-Object{$_.status-eq'ready'-and-not$_.humanGate}|Sort-Object createdAt|Select-Object -First 1}
