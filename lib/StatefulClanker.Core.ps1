@@ -110,6 +110,46 @@ function Add-SCEvent([string]$Type,[string]$Text,$Data=$null) {
     $evt=[ordered]@{id=New-SCId 'event';ts=(Get-Date).ToUniversalTime().ToString('o');type=$Type;message=$Text;data=$Data}
     Invoke-SCLocked { Add-SCTextLine (Get-SCPath 'events.jsonl') ((ConvertTo-SCJson $evt 12) -replace "`r?`n",'') }
 }
+
+# A safety trip is intentionally explicit and latched.  Automatic worker guards call
+# this only for concrete boundary/authority violations, never for ordinary failures,
+# bad code, rejected reviews, or model weirdness.  The extensionless EVIL sentinel
+# gives the tray an O(1), crash-safe signal and prevents later dispatch until a human
+# clears it.
+function Get-SCEvilPath { Get-SCPath 'EVIL' }
+function Test-SCEvilLatched { Test-Path -LiteralPath (Get-SCEvilPath) -PathType Leaf }
+function Set-SCEvilTrip([string]$Trigger,[string]$Reason,$Data=$null) {
+    Assert-SCInitialized
+    $path=Get-SCEvilPath
+    $now=(Get-Date).ToUniversalTime().ToString('o')
+    $prior=$null
+    try{$prior=Read-SCJson $path}catch{}
+    $firstAt=if($prior-and$prior.PSObject.Properties['firstAt']){[string]$prior.firstAt}else{$now}
+    $count=if($prior-and$prior.PSObject.Properties['tripCount']){[int]$prior.tripCount+1}else{1}
+    $record=[ordered]@{
+        schemaVersion=1;latched=$true;firstAt=$firstAt;lastAt=$now;tripCount=$count;
+        trigger=$Trigger;reason=$Reason;workRoot=(Get-SCRoot);stateRoot=(Get-SCStateRoot);
+        processId=$PID;details=$Data
+    }
+    Write-SCJson $path $record
+    Add-SCEvent 'clanker.evil' "AUTOMATIC SAFETY TRIP [$Trigger]: $Reason" $record
+    return $record
+}
+function Clear-SCEvilTrip([string]$Reason='Cleared by operator.') {
+    Assert-SCInitialized
+    $path=Get-SCEvilPath
+    $prior=$null
+    try{$prior=Read-SCJson $path}catch{}
+    if(Test-Path -LiteralPath $path){Remove-Item -Force -LiteralPath $path}
+    Add-SCEvent 'clanker.evil.cleared' $Reason @{previous=$prior;clearedBy='operator';processId=$PID}
+}
+function Assert-SCNotEvil {
+    if(Test-SCEvilLatched){
+        $record=$null;try{$record=Read-SCJson (Get-SCEvilPath)}catch{}
+        $why=if($record-and$record.PSObject.Properties['reason']){[string]$record.reason}else{'automatic safety trip'}
+        throw "StatefulClanker safety trip is latched: $why. Inspect .statefulclanker\EVIL and clear explicitly with: .\StatefulClanker.ps1 evil clear"
+    }
+}
 function Get-SCState { Assert-SCInitialized;Invoke-SCLocked { Read-SCJson (Get-SCPath 'state.json') } }
 function Save-SCState($State) {
     Invoke-SCLocked {
