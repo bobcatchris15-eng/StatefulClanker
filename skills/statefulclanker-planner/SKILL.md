@@ -203,6 +203,10 @@ inspection / discovery
     -> integration / regression proof if needed
 ```
 
+### Output kind is part of the proof boundary
+
+Set `output-kind` deliberately. Ordinary implementation defaults to `change`. Use `research`, `diagnosis`, or `answer` for tasks whose correct result may legitimately produce no worktree artifact. This matters operationally: direct workers proposing completion for artifact-producing tasks are mechanically rejected before critic review when their candidate snapshot is unchanged.
+
 ## 6.1 Create a discovery task when
 
 - the relevant files/interfaces are uncertain;
