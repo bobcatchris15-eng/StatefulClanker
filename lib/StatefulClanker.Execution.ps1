@@ -198,107 +198,193 @@ function Commit-SCProposal($Task,$Proposal,$Compilation) {
     $Task=Get-SCTask ([string]$Task.id);$Proposal.status='committed';$Proposal.committedAt=(Get-Date).ToUniversalTime().ToString('o');Save-SCProposal $Proposal;$Task.status='complete';$Task.blockReason=$null;Save-SCTask $Task;Add-SCEvent 'state.committed' "Committed completion proposal $($Proposal.id)." @{taskId=$Task.id;proposalId=$Proposal.id;compilationId=$Compilation.id};Add-SCEvent 'task.completed' "Completed $($Task.id) after validated commit." @{taskId=$Task.id;runId=$Proposal.evidence.runId;proposalId=$Proposal.id};Add-SCProgressRecord $Task $Compilation $true 'committed' 'Validated proposal committed.'|Out-Null;Add-SCCompletedTaskCount|Out-Null;Update-SCReadiness;return $true
 }
 function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
-    Assert-SCInitialized;Assert-SCNotHeld;Update-SCReadiness;$state=Get-SCState;$cfg=Get-SCConfig;if($state.activePlanId-and[bool]$cfg.requireHumanApprovalForPlan-and-not[bool]$state.planApproved){throw 'Active plan requires approval.'}
-    $task=if($RequestedTaskId){Get-SCTask $RequestedTaskId}else{Get-SCTasks|Where-Object{$_.status-eq'ready'-and-not$_.humanGate}|Sort-Object createdAt|Select-Object -First 1};if($null-eq$task){throw 'No runnable ready task.'};if($task.status-ne'ready'){throw "Task $($task.id) is $($task.status), not ready."};if($task.humanGate){throw 'Task requires human gate.'}
-    $task.status='running';$attempt=if($task.PSObject.Properties['attemptCount']){[int]$task.attemptCount+1}else{1};Set-SCProperty $task 'attemptCount' $attempt;$task.blockReason=$null;Save-SCTask $task;Add-SCEvent 'run.started' 'Worker cycle started' @{taskId=$task.id;attempt=$attempt}
+    Assert-SCInitialized;Assert-SCNotHeld;Update-SCReadiness
+    $state=Get-SCState;$cfg=Get-SCConfig
+    if($state.activePlanId-and[bool]$cfg.requireHumanApprovalForPlan-and-not[bool]$state.planApproved){throw 'Active plan requires approval.'}
+    $task=if($RequestedTaskId){Get-SCTask $RequestedTaskId}else{Get-SCTasks|Where-Object{$_.status-eq'ready'-and-not$_.humanGate}|Sort-Object createdAt|Select-Object -First 1}
+    if($null-eq$task){throw 'No runnable ready task.'};if($task.status-ne'ready'){throw "Task $($task.id) is $($task.status), not ready."};if($task.humanGate){throw 'Task requires human gate.'}
+
+    $task.status='running'
+    $attempt=if($task.PSObject.Properties['attemptCount']){[int]$task.attemptCount+1}else{1}
+    Set-SCProperty $task 'attemptCount' $attempt
+    $workerSessionId=New-SCId 'wsess'
+    Set-SCProperty $task 'activeWorkerSessionId' $workerSessionId
+    Set-SCProperty $task 'latestWorkerSessionId' $workerSessionId
+    $task.blockReason=$null;Save-SCTask $task
+    Add-SCEvent 'run.started' 'Worker cycle started' @{taskId=$task.id;attempt=$attempt;workerSessionId=$workerSessionId}
+
     $compilation=New-SCCompilation $task;$fresh=Test-SCCompilationFreshness $compilation 'dispatch'
-    if(-not$fresh.fresh){$task=Get-SCTask $task.id;$task.status='needs_rework';$task.blockReason='Compiled context became stale before dispatch.';Save-SCTask $task;Add-SCProgressRecord $task $compilation $false 'stale-before-dispatch' ($fresh.reasons -join '; ')|Out-Null;Add-SCEvent 'context.stale' $task.blockReason @{taskId=$task.id;compilationId=$compilation.id;reasons=@($fresh.reasons)};Write-Warning $task.blockReason;return}
-    $run=Invoke-SCProvider $task (New-SCWorkerPrompt $compilation) 'run' $ProviderOverride $null $compilation;$contextRequests=@(Capture-SCContextRequests $task $run $compilation);Write-SCJson (Get-SCPath ("runs/{0}.json"-f$run.id)) $run;$task=Get-SCTask $task.id;$task.latestRunId=$run.id;Save-SCTask $task
-    if(Stop-SCForStaleCompilation $task $compilation 'stale-after-worker' 'Compiled state became stale while the worker was running.'){return}
-    if([int]$run.exitCode-ne 0){
-        $task=Get-SCTask $task.id
-        $routeUnavailable=($run.PSObject.Properties['routeDeferred'] -and [bool]$run.routeDeferred) -or ($run.PSObject.Properties['routeExhausted'] -and [bool]$run.routeExhausted)
-        if($routeUnavailable){
-            $task.status='blocked'
-            $task.blockReason=if($run.stderr){"Inference routing unavailable: "+([string]$run.stderr).Trim()}else{'Inference routing unavailable; all eligible endpoints failed or are cooling down.'}
-            Save-SCTask $task
-            Add-SCEvent 'routing.deferred' $task.blockReason @{taskId=$task.id;runId=$run.id;compilationId=$compilation.id;retryAfter=if($run.PSObject.Properties['retryAfter']){$run.retryAfter}else{$null};routeHistory=if($run.PSObject.Properties['routeHistory']){@($run.routeHistory)}else{@()}}
-            Add-SCProgressRecord $task $compilation $false 'routing-unavailable' $task.blockReason|Out-Null
-            Write-Warning $task.blockReason
-            return
-        }
-        $task.status='failed';$task.blockReason="Worker exited $($run.exitCode)";Save-SCTask $task;Add-SCEvent 'run.failed' $task.blockReason @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;compilationId=$compilation.id};Add-SCProgressRecord $task $compilation $false 'worker-failed' $task.blockReason|Out-Null;Write-Warning $task.blockReason;return
-    };Add-SCEvent 'run.finished' "Worker finished $($run.id)" @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;compilationId=$compilation.id}
-    if($contextRequests.Count-gt 0){$task=Get-SCTask $task.id;$task.status='needs_rework';$task.blockReason='Worker requested missing context; completion was not proposed.';Save-SCTask $task;Add-SCProgressRecord $task $compilation $false 'context-fault' ($contextRequests -join '; ')|Out-Null;Write-Warning $task.blockReason;return}
-    $task=Get-SCTask $task.id;$proposal=New-SCCompletionProposal $task $run $compilation
-    if([bool]$cfg.criticEnabled){
-        $task.status='reviewing';Save-SCTask $task
-        $critique=Invoke-SCReview $task $run $compilation 'critic'
-        $proposal.evidence.criticId=$critique.id
-        $proposal.evidence.criticVerdict=$critique.verdict
-        Save-SCProposal $proposal
-        $task=Get-SCTask $task.id
-        $task.latestCritiqueId=$critique.id
-        Save-SCTask $task
-        if($critique.verdict-eq'ERROR'){
-            $errDetail=if($critique.stderr){$critique.stderr.Trim()}else{'Critic review encountered an infrastructure error.'}
-            $routeUnavailable=($critique.PSObject.Properties['routeDeferred'] -and [bool]$critique.routeDeferred) -or ($critique.PSObject.Properties['routeExhausted'] -and [bool]$critique.routeExhausted)
-            $task.status=if($routeUnavailable){'blocked'}else{'needs_rework'}
-            $task.blockReason=if($routeUnavailable){"Critic inference routing unavailable: $errDetail"}else{"Critic infrastructure error: $errDetail"}
-            Save-SCTask $task
-            Add-SCProgressRecord $task $compilation $false 'critic-error' $task.blockReason|Out-Null
-            Add-SCEvent 'critic.error' $task.blockReason @{taskId=$task.id;receiptId=$critique.id;error=$errDetail}
-            Write-Warning $task.blockReason
-            return
-        }
-        if($critique.verdict-ne'PASS'){
-            $reasonExcerpt=Get-SCReasonExcerpt ([string]$critique.stdout)
-            $reason=if($reasonExcerpt){"critic rejected worker result: $reasonExcerpt"}else{'critic rejected worker result'}
-            Reject-SCProposal $proposal @($reason)
-            $criticRejectCount=if($task.PSObject.Properties['criticRejectCount']){[int]$task.criticRejectCount+1}else{1}
-            Set-SCProperty $task 'criticRejectCount' $criticRejectCount
-            if($criticRejectCount-ge 3){
-                $task.status='blocked'
-                $task.blockReason=if($reasonExcerpt){"Critic rejected this task scope $criticRejectCount times; plan-graph repair required. Latest: $reasonExcerpt"}else{"Critic rejected this task scope $criticRejectCount times; plan-graph repair required."}
-            }else{
-                $task.status='needs_rework'
-                $task.blockReason=if($reasonExcerpt){"Critic rejected worker result: $reasonExcerpt"}else{'Critic rejected worker result.'}
-            }
-            Save-SCTask $task
-            Add-SCProgressRecord $task $compilation $false 'critic-rejected' $task.blockReason|Out-Null
-            if($criticRejectCount-eq 3){
-                $repairMessage="CLANKER PLAN REPAIR REQUIRED for task '$($task.id)' ($($task.title)): the critic has rejected this scope three times. Latest reason: "+$(if($reasonExcerpt){$reasonExcerpt}else{'no detailed critic reason was captured'})+". Do not retry the task unchanged. Inspect the critic evidence plus current Intent/directives; decompose it into smaller independently verifiable plan nodes, add missing clarification/context where that resolves the failure, or ask the human a specific question if intent is genuinely ambiguous. Then rebuild the affected plan-graph dependencies/relations and acceptance criteria before releasing replacement work."
-                Add-SCEvent 'task.plan_repair_required' $repairMessage @{taskId=$task.id;title=$task.title;criticRejectCount=$criticRejectCount;latestCritiqueId=$critique.id;latestReason=$reasonExcerpt;attemptCount=$task.attemptCount}
-            }
-            Write-Warning $task.blockReason
-            return
-        }
-        if(Stop-SCForStaleCompilation $task $compilation 'stale-after-critic' 'Compiled state became stale during critic review.' $proposal){return}
-        $task=Get-SCTask $task.id
+    if(-not$fresh.fresh){
+        $task=Get-SCTask $task.id;$task.status='needs_rework';$task.blockReason='Compiled context became stale before dispatch.';Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task
+        Add-SCProgressRecord $task $compilation $false 'stale-before-dispatch' ($fresh.reasons -join '; ')|Out-Null
+        Add-SCEvent 'context.stale' $task.blockReason @{taskId=$task.id;compilationId=$compilation.id;reasons=@($fresh.reasons)}
+        Write-Warning $task.blockReason;return
     }
+
+    $basePrompt=New-SCWorkerPrompt $compilation
+    $continuation=$null
+    $run=$null;$proposal=$null
+    while($true){
+        $task=Get-SCTask $task.id
+        $task.status='running';$task.blockReason=$null;Save-SCTask $task
+
+        $run=Invoke-SCProvider $task $basePrompt 'run' $ProviderOverride $null $compilation $workerSessionId $continuation
+        $continuation=$null
+        $contextRequests=@(Capture-SCContextRequests $task $run $compilation)
+        Write-SCJson (Get-SCPath ("runs/{0}.json"-f$run.id)) $run
+        $task=Get-SCTask $task.id;$task.latestRunId=$run.id;Save-SCTask $task
+
+        if(Stop-SCForStaleCompilation $task $compilation 'stale-after-worker' 'Compiled state became stale while the worker was running.'){
+            Close-SCWorkerSession $workerSessionId 'stale';$task=Get-SCTask $task.id;Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task;return
+        }
+
+        if([int]$run.exitCode-ne0){
+            $task=Get-SCTask $task.id
+            $routeUnavailable=($run.PSObject.Properties['routeDeferred'] -and [bool]$run.routeDeferred) -or ($run.PSObject.Properties['routeExhausted'] -and [bool]$run.routeExhausted)
+            if($routeUnavailable){
+                $task.status='blocked'
+                $task.blockReason=if($run.stderr){"Inference routing unavailable: "+([string]$run.stderr).Trim()}else{'Inference routing unavailable; all eligible endpoints failed or are cooling down.'}
+                Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task;Close-SCWorkerSession $workerSessionId 'routing-deferred'
+                Add-SCEvent 'routing.deferred' $task.blockReason @{taskId=$task.id;runId=$run.id;workerSessionId=$workerSessionId;compilationId=$compilation.id;retryAfter=if($run.PSObject.Properties['retryAfter']){$run.retryAfter}else{$null};routeHistory=if($run.PSObject.Properties['routeHistory']){@($run.routeHistory)}else{@()}}
+                Add-SCProgressRecord $task $compilation $false 'routing-unavailable' $task.blockReason|Out-Null
+                Write-Warning $task.blockReason;return
+            }
+            $task.status='failed';$task.blockReason="Worker exited $($run.exitCode)";Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task;Close-SCWorkerSession $workerSessionId 'failed'
+            Add-SCEvent 'run.failed' $task.blockReason @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;workerSessionId=$workerSessionId;compilationId=$compilation.id}
+            Add-SCProgressRecord $task $compilation $false 'worker-failed' $task.blockReason|Out-Null;Write-Warning $task.blockReason;return
+        }
+
+        Add-SCEvent 'run.finished' "Worker finished $($run.id)" @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;workerSessionId=$workerSessionId;compilationId=$compilation.id}
+        if($contextRequests.Count-gt0){
+            $task=Get-SCTask $task.id;$task.status='needs_rework';$task.blockReason='Worker requested missing context; completion was not proposed.';Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task;Close-SCWorkerSession $workerSessionId 'context-fault'
+            Add-SCProgressRecord $task $compilation $false 'context-fault' ($contextRequests -join '; ')|Out-Null;Write-Warning $task.blockReason;return
+        }
+
+        $resumable=($run.PSObject.Properties['workerSessionResumable'] -and [bool]$run.workerSessionResumable)
+        $preflight=$null
+        if($resumable){
+            $preflight=Get-SCWorkerCandidatePreflight $workerSessionId $task
+            Set-SCProperty $run 'candidatePreflight' $preflight
+            Write-SCJson (Get-SCPath ("runs/{0}.json"-f$run.id)) $run
+            if(-not[bool]$preflight.material){
+                $noArtifactCount=Add-SCWorkerNoArtifact $workerSessionId ([string]$preflight.reason)
+                if($noArtifactCount-eq1){
+                    $continuation="CANDIDATE PREFLIGHT REJECTED. No critic was run because StatefulClanker's deterministic evidence gate found no required material artifact change. Reason: $($preflight.reason). This task expects implementation artifacts. Inspect the current worktree, perform the requested work, verify it, and submit a new candidate. Do not merely restate the intended implementation."
+                    Add-SCEvent 'worker.session_repair' "Returning no-artifact candidate to the same worker session." @{taskId=$task.id;workerSessionId=$workerSessionId;candidateNumber=$preflight.candidateNumber;reason=$preflight.reason}
+                    Add-SCProgressRecord $task $compilation $false 'candidate-preflight-repair' ([string]$preflight.reason)|Out-Null
+                    continue
+                }
+                $task=Get-SCTask $task.id;$task.status='needs_rework';$task.blockReason="Worker session submitted $noArtifactCount completion candidates without required artifacts. Latest: $($preflight.reason)";Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task;Close-SCWorkerSession $workerSessionId 'no-artifact'
+                Add-SCProgressRecord $task $compilation $false 'candidate-no-artifact' $task.blockReason|Out-Null
+                Add-SCEvent 'worker.session_abandoned' $task.blockReason @{taskId=$task.id;workerSessionId=$workerSessionId;noArtifactCount=$noArtifactCount}
+                Write-Warning $task.blockReason;return
+            }
+        }
+
+        $task=Get-SCTask $task.id
+        $proposal=New-SCCompletionProposal $task $run $compilation
+        if($preflight){
+            Set-SCProperty $proposal.evidence 'workerSessionId' $workerSessionId
+            Set-SCProperty $proposal.evidence 'candidateNumber' ([int]$preflight.candidateNumber)
+            Set-SCProperty $proposal.evidence 'candidateCheckpointId' $preflight.candidateCheckpointId
+            Set-SCProperty $proposal.evidence 'candidatePreflight' ([ordered]@{material=[bool]$preflight.material;requiresArtifact=[bool]$preflight.requiresArtifact;missingArtifacts=@($preflight.missingArtifacts)})
+            Save-SCProposal $proposal
+        }
+
+        if([bool]$cfg.criticEnabled){
+            $task.status='reviewing';Save-SCTask $task
+            $critique=Invoke-SCReview $task $run $compilation 'critic'
+            $proposal.evidence.criticId=$critique.id;$proposal.evidence.criticVerdict=$critique.verdict;Save-SCProposal $proposal
+            $task=Get-SCTask $task.id;$task.latestCritiqueId=$critique.id;Save-SCTask $task
+
+            if($critique.verdict-eq'ERROR'){
+                $errDetail=if($critique.stderr){$critique.stderr.Trim()}else{'Critic review encountered an infrastructure error.'}
+                $routeUnavailable=($critique.PSObject.Properties['routeDeferred'] -and [bool]$critique.routeDeferred) -or ($critique.PSObject.Properties['routeExhausted'] -and [bool]$critique.routeExhausted)
+                $task.status=if($routeUnavailable){'blocked'}else{'needs_rework'}
+                $task.blockReason=if($routeUnavailable){"Critic inference routing unavailable: $errDetail"}else{"Critic infrastructure error: $errDetail"}
+                Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task;Close-SCWorkerSession $workerSessionId 'critic-error'
+                Add-SCProgressRecord $task $compilation $false 'critic-error' $task.blockReason|Out-Null
+                Add-SCEvent 'critic.error' $task.blockReason @{taskId=$task.id;receiptId=$critique.id;workerSessionId=$workerSessionId;error=$errDetail}
+                Write-Warning $task.blockReason;return
+            }
+
+            if($critique.verdict-ne'PASS'){
+                $reasonExcerpt=Get-SCReasonExcerpt ([string]$critique.stdout)
+                $reason=if($reasonExcerpt){"critic rejected worker result: $reasonExcerpt"}else{'critic rejected worker result'}
+                Reject-SCProposal $proposal @($reason)
+                $criticRejectCount=if($task.PSObject.Properties['criticRejectCount']){[int]$task.criticRejectCount+1}else{1}
+                Set-SCProperty $task 'criticRejectCount' $criticRejectCount
+
+                if($criticRejectCount-ge3){
+                    $task.status='blocked'
+                    $task.blockReason=if($reasonExcerpt){"Critic rejected this task scope $criticRejectCount times; plan-graph repair required. Latest: $reasonExcerpt"}else{"Critic rejected this task scope $criticRejectCount times; plan-graph repair required."}
+                    Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task;Close-SCWorkerSession $workerSessionId 'plan-repair'
+                    Add-SCProgressRecord $task $compilation $false 'critic-rejected' $task.blockReason|Out-Null
+                    if($criticRejectCount-eq3){
+                        $repairMessage="CLANKER PLAN REPAIR REQUIRED for task '$($task.id)' ($($task.title)): the critic has rejected this scope three times. Latest reason: "+$(if($reasonExcerpt){$reasonExcerpt}else{'no detailed critic reason was captured'})+". Do not retry the task unchanged. Inspect the critic evidence plus current Intent/directives; decompose it into smaller independently verifiable plan nodes, add missing clarification/context where that resolves the failure, or ask the human a specific question if intent is genuinely ambiguous. Then rebuild the affected plan-graph dependencies/relations and acceptance criteria before releasing replacement work."
+                        Add-SCEvent 'task.plan_repair_required' $repairMessage @{taskId=$task.id;title=$task.title;workerSessionId=$workerSessionId;criticRejectCount=$criticRejectCount;latestCritiqueId=$critique.id;latestReason=$reasonExcerpt;attemptCount=$task.attemptCount}
+                    }
+                    Write-Warning $task.blockReason;return
+                }
+
+                if($resumable){
+                    if(Stop-SCForStaleCompilation $task $compilation 'stale-after-critic' 'Compiled state became stale during critic review.' $proposal){Close-SCWorkerSession $workerSessionId 'stale';return}
+                    $feedback=[string]$critique.stdout
+                    if($feedback.Length-gt6000){$feedback=$feedback.Substring(0,6000)}
+                    $continuation="CRITIC REJECTED CANDIDATE $criticRejectCount. Repair the existing work in this same worker session; do not restart from the task description and do not discard correct work. Critic feedback follows:"+[Environment]::NewLine+$feedback+[Environment]::NewLine+"Inspect the current worktree, address the specific review failures, run appropriate verification, and submit a replacement candidate."
+                    $task=Get-SCTask $task.id;$task.status='running';$task.blockReason=$null;Save-SCTask $task
+                    Add-SCProgressRecord $task $compilation $false 'critic-repair-same-session' $reason|Out-Null
+                    Add-SCEvent 'worker.session_repair' "Returning critic rejection to worker session $workerSessionId." @{taskId=$task.id;workerSessionId=$workerSessionId;criticRejectCount=$criticRejectCount;critiqueId=$critique.id}
+                    continue
+                }
+
+                $task.status='needs_rework';$task.blockReason=if($reasonExcerpt){"Critic rejected worker result: $reasonExcerpt"}else{'Critic rejected worker result.'}
+                Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task;Close-SCWorkerSession $workerSessionId 'critic-rejected-nonresumable'
+                Add-SCProgressRecord $task $compilation $false 'critic-rejected' $task.blockReason|Out-Null
+                Write-Warning $task.blockReason;return
+            }
+
+            if(Stop-SCForStaleCompilation $task $compilation 'stale-after-critic' 'Compiled state became stale during critic review.' $proposal){Close-SCWorkerSession $workerSessionId 'stale';return}
+            $task=Get-SCTask $task.id
+        }
+        break
+    }
+
     if([bool]$cfg.validatorEnabled){
         $task.status='validating';Save-SCTask $task
         $validation=Invoke-SCReview $task $run $compilation 'validator'
-        $proposal.evidence.validationId=$validation.id
-        $proposal.evidence.validationVerdict=$validation.verdict
-        Save-SCProposal $proposal
-        $task=Get-SCTask $task.id
-        $task.latestValidationId=$validation.id
-        Save-SCTask $task
+        $proposal.evidence.validationId=$validation.id;$proposal.evidence.validationVerdict=$validation.verdict;Save-SCProposal $proposal
+        $task=Get-SCTask $task.id;$task.latestValidationId=$validation.id;Save-SCTask $task
         if($validation.verdict-eq'ERROR'){
             $errDetail=if($validation.stderr){$validation.stderr.Trim()}else{'Validator review encountered an infrastructure error.'}
             $routeUnavailable=($validation.PSObject.Properties['routeDeferred'] -and [bool]$validation.routeDeferred) -or ($validation.PSObject.Properties['routeExhausted'] -and [bool]$validation.routeExhausted)
             $task.status=if($routeUnavailable){'blocked'}else{'needs_rework'}
             $task.blockReason=if($routeUnavailable){"Validator inference routing unavailable: $errDetail"}else{"Validator infrastructure error: $errDetail"}
-            Save-SCTask $task
+            Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task;Close-SCWorkerSession $workerSessionId 'validator-error'
             Add-SCProgressRecord $task $compilation $false 'validator-error' $task.blockReason|Out-Null
-            Add-SCEvent 'validator.error' $task.blockReason @{taskId=$task.id;receiptId=$validation.id;error=$errDetail}
-            Write-Warning $task.blockReason
-            return
+            Add-SCEvent 'validator.error' $task.blockReason @{taskId=$task.id;receiptId=$validation.id;workerSessionId=$workerSessionId;error=$errDetail}
+            Write-Warning $task.blockReason;return
         }
         if($validation.verdict-ne'PASS'){
             $reasonExcerpt=Get-SCReasonExcerpt ([string]$validation.stdout)
             $reason=if($reasonExcerpt){"validator rejected worker result: $reasonExcerpt"}else{'validator rejected worker result'}
             Reject-SCProposal $proposal @($reason)
-            $task.status='needs_rework'
-            $task.blockReason=if($reasonExcerpt){"Validator rejected worker result: $reasonExcerpt"}else{'Validator rejected worker result.'}
-            Save-SCTask $task
+            $task.status='needs_rework';$task.blockReason=if($reasonExcerpt){"Validator rejected worker result: $reasonExcerpt"}else{'Validator rejected worker result.'}
+            Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task;Close-SCWorkerSession $workerSessionId 'validator-rejected'
             Add-SCProgressRecord $task $compilation $false 'validator-rejected' $task.blockReason|Out-Null
-            Write-Warning $task.blockReason
-            return
+            Write-Warning $task.blockReason;return
         }
     }
-    $task=Get-SCTask $task.id;if(Commit-SCProposal $task $proposal $compilation){Write-Host "Task complete: $($task.id)"}else{Write-Warning "Task not committed: $($task.id)"}
+
+    $task=Get-SCTask $task.id
+    if(Commit-SCProposal $task $proposal $compilation){
+        Close-SCWorkerSession $workerSessionId 'completed'
+        $task=Get-SCTask $task.id;Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task
+        Write-Host "Task complete: $($task.id)"
+    }else{
+        Close-SCWorkerSession $workerSessionId 'not-committed'
+        Write-Warning "Task not committed: $($task.id)"
+    }
     Invoke-SCProjectReviewIfDue 'interval'|Out-Null
 }
 function Retry-SCTask([string]$Id) {
