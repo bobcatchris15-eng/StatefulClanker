@@ -245,10 +245,21 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
             $reasonExcerpt=Get-SCReasonExcerpt ([string]$critique.stdout)
             $reason=if($reasonExcerpt){"critic rejected worker result: $reasonExcerpt"}else{'critic rejected worker result'}
             Reject-SCProposal $proposal @($reason)
-            $task.status='needs_rework'
-            $task.blockReason=if($reasonExcerpt){"Critic rejected worker result: $reasonExcerpt"}else{'Critic rejected worker result.'}
+            $criticRejectCount=if($task.PSObject.Properties['criticRejectCount']){[int]$task.criticRejectCount+1}else{1}
+            Set-SCProperty $task 'criticRejectCount' $criticRejectCount
+            if($criticRejectCount-ge 3){
+                $task.status='blocked'
+                $task.blockReason=if($reasonExcerpt){"Critic rejected this task scope $criticRejectCount times; plan-graph repair required. Latest: $reasonExcerpt"}else{"Critic rejected this task scope $criticRejectCount times; plan-graph repair required."}
+            }else{
+                $task.status='needs_rework'
+                $task.blockReason=if($reasonExcerpt){"Critic rejected worker result: $reasonExcerpt"}else{'Critic rejected worker result.'}
+            }
             Save-SCTask $task
             Add-SCProgressRecord $task $compilation $false 'critic-rejected' $task.blockReason|Out-Null
+            if($criticRejectCount-eq 3){
+                $repairMessage="CLANKER PLAN REPAIR REQUIRED for task '$($task.id)' ($($task.title)): the critic has rejected this scope three times. Latest reason: "+$(if($reasonExcerpt){$reasonExcerpt}else{'no detailed critic reason was captured'})+". Do not retry the task unchanged. Inspect the critic evidence plus current Intent/directives; decompose it into smaller independently verifiable plan nodes, add missing clarification/context where that resolves the failure, or ask the human a specific question if intent is genuinely ambiguous. Then rebuild the affected plan-graph dependencies/relations and acceptance criteria before releasing replacement work."
+                Add-SCEvent 'task.plan_repair_required' $repairMessage @{taskId=$task.id;title=$task.title;criticRejectCount=$criticRejectCount;latestCritiqueId=$critique.id;latestReason=$reasonExcerpt;attemptCount=$task.attemptCount}
+            }
             Write-Warning $task.blockReason
             return
         }
