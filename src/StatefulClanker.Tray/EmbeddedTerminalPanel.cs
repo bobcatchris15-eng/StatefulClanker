@@ -277,6 +277,10 @@ sealed class EmbeddedTerminalPanel : UserControl
                 StartupCommandLine = command,
                 WorkingDirectory = _projectPath,
                 LogConPTYOutput = true,
+                // Be explicit: the control's read-only flag is write-only and can otherwise
+                // be hard to diagnose when the renderer is alive but keystrokes are ignored.
+                IsReadOnly = false,
+                IsCursorVisible = true,
                 FontFamilyWhenSettingTheme = new System.Windows.Media.FontFamily("Cascadia Mono"),
                 FontSizeWhenSettingTheme = 11,
                 Win32InputMode = true,
@@ -293,6 +297,12 @@ sealed class EmbeddedTerminalPanel : UserControl
             _hostPanel.Controls.Add(_elementHost);
             _elementHost.BringToFront();
 
+            // ElementHost/WPF keyboard focus can visually appear to be in the terminal
+            // while Win32 focus is still owned by the WinForms host. Reassert focus when
+            // the user clicks into either side of the bridge.
+            _elementHost.MouseDown += (_, _) => FocusTerminal();
+            _terminal.PreviewMouseDown += (_, _) => FocusTerminal();
+
             _currentCommand = command;
             _status.Text = $"RUNNING  {command}   @   {_projectPath}";
             _status.ForeColor = Theme.Good;
@@ -306,7 +316,7 @@ sealed class EmbeddedTerminalPanel : UserControl
 
             // Let WPF create the terminal HWND and ConPTY before focusing it.
             await Task.Delay(150);
-            try { _terminal.Focus(); } catch { }
+            FocusTerminal();
         }
         catch (Exception ex)
         {
@@ -349,6 +359,21 @@ sealed class EmbeddedTerminalPanel : UserControl
     {
         _preset.SelectedItem = "OpenCode";
         _ = StartCommandAsync(ToolViaShell("opencode"), true);
+    }
+
+    void FocusTerminal()
+    {
+        try { _elementHost?.Focus(); } catch { }
+        try { _terminal?.Focus(); } catch { }
+        try
+        {
+            if (_terminal?.Terminal is not null)
+            {
+                _terminal.Terminal.Focus();
+                System.Windows.Input.Keyboard.Focus(_terminal.Terminal);
+            }
+        }
+        catch { }
     }
 
     /// <summary>
