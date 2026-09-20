@@ -251,6 +251,7 @@ function Get-SCRouteFailureClass([int]$ExitCode,[string]$Text) {
     if($t-match'(?i)model.{0,25}(not found|unavailable|disabled|unsupported)|unknown model'){return 'model_unavailable'}
     if($t-match'(?i)invalid json|malformed json|text-tool model returned invalid json|could not parse.*json'){return 'malformed_response'}
     if($t-match'(?i)returned no choices|returned no content|no content or tool call|empty response'){return 'empty_response'}
+    if($t-match'(?i)worker session .+ cannot resume on .+ without transcript conversion'){return 'session_incompatible'}
     if($t-match'(?i)protocol|unsupported response shape|unexpected response shape'){return 'protocol_error'}
     if($t-match'(?i)capacity|overloaded|busy|temporarily unavailable'){return 'capacity'}
     if($t-match'(?i)timeout|timed out|connection refused|connection reset|reset by peer|forcibly closed|network is unreachable|name or service not known|no such host'){return 'timeout'}
@@ -261,7 +262,7 @@ function Get-SCRouteFailureClass([int]$ExitCode,[string]$Text) {
 }
 
 function Test-SCRouteFailureTransient([string]$Class) {
-    return @('rate_limited','capacity','timeout','server_error','model_unavailable','malformed_response','empty_response','protocol_error','context_too_large','bad_request')-contains$Class
+    return @('rate_limited','capacity','timeout','server_error','model_unavailable','malformed_response','empty_response','protocol_error','session_incompatible','context_too_large','bad_request')-contains$Class
 }
 
 function Register-SCRouteSuccess([string]$Name,[string]$Scope=$null) {
@@ -317,6 +318,7 @@ function Get-SCFailureHealthScope($Record,[string]$Class) {
     $connection=if($cfg.PSObject.Properties['connection']){[string]$cfg.connection}else{$null};$service=if($connection){Get-SCConnectionServiceName $connection}else{$null}
     if(@('rate_limited','auth','timeout','server_error')-contains$Class -and $connection){return [ordered]@{scope='connection';key="connection:$connection";connection=$connection;service=$service}}
     if(@('capacity','model_unavailable','malformed_response','empty_response','protocol_error')-contains$Class){return [ordered]@{scope='endpoint';key=[string]$Record.name;connection=$connection;service=$service}}
+    if($Class-eq'session_incompatible'){return [ordered]@{scope='request';key=$null;connection=$connection;service=$service}}
     return [ordered]@{scope='request';key=$null;connection=$connection;service=$service}
 }
 
