@@ -5,7 +5,7 @@ param(
     [Parameter(Position=1)][string]$Subcommand,
     [string]$Title,[string]$Instruction,[string[]]$Accept,[string[]]$DependsOn,
     [string[]]$Retrieval,[string[]]$Evidence,[string[]]$Relation,[string]$Provider,[string]$Role='worker',
-    [string]$Size='small',[string[]]$Source,[string[]]$IntentRef,[string]$SourceRef,
+    [string]$Size='small',[string]$OutputKind='change',[string[]]$Source,[string[]]$IntentRef,[string]$SourceRef,
     [string]$CapabilityProfile,[string[]]$ToolAllow,[string[]]$ToolDeny,
     [string]$DirectiveId,[string]$Scope,[long]$Since=0,[int]$Limit=100,[string]$MinimumLevel,
     [switch]$HumanGate,[string]$TaskId,[string]$Path,[string]$Reason,[string]$Message,[string]$RunId,[string]$CompilationId,
