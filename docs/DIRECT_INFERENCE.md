@@ -57,7 +57,11 @@ Route health remains durable under:
 
 Endpoint/model health and shared connection health are separate. A connection-scoped failure can remove every child model on that credential/service from eligibility without rediscovering the same 429 on each model. Model-specific capacity/unavailability can cool only that target.
 
-Free inference is expected to be flaky. Routing failures are infrastructure telemetry and should preferentially rotate to another healthy target rather than changing task semantics. The broader recovery design uses small health probes at the failed scope (connection/service rather than every child model), honoring provider reset/Retry-After data when available and falling back to sparse probes.
+Free inference is expected to be flaky. Routing failures are infrastructure telemetry and should preferentially rotate to another healthy target rather than changing task semantics.
+
+**Route Doctor** probes failed health domains rather than every child endpoint. It honors provider Retry-After/reset timing when available. Without an explicit reset, account/rate-limit failures probe conservatively at roughly 30m -> 1h -> 2h -> 4h -> 6h, while transport/server failures start at 5m -> 15m -> 30m -> 1h -> 2h. Auth failures are quarantined much longer and are cleared immediately when the stored connection configuration/credential fingerprint changes. An expired cooldown is not enough to return a route to production: a successful tiny probe must recover the circuit first.
+
+Failures inherit downward: an endpoint/model circuit suppresses one target row; a connection/account circuit suppresses every model using that connection; and corroborated transport/server failures on two independent connections to the same service can suppress that service until recovery. Account-level 429s do not automatically poison an independent credential for the same service.
 
 ## Direct API worker harness
 
