@@ -93,6 +93,7 @@ sealed class EmbeddedTerminalPanel : UserControl
     {
         ("PowerShell", "pwsh.exe -NoLogo"),
         ("Antigravity (agy)", "agy"),
+        ("Goose", "goose session"),
         ("OpenCode", "opencode"),
         ("OpenCode mini", "opencode mini"),
         ("Custom", "")
