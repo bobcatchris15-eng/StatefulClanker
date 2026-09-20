@@ -353,7 +353,7 @@ function New-SCWorkerSession([string]$SessionId,$Task,$Compilation,[string]$Prom
     if($existing){return $existing}
     $now=[datetimeoffset]::UtcNow.ToString('o')
     $session=[pscustomobject][ordered]@{
-        schemaVersion=1;id=$SessionId;taskId=[string]$Task.id;status='active';backend='stateful-direct';
+        schemaVersion=1;id=$SessionId;taskId=[string]$Task.id;status='active';backend='stateful-direct';workRoot=(Get-SCRoot);
         compilationId=if($Compilation){[string]$Compilation.id}else{$null};
         inputFingerprint=if($Compilation){[string]$Compilation.inputFingerprint}else{$null};
         toolMode=$ToolMode;candidateNumber=0;noArtifactCount=0;mutationToolCalls=0;turn=0;
@@ -454,7 +454,8 @@ function Restore-SCWorkerCheckpoint([string]$SessionId,[string]$CheckpointId) {
     $cp=@($s.checkpoints|Where-Object{[string]$_.id-eq$CheckpointId}|Select-Object -First 1)
     if($cp.Count-eq0){throw "Unknown worker checkpoint: $CheckpointId"}
     $cp=$cp[0];if(-not[bool]$cp.git-or-not$cp.commit){throw "Checkpoint $CheckpointId has no restorable Git snapshot."}
-    $root=Get-SCRoot
+    $root=if($s.PSObject.Properties['workRoot'] -and $s.workRoot){[string]$s.workRoot}else{Get-SCRoot}
+    if(-not(Test-Path -LiteralPath $root -PathType Container)){throw "Worker worktree no longer exists: $root"}
     & git -C $root clean -fd 2>$null|Out-Null
     & git -C $root restore --source ([string]$cp.commit) --staged --worktree -- . 2>$null
     if($LASTEXITCODE-ne0){throw "Could not restore checkpoint $CheckpointId."}
