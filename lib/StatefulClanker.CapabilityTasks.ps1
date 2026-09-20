@@ -67,3 +67,138 @@ function Add-SCTask {
     $outputKindValue=if($OutputKind){$OutputKind.ToLowerInvariant()}else{'change'};if(@('change','document','state-update','research','diagnosis','answer','none','no-change')-notcontains$outputKindValue){throw "Invalid -OutputKind '$OutputKind'."};Set-SCProperty $taskObj 'size' $sizeValue;Set-SCProperty $taskObj 'outputKind' $outputKindValue;Set-SCProperty $taskObj 'sources' @($Source);Set-SCProperty $taskObj 'intentRefs' @($IntentRef);Set-SCProperty $taskObj 'capabilityProfile' $CapabilityProfile;Set-SCProperty $taskObj 'toolPolicy' (New-SCTaskToolPolicy $ToolAllow $ToolDeny);Set-SCProperty $taskObj 'implications' @();Set-SCProperty $taskObj 'proofObligations' @();Set-SCProperty $taskObj 'refinementStatus' 'pending';Set-SCProperty $taskObj 'refinementDepth' 0;Set-SCProperty $taskObj 'parentTaskId' $null;Set-SCProperty $taskObj 'childTaskIds' @()
     Save-SCTask $taskObj;Update-SCReadiness;Add-SCEvent 'task.created' $Title @{taskId=$id;size=$sizeValue;capabilityProfile=$CapabilityProfile;toolPolicy=$taskObj.toolPolicy};[Console]::Out.WriteLine($id)
 }
+
+
+# Control-plane recovery is distinct from human authority. It may repair orchestration
+# metadata after a task has stalled, but it cannot rewrite current human directives,
+# normalized Intent, or a human-gated task. Every recovery records concrete evidence.
+function Get-SCRecoveryPayload([string]$PayloadPath) {
+    if([string]::IsNullOrWhiteSpace($PayloadPath)-or-not(Test-Path -LiteralPath $PayloadPath -PathType Leaf)){throw '-Path to recovery JSON is required.'}
+    $payload=Read-SCJson $PayloadPath
+    if($null-eq$payload){throw 'Recovery payload is empty or invalid.'}
+    return $payload
+}
+
+function Assert-SCRecoveryTaskMutable($Task) {
+    if($null-eq$Task){throw 'Recovery task is missing.'}
+    if([bool]$Task.humanGate){throw "Task $($Task.id) is human-gated; control-plane recovery must stop for human direction."}
+    if(@('running','reviewing','validating')-contains[string]$Task.status){throw "Task $($Task.id) is active ($($Task.status)); recovery cannot rewrite in-flight state."}
+}
+
+function Get-SCRecoveryEvidence($Payload) {
+    $items=@()
+    if($Payload.PSObject.Properties['evidence']){
+        $items=@($Payload.evidence|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})
+    }
+    if($items.Count-eq0){throw 'Control-plane recovery requires at least one concrete evidence item.'}
+    return @($items)
+}
+
+function Repair-SCTaskFromRecovery([string]$Id,[string]$PayloadPath,[string]$Why) {
+    if([string]::IsNullOrWhiteSpace($Id)){throw '-TaskId required.'}
+    if([string]::IsNullOrWhiteSpace($Why)){throw '-Reason required for control-plane task repair.'}
+    $payload=Get-SCRecoveryPayload $PayloadPath
+    $evidence=@(Get-SCRecoveryEvidence $payload)
+    if(-not$payload.PSObject.Properties['patch']-or$null-eq$payload.patch){throw 'Recovery repair payload requires a patch object.'}
+    $patch=$payload.patch
+    $task=Get-SCTask $Id
+    Assert-SCRecoveryTaskMutable $task
+    if([string]$task.status-eq'complete'){throw "Task $Id is already complete; recovery repair is for incomplete stalled state."}
+
+    $beforeHash=Get-SCTaskDefinitionHash $task
+    $changed=@()
+    $allowed=@('title','instruction','size','outputKind','acceptance','dependsOn','relations','retrieval','evidence','provider','role','sources','intentRefs','capabilityProfile','toolPolicy','implications','proofObligations','parentTaskId','childTaskIds')
+    foreach($name in $allowed){
+        $prop=$patch.PSObject.Properties[$name]
+        if($null-eq$prop){continue}
+        $value=$prop.Value
+        switch($name){
+            'title' {if([string]::IsNullOrWhiteSpace([string]$value)){throw 'Recovered task title cannot be empty.'};Set-SCProperty $task $name ([string]$value)}
+            'instruction' {if([string]::IsNullOrWhiteSpace([string]$value)){throw 'Recovered task instruction cannot be empty.'};Set-SCProperty $task $name ([string]$value)}
+            'size' {$v=([string]$value).ToLowerInvariant();if(@('tiny','small','medium','large')-notcontains$v){throw "Invalid recovery size '$value'."};Set-SCProperty $task $name $v}
+            'outputKind' {$v=([string]$value).ToLowerInvariant();if(@('change','document','state-update','research','diagnosis','answer','none','no-change')-notcontains$v){throw "Invalid recovery outputKind '$value'."};Set-SCProperty $task $name $v}
+            'acceptance' {Set-SCProperty $task $name @($value)}
+            'dependsOn' {Set-SCProperty $task $name @($value)}
+            'relations' {Set-SCProperty $task $name @(ConvertTo-SCRelations $value)}
+            'retrieval' {Set-SCProperty $task $name @($value)}
+            'evidence' {Set-SCProperty $task $name @($value)}
+            'sources' {Set-SCProperty $task $name @($value)}
+            'intentRefs' {Set-SCProperty $task $name @($value)}
+            'implications' {Set-SCProperty $task $name @($value)}
+            'proofObligations' {Set-SCProperty $task $name @($value)}
+            'childTaskIds' {Set-SCProperty $task $name @($value)}
+            'provider' {Set-SCProperty $task $name $(if($null-eq$value-or[string]::IsNullOrWhiteSpace([string]$value)){$null}else{[string]$value})}
+            'capabilityProfile' {Set-SCProperty $task $name $(if($null-eq$value-or[string]::IsNullOrWhiteSpace([string]$value)){$null}else{[string]$value})}
+            'toolPolicy' {Set-SCProperty $task $name $value}
+            'parentTaskId' {Set-SCProperty $task $name $(if($null-eq$value-or[string]::IsNullOrWhiteSpace([string]$value)){$null}else{[string]$value})}
+            default {Set-SCProperty $task $name ([string]$value)}
+        }
+        $changed+=,$name
+    }
+    if($changed.Count-eq0){throw 'Recovery patch did not contain any supported task fields.'}
+
+    Advance-SCTaskControlRevision $task|Out-Null
+    $previousStatus=[string]$task.status
+    $previousAttempts=if($task.PSObject.Properties['attemptCount']){[int]$task.attemptCount}else{0}
+    Set-SCProperty $task 'attemptCount' 0
+    Set-SCProperty $task 'criticRejectCount' 0
+    Set-SCProperty $task 'activeWorkerSessionId' $null
+    Set-SCProperty $task 'blockReason' $null
+    Set-SCProperty $task 'status' 'pending'
+    $recoveryCount=if($task.PSObject.Properties['recoveryCount']){[int]$task.recoveryCount+1}else{1}
+    Set-SCProperty $task 'recoveryCount' $recoveryCount
+    Set-SCProperty $task 'lastRecovery' ([pscustomobject][ordered]@{
+        kind='task-repair';ts=(Get-Date).ToUniversalTime().ToString('o');reason=$Why;evidence=@($evidence);changedFields=@($changed)
+    })
+    Save-SCTask $task
+    Update-SCReadiness
+    $task=Get-SCTask $Id
+    $afterHash=Get-SCTaskDefinitionHash $task
+    Add-SCEvent 'task.repaired.control_plane' "Control plane repaired stalled task $Id: $Why" @{
+        taskId=$Id;previousStatus=$previousStatus;previousAttempts=$previousAttempts;changedFields=@($changed);
+        reason=$Why;evidence=@($evidence);beforeDefinitionHash=$beforeHash;afterDefinitionHash=$afterHash;
+        controlRevision=$task.controlRevision;recoveryCount=$recoveryCount;newStatus=$task.status
+    }
+    if(Get-Command Add-SCProgressRecord -ErrorAction SilentlyContinue){
+        Add-SCProgressRecord $task $null $true 'control-plane-task-repair' $Why|Out-Null
+    }
+    Write-Host "Recovered task definition: $Id -> $($task.status)"
+    return $task
+}
+
+function Complete-SCTaskFromRecovery([string]$Id,[string]$PayloadPath,[string]$Why) {
+    if([string]::IsNullOrWhiteSpace($Id)){throw '-TaskId required.'}
+    if([string]::IsNullOrWhiteSpace($Why)){throw '-Reason required for control-plane recovery completion.'}
+    $payload=Get-SCRecoveryPayload $PayloadPath
+    $evidence=@(Get-SCRecoveryEvidence $payload)
+    $task=Get-SCTask $Id
+    Assert-SCRecoveryTaskMutable $task
+    if([string]$task.status-eq'complete'){Write-Host "Task already complete: $Id";return $task}
+
+    $allowedStatus=@('pending','ready','needs_rework','stale','blocked','failed')
+    if($allowedStatus-notcontains[string]$task.status){throw "Task $Id status '$($task.status)' is not eligible for recovery completion."}
+    $previousStatus=[string]$task.status
+    $previousAttempts=if($task.PSObject.Properties['attemptCount']){[int]$task.attemptCount}else{0}
+    Advance-SCTaskControlRevision $task|Out-Null
+    $task.status='complete'
+    $task.blockReason=$null
+    Set-SCProperty $task 'activeWorkerSessionId' $null
+    $recoveryCount=if($task.PSObject.Properties['recoveryCount']){[int]$task.recoveryCount+1}else{1}
+    Set-SCProperty $task 'recoveryCount' $recoveryCount
+    Set-SCProperty $task 'lastRecovery' ([pscustomobject][ordered]@{
+        kind='accepted-existing-work';ts=(Get-Date).ToUniversalTime().ToString('o');reason=$Why;evidence=@($evidence)
+    })
+    Save-SCTask $task
+    Add-SCEvent 'task.completed.control_plane_recovery' "Control plane accepted existing work for stalled task $Id: $Why" @{
+        taskId=$Id;previousStatus=$previousStatus;previousAttempts=$previousAttempts;reason=$Why;evidence=@($evidence);
+        authority='control-plane-recovery';bypassedReviewGate=$true;controlRevision=$task.controlRevision;
+        latestRunId=$task.latestRunId;latestProposalId=$task.latestProposalId;latestCritiqueId=$task.latestCritiqueId;latestValidationId=$task.latestValidationId;
+        recoveryCount=$recoveryCount
+    }
+    if(Get-Command Add-SCProgressRecord -ErrorAction SilentlyContinue){
+        Add-SCProgressRecord $task $null $true 'control-plane-recovery-commit' $Why|Out-Null
+    }
+    Update-SCReadiness
+    Write-Host "Task recovery-completed: $Id"
+    return (Get-SCTask $Id)
+}
