@@ -1819,7 +1819,7 @@ sealed class MainForm : Form
     static readonly HashSet<string> EscalatedEventTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "run.failed", "critic.error", "validator.error", "project.hold.set", "project.review.failed",
-        "state.proposal_rejected"
+        "state.proposal_rejected", "task.plan_repair_required"
     };
     int _refreshing;
     int _mcpDiscoveryRunning;
