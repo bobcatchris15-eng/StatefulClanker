@@ -47,6 +47,79 @@ sealed class ApiConnectionProfile
     public double? temperature { get; set; }
 }
 
+sealed class TargetPoolEntry
+{
+    public string id { get; set; } = "";
+    public string connection { get; set; } = "";
+    public string model { get; set; } = "";
+    public string displayName { get; set; } = "";
+    public bool enabled { get; set; } = true;
+    public bool workhorse { get; set; } = true;
+    public bool? free { get; set; }
+    public bool? supportsTools { get; set; }
+    public long? contextLength { get; set; }
+    public string toolMode { get; set; } = "native";
+    public string source { get; set; } = "user";
+    public string? rationale { get; set; }
+    public string? researchedAt { get; set; }
+    public string updatedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
+}
+
+sealed class TargetPoolDocument
+{
+    public int schemaVersion { get; set; } = 1;
+    public string updatedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
+    public Dictionary<string,TargetPoolEntry> entries { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+static class TargetPoolStore
+{
+    static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
+
+    public static string? ActiveProject()
+    {
+        try
+        {
+            if (!File.Exists(AppStore.ActiveProjectPointer)) return null;
+            var p = File.ReadAllText(AppStore.ActiveProjectPointer).Trim();
+            return Directory.Exists(p) ? p : null;
+        }
+        catch { return null; }
+    }
+
+    public static string? ActivePoolPath()
+    {
+        var project = ActiveProject();
+        return project is null ? null : System.IO.Path.Combine(project,".statefulclanker","routing","target-pool.json");
+    }
+
+    public static TargetPoolDocument LoadActive()
+    {
+        var path = ActivePoolPath();
+        if (path is null || !File.Exists(path)) return new();
+        try
+        {
+            var doc = JsonSerializer.Deserialize<TargetPoolDocument>(File.ReadAllText(path),Json) ?? new();
+            doc.entries = new Dictionary<string,TargetPoolEntry>(doc.entries ?? new(),StringComparer.OrdinalIgnoreCase);
+            return doc;
+        }
+        catch { return new(); }
+    }
+
+    public static void SaveActive(TargetPoolDocument doc)
+    {
+        var path = ActivePoolPath() ?? throw new InvalidOperationException("Select an active project first.");
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+        doc.schemaVersion = 1;
+        doc.updatedAt = DateTimeOffset.UtcNow.ToString("O");
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp,JsonSerializer.Serialize(doc,Json),new UTF8Encoding(false));
+        File.Move(tmp,path,true);
+    }
+
+    public static string Id(string connection,string model) => connection.Trim() + "::" + model.Trim();
+}
+
 static class ApiConnectionStore
 {
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
@@ -178,6 +251,8 @@ static class ApiConnectionTester
             bool? tools = Bool(x,"supports_tools");
             if (tools is null && x.TryGetProperty("capabilities",out var caps) && caps.ValueKind==JsonValueKind.Object)
                 tools = Bool(caps,"function_calling");
+            if (tools is null && x.TryGetProperty("supported_parameters",out var supported) && supported.ValueKind==JsonValueKind.Array)
+                tools = supported.EnumerateArray().Any(v => v.ValueKind==JsonValueKind.String && (string.Equals(v.GetString(),"tools",StringComparison.OrdinalIgnoreCase) || string.Equals(v.GetString(),"tool_choice",StringComparison.OrdinalIgnoreCase)));
             bool? free = Bool(x,"is_free");
             double? input = null, outputPrice = null;
             if (x.TryGetProperty("pricing",out var pricing) && pricing.ValueKind==JsonValueKind.Object)
@@ -256,12 +331,13 @@ sealed class ApiConnectionsPage : TabPage
         rows.Controls.Add(bar,0,0);
 
         ConfigureConnectionGrid(); rows.Controls.Add(_connections,0,1);
-        rows.Controls.Add(SectionLabel("DISCOVERED MODELS — select models to make project endpoints"),0,2);
+        rows.Controls.Add(SectionLabel("DISCOVERED MODELS / ACTIVE PROJECT TARGET POOL"),0,2);
         ConfigureModelGrid(); rows.Controls.Add(_models,0,3);
 
         var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
-        bottom.Controls.Add(Make("Add selected endpoints to active project",AddEndpoints,260));
-        var note=new Label{Text="Connections are machine-local. Endpoints are project-local model + connection targets.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
+        bottom.Controls.Add(Make("Save target selection",SaveTargetSelection,170));
+        bottom.Controls.Add(Make("Auto-target free workhorses",AutoTargetFreeWorkhorses,205));
+        var note=new Label{Text="Connections are machine-local. The target pool is project-local and is the scheduler's pseudo-round-robin workhorse set.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
         bottom.Controls.Add(note);rows.Controls.Add(bottom,0,4);
 
         Controls.Add(rows); Theme.Apply(this); Reload();
@@ -280,7 +356,7 @@ sealed class ApiConnectionsPage : TabPage
     void ConfigureModelGrid()
     {
         _models.Dock=DockStyle.Fill;_models.AllowUserToAddRows=false;_models.RowHeadersVisible=false;_models.SelectionMode=DataGridViewSelectionMode.FullRowSelect;_models.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
-        _models.Columns.Add(new DataGridViewCheckBoxColumn{Name="use",HeaderText="Add",Width=48,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});
+        _models.Columns.Add(new DataGridViewCheckBoxColumn{Name="use",HeaderText="Target",Width=58,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});
         _models.Columns.Add("name","Model");_models.Columns.Add("id","Model ID");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");_models.Columns.Add("free","Free");
         foreach(DataGridViewColumn c in _models.Columns) if(c.Name!="use") c.ReadOnly=true;
     }
@@ -298,7 +374,8 @@ sealed class ApiConnectionsPage : TabPage
             if(string.Equals(p.health,"healthy",StringComparison.OrdinalIgnoreCase))_connections.Rows[i].Cells["health"].Style.ForeColor=Theme.Good;
             else if(string.Equals(p.health,"failed",StringComparison.OrdinalIgnoreCase))_connections.Rows[i].Cells["health"].Style.ForeColor=Theme.Error;
         }
-        _summary.Text=$"{_profiles.Count} connection(s)";
+        var pool=TargetPoolStore.LoadActive();
+        _summary.Text=$"{_profiles.Count} connection(s) • {pool.entries.Count} targeted model(s)";
         if(_connections.Rows.Count>0)
         {
             var row=_connections.Rows.Cast<DataGridViewRow>().FirstOrDefault(x=>string.Equals(x.Cells["id"].Value?.ToString(),select,StringComparison.OrdinalIgnoreCase))??_connections.Rows[0];
@@ -312,11 +389,13 @@ sealed class ApiConnectionsPage : TabPage
     void LoadModels()
     {
         _models.Rows.Clear();var id=SelectedId;if(id is null||!_profiles.TryGetValue(id,out var p))return;
+        var pool=TargetPoolStore.LoadActive();
         foreach(var m in p.models)
         {
             var context=m.contextLength.HasValue?m.contextLength.Value.ToString("N0"):"—";
             var free=m.isFree==true?"yes":m.isFree==false?"no":"?";
-            _models.Rows.Add(false,m.displayName,m.id,m.supportsTools==false?"text":"native",context,free);
+            var targeted=pool.entries.ContainsKey(TargetPoolStore.Id(id,m.id));
+            _models.Rows.Add(targeted,m.displayName,m.id,m.supportsTools==false?"text":"native",context,free);
         }
     }
 
@@ -349,7 +428,7 @@ sealed class ApiConnectionsPage : TabPage
     void Remove(object? s,EventArgs e)
     {
         var id=SelectedId;if(id is null)return;
-        if(MessageBox.Show(FindForm(),$"Remove machine connection '{id}'? Project endpoints that reference it will become unavailable until changed.","Remove connection",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
+        if(MessageBox.Show(FindForm(),$"Remove machine connection '{id}'? Target-pool rows that reference it will remain visible to Clanker but cannot route until the connection is restored or those rows are removed.","Remove connection",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
         _profiles.Remove(id);ApiConnectionStore.Save(_profiles);Reload();
     }
 
@@ -360,35 +439,92 @@ sealed class ApiConnectionsPage : TabPage
         if(choice==DialogResult.Yes&&!string.IsNullOrWhiteSpace(preset.SetupUrl))try{Process.Start(new ProcessStartInfo(preset.SetupUrl){UseShellExecute=true});}catch{}
     }
 
-    void AddEndpoints(object? s,EventArgs e)
+    void SaveTargetSelection(object? s,EventArgs e)
     {
         var connection=SelectedId;if(connection is null)return;
-        var selected=_models.Rows.Cast<DataGridViewRow>().Where(r=>Convert.ToBoolean(r.Cells["use"].Value??false)).Select(r=>r.Cells["id"].Value?.ToString()).Where(x=>!string.IsNullOrWhiteSpace(x)).Cast<string>().ToList();
-        if(selected.Count==0){MessageBox.Show(FindForm(),"Select at least one discovered model.");return;}
-        var pointer=AppStore.ActiveProjectPointer;if(!File.Exists(pointer)){MessageBox.Show(FindForm(),"Select an active project first.");return;}
-        var project=File.ReadAllText(pointer).Trim();var path=System.IO.Path.Combine(project,".statefulclanker","config.json");if(!File.Exists(path)){MessageBox.Show(FindForm(),"Active project has no StatefulClanker config.");return;}
+        if(TargetPoolStore.ActiveProject() is null){MessageBox.Show(FindForm(),"Select an active project first.");return;}
         try
         {
-            var root=JsonNode.Parse(File.ReadAllText(path))?.AsObject()??throw new Exception("Invalid project config.");
-            var endpoints=root["providers"] as JsonObject??new JsonObject();root["providers"]=endpoints;
-            var nextPriority=endpoints.Count==0?10:endpoints.Select(x=>x.Value is JsonObject o && o["priority"] is JsonValue v && v.TryGetValue<int>(out var n) ? n : 100).DefaultIfEmpty(0).Max()+10;
-            var added=0;
-            foreach(var modelId in selected)
+            var pool=TargetPoolStore.LoadActive();
+            var p=_profiles[connection];
+            foreach(DataGridViewRow row in _models.Rows)
             {
-                if(endpoints.Any(x=>x.Value is JsonObject o&&o["type"]?.ToString()=="api"&&o["connection"]?.ToString()==connection&&o["model"]?.ToString()==modelId))continue;
-                var model=_profiles[connection].models.FirstOrDefault(x=>x.id==modelId);
-                var baseName=SafeId(connection+"-"+modelId);
-                var name=baseName;var suffix=2;while(endpoints.ContainsKey(name))name=baseName+"-"+suffix++;
-                endpoints[name]=new JsonObject{
-                    ["type"]="api",["connection"]=connection,["model"]=modelId,
-                    ["toolMode"]=model?.supportsTools==false?"text":"native",["priority"]=nextPriority
-                };
-                nextPriority+=10;added++;
+                var modelId=row.Cells["id"].Value?.ToString();if(string.IsNullOrWhiteSpace(modelId))continue;
+                var key=TargetPoolStore.Id(connection,modelId);
+                var selected=Convert.ToBoolean(row.Cells["use"].Value??false);
+                if(!selected){pool.entries.Remove(key);continue;}
+                var model=p.models.FirstOrDefault(x=>string.Equals(x.id,modelId,StringComparison.OrdinalIgnoreCase));
+                if(model is null)continue;
+                if(!pool.entries.TryGetValue(key,out var entry))entry=new TargetPoolEntry{id=key,connection=connection,model=model.id,source="user"};
+                entry.displayName=model.displayName;entry.enabled=true;entry.workhorse=true;entry.free=model.isFree;entry.supportsTools=model.supportsTools;
+                entry.contextLength=model.contextLength;entry.toolMode=model.supportsTools==false?"text":"native";entry.updatedAt=DateTimeOffset.UtcNow.ToString("O");
+                if(string.IsNullOrWhiteSpace(entry.rationale))entry.rationale="Selected by the operator from the discovered connection catalog.";
+                pool.entries[key]=entry;
             }
-            var tmp=path+".tmp";File.WriteAllText(tmp,root.ToJsonString(new JsonSerializerOptions{WriteIndented=true}),new UTF8Encoding(false));File.Move(tmp,path,true);
-            MessageBox.Show(FindForm(),$"Added {added} endpoint(s) to the active project. Configure their preference and failover order on Endpoints & Routing.");
+            TargetPoolStore.SaveActive(pool);Reload(connection);
         }
-        catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not add endpoints",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+        catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not save target pool",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+    }
+
+    void AutoTargetFreeWorkhorses(object? s,EventArgs e)
+    {
+        if(TargetPoolStore.ActiveProject() is null){MessageBox.Show(FindForm(),"Select an active project first.");return;}
+        try
+        {
+            var pool=TargetPoolStore.LoadActive();var added=0;
+            foreach(var kv in _profiles)
+            {
+                var connection=kv.Key;var p=kv.Value;var preset=InferencePresets.Get(p.presetId);
+                var providerEligible=preset.FreePoolProvider || p.presetId is "ollama" or "lmstudio" or "vllm";
+                var candidates=p.models
+                    .Where(m => (providerEligible || m.isFree==true) && IsLikelyWorkhorse(m))
+                    .OrderByDescending(WorkhorseScore)
+                    .ThenBy(m=>m.displayName,StringComparer.OrdinalIgnoreCase)
+                    .Take(6)
+                    .ToList();
+                foreach(var model in candidates)
+                {
+                    var key=TargetPoolStore.Id(connection,model.id);
+                    if(pool.entries.TryGetValue(key,out var existing))
+                    {
+                        existing.displayName=model.displayName;existing.free=model.isFree;existing.supportsTools=model.supportsTools;existing.contextLength=model.contextLength;
+                        existing.toolMode=model.supportsTools==false?"text":"native";existing.updatedAt=DateTimeOffset.UtcNow.ToString("O");pool.entries[key]=existing;continue;
+                    }
+                    pool.entries[key]=new TargetPoolEntry{
+                        id=key,connection=connection,model=model.id,displayName=model.displayName,enabled=true,workhorse=true,free=model.isFree,
+                        supportsTools=model.supportsTools,contextLength=model.contextLength,toolMode=model.supportsTools==false?"text":"native",
+                        source="auto-seed",rationale=$"Seeded from {preset.DisplayName} as a likely free/local bounded-work workhorse. Clanker should briefly research and prune/update this row when model availability or quota changes.",
+                        updatedAt=DateTimeOffset.UtcNow.ToString("O")
+                    };added++;
+                }
+            }
+            TargetPoolStore.SaveActive(pool);Reload(SelectedId);
+            MessageBox.Show(FindForm(),$"Seeded {added} new target-pool row(s). Existing user/Clanker choices were preserved.");
+        }
+        catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not auto-target models",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+    }
+
+    static bool IsLikelyWorkhorse(ApiDiscoveredModel model)
+    {
+        if(model.supportsTools==false)return false;
+        var id=(model.id+" "+model.displayName).ToLowerInvariant();
+        string[] reject={"embedding","embed-","rerank","whisper","speech","audio","tts","image","flux","stable-diffusion","video","moderation"};
+        if(reject.Any(id.Contains))return false;
+        if(model.contextLength.HasValue && model.contextLength.Value<16000)return false;
+        return true;
+    }
+
+    static int WorkhorseScore(ApiDiscoveredModel model)
+    {
+        var score=0;var id=(model.id+" "+model.displayName).ToLowerInvariant();
+        if(model.isFree==true)score+=8;
+        if(model.supportsTools==true)score+=8;else if(model.supportsTools is null)score+=2;
+        if(model.contextLength>=131072)score+=4;else if(model.contextLength>=32768)score+=3;else if(model.contextLength>=16000)score+=1;
+        string[] useful={"coder","code","devstral","codestral","qwen","gpt-oss","flash","instruct","llama","gemma","mistral","glm"};
+        if(useful.Any(id.Contains))score+=3;
+        if(id.Contains(":free")||id.Contains("/free")||id.Contains("auto:free"))score+=4;
+        if(id.Contains("vision")||id.Contains("vl"))score-=1;
+        return score;
     }
 
     static string SafeId(string text)
