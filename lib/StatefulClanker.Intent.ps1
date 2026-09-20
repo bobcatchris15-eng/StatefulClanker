@@ -168,7 +168,13 @@ function New-SCWorkerPrompt($Compilation) {
 function New-SCReviewPrompt($Task,$Run,$Compilation,[string]$Stage) {
     $rule=if($Stage-eq'critic'){'Check omissions, contradictions, risky assumptions, regressions, whether the worker addressed the bounded task, and especially whether it preserved current human directives plus the reconciled intent contract.'}else{'Judge acceptance criteria and compliance with current human directives plus reconciled intent from the compiled evidence and worker receipt. Do not trust the worker claim without evidence.'}
     $compiled=Get-SCPersistedCompilationText $Compilation
-    $worker=ConvertTo-SCJson ([ordered]@{runId=$Run.id;exitCode=$Run.exitCode;stdout=$Run.stdout;stderr=$Run.stderr;contextRequests=if($Run.PSObject.Properties['contextRequests']){@($Run.contextRequests)}else{@()}}) 12
+    $worker=ConvertTo-SCJson ([ordered]@{
+        runId=$Run.id;exitCode=$Run.exitCode;stdout=$Run.stdout;stderr=$Run.stderr
+        workerSessionId=if($Run.PSObject.Properties['workerSessionId']){$Run.workerSessionId}else{$null}
+        candidatePreflight=if($Run.PSObject.Properties['candidatePreflight']){$Run.candidatePreflight}else{$null}
+        candidateClaim=if($Run.PSObject.Properties['candidateClaim']){$Run.candidateClaim}else{$null}
+        contextRequests=if($Run.PSObject.Properties['contextRequests']){@($Run.contextRequests)}else{@()}
+    }) 14
     return "You are the $Stage in StatefulClanker. You did not perform the work.`r`n$rule`r`n`r`nCOMPILED RECEIPT:`r`n$compiled`r`n`r`nWORKER RECEIPT:`r`n$worker`r`n`r`nFirst non-empty line MUST be exactly VERDICT: PASS or VERDICT: FAIL. Then explain evidence briefly."
 }
 
