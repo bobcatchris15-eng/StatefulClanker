@@ -11,7 +11,7 @@ function Get-SCWorkerPolicyMachinePath {
 }
 function Get-SCWorkerPolicyProjectPath { return Get-SCPath 'worker-policy.json' }
 function Get-SCDefaultWorkerCapabilityCatalog {
-    return [ordered]@{schemaVersion=2;allow=@('builtin.*','intent.human.read','intent.normalized.read');deny=@();profiles=[ordered]@{};sources=[ordered]@{}}
+    return [ordered]@{schemaVersion=3;allow=@('builtin.*','intent.human.read','intent.normalized.read','rpk.*');deny=@();profiles=[ordered]@{};sources=[ordered]@{}}
 }
 function Read-SCWorkerPolicyJson([string]$Path,$Default=$null) {
     if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){return $Default}
@@ -20,7 +20,7 @@ function Read-SCWorkerPolicyJson([string]$Path,$Default=$null) {
 function Get-SCWorkerCapabilityCatalog {
     $path=Get-SCWorkerPolicyMachinePath;$catalog=Read-SCWorkerPolicyJson $path $null
     if($null-eq$catalog){return [pscustomobject](Get-SCDefaultWorkerCapabilityCatalog)}
-    if(-not$catalog.PSObject.Properties['allow']){Set-SCProperty $catalog 'allow' @('builtin.*','intent.human.read','intent.normalized.read')}
+    if(-not$catalog.PSObject.Properties['allow']){Set-SCProperty $catalog 'allow' @('builtin.*','intent.human.read','intent.normalized.read','rpk.*')}
     if(-not$catalog.PSObject.Properties['deny']){Set-SCProperty $catalog 'deny' @()}
     if(-not$catalog.PSObject.Properties['profiles']){Set-SCProperty $catalog 'profiles' ([pscustomobject]@{})}
     if(-not$catalog.PSObject.Properties['sources']){Set-SCProperty $catalog 'sources' ([pscustomobject]@{})}
@@ -28,7 +28,7 @@ function Get-SCWorkerCapabilityCatalog {
     return $catalog
 }
 function Save-SCWorkerCapabilityCatalog($Catalog) {
-    Set-SCProperty $Catalog 'schemaVersion' 2
+    Set-SCProperty $Catalog 'schemaVersion' 3
     if(-not$Catalog.PSObject.Properties['profiles']){Set-SCProperty $Catalog 'profiles' ([pscustomobject]@{})}
     $path=Get-SCWorkerPolicyMachinePath;$tmp=$path+'.tmp';$Catalog|ConvertTo-Json -Depth 40|Set-Content -LiteralPath $tmp -Encoding UTF8;Move-Item -LiteralPath $tmp -Destination $path -Force
 }
