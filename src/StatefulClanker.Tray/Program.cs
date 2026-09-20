@@ -1959,7 +1959,9 @@ sealed class MainForm : Form
         _tabs.TabPages.Add(BuildActivity());
         _tabs.TabPages.Add(BuildIntegrations());
         _tabs.TabPages.Add(BuildMcpImport());
-        _tabs.TabPages.Add(BuildProviders());
+        // Connection discovery + the project target pool now own inference setup.
+        // The old Providers/Endpoints & Routing page remains as compatibility code
+        // for older configs but is intentionally no longer exposed in the cockpit.
         right.Controls.Add(_tabs, 0, 1);
         shell.Controls.Add(right, 1, 0);
 
@@ -2030,7 +2032,7 @@ sealed class MainForm : Form
 
         rows.Controls.Add(topDeck, 0, 0);
         rows.Controls.Add(autofillBar, 0, 1);
-        rows.Controls.Add(Section("PROJECT ROUTING / USAGE"), 0, 2);
+        rows.Controls.Add(Section("TARGET POOL / USAGE"), 0, 2);
         rows.Controls.Add(infoGrid, 0, 3);
         rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 4);
         rows.Controls.Add(authority, 0, 5);
