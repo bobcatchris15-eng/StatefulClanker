@@ -10,6 +10,7 @@ plan capability-authoring
 summary Verify capability profile and task-local narrowing persist.
 task t-cap
 size small
+output-kind research
 title bounded research edit
 instruction Inspect intent and make one bounded change.
 capability-profile research-readonly
@@ -24,14 +25,18 @@ end
     Assert-True ([string]$task.capabilityProfile-eq'research-readonly') 'SCPLAN capability-profile was not persisted.'
     Assert-True (@($task.toolPolicy.allow)-contains'builtin.read_file') 'SCPLAN tool-allow was not persisted.'
     Assert-True (@($task.toolPolicy.deny)-contains'builtin.run_command') 'SCPLAN tool-deny was not persisted.'
+    Assert-True ([string]$task.outputKind-eq'research') 'SCPLAN output-kind was not persisted.'
 
-    & $harness task add -TaskId t-cli -Title 'CLI capability task' -Instruction 'Exercise CLI task authoring.' -CapabilityProfile coding -ToolAllow 'builtin.read_file' -ToolDeny 'mcp.*'|Out-Null
+    & $harness task add -TaskId t-cli -Title 'CLI capability task' -Instruction 'Exercise CLI task authoring.' -OutputKind diagnosis -CapabilityProfile coding -ToolAllow 'builtin.read_file' -ToolDeny 'mcp.*'|Out-Null
     $cliTask=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\t-cli.json')|ConvertFrom-Json
     Assert-True ([string]$cliTask.capabilityProfile-eq'coding') 'CLI capability profile was not persisted.'
     Assert-True (@($cliTask.toolPolicy.deny)-contains'mcp.*') 'CLI task-local deny was not persisted.'
+    Assert-True ([string]$cliTask.outputKind-eq'diagnosis') 'CLI OutputKind was not persisted.'
 
     . (Join-Path $repo 'lib\StatefulClanker.Core.ps1');. (Join-Path $repo 'lib\StatefulClanker.Context.ps1');. (Join-Path $repo 'lib\StatefulClanker.Plan.ps1');. (Join-Path $repo 'lib\StatefulClanker.CapabilityTasks.ps1');Set-SCRoots $temp $temp
     $before=Get-SCTaskDefinitionHash $task;$task.toolPolicy.deny=@('builtin.run_command','mcp.*');$after=Get-SCTaskDefinitionHash $task
     Assert-True ($before-ne$after) 'Changing task-local capability policy must change the task definition hash.'
+    $beforeKind=$after;$task.outputKind='change';$afterKind=Get-SCTaskDefinitionHash $task
+    Assert-True ($beforeKind-ne$afterKind) 'Changing output-kind must change the task definition hash.'
     Write-Host 'PASS: SCPLAN/CLI capability profiles and task-local narrowing are first-class task semantics.'
 } finally {if((Get-Location).Path-eq$temp){Pop-Location};Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue}
