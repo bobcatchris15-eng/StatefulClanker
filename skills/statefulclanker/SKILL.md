@@ -16,9 +16,9 @@ Priorities, in order:
 2. **Keep the human accurately informed about meaningful project-state changes.**
 3. **Create or revise durable semantic work structure.**
 4. **Delegate implementation and review to StatefulClanker workers.**
-5. **Diagnose orchestration failures without bypassing authority, review, or freshness gates.**
+5. **Diagnose and actively recover orchestration failures before escalating to the human.**
 
-Do not absorb implementation work merely because the conversational model can edit files. If the requested change belongs to a StatefulClanker-managed project, prefer expressing it as durable directives, Intent, plan, and tasks so the managed system remains the source of truth.
+Normally delegate implementation through StatefulClanker so durable tasks and receipts remain the source of truth. During a control-plane recovery, however, do not merely narrate a stuck graph: inspect the actual artifacts and review evidence, repair implementation or task/graph metadata when the failure is mechanical, and use the audited recovery transitions when appropriate. Human authority and unresolved Intent remain hard boundaries.
 
 The central invariant is:
 
@@ -166,9 +166,11 @@ If the prior cursor is unavailable, use the safest available snapshot/history, r
 
 Surface:
 
-- `human_required` immediately;
-- `attention` events when they affect progress, validity, failures, holds, retries, invalidation, or accepted milestones;
+- `human_required` when investigation confirms a genuine unresolved human-authority/Intent decision; formulate the smallest exact question that blocks safe progress;
+- `attention` events by investigating and acting on recoverable failures, holds, retries, invalidation, recovery requests, or accepted milestones rather than merely reporting them;
 - routine `fyi` events in batches or omit them unless useful.
+
+`autofill.stalled`, `task.plan_repair_required`, exhausted attempts, and repeated critic/validator rejection are recovery signals first. Read `task_recovery_context` and attempt autonomous repair before asking the human.
 
 A lost subscription does not imply no project changes occurred.
 
@@ -438,8 +440,11 @@ Tool availability can vary by protocol/version. Prefer discovery/current MCP ins
 - `task_list/show/add` — inspect/add bounded work.
 - `task_retry` — explicitly retry/reopen with normal invalidation/freshness semantics.
 - `task_block` — stop wrong/unsafe work and preserve control-plane truth.
+- `task_recovery_context` — read the stalled task plus latest compilation/run/proposal/critic/validator/progress evidence in one recovery dossier.
+- `task_repair` — audited control-plane repair of a stalled non-human-gated task definition/graph; resets exhausted retry/reviewer counters and reopens readiness.
+- `task_recover_complete` — last-resort audited recovery when concrete current evidence proves the work is already correct despite a broken/stale review loop.
 
-Do not manually complete tasks merely to unblock the graph unless the human explicitly intends to exercise a human-authority shortcut and the server is configured to permit it.
+Do not use the human-authority `task_complete` merely to unblock the graph. `task_recover_complete` is a separate control-plane authority path: it requires concrete evidence, refuses active/human-gated tasks, and must never be used to invent or override unresolved human intent.
 
 ## Execution
 
@@ -818,6 +823,22 @@ Treat the failed observable condition as evidence.
 Fix implementation/task/environment or clarify the criterion.
 
 Do not downgrade criteria after failure unless the human requirement itself changed.
+
+## Manual intervention / stalled graph
+
+Treat "manual intervention required" as **control-plane intervention required first**, unless the stall is already known to be an explicit human gate or unresolved Intent question.
+
+Recovery order:
+
+1. Read `task_recovery_context` for each stalled task.
+2. Inspect the actual current artifact/tests and compare them with current Human Directives, reconciled Intent, task scope, acceptance, retrieval/dependencies, and the reviewer evidence.
+3. If implementation is wrong, repair it or create/retry appropriately bounded work.
+4. If task/graph metadata is wrong or stale, use `task_repair` with a written diagnosis and concrete evidence.
+5. If the work is demonstrably already correct and the remaining failure is reviewer/bookkeeping error, use `task_recover_complete` only as a last resort, citing the evidence.
+6. Recheck downstream readiness and trigger/resume Autofill.
+7. Ask the human only if safe recovery reaches a genuine missing preference, design decision, authority conflict, explicit human gate, or other decision the control plane cannot legitimately make.
+
+A repeated validator/critic "no" is evidence to investigate, not proof that correct work must be thrown away, and not by itself a reason to interrupt the human.
 
 ## Context request
 
