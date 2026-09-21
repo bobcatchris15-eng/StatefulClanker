@@ -80,3 +80,11 @@ run as final verification.
 - Relaxing project-root, path traversal, mutation authority, or other
   operation-level safety validation.
 - Changing the already-pending target-pool overview layout work.
+
+## Delivery
+
+After source verification, ship this as patch version `0.8.13`: commit the
+removal, push `main` and an annotated `v0.8.13` tag to the configured remote,
+build the Windows installer, create the matching hosted release with that
+installer attached, and install the installer on this machine. The release
+must only be published after the test suite and tray build pass.
