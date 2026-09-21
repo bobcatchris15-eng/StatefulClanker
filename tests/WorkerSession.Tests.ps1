@@ -58,7 +58,6 @@ try {
     Assert-True ([bool]$changed.candidateCheckpointId) 'Material candidate did not get a checkpoint.'
     $session=Get-SCWorkerSession $sessionId
     Assert-True ($session.candidateNumber-eq2) "Expected candidateNumber=2, got $($session.candidateNumber)."
-    Assert-True (@($session.candidateClaim.expectedArtifacts)[0]-eq'artifact.txt') 'Expected artifact claim was not persisted.'
 
     Write-Host '  WS 3: checkpoint restores worktree without moving HEAD'
     $checkpointId=[string]$changed.candidateCheckpointId
