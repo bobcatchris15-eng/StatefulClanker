@@ -23,6 +23,11 @@ foreach($file in $runtimeFiles){
 $cliSource=[IO.File]::ReadAllText((Join-Path $repo 'StatefulClanker.ps1'))
 Assert-True ($cliSource-notmatch"'evil'") 'Legacy evil CLI route remains in StatefulClanker.ps1.'
 
+$traySource=[IO.File]::ReadAllText((Join-Path $repo 'src\StatefulClanker.Tray\Program.cs'))
+foreach($symbol in @('IsEvil','SetEvil','EvilMode','clanker.evil','clanker.evil.cleared')){
+    Assert-True ($traySource-notmatch([regex]::Escape($symbol))) "Legacy evil-mode tray symbol '$symbol' remains in Program.cs."
+}
+
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('sc-evil-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp|Out-Null
 try{
