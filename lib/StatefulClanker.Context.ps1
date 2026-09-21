@@ -39,11 +39,16 @@ function New-SCCompilation($Task) {
     $readSet=[ordered]@{projectGoalHash=Get-SCHashString ([string]$state.goal);activePlanId=$state.activePlanId;planIntentHash=$planIntentHash;directionRevision=$state.directionRevision;intentRevision=[int]$intent.revision;intentHash=$intentHash;executionPolicyHash=$policyHash;taskId=$Task.id;taskControlRevision=$taskControlRevision;taskDefinitionHash=Get-SCTaskDefinitionHash $Task;dependencies=@($dependencies|ForEach-Object{[ordered]@{id=$_.id;status=$_.status;definitionHash=$_.definitionHash;latestRunId=$_.latestRunId;latestValidationId=$_.latestValidationId}});files=@($retrieved.items|ForEach-Object{[ordered]@{path=$_.path;sha256=$_.sha256;authority=$_.authority}})}
     $inputFingerprint=Get-SCHashString (ConvertTo-SCJson $readSet 20)
     $contract=@('Perform only this bounded task.','The authoritative intent contract is read-only to workers. Never edit, replace, reinterpret away, or weaken it.','If task instructions conflict with the intent contract, emit INTENT_CONFLICT: <specific conflict> and stop rather than choosing your own interpretation.','If the intent contract is ambiguous or insufficient for a material choice, emit INTENT_QUESTION: <specific question> and stop rather than guessing.','Treat durable state and project files as authoritative.','Report files changed, commands run, failures, and unresolved risks.','Do not claim verification you did not perform.','If required state or evidence is missing, emit CONTEXT_REQUEST: <specific missing state> rather than guessing.')
-        $latestFeedback = $null
-    if ($Task.PSObject.Properties['latestCritiqueId'] -and $Task.latestCritiqueId) {
+    $latestFeedback = $null
+    if ($Task.PSObject.Properties['latestValidationId'] -and $Task.latestValidationId) {
+        try {
+            $v = Read-SCJson (Get-SCPath ("validations/{0}.json" -f $Task.latestValidationId))
+            if ($v) { $latestFeedback = [ordered]@{ source='validator'; verdict = $v.verdict; feedback = $v.stdout } }
+        } catch {}
+    } elseif ($Task.PSObject.Properties['latestCritiqueId'] -and $Task.latestCritiqueId) {
         try {
             $c = Read-SCJson (Get-SCPath ("critiques/{0}.json" -f $Task.latestCritiqueId))
-            if ($c) { $latestFeedback = [ordered]@{ verdict = $c.verdict; feedback = $c.stdout } }
+            if ($c) { $latestFeedback = [ordered]@{ source='legacy-critic'; verdict = $c.verdict; feedback = $c.stdout } }
         } catch {}
     }
     $taskRole=if($Task.PSObject.Properties['role']-and$Task.role){[string]$Task.role}else{'worker'}
