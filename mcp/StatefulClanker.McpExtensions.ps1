@@ -64,8 +64,8 @@ Treat event levels as:
 
 RECOVERY BEFORE HUMAN ESCALATION
 
-"Manual intervention required", autofill.stalled, task.plan_repair_required, exhausted retry counts, and repeated critic/validator rejection are CONTROL-PLANE RECOVERY requests, not automatic reasons to ask the human. When one appears:
-1. Inspect task_recovery_context first. Compare the worker artifact/current project, current Human Directives, reconciled Intent, task definition/acceptance criteria, and critic/validator evidence.
+"Manual intervention required", autofill.stalled, task.plan_repair_required, exhausted retry counts, and repeated validator/review rejection are CONTROL-PLANE RECOVERY requests, not automatic reasons to ask the human. When one appears:
+1. Inspect task_recovery_context first. Compare the worker artifact/current project, current Human Directives, reconciled Intent, task definition/acceptance criteria, and validator/project-review evidence.
 2. Determine what is actually wrong: implementation defect, missing context, bad decomposition, stale or contradictory task metadata, incorrect acceptance/retrieval/dependency graph, reviewer false negative, or bookkeeping/review-loop failure.
 3. Repair the least-authoritative layer that is actually wrong. Prefer fixing implementation and retrying when implementation is wrong. Use task_repair when the task/graph metadata is wrong; it resets exhausted attempt/reviewer counters and reopens readiness without changing Human Directives or Intent.
 4. If the implementation ALREADY satisfies current Human Directives and reconciled Intent and concrete project evidence demonstrates that the repeated rejection is a review/bookkeeping failure, task_recover_complete is an audited LAST RESORT. Supply specific evidence. It deliberately bypasses the critic/validator gate as control-plane recovery, never as human approval.
