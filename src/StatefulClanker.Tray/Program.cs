@@ -404,11 +404,10 @@ static class Inspector
                 var type = "Worker";
                 string? tidStr = null;
                 if (r.TryGetProperty("taskId", out var tidProp) && tidProp.ValueKind == JsonValueKind.String) tidStr = tidProp.GetString();
-                // Project-level reviews run through the same 'critic'/'validator' stages as
-                // per-task review, but their pseudo-task id is prefixed "review-" (New-SCId
-                // 'review' in ProjectReview.ps1). Only the project-level critic stays red;
-                // everything else (per-task critic, per-task validator, project validator)
-                // is the amber "Validator" lamp.
+                // Ordinary task completion uses the validator stage only. Project-level
+                // reviews may still run both critic and validator; their pseudo-task id is
+                // prefixed "review-" (New-SCId 'review' in ProjectReview.ps1). Only that
+                // project-level critic gets the distinct red "Project Critic" lamp.
                 var isProjectReview = !string.IsNullOrEmpty(tidStr) && tidStr.StartsWith("review-", StringComparison.OrdinalIgnoreCase);
                 if (r.TryGetProperty("stage", out var st) && st.ValueKind == JsonValueKind.String)
                 {
