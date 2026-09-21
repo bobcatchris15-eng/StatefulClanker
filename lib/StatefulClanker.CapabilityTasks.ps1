@@ -142,6 +142,7 @@ function Repair-SCTaskFromRecovery([string]$Id,[string]$PayloadPath,[string]$Why
     $previousAttempts=if($task.PSObject.Properties['attemptCount']){[int]$task.attemptCount}else{0}
     Set-SCProperty $task 'attemptCount' 0
     Set-SCProperty $task 'criticRejectCount' 0
+    Set-SCProperty $task 'validatorRejectCount' 0
     Set-SCProperty $task 'activeWorkerSessionId' $null
     Set-SCProperty $task 'blockReason' $null
     Set-SCProperty $task 'status' 'pending'
