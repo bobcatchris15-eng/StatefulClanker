@@ -142,7 +142,7 @@ Independent work need not stop unless it depends on the changed authority, but n
 
 ## Control-plane recovery flow
 
-Mechanical stalls are deliberately different from human-authority ambiguity. An exhausted retry count, repeated critic/validator rejection, `task.plan_repair_required`, or `autofill.stalled` is emitted as an `attention` recovery request and may be injected into the live conversational session.
+Mechanical stalls are deliberately different from human-authority ambiguity. An exhausted retry count, repeated validator/review rejection, `task.plan_repair_required`, or `autofill.stalled` is emitted as an `attention` recovery request and may be injected into the live conversational session.
 
 The recovery path is:
 
