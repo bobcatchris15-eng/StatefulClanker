@@ -64,5 +64,8 @@
   "mcp": {
     "allowHumanAuthorityTools": false
   },
-  "perTaskReviewPolicy": "validator-only; criticEnabled is retained for legacy config compatibility and is not an ordinary task gate"
+  "perTaskReviewPolicy": "validator-only; criticEnabled is retained for legacy config compatibility and is not an ordinary task gate",
+  "defaultProvider": null,
+  "criticProvider": null,
+  "validatorProvider": null
 }
