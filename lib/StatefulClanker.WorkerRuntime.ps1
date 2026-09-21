@@ -281,18 +281,24 @@ function New-SCDirectWorkerSystemPrompt([string]$ToolMode,$Registry) {
 function Get-SCWorkerMaxSteps($Connection,$Task,[string]$Stage='worker') {
     $cfg=try{Get-SCConfig}catch{$null}
     $taskSize=if($Task -and $Task.PSObject.Properties['size'] -and $Task.size){[string]$Task.size.ToLowerInvariant()}else{'small'}
+    $hardCap=1024
+    # Project-level settings are explicit operator policy and may deliberately lower the limit.
     if($cfg -and $cfg.PSObject.Properties['maxStepsBySize'] -and $cfg.maxStepsBySize.PSObject.Properties[$taskSize]){
-        return [Math]::Min(150,[Math]::Max(1,[int]$cfg.maxStepsBySize.$taskSize))
+        return [Math]::Min($hardCap,[Math]::Max(1,[int]$cfg.maxStepsBySize.$taskSize))
     }
     if($cfg -and $cfg.PSObject.Properties['maxSteps'] -and [int]$cfg.maxSteps -gt 0){
-        return [Math]::Min(150,[Math]::Max(1,[int]$cfg.maxSteps))
+        return [Math]::Min($hardCap,[Math]::Max(1,[int]$cfg.maxSteps))
     }
-    if($Connection -and $Connection.PSObject.Properties['maxSteps'] -and [int]$Connection.maxSteps -gt 0){
-        $connSteps=[int]$Connection.maxSteps
-        if($taskSize-eq'large' -and $connSteps -lt 60){return 60}
-        if($taskSize-eq'medium' -and $connSteps -lt 40){return 40}
-        return [Math]::Min(150,[Math]::Max(1,$connSteps))
+    $connSteps=0
+    if($Connection -and $Connection.PSObject.Properties['maxSteps'] -and [int]$Connection.maxSteps -gt 0){$connSteps=[int]$Connection.maxSteps}
+    if($Stage-eq'run'){
+        # Old connection profiles defaulted to 24. Cold implementation workers now get
+        # a much larger floor so the harness, rather than an arbitrary turn count, is
+        # normally what ends the session.
+        $floor=switch($taskSize){'tiny'{128};'small'{128};'medium'{192};'large'{256};default{128}}
+        return [Math]::Min($hardCap,[Math]::Max($floor,$connSteps))
     }
+    if($connSteps-gt0){return [Math]::Min($hardCap,[Math]::Max(1,$connSteps))}
     switch($taskSize){
         'tiny'{return 16}
         'small'{return 24}
@@ -472,6 +478,7 @@ function New-SCWorkerSession([string]$SessionId,$Task,$Compilation,[string]$Prom
         inputFingerprint=if($Compilation){[string]$Compilation.inputFingerprint}else{$null};
         toolMode=$ToolMode;candidateNumber=0;noArtifactCount=0;mutationToolCalls=0;turn=0;
         createdAt=$now;updatedAt=$now;completedAt=$null;
+        pinnedEndpoint=$null;pinnedConnection=$null;pinnedModel=$null;
         providerHistory=@();appliedContinuations=@();messages=@(
             [ordered]@{role='system';content=(New-SCDirectWorkerSystemPrompt $ToolMode $Registry)},
             [ordered]@{role='user';content=$Prompt}
@@ -490,6 +497,41 @@ function Add-SCWorkerSessionProvider([string]$SessionId,[string]$Endpoint,[strin
     $history=@($s.providerHistory)
     $history+=,[ordered]@{ts=[datetimeoffset]::UtcNow.ToString('o');endpoint=$Endpoint;connection=$Connection;model=$Model}
     Set-SCProperty $s 'providerHistory' @($history);Save-SCWorkerSession $s
+}
+function Get-SCWorkerSessionRoutePin([string]$SessionId) {
+    $s=Get-SCWorkerSession $SessionId
+    if($null-eq$s-or-not$s.PSObject.Properties['pinnedEndpoint']-or[string]::IsNullOrWhiteSpace([string]$s.pinnedEndpoint)){return $null}
+    return [pscustomobject][ordered]@{
+        endpoint=[string]$s.pinnedEndpoint
+        connection=if($s.PSObject.Properties['pinnedConnection']){[string]$s.pinnedConnection}else{$null}
+        model=if($s.PSObject.Properties['pinnedModel']){[string]$s.pinnedModel}else{$null}
+    }
+}
+function Set-SCWorkerSessionRoutePin([string]$SessionId,[string]$Endpoint,[string]$Connection,[string]$Model) {
+    if([string]::IsNullOrWhiteSpace($SessionId)-or[string]::IsNullOrWhiteSpace($Endpoint)){return}
+    $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return}
+    $old=if($s.PSObject.Properties['pinnedEndpoint']){[string]$s.pinnedEndpoint}else{''}
+    $oldConnection=if($s.PSObject.Properties['pinnedConnection']){[string]$s.pinnedConnection}else{''}
+    $oldModel=if($s.PSObject.Properties['pinnedModel']){[string]$s.pinnedModel}else{''}
+    if($old-and($old-ne$Endpoint-or($oldConnection-and$oldConnection-ne$Connection)-or($oldModel-and$oldModel-ne$Model))){
+        throw "Worker session $SessionId is pinned to $old ($oldConnection / $oldModel) and cannot resume on $Endpoint ($Connection / $Model)."
+    }
+    if(-not$old){
+        Set-SCProperty $s 'pinnedEndpoint' $Endpoint
+        Set-SCProperty $s 'pinnedConnection' $Connection
+        Set-SCProperty $s 'pinnedModel' $Model
+        Save-SCWorkerSession $s
+        Add-SCEvent 'worker.session_route_pinned' "Pinned worker session $SessionId to $Endpoint / $Model." @{sessionId=$SessionId;taskId=$s.taskId;endpoint=$Endpoint;connection=$Connection;model=$Model}
+    }
+}
+function Get-SCReusableWorkerSessionId($Task) {
+    if($null-eq$Task-or-not$Task.PSObject.Properties['latestWorkerSessionId']-or[string]::IsNullOrWhiteSpace([string]$Task.latestWorkerSessionId)){return $null}
+    $id=[string]$Task.latestWorkerSessionId
+    $s=Get-SCWorkerSession $id
+    if($null-eq$s-or[string]$s.taskId-ne[string]$Task.id){return $null}
+    $status=if($s.PSObject.Properties['status']){[string]$s.status}else{'active'}
+    if(@('completed','stale','no-artifact','plan-repair','failed','context-fault')-contains$status){return $null}
+    return $id
 }
 function Add-SCWorkerSessionContinuation([string]$SessionId,[string]$Text) {
     if([string]::IsNullOrWhiteSpace($Text)){return}
@@ -623,6 +665,14 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
     if($Stage-eq'run' -and $WorkerSessionId){
         $session=New-SCWorkerSession $WorkerSessionId $Task $Compilation $Prompt $toolMode $registry
         if([string]$session.toolMode-ne$toolMode){throw "Worker session $WorkerSessionId uses toolMode '$($session.toolMode)' and cannot resume on '$toolMode' without transcript conversion."}
+        if($Compilation -and $session.PSObject.Properties['inputFingerprint'] -and [string]$session.inputFingerprint-ne[string]$Compilation.inputFingerprint){
+            $refresh="REFRESHED COMPILED TASK CONTEXT. This packet supersedes older task-context messages while preserving the work and reasoning already in this session:"+[Environment]::NewLine+$Prompt
+            Add-SCWorkerSessionContinuation $WorkerSessionId $refresh
+            $session=Get-SCWorkerSession $WorkerSessionId
+            Set-SCProperty $session 'compilationId' ([string]$Compilation.id)
+            Set-SCProperty $session 'inputFingerprint' ([string]$Compilation.inputFingerprint)
+        }
+        Set-SCProperty $session 'status' 'active';Save-SCWorkerSession $session
         Add-SCWorkerSessionContinuation $WorkerSessionId $ContinuationMessage
         if($ProviderRecord){Add-SCWorkerSessionProvider $WorkerSessionId ([string]$ProviderRecord.name) ([string]$ProviderRecord.config.connection) ([string]$ProviderRecord.config.model)}
         $session=Get-SCWorkerSession $WorkerSessionId
@@ -634,6 +684,7 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
     $protocol=Get-SCConnectionProtocol $Connection
     for($step=1;$step-le$maxSteps;$step++){
         $response=Invoke-SCApiChat $Connection $messages $tools $toolMode
+        if($WorkerSessionId -and $ProviderRecord){Set-SCWorkerSessionRoutePin $WorkerSessionId ([string]$ProviderRecord.name) ([string]$ProviderRecord.config.connection) ([string]$ProviderRecord.config.model)}
         Add-SCApiUsage $UsageAccumulator $response
         $m=Get-SCAssistantMessage $response $protocol
         if($toolMode-eq'text'){
@@ -765,12 +816,25 @@ function Invoke-SCRouteDoctor([int]$MaxProbes=1) {
 function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null) {
     try{Invoke-SCRouteDoctor 1|Out-Null}catch{}
     $history=@()
-    $candidates=@(Get-SCProviderCandidates $Task $ProviderOverride $Stage)
+    $routeOverride=$ProviderOverride;$pinnedEndpoint=$null
+    if($Stage-eq'run' -and $WorkerSessionId){
+        $pin=Get-SCWorkerSessionRoutePin $WorkerSessionId
+        if($pin){
+            $pinnedEndpoint=[string]$pin.endpoint
+            if($ProviderOverride -and [string]$ProviderOverride-ne$pinnedEndpoint){throw "Worker session $WorkerSessionId is already pinned to '$pinnedEndpoint'; provider override '$ProviderOverride' would break session continuity."}
+            $routeOverride=$pinnedEndpoint
+        }
+    }
+    $candidates=@()
+    try{$candidates=@(Get-SCProviderCandidates $Task $routeOverride $Stage)}catch{
+        if(-not$pinnedEndpoint){throw}
+        $history+=,[ordered]@{endpoint=$pinnedEndpoint;exitCode=-3;failureClass='session_route_unavailable';scope='endpoint';error=$_.Exception.Message}
+    }
     if($candidates.Count-eq0){
         $next=Get-SCNextRouteAvailability
-        $message=if($next){"All eligible inference endpoints are cooling down until at least $($next.ToLocalTime().ToString('o'))."}else{'No eligible inference endpoint is available.'}
+        $message=if($pinnedEndpoint){"Worker session $WorkerSessionId is pinned to '$pinnedEndpoint', which is unavailable. The session will not migrate to another endpoint."}elseif($next){"All eligible inference endpoints are cooling down until at least $($next.ToLocalTime().ToString('o'))."}else{'No eligible inference endpoint is available.'}
         $now=(Get-Date).ToUniversalTime().ToString('o')
-        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$null;endpoint=$null;compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr=$message;routeDeferred=$true;retryAfter=if($next){$next.ToString('o')}else{$null};routeAttempts=0;routeHistory=@()}
+        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$pinnedEndpoint;endpoint=$pinnedEndpoint;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId);compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr=$message;routeDeferred=$true;retryAfter=if($next){$next.ToString('o')}else{$null};routeAttempts=0;routeHistory=@($history)}
     }
     $last=$null
     foreach($record in $candidates){
