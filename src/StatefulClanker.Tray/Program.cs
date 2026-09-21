@@ -35,6 +35,7 @@ sealed class AppSettings
     // here so every major pane is actually draggable without snapping back on restart.
     public int LeftRailWidth { get; set; } = 235;
     public int LeftProjectHeight { get; set; } = 330;
+    public int LeftTargetPoolHeight { get; set; } = 180;
     public int RightRailWidth { get; set; } = 265;
     public int OverviewInfoHeight { get; set; } = 285;
     public int OverviewStatusWidth { get; set; } = 255;
@@ -2011,13 +2012,23 @@ sealed class MainForm : Form
         var explorer = Btn("Open in Explorer", 210); explorer.Dock = DockStyle.Fill; explorer.Click += (_, _) => OpenExplorer(); projectPanel.Controls.Add(explorer, 0, 3);
         leftBody.Panel1.Controls.Add(projectPanel);
 
+        var leftTargetSplit = new QuietSplitContainer(Orientation.Horizontal)
+        {
+            Panel1MinSize = 110,
+            Panel2MinSizePending = 80,
+            ResetDistance = 180
+        };
+        var targetPanel = BuildTargetPoolPanel();
+        leftTargetSplit.Panel1.Controls.Add(targetPanel);
+
         var recentPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(0), Padding = new Padding(0, 4, 0, 0), BackColor = Theme.Back };
         recentPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         recentPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         recentPanel.Controls.Add(Section("RECENT ACTIVITY"), 0, 0);
         _recentActivity.OpenActivityRequested += () => _tabs.SelectedIndex = 1;
         recentPanel.Controls.Add(_recentActivity, 0, 1);
-        leftBody.Panel2.Controls.Add(recentPanel);
+        leftTargetSplit.Panel2.Controls.Add(recentPanel);
+        leftBody.Panel2.Controls.Add(leftTargetSplit);
         leftRoot.Controls.Add(leftBody, 0, 1);
         shell.Panel1.Controls.Add(leftRoot);
 
@@ -2079,11 +2090,13 @@ sealed class MainForm : Form
 
         TrackSplitter(shell, () => _settings.LeftRailWidth = shell.SplitterDistance);
         TrackSplitter(leftBody, () => _settings.LeftProjectHeight = leftBody.SplitterDistance);
+        TrackSplitter(leftTargetSplit, () => _settings.LeftTargetPoolHeight = leftTargetSplit.SplitterDistance);
         TrackSplitter(workspace, () => _settings.RightRailWidth = Math.Max(workspace.Panel2MinSize, workspace.Width - workspace.SplitterDistance - workspace.SplitterWidth));
         RestoreSplitterWhenShown(() =>
         {
             shell.RestoreDistance(_settings.LeftRailWidth);
             leftBody.RestoreDistance(_settings.LeftProjectHeight);
+            leftTargetSplit.RestoreDistance(_settings.LeftTargetPoolHeight);
             workspace.RestorePanel2Width(_settings.RightRailWidth);
         });
     }
@@ -2127,30 +2140,9 @@ sealed class MainForm : Form
         _autofillStatus.AutoSize = true; _autofillStatus.Margin = new Padding(12, 8, 4, 0); _autofillStatus.Font = new Font("Cascadia Mono", 8.5f, FontStyle.Bold); _autofillStatus.ForeColor = Theme.Muted;
         autofillBar.Controls.AddRange(new Control[] { _btnAutofillToggle, _btnAutofillPause, _btnAutofillTrigger, maxLbl, _numMaxConcurrent, _autofillStatus });
 
-        var poolSplit = new QuietSplitContainer(Orientation.Vertical)
-        {
-            Panel1MinSize = 180,
-            Panel2MinSizePending = 180,
-            ResetDistance = 315
-        };
-
-        var providersCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(8), Margin = new Padding(0, 0, 3, 0) };
-        var targetRows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
-        targetRows.RowStyles.Add(new RowStyle(SizeType.Absolute, 22)); targetRows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        _overviewTargetSummary.Dock = DockStyle.Fill; _overviewTargetSummary.Font = new Font("Segoe UI Semibold", 8f, FontStyle.Bold); _overviewTargetSummary.ForeColor = Theme.Muted;
-        _overviewTargets.Dock = DockStyle.Fill; _overviewTargets.AllowUserToAddRows = false; _overviewTargets.RowHeadersVisible = false; _overviewTargets.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _overviewTargets.MultiSelect = false; _overviewTargets.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _overviewTargets.BackgroundColor = Theme.Surface; _overviewTargets.BorderStyle = BorderStyle.None;
-        _overviewTargets.Columns.Add(new DataGridViewCheckBoxColumn { Name = "enabled", HeaderText = "On", Width = 42, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
-        _overviewTargets.Columns.Add("connection", "Connection"); _overviewTargets.Columns.Add("model", "Model");
-        foreach (DataGridViewColumn column in _overviewTargets.Columns) if (column.Name != "enabled") column.ReadOnly = true;
-        _overviewTargets.CurrentCellDirtyStateChanged += (_, _) => { if (_overviewTargets.IsCurrentCellDirty && _overviewTargets.CurrentCell?.ColumnIndex == 0) _overviewTargets.CommitEdit(DataGridViewDataErrorContexts.Commit); };
-        _overviewTargets.CellValueChanged += (_, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == 0 && _overviewTargets.Rows[e.RowIndex].Tag is TargetPoolEntry target) ToggleOverviewTarget(target, Convert.ToBoolean(_overviewTargets.Rows[e.RowIndex].Cells[0].Value)); };
-        targetRows.Controls.Add(_overviewTargetSummary, 0, 0); targetRows.Controls.Add(_overviewTargets, 0, 1); providersCard.Controls.Add(targetRows);
-
         var usageCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(3, 0, 0, 0) };
         _usage.Dock = DockStyle.Fill; _usage.Multiline = true; _usage.ReadOnly = true; _usage.ScrollBars = ScrollBars.Vertical; _usage.WordWrap = true; _usage.BorderStyle = BorderStyle.None; _usage.Font = new Font("Cascadia Mono", 8.25f);
         usageCard.Controls.Add(_usage);
-        poolSplit.Panel1.Controls.Add(providersCard);
-        poolSplit.Panel2.Controls.Add(usageCard);
 
         var authority = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(12) };
         _intent.Dock = DockStyle.Top; _intent.Height = 24; _intent.ForeColor = Theme.Accent; _intent.Font = new Font("Cascadia Mono", 9, FontStyle.Bold);
@@ -2159,8 +2151,8 @@ sealed class MainForm : Form
 
         rows.Controls.Add(topDeck, 0, 0);
         rows.Controls.Add(autofillBar, 0, 1);
-        rows.Controls.Add(Section("TARGET POOL / USAGE"), 0, 2);
-        rows.Controls.Add(poolSplit, 0, 3);
+        rows.Controls.Add(Section("USAGE"), 0, 2);
+        rows.Controls.Add(usageCard, 0, 3);
         rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 4);
         rows.Controls.Add(authority, 0, 5);
         infoScroll.Controls.Add(rows);
@@ -2172,14 +2164,28 @@ sealed class MainForm : Form
 
         TrackSplitter(overviewSplit, () => _settings.OverviewInfoHeight = overviewSplit.SplitterDistance);
         TrackSplitter(topDeck, () => _settings.OverviewStatusWidth = topDeck.SplitterDistance);
-        TrackSplitter(poolSplit, () => _settings.OverviewProviderWidth = poolSplit.SplitterDistance);
         RestoreSplitterWhenShown(() =>
         {
             overviewSplit.RestoreDistance(_settings.OverviewInfoHeight);
             topDeck.RestoreDistance(_settings.OverviewStatusWidth);
-            poolSplit.RestoreDistance(_settings.OverviewProviderWidth);
         });
         return p;
+    }
+
+    Control BuildTargetPoolPanel()
+    {
+        var card = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(8), Margin = new Padding(0, 0, 0, 4) };
+        var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 22)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _overviewTargetSummary.Dock = DockStyle.Fill; _overviewTargetSummary.Font = new Font("Segoe UI Semibold", 8f, FontStyle.Bold); _overviewTargetSummary.ForeColor = Theme.Muted; _overviewTargetSummary.Text = "TARGET POOL";
+        _overviewTargets.Dock = DockStyle.Fill; _overviewTargets.AllowUserToAddRows = false; _overviewTargets.RowHeadersVisible = false; _overviewTargets.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _overviewTargets.MultiSelect = false; _overviewTargets.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _overviewTargets.BackgroundColor = Theme.Surface; _overviewTargets.BorderStyle = BorderStyle.None;
+        _overviewTargets.Columns.Add(new DataGridViewCheckBoxColumn { Name = "enabled", HeaderText = "On", Width = 42, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
+        _overviewTargets.Columns.Add("connection", "Connection"); _overviewTargets.Columns.Add("model", "Model");
+        foreach (DataGridViewColumn column in _overviewTargets.Columns) if (column.Name != "enabled") column.ReadOnly = true;
+        _overviewTargets.CurrentCellDirtyStateChanged += (_, _) => { if (_overviewTargets.IsCurrentCellDirty && _overviewTargets.CurrentCell?.ColumnIndex == 0) _overviewTargets.CommitEdit(DataGridViewDataErrorContexts.Commit); };
+        _overviewTargets.CellValueChanged += (_, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == 0 && _overviewTargets.Rows[e.RowIndex].Tag is TargetPoolEntry target) ToggleOverviewTarget(target, Convert.ToBoolean(_overviewTargets.Rows[e.RowIndex].Cells[0].Value)); };
+        rows.Controls.Add(_overviewTargetSummary, 0, 0); rows.Controls.Add(_overviewTargets, 0, 1); card.Controls.Add(rows);
+        return card;
     }
 
     TabPage BuildActivity()
