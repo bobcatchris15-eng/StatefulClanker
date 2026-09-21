@@ -10,13 +10,13 @@ function Get-SCRpkHost {
     return $null
 }
 function Invoke-SCRpk([string]$Command,[hashtable]$Arguments=@{},[switch]$AllowUnavailable) {
-    $host=Get-SCRpkHost
-    if($null-eq$host){if($AllowUnavailable){return $null};throw 'RPK native host unavailable. Use an installed build or install the .NET 8 SDK for a source checkout.'}
-    $args=@($host.prefix)
+    $rpkHost=Get-SCRpkHost
+    if($null-eq$rpkHost){if($AllowUnavailable){return $null};throw 'RPK native host unavailable. Use an installed build or install the .NET 8 SDK for a source checkout.'}
+    $args=@($rpkHost.prefix)
     if($args.Count-eq0){$args+='--rpk'}
     $args+=$Command;$args+='--project';$args+=(Get-SCRoot)
     foreach($key in $Arguments.Keys){$value=$Arguments[$key];if($null-eq$value){$args+='--'+$key;$args+=[string]$value}}
-    $psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=$host.file;$psi.WorkingDirectory=Get-SCRoot;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
+    $psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=$rpkHost.file;$psi.WorkingDirectory=Get-SCRoot;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
     foreach($arg in $args){[void]$psi.ArgumentList.Add([string]$arg)}
     $p=New-Object Diagnostics.Process;$p.StartInfo=$psi
     try{[void]$p.Start();$stdout=$p.StandardOutput.ReadToEnd();$stderr=$p.StandardError.ReadToEnd();$p.WaitForExit();if($p.ExitCode-ne0){throw ("RPK {0} failed: {1}"-f$Command,($stderr+$stdout).Trim())};if([string]::IsNullOrWhiteSpace($stdout)){return $null};return $stdout|ConvertFrom-Json}finally{$p.Dispose()}

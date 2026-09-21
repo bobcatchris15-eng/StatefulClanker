@@ -285,7 +285,9 @@ static class ApiConnectionTester
 static class ApiConnectionsUiBootstrap
 {
     static bool _installed;
+    static ApiConnectionsPage? _page;
     [ModuleInitializer] public static void Initialize() => Application.Idle += Install;
+    public static void RefreshProjectMarkers() => _page?.RefreshProjectMarkers();
     static void Install(object? sender, EventArgs e)
     {
         if (_installed) return;
@@ -293,7 +295,8 @@ static class ApiConnectionsUiBootstrap
         {
             var tabs = Find<TabControl>(form).FirstOrDefault();
             if (tabs is null) continue;
-            tabs.TabPages.Add(new ApiConnectionsPage());
+            _page = new ApiConnectionsPage();
+            tabs.TabPages.Add(_page);
             _installed = true;
             break;
         }
@@ -357,7 +360,7 @@ sealed class ApiConnectionsPage : TabPage
     {
         _models.Dock=DockStyle.Fill;_models.AllowUserToAddRows=false;_models.RowHeadersVisible=false;_models.SelectionMode=DataGridViewSelectionMode.FullRowSelect;_models.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
         _models.Columns.Add(new DataGridViewCheckBoxColumn{Name="use",HeaderText="Target",Width=58,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});
-        _models.Columns.Add("name","Model");_models.Columns.Add("id","Model ID");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");_models.Columns.Add("free","Free");
+        _models.Columns.Add("name","Model");_models.Columns.Add("id","Model ID");_models.Columns.Add("state","Current project target");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");_models.Columns.Add("free","Free");
         foreach(DataGridViewColumn c in _models.Columns) if(c.Name!="use") c.ReadOnly=true;
     }
 
@@ -394,10 +397,14 @@ sealed class ApiConnectionsPage : TabPage
         {
             var context=m.contextLength.HasValue?m.contextLength.Value.ToString("N0"):"—";
             var free=m.isFree==true?"yes":m.isFree==false?"no":"?";
-            var targeted=pool.entries.ContainsKey(TargetPoolStore.Id(id,m.id));
-            _models.Rows.Add(targeted,m.displayName,m.id,m.supportsTools==false?"text":"native",context,free);
+            var targeted=pool.entries.TryGetValue(TargetPoolStore.Id(id,m.id),out var entry);
+            var state=!targeted?"—":entry!.enabled?"enabled":"disabled";
+            var row=_models.Rows.Add(targeted,m.displayName,m.id,state,m.supportsTools==false?"text":"native",context,free);
+            if(targeted)_models.Rows[row].Cells["state"].Style.ForeColor=entry!.enabled?Theme.Good:Theme.Muted;
         }
     }
+
+    public void RefreshProjectMarkers() => LoadModels();
 
     void Add(object? s,EventArgs e)
     {

@@ -1937,7 +1937,9 @@ sealed class MainForm : Form
     readonly TabControl _tabs = new();
     readonly Label _header = new(), _mcpState = new(), _intent = new(), _goal = new();
     readonly Label[] _metrics = Enumerable.Range(0, 5).Select(_ => new Label()).ToArray();
-    readonly TextBox _usage = new(), _allActivity = new(), _workerTelemetry = new(), _endpoint = new(), _stdio = new(), _integrationNote = new(), _activeProvidersText = new();
+    readonly TextBox _usage = new(), _allActivity = new(), _workerTelemetry = new(), _endpoint = new(), _stdio = new(), _integrationNote = new();
+    readonly DataGridView _overviewTargets = new();
+    readonly Label _overviewTargetSummary = new();
     readonly BlinkenRack _blinkenRack = new();
     readonly TaskBoardPanel _taskBoard = new();
     readonly RecentActivityPanel _recentActivity = new();
@@ -2209,9 +2211,17 @@ sealed class MainForm : Form
             ResetDistance = 315
         };
 
-        var providersCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(0, 0, 3, 0) };
-        _activeProvidersText.Dock = DockStyle.Fill; _activeProvidersText.ReadOnly = true; _activeProvidersText.BackColor = Theme.Surface; _activeProvidersText.BorderStyle = BorderStyle.None; _activeProvidersText.Font = new Font("Cascadia Mono", 9f, FontStyle.Bold); _activeProvidersText.ForeColor = Theme.Accent;
-        providersCard.Controls.Add(_activeProvidersText);
+        var providersCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(8), Margin = new Padding(0, 0, 3, 0) };
+        var targetRows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
+        targetRows.RowStyles.Add(new RowStyle(SizeType.Absolute, 22)); targetRows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _overviewTargetSummary.Dock = DockStyle.Fill; _overviewTargetSummary.Font = new Font("Segoe UI Semibold", 8f, FontStyle.Bold); _overviewTargetSummary.ForeColor = Theme.Muted;
+        _overviewTargets.Dock = DockStyle.Fill; _overviewTargets.AllowUserToAddRows = false; _overviewTargets.RowHeadersVisible = false; _overviewTargets.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _overviewTargets.MultiSelect = false; _overviewTargets.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _overviewTargets.BackgroundColor = Theme.Surface; _overviewTargets.BorderStyle = BorderStyle.None;
+        _overviewTargets.Columns.Add(new DataGridViewCheckBoxColumn { Name = "enabled", HeaderText = "On", Width = 42, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
+        _overviewTargets.Columns.Add("connection", "Connection"); _overviewTargets.Columns.Add("model", "Model");
+        foreach (DataGridViewColumn column in _overviewTargets.Columns) if (column.Name != "enabled") column.ReadOnly = true;
+        _overviewTargets.CurrentCellDirtyStateChanged += (_, _) => { if (_overviewTargets.IsCurrentCellDirty && _overviewTargets.CurrentCell?.ColumnIndex == 0) _overviewTargets.CommitEdit(DataGridViewDataErrorContexts.Commit); };
+        _overviewTargets.CellValueChanged += (_, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == 0 && _overviewTargets.Rows[e.RowIndex].Tag is TargetPoolEntry target) ToggleOverviewTarget(target, Convert.ToBoolean(_overviewTargets.Rows[e.RowIndex].Cells[0].Value)); };
+        targetRows.Controls.Add(_overviewTargetSummary, 0, 0); targetRows.Controls.Add(_overviewTargets, 0, 1); providersCard.Controls.Add(targetRows);
 
         var usageCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(3, 0, 0, 0) };
         _usage.Dock = DockStyle.Fill; _usage.Multiline = true; _usage.ReadOnly = true; _usage.ScrollBars = ScrollBars.Vertical; _usage.WordWrap = true; _usage.BorderStyle = BorderStyle.None; _usage.Font = new Font("Cascadia Mono", 8.25f);
@@ -2664,8 +2674,7 @@ sealed class MainForm : Form
             _workerTelemetry.Text = snapshot.Project.Telemetry;
             _recentActivity.SetActivity(snapshot.Project.Activity);
             _orchestratorStatus.SetState(snapshot.Project, snapshot.Autofill, d is not null, true);
-            var active = snapshot.Providers.Where(p => !p.Disabled).OrderBy(p => p.Priority).Select(p => p.Name).ToList();
-            _activeProvidersText.Text = active.Count > 0 ? string.Join(", ", active) : "None (All disabled)";
+            PopulateOverviewTargets();
         }
         else
         {
@@ -2675,7 +2684,9 @@ sealed class MainForm : Form
             _workerTelemetry.Text = "Select a project to inspect worker telemetry.";
             _recentActivity.SetActivity("");
             _orchestratorStatus.SetState(new(), snapshot.Autofill, d is not null, false);
+            PopulateOverviewTargets();
         }
+        ApiConnectionsUiBootstrap.RefreshProjectMarkers();
         _integrations.SuspendLayout();
         try
         {
@@ -2697,6 +2708,34 @@ sealed class MainForm : Form
             }
         }
         finally { _providers.ResumeLayout(); }
+    }
+
+    void PopulateOverviewTargets()
+    {
+        var targets = TargetPoolStore.LoadActive().entries.Values.OrderBy(x => x.connection, StringComparer.OrdinalIgnoreCase).ThenBy(x => x.model, StringComparer.OrdinalIgnoreCase).ToList();
+        _overviewTargets.SuspendLayout();
+        try
+        {
+            _overviewTargets.Rows.Clear();
+            foreach (var target in targets)
+            {
+                var row = _overviewTargets.Rows.Add(target.enabled, target.connection, target.displayName == target.model ? target.model : $"{target.displayName} ({target.model})");
+                _overviewTargets.Rows[row].Tag = target;
+                if (!target.enabled) _overviewTargets.Rows[row].DefaultCellStyle.ForeColor = Theme.Muted;
+            }
+            _overviewTargetSummary.Text = targets.Count == 0 ? "ACTIVE PROJECT TARGETS — none selected" : $"ACTIVE PROJECT TARGETS — {targets.Count(x => x.enabled)} enabled of {targets.Count}";
+        }
+        finally { _overviewTargets.ResumeLayout(); }
+    }
+
+    void ToggleOverviewTarget(TargetPoolEntry target, bool enabled)
+    {
+        var pool = TargetPoolStore.LoadActive();
+        var id = TargetPoolStore.Id(target.connection, target.model);
+        if (!pool.entries.TryGetValue(id, out var current)) return;
+        current.enabled = enabled; current.updatedAt = DateTimeOffset.UtcNow.ToString("O"); pool.entries[id] = current;
+        try { TargetPoolStore.SaveActive(pool); PopulateOverviewTargets(); ApiConnectionsUiBootstrap.RefreshProjectMarkers(); }
+        catch (Exception ex) { MessageBox.Show(this, "Failed to update target: " + ex.Message, "Target update failed", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
 
     void SetAutofillUi(AutofillSnapshot a, ProjectMetrics m, bool hasProject)
