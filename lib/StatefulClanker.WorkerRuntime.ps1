@@ -295,7 +295,7 @@ function Get-SCWorkerMaxSteps($Connection,$Task,[string]$Stage='worker') {
         # Old connection profiles defaulted to 24. Cold implementation workers now get
         # a much larger floor so the harness, rather than an arbitrary turn count, is
         # normally what ends the session.
-        $floor=switch($taskSize){'tiny'{128};'small'{128};'medium'{192};'large'{256};default{128}}
+        $floor=switch($taskSize){'tiny'{512};'small'{512};'medium'{512};'large'{768};default{512}}
         return [Math]::Min($hardCap,[Math]::Max($floor,$connSteps))
     }
     if($connSteps-gt0){return [Math]::Min($hardCap,[Math]::Max(1,$connSteps))}
