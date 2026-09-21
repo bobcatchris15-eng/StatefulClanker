@@ -6,7 +6,7 @@ function Get-SCControlPlaneInstructions {
 
 WORKER BACKENDS
 
-StatefulClanker may execute a bounded task through either a provider-owned CLI harness or its own minimal direct-inference harness. Treat both as interchangeable execution backends above the same current directives, reconciled Intent, task, freshness, critic, validator, and event machinery.
+StatefulClanker may execute a bounded task through either a provider-owned CLI harness or its own minimal direct-inference harness. Treat both as interchangeable execution backends above the same current directives, reconciled Intent, task, validator, freshness, and event machinery. Whole-project review is a separate critic + validator layer.
 
 A CLI backend delegates the inner coding-agent loop to tools such as Codex, Antigravity, Claude, OpenCode, Gemini, or another configured CLI. An API backend points at a machine-local connection profile and uses StatefulClanker's inherent worker loop. That loop always remains bounded by StatefulClanker authority, but its actual tool set is resolved per invocation through worker capability policy: repository operations, read-only human/normalized Intent views, and explicitly authorized external MCP tools may be present. Do not assume a direct worker has a capability merely because another direct worker did.
 
