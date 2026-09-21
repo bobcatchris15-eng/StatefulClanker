@@ -95,7 +95,7 @@ Task semantics do not depend on execution transport.
 - `cli` backend: delegate the inner agent loop to Codex/Claude/OpenCode/Antigravity/Gemini/another configured CLI.
 - `api` backend: StatefulClanker calls a machine-local inference connection directly and owns the bounded tool loop.
 
-Semantic-size/provider routing selects the backend; critic/validator/freshness/event behavior is shared.
+Semantic-size/provider routing selects the backend; task-local validator/freshness/event behavior is shared. Periodic project review may separately run both a project critic and project validator.
 
 ## Worker capability tools
 
