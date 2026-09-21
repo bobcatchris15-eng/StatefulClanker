@@ -84,10 +84,10 @@ try {
     Close-SCWorkerSession $sessionId 'completed'
     Assert-True ($null-eq(Get-SCReusableWorkerSessionId $task)) 'Completed worker session should not be reused.'
 
-    Write-Host '  WS 5: cold worker turn budget dwarfs the legacy 24-turn connection default'
+    Write-Host '  WS 5: cold worker turn budget makes the legacy 24-turn connection default irrelevant'
     $budgetTask=[pscustomobject]@{id='budget-task';role='worker';size='small'}
     $legacyConnection=[pscustomobject]@{maxSteps=24}
-    Assert-True ((Get-SCWorkerMaxSteps $legacyConnection $budgetTask 'run')-ge128) 'Cold run retained the legacy 24-turn limit.'
+    Assert-True ((Get-SCWorkerMaxSteps $legacyConnection $budgetTask 'run')-ge512) 'Cold run retained a low legacy turn limit.'
     Assert-True ((Get-SCWorkerMaxSteps $legacyConnection $budgetTask 'validator')-eq24) 'Reviewer turn budget should still respect the connection setting.'
 
     Write-Host '  WS 6: diagnosis tasks may legitimately produce zero diff'
