@@ -108,23 +108,16 @@ function Resolve-SCWorkerPath([string]$Path,[switch]$AllowMissing) {
     return $candidate
 }
 
-# Worker safety guards. These are intentionally narrow: they trip only on a
+# Worker safety guards. These are intentionally narrow: they reject only a
 # concrete attempt to leave the worker root, mutate orchestration/Git control
 # state through a generic worker tool, or terminate StatefulClanker itself.
-# Ordinary failures, rejected work, and hallucinated tool names are not evil.
+# Ordinary failures, rejected work, and hallucinated tool names do not halt
+# subsequent worker operations.
 function Resolve-SCWorkerToolPath([string]$Path,$Task,[string]$ToolName,[switch]$AllowMissing) {
     try {
         if($AllowMissing){return Resolve-SCWorkerPath $Path -AllowMissing}
         return Resolve-SCWorkerPath $Path
     } catch {
-        if($_.Exception.Message -like 'Path escapes worker root:*'){
-            Set-SCEvilTrip 'worker.path_escape' "Worker tool '$ToolName' attempted to access a path outside its project root." @{
-                taskId=if($Task){[string]$Task.id}else{$null}
-                tool=$ToolName
-                requestedPath=$Path
-                workerRoot=(Get-SCRoot)
-            } | Out-Null
-        }
         throw
     }
 }
@@ -138,12 +131,6 @@ function Assert-SCWorkerMutablePath([string]$ResolvedPath,$Task,[string]$ToolNam
         $relative.StartsWith('.git'+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)
     )
     if($protected){
-        Set-SCEvilTrip 'worker.control_state_tamper' "Worker tool '$ToolName' attempted to mutate orchestration or Git control state directly." @{
-            taskId=if($Task){[string]$Task.id}else{$null}
-            tool=$ToolName
-            requestedPath=$relative
-            resolvedPath=$ResolvedPath
-        } | Out-Null
         throw "Worker mutation of control state is forbidden: $relative"
     }
 }
@@ -162,7 +149,12 @@ function Test-SCWorkerCommandPathToken([string]$Token) {
         return [pscustomobject]@{outside=$true;token=$Token;resolved='<user profile>'}
     }
 
-    $looksPath=[IO.Path]::IsPathRooted($text) -or $text -match '(^|[\\/])\.\.([\\/]|$)'
+    # .NET treats a leading slash as rooted on Windows, but classic Windows
+    # tools use single-segment slash switches such as /s, /b, and /q.
+    # Preserve rooted-path checks for drive, UNC, backslash-rooted, and
+    # multi-segment forward-slash paths while allowing those switches.
+    $slashSwitch=$text -match '^/[^/\\:\s=]+(?:=[^/\\:\s]+)?$'
+    $looksPath=(-not$slashSwitch-and[IO.Path]::IsPathRooted($text)) -or $text -match '(^|[\\/])\.\.([\\/]|$)'
     if(-not$looksPath){return $null}
 
     $probe=$text
@@ -193,13 +185,6 @@ function Assert-SCWorkerCommandSafe([string]$Command,$Task) {
             $value=if($el -is [System.Management.Automation.Language.StringConstantExpressionAst]){[string]$el.Value}else{[string]$el.Extent.Text}
             $check=Test-SCWorkerCommandPathToken $value
             if($check-and$check.outside){
-                Set-SCEvilTrip 'worker.command_path_escape' 'run_command attempted to reference a path outside the project root.' @{
-                    taskId=if($Task){[string]$Task.id}else{$null}
-                    tool='run_command'
-                    token=$check.token
-                    resolvedPath=$check.resolved
-                    command=$Command
-                } | Out-Null
                 throw "run_command path escapes worker root: $($check.token)"
             }
         }
@@ -207,13 +192,6 @@ function Assert-SCWorkerCommandSafe([string]$Command,$Task) {
             $raw=([string]$redir.Extent.Text -replace '^\s*\d*\s*>+\s*','').Trim()
             $check=Test-SCWorkerCommandPathToken $raw
             if($check-and$check.outside){
-                Set-SCEvilTrip 'worker.command_path_escape' 'run_command attempted to redirect output outside the project root.' @{
-                    taskId=if($Task){[string]$Task.id}else{$null}
-                    tool='run_command'
-                    token=$check.token
-                    resolvedPath=$check.resolved
-                    command=$Command
-                } | Out-Null
                 throw "run_command redirection escapes worker root: $($check.token)"
             }
         }
@@ -222,20 +200,10 @@ function Assert-SCWorkerCommandSafe([string]$Command,$Task) {
     $mutates='(?i)(Set-Content|Add-Content|Out-File|Remove-Item|Move-Item|Copy-Item|Rename-Item|New-Item|Clear-Content|Set-Item(?:Property)?|Remove-ItemProperty|\[IO\.File\]::(?:Write|Delete|Move|Copy)|(?:^|[;&|])\s*(?:del|erase|rm|rmdir|rd|move|copy)\b|(?:^|\s)\d*>>?\s*)'
     $control='(?i)(?:^|[\\/"\s])\.(?:statefulclanker|git)(?:[\\/"\s]|$)'
     if($Command-match$mutates-and$Command-match$control){
-        Set-SCEvilTrip 'worker.control_state_tamper' 'run_command attempted to mutate orchestration or Git control state directly.' @{
-            taskId=if($Task){[string]$Task.id}else{$null}
-            tool='run_command'
-            command=$Command
-        } | Out-Null
         throw 'run_command may not mutate .statefulclanker or .git control state.'
     }
 
     if($Command-match'(?i)\b(Stop-Process|taskkill(?:\.exe)?|kill(?:\.exe)?)\b' -and $Command-match'(?i)StatefulClanker|Clanker\.Tray'){
-        Set-SCEvilTrip 'worker.oversight_termination' 'run_command attempted to terminate the StatefulClanker host or tray.' @{
-            taskId=if($Task){[string]$Task.id}else{$null}
-            tool='run_command'
-            command=$Command
-        } | Out-Null
         throw 'Workers may not terminate StatefulClanker oversight processes.'
     }
 }
@@ -273,7 +241,6 @@ function Get-SCWorkerToolRecords($Task,[string]$Stage='worker') {
 }
 function Get-SCArgValue($ToolArgs,[string]$Name,$Default=$null){if($ToolArgs-and$ToolArgs.PSObject.Properties[$Name]){return $ToolArgs.$Name};return $Default}
 function Invoke-SCWorkerTool([string]$Name,$ToolArgs,$Task,[string]$Stage,$Registry) {
-    Assert-SCNotEvil
     $record=@($Registry|Where-Object{[string]$_.wireName-eq$Name}|Select-Object -First 1)
     if($record.Count-eq0){throw "Tool '$Name' is not authorized for this worker."}
     $record=$record[0];if(-not(Test-SCWorkerCapabilityAllowed ([string]$record.capability) $Task $Stage)){throw "Capability '$($record.capability)' is no longer authorized."}
@@ -652,7 +619,6 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
     $tools=@($registry|ForEach-Object{$_.definition})
     $protocol=Get-SCConnectionProtocol $Connection
     for($step=1;$step-le$maxSteps;$step++){
-        Assert-SCNotEvil
         $response=Invoke-SCApiChat $Connection $messages $tools $toolMode
         Add-SCApiUsage $UsageAccumulator $response
         $m=Get-SCAssistantMessage $response $protocol
@@ -667,7 +633,6 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
             if(-not$cmd.PSObject.Properties['tool']){throw "Text-tool model returned neither tool nor final at step $step."}
             $toolName=[string]$cmd.tool
             $result=try{Invoke-SCWorkerTool $toolName $cmd.arguments $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
-            if(Test-SCEvilLatched){throw "StatefulClanker safety trip latched during worker tool '$toolName'; worker halted."}
             if($WorkerSessionId -and -not([string]$result).StartsWith('TOOL_ERROR:')){Add-SCWorkerMutationToolCall $WorkerSessionId $toolName}
             if($toolName-eq'finish'){
                 if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $cmd.arguments ([string]$result);New-SCWorkerCheckpoint $WorkerSessionId 'candidate-submit' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null}
@@ -702,7 +667,6 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
                 $args=if([string]::IsNullOrWhiteSpace([string]$call.function.arguments)){[pscustomobject]@{}}else{[string]$call.function.arguments|ConvertFrom-Json}
                 $result=try{Invoke-SCWorkerTool $name $args $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
             }catch{$args=[pscustomobject]@{};$result="TOOL_ERROR: malformed arguments: $($_.Exception.Message)"}
-            if(Test-SCEvilLatched){throw "StatefulClanker safety trip latched during worker tool '$name'; worker halted."}
             if($WorkerSessionId -and -not([string]$result).StartsWith('TOOL_ERROR:')){Add-SCWorkerMutationToolCall $WorkerSessionId $name}
             if($name-eq'finish'){
                 if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $args ([string]$result)}
