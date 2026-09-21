@@ -42,7 +42,7 @@ sealed class ApiConnectionProfile
     // v1 compatibility. Old profiles stored one model per "connection".
     public string? model { get; set; }
     public string? toolMode { get; set; }
-    public int maxSteps { get; set; } = 24;
+    public int maxSteps { get; set; } = 512;
     public int? maxTokens { get; set; }
     public double? temperature { get; set; }
 }

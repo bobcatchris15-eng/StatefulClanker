@@ -132,7 +132,7 @@ vLLM       http://127.0.0.1:8000/v1
 OpenRouter https://openrouter.ai/api/v1
 ```
 
-Select discovered models and add them to the active project as endpoints, then use **Connections / target pool** to set priority and preferred worker/critic/validator/size routes. Use **Custom OpenAI-compatible** for any other compatible provider or gateway. OpenCode can remain a CLI endpoint using its own provider catalogue.
+Select discovered models and add them to the active project as endpoints, then use **Connections / target pool** to set priority and the worker/validator target pool. Use **Custom OpenAI-compatible** for any other compatible provider or gateway. OpenCode can remain a CLI endpoint using its own provider catalogue.
 
 API keys typed into the app are encrypted with Windows DPAPI for the current Windows user. Alternatively specify an environment variable such as `OPENROUTER_API_KEY` and leave the key field empty.
 
@@ -212,7 +212,7 @@ StatefulClanker sends the compiled packet directly to the configured inference e
 
 `native` tool mode uses OpenAI-compatible function/tool calls. `text` mode uses one strict JSON tool command per model turn and exists primarily for local models/servers without reliable native function calling.
 
-Both execution paths produce the same outer run receipts and flow through the same critic/validator/freshness/commit machinery.
+Both execution paths produce the same outer run receipts and flow through the same validator/freshness/commit machinery. Periodic whole-project review remains a separate critic + validator layer.
 
 ## Build from source
 

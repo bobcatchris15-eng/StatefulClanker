@@ -19,6 +19,7 @@ try{
     $task.status='needs_rework'
     $task.attemptCount=5
     $task.criticRejectCount=3
+    $task.validatorRejectCount=3
     $task.blockReason='Validator repeatedly rejected already-produced work.'
     $task|ConvertTo-Json -Depth 30|Set-Content -LiteralPath $taskPath -Encoding UTF8
 
@@ -40,7 +41,8 @@ try{
     Assert-True ($task.instruction-eq'Repaired instruction grounded in current intent') 'task repair did not update instruction.'
     Assert-True (@($task.acceptance).Count-eq1-and$task.acceptance[0]-eq'new observable acceptance') 'task repair did not update acceptance.'
     Assert-True ([int]$task.attemptCount-eq0) 'task repair did not reset attemptCount.'
-    Assert-True ([int]$task.criticRejectCount-eq0) 'task repair did not reset criticRejectCount.'
+    Assert-True ([int]$task.criticRejectCount-eq0) 'task repair did not reset legacy criticRejectCount.'
+    Assert-True ([int]$task.validatorRejectCount-eq0) 'task repair did not reset validatorRejectCount.'
     Assert-True ([string]$task.status-eq'ready') "task repair did not recompute readiness; status=$($task.status)"
     Assert-True ([string]$task.lastRecovery.kind-eq'task-repair') 'task repair did not persist recovery metadata.'
 

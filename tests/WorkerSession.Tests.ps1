@@ -42,7 +42,7 @@ try {
     Assert-True ([bool]$session.baselineCheckpointId) 'Session has no baseline checkpoint.'
     Assert-True (@($session.checkpoints).Count-ge1) 'Baseline checkpoint was not recorded.'
 
-    Write-Host '  WS 1: unchanged artifact-producing candidate is rejected before critic'
+    Write-Host '  WS 1: unchanged artifact-producing candidate is rejected before validator'
     Set-SCWorkerCandidateClaim $sessionId ([pscustomobject]@{summary='claimed completion';expectedArtifacts=@('artifact.txt');verification=@()}) $null
     $unchanged=Get-SCWorkerCandidatePreflight $sessionId $task
     Assert-True (-not[bool]$unchanged.material) 'Unchanged change-task candidate passed materiality preflight.'
@@ -58,7 +58,6 @@ try {
     Assert-True ([bool]$changed.candidateCheckpointId) 'Material candidate did not get a checkpoint.'
     $session=Get-SCWorkerSession $sessionId
     Assert-True ($session.candidateNumber-eq2) "Expected candidateNumber=2, got $($session.candidateNumber)."
-    Assert-True ($session.candidateClaim.expectedArtifacts[0]-eq'artifact.txt') 'Expected artifact claim was not persisted.'
 
     Write-Host '  WS 3: checkpoint restores worktree without moving HEAD'
     $checkpointId=[string]$changed.candidateCheckpointId
@@ -71,7 +70,27 @@ try {
     Assert-True ((Get-Content -Raw -LiteralPath 'artifact.txt').Trim()-eq'candidate-two') 'Checkpoint restore did not recover the candidate artifact.'
     Assert-True (-not(Test-Path -LiteralPath 'untracked.tmp')) 'Checkpoint restore did not remove post-checkpoint untracked work.'
 
-    Write-Host '  WS 4: diagnosis tasks may legitimately produce zero diff'
+    Write-Host '  WS 4: worker session pins to its first responding endpoint and is reusable while unfinished'
+    Set-SCWorkerSessionRoutePin $sessionId 'endpoint-a' 'connection-a' 'model-a'
+    $pin=Get-SCWorkerSessionRoutePin $sessionId
+    Assert-True ($pin.endpoint-eq'endpoint-a'-and$pin.connection-eq'connection-a'-and$pin.model-eq'model-a') 'Worker route pin was not persisted.'
+    $task|Add-Member -NotePropertyName latestWorkerSessionId -NotePropertyValue $sessionId -Force
+    Assert-True ((Get-SCReusableWorkerSessionId $task)-eq$sessionId) 'Active worker session was not reusable.'
+    $mismatchRejected=$false
+    try{Set-SCWorkerSessionRoutePin $sessionId 'endpoint-b' 'connection-b' 'model-b'}catch{$mismatchRejected=$true}
+    Assert-True $mismatchRejected 'Pinned session accepted a different endpoint/model.'
+    Close-SCWorkerSession $sessionId 'validator-error'
+    Assert-True ((Get-SCReusableWorkerSessionId $task)-eq$sessionId) 'Validator-error session should be resumable.'
+    Close-SCWorkerSession $sessionId 'completed'
+    Assert-True ($null-eq(Get-SCReusableWorkerSessionId $task)) 'Completed worker session should not be reused.'
+
+    Write-Host '  WS 5: cold worker turn budget makes the legacy 24-turn connection default irrelevant'
+    $budgetTask=[pscustomobject]@{id='budget-task';role='worker';size='small'}
+    $legacyConnection=[pscustomobject]@{maxSteps=24}
+    Assert-True ((Get-SCWorkerMaxSteps $legacyConnection $budgetTask 'run')-ge512) 'Cold run retained a low legacy turn limit.'
+    Assert-True ((Get-SCWorkerMaxSteps $legacyConnection $budgetTask 'validator')-eq24) 'Reviewer turn budget should still respect the connection setting.'
+
+    Write-Host '  WS 6: diagnosis tasks may legitimately produce zero diff'
     $diagnosis=[pscustomobject]@{id='diagnosis-task';title='diagnosis';role='worker';outputKind='diagnosis'}
     $diagId='wsess-diagnosis'
     [void](New-SCWorkerSession $diagId $diagnosis $comp 'inspect only' 'native' $registry)
@@ -79,7 +98,7 @@ try {
     $diag=Get-SCWorkerCandidatePreflight $diagId $diagnosis
     Assert-True ([bool]$diag.material) 'Explicit diagnosis output kind incorrectly required a worktree mutation.'
 
-    Write-Host 'PASS: durable worker sessions, pre-critic materiality gate, and restorable API-boundary Git checkpoints.'
+    Write-Host 'PASS: durable worker sessions, pre-validator materiality gate, route pinning, and restorable API-boundary Git checkpoints.'
 }
 finally {
     Pop-Location

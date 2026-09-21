@@ -674,7 +674,7 @@ Before acceptance, revalidate:
 - dependency acceptance;
 - project/goal/plan identity where applicable;
 - human holds/gates;
-- required critic/validator outcomes.
+- required task-validator outcomes and any project-review outcomes.
 
 ---
 
@@ -1012,7 +1012,7 @@ For changes to StatefulClanker itself, preserve the structural invariants in `do
 - retrieval omissions/truncation are observable;
 - explicit uncertainty cannot advance completion;
 - worker claims remain non-authoritative until commit;
-- required critic/validator stages fail closed;
+- required task-validator/freshness stages fail closed;
 - reviewers judge the same compiled snapshot;
 - newer human/task-control authority invalidates older assumptions;
 - stale upstream assumptions cannot silently retain downstream authority;
@@ -1113,7 +1113,7 @@ Use this as the default algorithm:
 13. Consume control events and inspect failing/stalled runs.
 14. Resolve context/intent conflicts instead of guessing.
 15. Treat worker success as proposal evidence.
-16. Require configured critic/validator/freshness gates.
+16. Require configured task-validator/freshness gates; respect separate project-level critic/validator review.
 17. Accept/commit only current, valid work.
 18. Replan when evidence shows task graph/context/backend/policy is wrong.
 19. Report meaningful accepted progress and human-required decisions.

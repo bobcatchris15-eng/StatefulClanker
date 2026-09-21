@@ -51,9 +51,11 @@ worker backend
         ├─ read-only human/normalized intent tools
         └─ authorized external MCP tools
   ↓
-worker receipt → critic → validator → freshness/authority gate
+worker receipt → validator → freshness/authority gate
   ↓
-accepted project state / commit
+accepted task state / commit
+  ↓
+periodic project critic + project validator
 ```
 
 No worker response becomes canonical merely because it exists.

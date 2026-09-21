@@ -1,7 +1,7 @@
 <# Periodic project-review tests: interval trigger, evidence, and the failure path
    (hold, remediation task, refusal of further dispatch, release).
 
-   The per-task critic and validator judge one task against one compiled context.
+   The per-task validator judges one task against one compiled context.
    This layer is the only thing that looks at the project as a whole, and it is the
    only thing that can stop the queue, so the failure path matters more than the
    happy path. #>

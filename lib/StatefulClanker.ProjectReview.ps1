@@ -1,8 +1,8 @@
 <# Periodic PROJECT-level review.
 
-   The per-task critic and validator each judge one task against one compiled
-   context. Nothing looks at the project as a whole, so N tasks that each passed
-   their own review can still leave the project broken - most obviously after a
+   The per-task validator judges one task against one compiled context.
+   Nothing in that task-local gate looks at the project as a whole, so N tasks
+   that each passed their own validation can still leave the project broken - most obviously after a
    parallel batch, where two changes that merged cleanly can break together with no
    textual conflict.
 

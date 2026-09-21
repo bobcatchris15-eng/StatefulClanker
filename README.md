@@ -2,7 +2,7 @@
 
 StatefulClanker is a **Windows-first resident orchestration application** for long-running agent work where **the project persists and model context does not**.
 
-A conversational agent steers the resident app through MCP. StatefulClanker preserves current human authority, compiles bounded cold-start worker context, routes tasks into replaceable worker backends, controls tools for its inherent worker loop, persists project updates, and applies critic/validator/freshness gates before accepted state advances.
+A conversational agent steers the resident app through MCP. StatefulClanker preserves current human authority, compiles bounded cold-start worker context, routes tasks into replaceable worker backends, controls tools for its inherent worker loop, persists project updates, and applies validator/freshness gates before task state advances, plus periodic project-level critic/validator review.
 
 ```text
 human
@@ -23,7 +23,9 @@ worker backend
        ├─ direct + normalized intent readers
        └─ authorized external MCP tools
   ↓
-critic → validator → freshness/authority gate → accepted state
+validator → freshness/authority gate → accepted task state
+  ↓
+periodic project critic + project validator → project hold/remediation when needed
 ```
 
 The central rule is:

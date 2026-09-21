@@ -22,7 +22,7 @@ Filesystem hashes are intentionally dispatch-time guards only. A worker may legi
 
 ### Candidate vs canonical state
 
-Normal successful worker output creates a completion proposal. Critic and validator results attach to that proposal. Canonical task completion changes only at an explicit commit boundary after required review and freshness checks.
+Normal successful worker output creates a completion proposal. The task validator result attaches to that proposal. Project-level critic/validator review is separate from the task proposal gate. Canonical task completion changes only at an explicit commit boundary after required review and freshness checks.
 
 ### Selective invalidation
 
@@ -70,7 +70,7 @@ When changing the harness, verify all of the following:
 - [ ] Retrieval omissions/truncation are observable.
 - [ ] An explicit context request cannot advance completion.
 - [ ] Worker claims remain non-authoritative until commit.
-- [ ] Required critic/validator stages fail closed.
+- [ ] Required task-validator and freshness stages fail closed.
 - [ ] Reviewers judge the worker against the same compiled snapshot.
 - [ ] New human direction invalidates older compiled assumptions.
 - [ ] Explicit human task control cannot be overwritten by an older in-flight cycle.
