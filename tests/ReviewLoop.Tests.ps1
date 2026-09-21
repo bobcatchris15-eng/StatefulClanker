@@ -26,6 +26,6 @@ Assert-True ($runtime.Contains('The session will not migrate to another endpoint
 
 Write-Host '  REVIEW 4: cold workers have a high turn ceiling'
 Assert-True ($runtime.Contains('$hardCap=1024')) 'Direct worker hard ceiling is not 1024.'
-Assert-True ($runtime.Contains("'small'{128}")) 'Small cold worker floor is not 128.'
+Assert-True ($runtime.Contains("'small'{512}")) 'Small cold worker floor is not 512.'
 
 Write-Host 'PASS: ordinary task review is validator-only; failures resume the pinned worker session; cold-worker turn budget is raised.'
