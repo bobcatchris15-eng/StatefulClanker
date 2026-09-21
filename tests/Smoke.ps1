@@ -61,10 +61,10 @@ try {
     $cfg | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
 
     Write-Host 'STEP 3: create goal and task'
-    & $harness goal -Message 'Exercise worker-review-validation and telemetry.'
+    & $harness goal -Message 'Exercise worker-validation and telemetry.'
     & $harness task add -TaskId smoke-task -Title 'Smoke task' -Instruction 'Return a successful bounded result.' -Accept 'Mock validator passes' -Retrieval 'evidence.txt'
 
-    Write-Host 'STEP 4: execute worker/review pipeline in bounded job'
+    Write-Host 'STEP 4: execute worker/validator pipeline in bounded job'
     $job = Start-Job -ArgumentList $harness,$temp -ScriptBlock {
         param($HarnessPath,$ProjectPath)
         Set-Location $ProjectPath
@@ -92,14 +92,13 @@ try {
     $task = Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\smoke-task.json') | ConvertFrom-Json
     if ($task.status -ne 'complete') { throw "Expected complete, got $($task.status)" }
     if (-not $task.latestRunId) { throw 'Missing worker receipt id.' }
-    if (-not $task.latestCritiqueId) { throw 'Missing critic receipt id.' }
     if (-not $task.latestValidationId) { throw 'Missing validator receipt id.' }
 
     Write-Host 'STEP 6: validate telemetry records'
     $telemetry = @(Get-ChildItem -LiteralPath (Join-Path $temp '.statefulclanker\telemetry\runs') -Filter '*.json' -File | ForEach-Object { Get-Content -Raw $_.FullName | ConvertFrom-Json })
-    if ($telemetry.Count -ne 3) { throw "Expected 3 telemetry records, got $($telemetry.Count)" }
+    if ($telemetry.Count -ne 2) { throw "Expected 2 telemetry records (worker + validator), got $($telemetry.Count)" }
     if (@($telemetry | Where-Object { $_.lifecycle -ne 'completed' }).Count -ne 0) { throw 'Expected completed telemetry records.' }
-    if (@($telemetry | Where-Object { $_.stage -eq 'critic' -and $_.verdict -eq 'PASS' }).Count -ne 1) { throw 'Missing passing critic telemetry.' }
+    if (@($telemetry | Where-Object { $_.stage -eq 'critic' }).Count -ne 0) { throw 'Ordinary task unexpectedly ran a critic.' }
     if (@($telemetry | Where-Object { $_.stage -eq 'validator' -and $_.verdict -eq 'PASS' }).Count -ne 1) { throw 'Missing passing validator telemetry.' }
     if (@(Get-ChildItem -LiteralPath (Join-Path $temp '.statefulclanker\telemetry\active') -Filter '*.json' -File).Count -ne 0) { throw 'Active telemetry should be empty after completion.' }
 
@@ -119,7 +118,7 @@ try {
     $history = (& $harness telemetry history | Out-String)
     if ($history -notmatch 'smoke-task') { throw 'Telemetry CLI did not show smoke task.' }
 
-    Write-Host 'PASS: worker -> critic -> validator -> complete + durable telemetry'
+    Write-Host 'PASS: worker -> validator -> complete + durable telemetry'
 }
 finally {
     Write-Host 'STEP 8: cleanup'
