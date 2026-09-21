@@ -149,12 +149,9 @@ function Test-SCWorkerCommandPathToken([string]$Token) {
         return [pscustomobject]@{outside=$true;token=$Token;resolved='<user profile>'}
     }
 
-    # .NET treats a leading slash as rooted on Windows, but cmd.exe and dir
-    # use a small set of slash switches.  Only exempt those known switches;
-    # an arbitrary rooted single-segment path such as /outside must still be
-    # subject to project-root validation.
-    $slashSwitch=@('/?','/4','/a','/b','/c','/d','/k','/l','/n','/p','/q','/r','/s','/u','/w','/x','/v:on','/v:off') -contains $text.ToLowerInvariant()
-    $looksPath=(-not$slashSwitch-and[IO.Path]::IsPathRooted($text)) -or $text -match '(^|[\\/])\.\.([\\/]|$)'
+    # Switch exceptions belong to the command argument context, never to this
+    # path validator: redirection targets must always be checked as paths.
+    $looksPath=[IO.Path]::IsPathRooted($text) -or $text -match '(^|[\\/])\.\.([\\/]|$)'
     if(-not$looksPath){return $null}
 
     $probe=$text
@@ -176,13 +173,30 @@ function Assert-SCWorkerCommandSafe([string]$Command,$Task) {
     $tokens=$null
     $parseErrors=$null
     $ast=[System.Management.Automation.Language.Parser]::ParseInput($Command,[ref]$tokens,[ref]$parseErrors)
+    $classicSwitches=@{
+        'cmd'=@('/?','/a','/c','/d','/k','/q','/s','/u','/v:on','/v:off','/e:on','/e:off','/f:on','/f:off')
+        'dir'=@('/?','/4','/a','/b','/c','/d','/l','/n','/p','/q','/r','/s','/w','/x')
+        'taskkill'=@('/?','/im','/pid','/f','/t')
+    }
     foreach($cmd in @($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.CommandAst]},$true))){
         $elements=@($cmd.CommandElements)
+        $commandName=[IO.Path]::GetFileNameWithoutExtension($cmd.GetCommandName())
+        # Bare dir is a PowerShell alias, not the cmd.exe built-in.
+        $classicCommand=if($commandName-in@('cmd','taskkill')){$commandName.ToLowerInvariant()}else{''}
+        $awaitCmdCommand=$false
         # Element zero is the executable/cmdlet. An absolute executable path is
         # allowed; access performed by its arguments must remain in-project.
         for($i=1;$i-lt$elements.Count;$i++){
             $el=$elements[$i]
             $value=if($el -is [System.Management.Automation.Language.StringConstantExpressionAst]){[string]$el.Value}else{[string]$el.Extent.Text}
+            if($awaitCmdCommand){
+                $nestedName=[IO.Path]::GetFileNameWithoutExtension($value)
+                $classicCommand=if($nestedName-in@('cmd','dir','taskkill')){$nestedName.ToLowerInvariant()}else{''}
+                $awaitCmdCommand=$false
+            }elseif($classicCommand-and$classicSwitches[$classicCommand]-contains$value.ToLowerInvariant()){
+                if($classicCommand-eq'cmd'-and$value-in@('/c','/k')){$awaitCmdCommand=$true}
+                continue
+            }
             $check=Test-SCWorkerCommandPathToken $value
             if($check-and$check.outside){
                 throw "run_command path escapes worker root: $($check.token)"

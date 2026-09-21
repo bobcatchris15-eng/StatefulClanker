@@ -1883,6 +1883,12 @@ sealed class MainForm : Form
     bool _updatingAutofillUi;
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
     readonly System.Windows.Forms.Timer _layoutSaveTimer = new() { Interval = 450 };
+    string? _eventCursorTs = DateTimeOffset.UtcNow.ToString("o");
+    static readonly HashSet<string> EscalatedEventTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "run.failed", "critic.error", "validator.error", "project.hold.set", "project.review.failed",
+        "state.proposal_rejected", "task.plan_repair_required", "autofill.stalled"
+    };
     int _refreshing;
     int _mcpDiscoveryRunning;
     readonly McpHost _mcp;
@@ -1899,7 +1905,49 @@ sealed class MainForm : Form
         _notify = new NotifyIcon { Text = "StatefulClanker", Icon = Icon ?? SystemIcons.Application, Visible = true, ContextMenuStrip = menu }; _notify.DoubleClick += (_, _) => ShowFromTray();
         BuildUi(); RestoreProjects(); Theme.Apply(this); _ = RefreshAllAsync();
         _layoutSaveTimer.Tick += (_, _) => { _layoutSaveTimer.Stop(); AppStore.Save(_settings); };
-        _timer.Tick += async (_, _) => { await RefreshAllAsync(); }; _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
+        _timer.Tick += async (_, _) => { await RefreshAllAsync(); EscalateNewEvents(); }; _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
+    }
+
+    // Surface failures and holds in the active terminal. QueueNotice displays a
+    // toast and flushes the notice into the PTY at the next input boundary.
+    void EscalateNewEvents()
+    {
+        if (!_terminal.HasActiveSession) return;
+        var project = _settings.ActiveProjectPath;
+        if (string.IsNullOrWhiteSpace(project) || !Directory.Exists(project)) return;
+        var eventsPath = System.IO.Path.Combine(project, ".statefulclanker", "events.jsonl");
+        foreach (var (ts, type, message) in ReadNewEvents(eventsPath, ref _eventCursorTs))
+        {
+            var text = string.IsNullOrWhiteSpace(message) ? type : $"{type}: {message}";
+            _terminal.QueueNotice($"# [StatefulClanker] {text}");
+        }
+    }
+
+    static List<(string ts, string type, string message)> ReadNewEvents(string path, ref string? cursorTs)
+    {
+        var results = new List<(string ts, string type, string message)>();
+        if (!File.Exists(path)) return results;
+        string? newCursor = cursorTs;
+        foreach (var line in File.ReadLines(path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var d = JsonDocument.Parse(line);
+                var r = d.RootElement;
+                var ts = r.TryGetProperty("ts", out var t) ? t.GetString() : null;
+                var type = r.TryGetProperty("type", out var ty) ? ty.GetString() : null;
+                if (string.IsNullOrEmpty(ts) || string.IsNullOrEmpty(type)) continue;
+                if (cursorTs is not null && string.CompareOrdinal(ts, cursorTs) <= 0) continue;
+                if (!EscalatedEventTypes.Contains(type)) { if (newCursor is null || string.CompareOrdinal(ts, newCursor) > 0) newCursor = ts; continue; }
+                var message = r.TryGetProperty("message", out var mm) ? mm.GetString() ?? "" : "";
+                results.Add((ts, type, message));
+                if (newCursor is null || string.CompareOrdinal(ts, newCursor) > 0) newCursor = ts;
+            }
+            catch { }
+        }
+        cursorTs = newCursor;
+        return results;
     }
 
     static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 32, Margin = new Padding(0, 4, 8, 0) };
