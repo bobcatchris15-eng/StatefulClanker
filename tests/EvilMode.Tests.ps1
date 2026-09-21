@@ -28,6 +28,7 @@ try{
     Assert-Rejected { Assert-SCWorkerMutablePath $control $task 'write_file' } 'Worker mutation of control state is forbidden' 'Control-state mutation was not rejected locally.'
 
     Assert-SCWorkerCommandSafe 'cmd.exe /c dir /s /b' $task
+    Assert-Rejected { Assert-SCWorkerCommandSafe 'cmd.exe /outside' $task } 'run_command path escapes worker root' 'Rooted slash path was not rejected locally.'
     Assert-SCWorkerCommandSafe 'Get-Content .\inside.txt' $task
     Assert-True (-not(Test-Path -LiteralPath (Join-Path $state 'EVIL'))) 'Rejected operations created an EVIL latch file.'
 

@@ -149,11 +149,11 @@ function Test-SCWorkerCommandPathToken([string]$Token) {
         return [pscustomobject]@{outside=$true;token=$Token;resolved='<user profile>'}
     }
 
-    # .NET treats a leading slash as rooted on Windows, but classic Windows
-    # tools use single-segment slash switches such as /s, /b, and /q.
-    # Preserve rooted-path checks for drive, UNC, backslash-rooted, and
-    # multi-segment forward-slash paths while allowing those switches.
-    $slashSwitch=$text -match '^/[^/\\:\s=]+(?:=[^/\\:\s]+)?$'
+    # .NET treats a leading slash as rooted on Windows, but cmd.exe and dir
+    # use a small set of slash switches.  Only exempt those known switches;
+    # an arbitrary rooted single-segment path such as /outside must still be
+    # subject to project-root validation.
+    $slashSwitch=@('/?','/4','/a','/b','/c','/d','/k','/l','/n','/p','/q','/r','/s','/u','/w','/x','/v:on','/v:off') -contains $text.ToLowerInvariant()
     $looksPath=(-not$slashSwitch-and[IO.Path]::IsPathRooted($text)) -or $text -match '(^|[\\/])\.\.([\\/]|$)'
     if(-not$looksPath){return $null}
 
