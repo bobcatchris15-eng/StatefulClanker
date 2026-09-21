@@ -59,6 +59,5 @@ switch($Command.ToLowerInvariant()){
     default{throw "Unknown mcp subcommand: $Subcommand"}
 };break}
 'hold'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){'clear'{Clear-SCProjectHold;break};'status'{$h=Get-SCProjectHold;if($h){Write-Host "HELD since $($h.since): $($h.reason) (review $($h.reviewId))"}else{Write-Host 'Not held.'};break};default{throw "Unknown hold subcommand: $Subcommand"}};break}
-'evil'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){'clear'{$clearReason=if($Reason){$Reason}else{'Cleared explicitly by operator.'};Clear-SCEvilTrip $clearReason;Write-Host 'Evil safety trip cleared.';break};'status'{$e=if(Test-SCEvilLatched){Read-SCJson (Get-SCEvilPath)}else{$null};if($e){Write-Host "EVIL LATCHED since $($e.firstAt): $($e.reason) [$($e.trigger)]";Write-Host "Trip count: $($e.tripCount)  Last trip: $($e.lastAt)"}else{Write-Host 'Not evil.'};break};default{throw "Unknown evil subcommand: $Subcommand"}};break}
 default{throw "Unknown command: $Command"}
 }

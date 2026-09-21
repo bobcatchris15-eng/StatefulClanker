@@ -8,6 +8,21 @@ function Assert-Rejected([scriptblock]$Action,[string]$ExpectedError,[string]$Me
     Assert-True ($caught.Exception.Message-like"*$ExpectedError*") "$Message (expected error containing '$ExpectedError', got '$($caught.Exception.Message)')"
 }
 
+$evilSymbols=@('Get-SCEvilPath','Test-SCEvilLatched','Set-SCEvilTrip','Clear-SCEvilTrip','Assert-SCNotEvil')
+$runtimeFiles=@(
+    (Join-Path $repo 'lib\StatefulClanker.Core.ps1'),
+    (Join-Path $repo 'lib\StatefulClanker.Execution.ps1'),
+    (Join-Path $repo 'lib\StatefulClanker.Autofill.ps1')
+)
+foreach($file in $runtimeFiles){
+    $source=[IO.File]::ReadAllText($file)
+    foreach($symbol in $evilSymbols){
+        Assert-True ($source-notmatch([regex]::Escape($symbol))) "Legacy evil-mode symbol '$symbol' remains in $file."
+    }
+}
+$cliSource=[IO.File]::ReadAllText((Join-Path $repo 'StatefulClanker.ps1'))
+Assert-True ($cliSource-notmatch"'evil'") 'Legacy evil CLI route remains in StatefulClanker.ps1.'
+
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('sc-evil-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp|Out-Null
 try{

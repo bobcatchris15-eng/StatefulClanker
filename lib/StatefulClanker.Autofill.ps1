@@ -106,7 +106,7 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
             $retryCount=$retryCandidates.Count
 
             $reason=$null
-            try{Assert-SCDispatchAuthority;Assert-SCNotHeld;Assert-SCNotEvil}catch{$reason=$_.Exception.Message}
+            try{Assert-SCDispatchAuthority;Assert-SCNotHeld}catch{$reason=$_.Exception.Message}
             if(-not$reason){$tree=Test-SCAutofillMainTreeReady;if(-not$tree.ok){$reason=[string]$tree.reason}}
 
             if(-not$stopRequested-and-not$reason-and$slots-gt0){
