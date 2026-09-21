@@ -1102,6 +1102,8 @@ sealed class QuietSplitContainer : SplitContainer
     public int? ResetPanel2Width { get; set; }
     public event EventHandler? SplitterReset;
 
+    private int? _pendingPanel2MinSize;
+
     public QuietSplitContainer(Orientation orientation)
     {
         Dock = DockStyle.Fill;
@@ -1115,6 +1117,11 @@ sealed class QuietSplitContainer : SplitContainer
     }
 
     int Extent => this.Orientation == System.Windows.Forms.Orientation.Vertical ? ClientSize.Width : ClientSize.Height;
+
+    public int Panel2MinSizePending
+    {
+        set => _pendingPanel2MinSize = value;
+    }
 
     public void RestoreDistance(int desired)
     {
@@ -1130,6 +1137,16 @@ sealed class QuietSplitContainer : SplitContainer
     {
         var axis = this.Orientation == System.Windows.Forms.Orientation.Vertical ? point.X : point.Y;
         return axis >= SplitterDistance - 3 && axis <= SplitterDistance + SplitterWidth + 3;
+    }
+
+    protected override void OnLayout(LayoutEventArgs e)
+    {
+        base.OnLayout(e);
+        if (_pendingPanel2MinSize.HasValue && base.Panel2MinSize != _pendingPanel2MinSize.Value)
+        {
+            base.Panel2MinSize = _pendingPanel2MinSize.Value;
+            _pendingPanel2MinSize = null;
+        }
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)
@@ -2034,13 +2051,13 @@ sealed class MainForm : Form
         var shell = new QuietSplitContainer(Orientation.Vertical)
         {
             Panel1MinSize = 160,
-            Panel2MinSize = 540,
+            Panel2MinSizePending = 540,
             ResetDistance = 235
         };
         var workspace = new QuietSplitContainer(Orientation.Vertical)
         {
             Panel1MinSize = 430,
-            Panel2MinSize = 180,
+            Panel2MinSizePending = 180,
             ResetPanel2Width = 265
         };
         Controls.Add(shell);
@@ -2054,7 +2071,7 @@ sealed class MainForm : Form
         var leftBody = new QuietSplitContainer(Orientation.Horizontal)
         {
             Panel1MinSize = 145,
-            Panel2MinSize = 90,
+            Panel2MinSizePending = 90,
             ResetDistance = 330
         };
         var projectPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, Margin = new Padding(0), BackColor = Theme.Back };
@@ -2153,7 +2170,7 @@ sealed class MainForm : Form
         var overviewSplit = new QuietSplitContainer(Orientation.Horizontal)
         {
             Panel1MinSize = 70,
-            Panel2MinSize = 120,
+            Panel2MinSizePending = 120,
             ResetDistance = 285
         };
 
@@ -2169,7 +2186,7 @@ sealed class MainForm : Form
         var topDeck = new QuietSplitContainer(Orientation.Vertical)
         {
             Panel1MinSize = 180,
-            Panel2MinSize = 180,
+            Panel2MinSizePending = 180,
             ResetDistance = 255
         };
         topDeck.Panel1.Controls.Add(_orchestratorStatus);
@@ -2188,7 +2205,7 @@ sealed class MainForm : Form
         var poolSplit = new QuietSplitContainer(Orientation.Vertical)
         {
             Panel1MinSize = 180,
-            Panel2MinSize = 180,
+            Panel2MinSizePending = 180,
             ResetDistance = 315
         };
 
@@ -2238,7 +2255,7 @@ sealed class MainForm : Form
         var split = new QuietSplitContainer(Orientation.Horizontal)
         {
             Panel1MinSize = 110,
-            Panel2MinSize = 110,
+            Panel2MinSizePending = 110,
             ResetDistance = 300
         };
 

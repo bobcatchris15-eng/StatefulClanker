@@ -565,7 +565,7 @@ sealed class ApiConnectionDialog : Form
         var root=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Padding=new Padding(14)};
         root.RowStyles.Add(new RowStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.Absolute,46));
 
-        var split=new QuietSplitContainer(Orientation.Horizontal){Panel1MinSize=150,Panel2MinSize=120,ResetDistance=350};
+        var split=new QuietSplitContainer(Orientation.Horizontal){Panel1MinSize=150,Panel2MinSizePending=120,ResetDistance=350};
         var setupScroll=new Panel{Dock=DockStyle.Fill,AutoScroll=true,BackColor=Theme.Back};
         var form=new TableLayoutPanel{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=2,RowCount=8};form.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,155));form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
         foreach(var p in InferencePresets.All)_preset.Items.Add(p);_preset.DisplayMember=nameof(InferencePreset.DisplayName);
