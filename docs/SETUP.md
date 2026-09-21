@@ -24,7 +24,7 @@ Building an installer from source additionally requires the .NET 8 SDK and Inno 
 Run:
 
 ```text
-StatefulClankerSetup-0.8.11.exe
+StatefulClankerSetup-0.8.13.exe
 ```
 
 The installer is per-user and normally needs no administrator rights. It can create a startup shortcut so StatefulClanker starts when the user signs in.
@@ -221,7 +221,7 @@ From a checkout on Windows:
 ```powershell
 winget install Microsoft.DotNet.SDK.8
 winget install JRSoftware.InnoSetup
-.\install\Build-Installer.ps1 -Version 0.8.11
+.\install\Build-Installer.ps1 -Version 0.8.13
 ```
 
 The build script publishes `src\StatefulClanker.Tray` as a self-contained `win-x64` executable and packages the app, PowerShell runtime, MCP scripts, docs, examples, skills, and local tests with Inno Setup.
