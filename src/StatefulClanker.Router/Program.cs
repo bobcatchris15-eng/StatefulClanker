@@ -45,7 +45,7 @@ internal static class Program
         var engine=new RouterEngine(store);
         var server=new RouterPipeServer(pipeName,engine);
         var monitor=new EndpointMonitor(engine);
-        var freeCapacity=new FreeCapacityManager(store);
+        var freeCapacity=new FreeCapacityManager(engine);
         using var cts=new CancellationTokenSource();
 
         Console.CancelKeyPress+=(s,e)=>{e.Cancel=true;cts.Cancel();};
