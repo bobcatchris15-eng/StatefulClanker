@@ -85,21 +85,27 @@ For rate limits and billing windows, the first real inference after re-admission
 
 ## Quota intelligence
 
-The monitor also runs a separate, low-rate quota-observation loop. It samples at most one due connection at a time (normally no more than once every five minutes per connection), independently of lease recovery and routing-health work. A slow or offline metadata endpoint therefore cannot stall worker lease cleanup or route recovery.
+The monitor also runs a separate, low-rate quota-observation loop. It samples at most one due connection at a time, independently of lease recovery and routing-health work. Probe cadence is adaptive: providers that return useful quota telemetry stay relatively warm, while quota-silent control planes are backed off substantially. A slow or offline metadata endpoint therefore cannot stall worker lease cleanup or route recovery.
 
-The sampler prefers requests that do not consume inference:
+The sampler prefers requests that do not consume inference and resolves them through a provider probe catalog:
 
-- the connection's model/catalog endpoint by default,
-- provider-specific account/limit metadata when a useful endpoint is known (for example OpenRouter's authenticated key metadata),
-- and no periodic probe for local Ollama, LM Studio, or vLLM connections.
+- OpenRouter uses authenticated `/api/v1/key` metadata for key budget/reset cadence.
+- Cohere uses its dedicated `POST /v1/check-api-key` endpoint for credential health.
+- Groq, Cerebras, Anthropic, Gemini, Cloudflare, Kilo and most compatible services use their model/catalog endpoint and harvest quota/reset headers when present.
+- Gemini and Cloudflare also contribute documented deterministic daily reset rules even when the control-plane response does not report a counter.
+- Kilo contributes its published free-model request limit as rule telemetry without pretending a rolling-window reset timestamp is known.
+- Mistral uses the ordinary model catalog with the normal inference key; richer Admin API usage/rate-limit endpoints require a separate Admin API key and therefore are not silently queried with the workhorse credential.
+- Local Ollama, LM Studio and vLLM connections are not periodically quota-probed.
+- Providers known to be retired are excluded from routing rather than tested by inference.
 
-Provider feedback is normalized into a `QuotaObservation` stored in `routing/health.json`:
+Provider feedback is normalized into a `QuotaObservation` stored in `routing/health.json`. One observation may contain multiple simultaneous `QuotaWindow` records, so request/day, token/minute, account-budget, and provider-allocation limits are not collapsed into one misleading counter.
+
+The normalized state includes:
 
 - availability/exhaustion status,
 - observed time,
-- remaining and limit values when reported,
-- limiter type when identifiable,
-- reset time,
+- independent quota windows with their own units, remaining/limit values, and reset times,
+- a backward-compatible summary limiter,
 - next actionable inference time,
 - evidence source,
 - and confidence (`reported`, `derived`, or `inferred`).
@@ -156,4 +162,4 @@ The tray references the router IPC types and asks the live daemon for the Overvi
 
 ## Direction
 
-This service is the home for quota-aware routing intelligence. The current implementation learns provider-reported reset windows and remaining counters without changing task semantics or provider execution code. Future work can add provider-specific budget endpoints, historical throughput/error scoring, and richer prediction while keeping reported facts distinct from inferred availability.
+This service is the home for quota-aware routing intelligence. The current implementation actively probes provider control planes, learns reported reset windows and remaining counters, retains simultaneous quota buckets, and applies documented provider reset rules without changing task semantics or provider execution code. Future work can add optional secondary credentials for admin-only usage APIs, historical throughput/error scoring, and richer prediction while keeping reported facts distinct from inferred availability.
