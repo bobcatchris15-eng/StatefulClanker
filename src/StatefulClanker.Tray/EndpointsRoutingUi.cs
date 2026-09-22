@@ -11,6 +11,7 @@ sealed class EndpointStatus
     public string Model="";
     public string DisplayName="";
     public string Health="ready";
+    public string Quota="-";
     public bool Enabled=true;
     public bool? Free;
     public bool? SupportsTools;
@@ -64,7 +65,7 @@ sealed class EndpointsRoutingPanel : UserControl
     {
         _grid.Dock=DockStyle.Fill;_grid.AllowUserToAddRows=false;_grid.RowHeadersVisible=false;_grid.SelectionMode=DataGridViewSelectionMode.FullRowSelect;_grid.MultiSelect=false;_grid.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
         _grid.Columns.Add(new DataGridViewCheckBoxColumn{Name="enabled",HeaderText="Enabled",Width=60,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});
-        _grid.Columns.Add("name","Endpoint");_grid.Columns.Add("connection","Provider connection");_grid.Columns.Add("model","Model");_grid.Columns.Add("tools","Tools");_grid.Columns.Add("free","Free");_grid.Columns.Add("health","Health");
+        _grid.Columns.Add("name","Endpoint");_grid.Columns.Add("connection","Provider connection");_grid.Columns.Add("model","Model");_grid.Columns.Add("tools","Tools");_grid.Columns.Add("free","Free");_grid.Columns.Add("quota","Quota / reset");_grid.Columns.Add("health","Health");
         foreach(DataGridViewColumn c in _grid.Columns)if(c.Name!="enabled")c.ReadOnly=true;
         _grid.CurrentCellDirtyStateChanged+=(_,_)=>{if(_grid.IsCurrentCellDirty&&_grid.CurrentCell?.ColumnIndex==0)_grid.CommitEdit(DataGridViewDataErrorContexts.Commit);};
         _grid.CellValueChanged+=(_,e)=>{if(!_loading&&e.RowIndex>=0&&e.ColumnIndex==0)Toggle(e.RowIndex,Convert.ToBoolean(_grid.Rows[e.RowIndex].Cells[0].Value));};
@@ -82,7 +83,7 @@ sealed class EndpointsRoutingPanel : UserControl
             var selected=Selected?.Id;_grid.Rows.Clear();
             foreach(var x in data)
             {
-                var i=_grid.Rows.Add(x.Enabled,x.DisplayName,x.Connection,x.Model,x.SupportsTools==false?"text":"native",x.Free==true?"yes":x.Free==false?"no":"?",x.Health);_grid.Rows[i].Tag=x;
+                var i=_grid.Rows.Add(x.Enabled,x.DisplayName,x.Connection,x.Model,x.SupportsTools==false?"text":"native",x.Free==true?"yes":x.Free==false?"no":"?",x.Quota,x.Health);_grid.Rows[i].Tag=x;
                 if(!x.Enabled)_grid.Rows[i].DefaultCellStyle.ForeColor=Theme.Muted;
                 if(x.Health.StartsWith("cooldown",StringComparison.OrdinalIgnoreCase)||x.Health.StartsWith("quarantined",StringComparison.OrdinalIgnoreCase))_grid.Rows[i].Cells["health"].Style.ForeColor=Theme.Warn;
                 else if(x.Health=="healthy"||x.Health=="ready")_grid.Rows[i].Cells["health"].Style.ForeColor=Theme.Good;
@@ -93,22 +94,37 @@ sealed class EndpointsRoutingPanel : UserControl
         finally{_grid.ResumeLayout();_loading=false;}
     }
 
+    sealed class RouteDisplay
+    {
+        public string Health="ready";
+        public string Quota="-";
+    }
+
     List<EndpointStatus> ReadEndpoints()
     {
         var pool=TargetPoolStore.LoadActive();var health=ReadRouteHealth();var result=new List<EndpointStatus>();
         foreach(var kv in pool.entries)
         {
-            var e=kv.Value;var h="ready";
-            if(health.TryGetValue("pool:"+kv.Key,out var endpointHealth))h=endpointHealth;
-            else if(health.TryGetValue("connection:"+e.connection,out var connectionHealth))h=connectionHealth+" [connection]";
-            result.Add(new EndpointStatus{Id=kv.Key,Connection=e.connection,Model=e.model,DisplayName=string.IsNullOrWhiteSpace(e.displayName)?e.model:e.displayName,Enabled=e.enabled,Free=e.free,SupportsTools=e.supportsTools,Health=h});
+            var e=kv.Value;var h="ready";var quota="-";
+            health.TryGetValue("connection:"+e.connection,out var connectionHealth);
+            if(health.TryGetValue("pool:"+kv.Key,out var endpointHealth))
+            {
+                h=endpointHealth.Health;
+                quota=endpointHealth.Quota!="-"?endpointHealth.Quota:(connectionHealth?.Quota??"-");
+            }
+            else if(connectionHealth is not null)
+            {
+                h=connectionHealth.Health=="ready"?"ready":connectionHealth.Health+" [connection]";
+                quota=connectionHealth.Quota;
+            }
+            result.Add(new EndpointStatus{Id=kv.Key,Connection=e.connection,Model=e.model,DisplayName=string.IsNullOrWhiteSpace(e.displayName)?e.model:e.displayName,Enabled=e.enabled,Free=e.free,SupportsTools=e.supportsTools,Health=h,Quota=quota});
         }
         return result.OrderBy(x=>x.Connection,StringComparer.OrdinalIgnoreCase).ThenBy(x=>x.Model,StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    static Dictionary<string,string> ReadRouteHealth()
+    static Dictionary<string,RouteDisplay> ReadRouteHealth()
     {
-        var output=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        var output=new Dictionary<string,RouteDisplay>(StringComparer.OrdinalIgnoreCase);
         var path=System.IO.Path.Combine(AppStore.Root,"routing","health.json");if(!File.Exists(path))return output;
         try
         {
@@ -116,9 +132,28 @@ sealed class EndpointsRoutingPanel : UserControl
             foreach(var p in eps.EnumerateObject())
             {
                 var state=p.Value.TryGetProperty("state",out var s)?s.GetString():"";var reason=p.Value.TryGetProperty("reason",out var r)?r.GetString():"";var retry=p.Value.TryGetProperty("retryAfter",out var ra)?ra.GetString():null;
-                if(state=="cooldown"&&DateTimeOffset.TryParse(retry,out var dto)&&dto>DateTimeOffset.UtcNow)output[p.Name]=$"cooldown: {reason} until {dto.ToLocalTime():HH:mm:ss}";
-                else if(state=="cooldown")output[p.Name]="ready";
-                else if(!string.IsNullOrWhiteSpace(state))output[p.Name]=string.IsNullOrWhiteSpace(reason)?state:$"{state}: {reason}";
+                var display=new RouteDisplay();
+                if(state=="cooldown"&&DateTimeOffset.TryParse(retry,out var dto)&&dto>DateTimeOffset.UtcNow)display.Health=$"cooldown: {reason} until {dto.ToLocalTime():HH:mm:ss}";
+                else if(state=="cooldown")display.Health="ready";
+                else if(!string.IsNullOrWhiteSpace(state))display.Health=string.IsNullOrWhiteSpace(reason)?state:$"{state}: {reason}";
+
+                if(p.Value.TryGetProperty("quota",out var q)&&q.ValueKind==JsonValueKind.Object)
+                {
+                    var status=q.TryGetProperty("status",out var qs)?qs.GetString():null;
+                    double? remaining=q.TryGetProperty("remaining",out var qr)&&qr.ValueKind==JsonValueKind.Number&&qr.TryGetDouble(out var rd)?rd:null;
+                    double? limit=q.TryGetProperty("limit",out var ql)&&ql.ValueKind==JsonValueKind.Number&&ql.TryGetDouble(out var ld)?ld:null;
+                    var at=q.TryGetProperty("nextAvailableAt",out var qn)?qn.GetString():null;
+                    if(string.IsNullOrWhiteSpace(at)&&q.TryGetProperty("resetAt",out var qra))at=qra.GetString();
+
+                    var parts=new List<string>();
+                    if(remaining is not null&&limit is not null)parts.Add($"{remaining:0.##}/{limit:0.##}");
+                    else if(remaining is not null)parts.Add($"{remaining:0.##} left");
+                    else if(string.Equals(status,"exhausted",StringComparison.OrdinalIgnoreCase))parts.Add("exhausted");
+                    if(DateTimeOffset.TryParse(at,out var reset)&&reset>DateTimeOffset.UtcNow)
+                        parts.Add($"reset {reset.ToLocalTime():HH:mm:ss}");
+                    if(parts.Count>0)display.Quota=string.Join(" · ",parts);
+                }
+                output[p.Name]=display;
             }
         }catch{}
         return output;
