@@ -107,23 +107,27 @@ try{
     $reader=$form.GetMethod('ReadNewEvents',[Reflection.BindingFlags]'Static,NonPublic')
     try{
         Assert-True ($null-ne$reader) 'Tray failure/hold event reader is missing.'
-        $eventTypes=@('run.failed','critic.error','validator.error','project.hold.set','project.review.failed','state.proposal_rejected','task.plan_repair_required','autofill.stalled')
+        $eventTypes=@(
+            'run.failed','critic.error','validator.error','project.hold.set','project.review.failed',
+            'state.proposal_rejected','task.plan_repair_required','autofill.stalled',
+            'worker.session_abandoned','routing.failover_stopped','merge.conflict'
+        )
         $events=Join-Path $state 'events.jsonl'
         $lines=@('{invalid-json')
         for($i=0;$i-lt$eventTypes.Count;$i++){
             $lines+=(@{ts=('2026-09-21T12:00:{0:00}Z'-f($i+1));type=$eventTypes[$i];message='needs attention'}|ConvertTo-Json -Compress)
         }
-        $lines+='{"ts":"2026-09-21T12:00:09Z","type":"clanker.evil"}'
-        $lines+='{"ts":"2026-09-21T12:00:10Z","type":"clanker.evil.cleared"}'
-        $lines+='{"ts":"2026-09-21T12:00:11Z","type":"run.completed"}'
+        $lines+='{"ts":"2026-09-21T12:00:12Z","type":"clanker.evil"}'
+        $lines+='{"ts":"2026-09-21T12:00:13Z","type":"clanker.evil.cleared"}'
+        $lines+='{"ts":"2026-09-21T12:00:14Z","type":"run.completed"}'
         [IO.File]::WriteAllLines($events,$lines)
         $arguments=[object[]]@([string]$events,'2026-09-21T12:00:00Z')
         $notices=$reader.Invoke($null,$arguments)
-        Assert-True ($notices.Count-eq8) 'Tray lost ordinary escalation events or escalated historic/routine events.'
-        for($i=0;$i-lt8;$i++){
+        Assert-True ($notices.Count-eq$eventTypes.Count) 'Tray lost ordinary escalation events or escalated historic/routine events.'
+        for($i=0;$i-lt$eventTypes.Count;$i++){
             Assert-True ($notices[$i].Item2-eq$eventTypes[$i]-and$notices[$i].Item3-eq'needs attention') 'Tray event type or message was not preserved.'
         }
-        Assert-True ($arguments[1]-eq'2026-09-21T12:00:11Z') 'Tray cursor did not advance past ignored events.'
+        Assert-True ($arguments[1]-eq'2026-09-21T12:00:14Z') 'Tray cursor did not advance past ignored events.'
         Assert-True ($reader.Invoke($null,$arguments).Count-eq0) 'Tray replayed events already consumed.'
     }catch{$regressions.Add($_.Exception.Message)}
     Assert-True ($regressions.Count-eq0) ($regressions-join"`n")
