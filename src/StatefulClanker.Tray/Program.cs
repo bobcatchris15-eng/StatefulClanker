@@ -1109,14 +1109,18 @@ sealed class QuietSplitContainer : SplitContainer
         return axis >= SplitterDistance - 3 && axis <= SplitterDistance + SplitterWidth + 3;
     }
 
-    protected override void OnCreateControl()
+    protected override void OnLayout(LayoutEventArgs levent)
     {
-        base.OnCreateControl();
-        if (_pendingPanel2MinSize.HasValue && base.Panel2MinSize != _pendingPanel2MinSize.Value)
-        {
-            base.Panel2MinSize = _pendingPanel2MinSize.Value;
-            _pendingPanel2MinSize = null;
-        }
+        base.OnLayout(levent);
+        if (!_pendingPanel2MinSize.HasValue || base.Panel2MinSize == _pendingPanel2MinSize.Value) return;
+
+        var pending = _pendingPanel2MinSize.Value;
+        var max = Extent - pending - SplitterWidth;
+        if (max < Panel1MinSize) return;
+
+        _pendingPanel2MinSize = null;
+        SplitterDistance = Math.Min(SplitterDistance, max);
+        base.Panel2MinSize = pending;
     }
 
     protected override void OnPaint(PaintEventArgs e)
