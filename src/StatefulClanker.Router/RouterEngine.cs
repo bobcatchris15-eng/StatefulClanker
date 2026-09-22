@@ -175,7 +175,7 @@ public sealed class RouterEngine
         return RouterResponse.Ok(new
         {
             endpoint=route.RouteName,key,scope,failureClass=klass,
-            state=entry.state,retryAfter=entry.retryAfter,nextProbeAt=entry.nextProbeAt
+            state=entry.state,retryAfter=entry.retryAfter,nextProbeAt=entry.nextProbeAt,quota=entry.quota
         });
     }
 
@@ -316,20 +316,39 @@ public sealed class RouterEngine
             e.scope=scope;e.reason=klass;e.failures=Math.Max(0,e.failures)+1;e.lastFailure=DateTimeOffset.UtcNow.ToString("O");
             e.message=Bound(message,500);
             var hard=(klass=="auth"||klass=="permission"||klass=="configuration");
+            var quota=QuotaIntelligence.ObserveFailure(connection?.presetId,klass,message);
+            if(HasQuotaSignal(quota)) e.quota=quota;
+            var exactAt=FutureTime(quota.nextAvailableAt);
             var explicitDelay=FailurePolicy.ParseExplicitDelay(message);
-            if(hard && explicitDelay is null)
+            if(hard && explicitDelay is null && exactAt is null)
             {
                 e.state="quarantined";e.retryAfter=null;e.nextProbeAt=null;
             }
             else
             {
-                var delay=explicitDelay ?? FailurePolicy.Delay(klass,message,e.failures);
-                var at=DateTimeOffset.UtcNow.Add(delay).ToString("O");
-                e.state="cooldown";e.retryAfter=at;e.nextProbeAt=at;
+                var at=exactAt ?? DateTimeOffset.UtcNow.Add(explicitDelay ?? FailurePolicy.Delay(klass,message,e.failures));
+                var atText=at.ToUniversalTime().ToString("O");
+                e.state="cooldown";e.retryAfter=atText;e.nextProbeAt=atText;
             }
             if(scope=="connection" && connection is not null)
                 e.configFingerprint=_store.ConnectionFingerprint(connection);
             doc.endpoints[key]=e;return e;
+        });
+    }
+
+    public void RecordQuotaObservation(string key,string scope,QuotaObservation observation,ConnectionProfile? connection=null)
+    {
+        if(!HasQuotaSignal(observation)) return;
+        _store.UpdateHealth(doc =>
+        {
+            if(!doc.endpoints.TryGetValue(key,out var e)) e=new HealthEntry();
+            e.scope=scope;
+            e.quota=observation;
+            e.lastProbe=observation.observedAt;
+            if(scope=="connection" && connection is not null)
+                e.configFingerprint=_store.ConnectionFingerprint(connection);
+            doc.endpoints[key]=e;
+            return 0;
         });
     }
 
@@ -370,8 +389,26 @@ public sealed class RouterEngine
         var keys=new[]{route.RouteName,"connection:"+route.Endpoint.connection,string.IsNullOrWhiteSpace(route.Service)?null:"service:"+route.Service};
         foreach(var key in keys)
             if(key is not null && health.endpoints.TryGetValue(key,out var e) && !string.Equals(e.state,"healthy",StringComparison.OrdinalIgnoreCase))
-                return new { key,e.state,e.reason,e.retryAfter,e.nextProbeAt };
-        return new { key=route.RouteName,state="healthy",reason=(string?)null,retryAfter=(string?)null,nextProbeAt=(string?)null };
+                return new { key,e.state,e.reason,e.retryAfter,e.nextProbeAt,e.quota };
+
+        QuotaObservation? quota=null;
+        string quotaKey=route.RouteName;
+        foreach(var key in keys)
+        {
+            if(key is null || !health.endpoints.TryGetValue(key,out var e) || e.quota is null) continue;
+            quota=e.quota;quotaKey=key;break;
+        }
+        return new { key=quotaKey,state="healthy",reason=(string?)null,retryAfter=(string?)null,nextProbeAt=(string?)null,quota };
+    }
+
+    static bool HasQuotaSignal(QuotaObservation? q) =>
+        q is not null && (q.nextAvailableAt is not null || q.resetAt is not null ||
+                          q.remaining is not null || q.limit is not null || q.source!="none");
+
+    static DateTimeOffset? FutureTime(string? value)
+    {
+        if(DateTimeOffset.TryParse(value,out var at) && at>DateTimeOffset.UtcNow) return at;
+        return null;
     }
 
     static string? NextRetryAt(RoutingHealthDocument health)
