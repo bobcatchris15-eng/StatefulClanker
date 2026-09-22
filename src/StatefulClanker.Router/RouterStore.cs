@@ -18,6 +18,7 @@ public sealed class RouterStore
     public string RoutingDir => Path.Combine(Root, "routing");
     public string HealthPath => Path.Combine(RoutingDir, "health.json");
     public string CursorPath => Path.Combine(RoutingDir, "round-robin.json");
+    public string LeasePath => Path.Combine(RoutingDir, "leases.json");
 
     readonly Mutex _mutex;
 
@@ -47,15 +48,20 @@ public sealed class RouterStore
     public ConnectionDocument LoadConnections() => WithLock(() => Load<ConnectionDocument>(ConnectionPath) ?? new());
     public RoutingHealthDocument LoadHealth() => WithLock(() => Load<RoutingHealthDocument>(HealthPath) ?? new());
     public RoundRobinDocument LoadCursor() => WithLock(() => Load<RoundRobinDocument>(CursorPath) ?? new());
+    public LeaseDocument LoadLeases() => WithLock(() => Load<LeaseDocument>(LeasePath) ?? new());
 
     public void SaveHealth(RoutingHealthDocument doc) => WithLock(() => { Save(HealthPath, doc); return 0; });
     public void SaveCursor(RoundRobinDocument doc) => WithLock(() => { Save(CursorPath, doc); return 0; });
+    public void SaveLeases(LeaseDocument doc) => WithLock(() => { doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(LeasePath,doc); return 0; });
 
     public TResult UpdateHealth<TResult>(Func<RoutingHealthDocument,TResult> update) =>
         WithLock(() => { var doc=Load<RoutingHealthDocument>(HealthPath) ?? new(); var r=update(doc); Save(HealthPath,doc); return r; });
 
     public TResult UpdateCursor<TResult>(Func<RoundRobinDocument,TResult> update) =>
         WithLock(() => { var doc=Load<RoundRobinDocument>(CursorPath) ?? new(); var r=update(doc); doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(CursorPath,doc); return r; });
+
+    public TResult UpdateLeases<TResult>(Func<LeaseDocument,TResult> update) =>
+        WithLock(() => { var doc=Load<LeaseDocument>(LeasePath) ?? new(); var r=update(doc); doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(LeasePath,doc); return r; });
 
     public string ConnectionFingerprint(ConnectionProfile profile)
     {
