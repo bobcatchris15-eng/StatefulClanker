@@ -83,6 +83,35 @@ The daemon monitor:
 
 For rate limits and billing windows, the first real inference after re-admission remains the authoritative probe. This avoids spending scarce free quota on synthetic health requests.
 
+## Quota intelligence
+
+The monitor also runs a separate, low-rate quota-observation loop. It samples at most one due connection at a time (normally no more than once every five minutes per connection), independently of lease recovery and routing-health work. A slow or offline metadata endpoint therefore cannot stall worker lease cleanup or route recovery.
+
+The sampler prefers requests that do not consume inference:
+
+- the connection's model/catalog endpoint by default,
+- provider-specific account/limit metadata when a useful endpoint is known (for example OpenRouter's authenticated key metadata),
+- and no periodic probe for local Ollama, LM Studio, or vLLM connections.
+
+Provider feedback is normalized into a `QuotaObservation` stored in `routing/health.json`:
+
+- availability/exhaustion status,
+- observed time,
+- remaining and limit values when reported,
+- limiter type when identifiable,
+- reset time,
+- next actionable inference time,
+- evidence source,
+- and confidence (`reported`, `derived`, or `inferred`).
+
+The generic parser understands common provider forms including `Retry-After`, standard `RateLimit` fields, `X-RateLimit-*`, Anthropic request/token reset headers, epoch and RFC3339 timestamps, compact durations such as `2m59.56s`, and retry hints embedded in JSON error bodies.
+
+Actual inference failures are authoritative for scheduling. If an inference 429 reports an exact retry/reset time, that time replaces generic exponential backoff for the affected endpoint. `Retry-After` is treated as the strongest first instruction when several equally authoritative timers are supplied.
+
+Background metadata probes are deliberately weaker. Their observations are tagged `probe:...` and are shown that way in the **Quota / reset** column of **Endpoints & Routing**. A model-list endpoint may have a different bucket from inference, so a probe-reported zero balance or metadata 429 does not by itself disable an otherwise healthy inference endpoint. Authentication, permission, or configuration failures discovered by a probe may quarantine the connection because those are credential facts rather than quota guesses.
+
+The endpoint table prefers endpoint-specific inference observations and falls back to connection-level probe telemetry. Examples are `7/30 · reset 14:32:10`, `exhausted · reset 00:00:00`, or `probe 7/30 · reset 14:32:10`.
+
 ## IPC
 
 The local service uses a machine-root-specific named pipe and newline-delimited JSON requests.
@@ -127,4 +156,4 @@ The tray references the router IPC types and asks the live daemon for the Overvi
 
 ## Direction
 
-This service is the intended home for future quota-aware routing intelligence. Provider-specific reset semantics, free-quota budgets, historical throughput/error scoring, and richer endpoint monitoring can be added here without changing task semantics or provider execution code.
+This service is the home for quota-aware routing intelligence. The current implementation learns provider-reported reset windows and remaining counters without changing task semantics or provider execution code. Future work can add provider-specific budget endpoints, historical throughput/error scoring, and richer prediction while keeping reported facts distinct from inferred availability.

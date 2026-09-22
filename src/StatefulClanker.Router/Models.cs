@@ -64,6 +64,7 @@ public sealed class HealthEntry
     public string? retryAfter { get; set; }
     public string? configFingerprint { get; set; }
     public string? message { get; set; }
+    public QuotaObservation? quota { get; set; }
 }
 
 public sealed class RoundRobinDocument

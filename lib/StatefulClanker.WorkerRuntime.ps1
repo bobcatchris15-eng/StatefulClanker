@@ -477,7 +477,16 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
         }
         $headerParts=@()
         if($response-and$response.PSObject.Properties['Headers']-and$response.Headers){
-            foreach($name in @('Retry-After','RateLimit-Reset','X-RateLimit-Reset','X-RateLimit-Reset-Requests','X-RateLimit-Reset-Tokens','X-RateLimit-Remaining','X-RateLimit-Limit')){
+            foreach($name in @(
+                'Retry-After','RateLimit','RateLimit-Policy','RateLimit-Remaining','RateLimit-Reset',
+                'X-RateLimit-Limit','X-RateLimit-Remaining','X-RateLimit-Reset',
+                'X-RateLimit-Limit-Requests','X-RateLimit-Remaining-Requests','X-RateLimit-Reset-Requests',
+                'X-RateLimit-Limit-Tokens','X-RateLimit-Remaining-Tokens','X-RateLimit-Reset-Tokens',
+                'Anthropic-RateLimit-Requests-Limit','Anthropic-RateLimit-Requests-Remaining','Anthropic-RateLimit-Requests-Reset',
+                'Anthropic-RateLimit-Tokens-Limit','Anthropic-RateLimit-Tokens-Remaining','Anthropic-RateLimit-Tokens-Reset',
+                'Anthropic-RateLimit-Input-Tokens-Limit','Anthropic-RateLimit-Input-Tokens-Remaining','Anthropic-RateLimit-Input-Tokens-Reset',
+                'Anthropic-RateLimit-Output-Tokens-Limit','Anthropic-RateLimit-Output-Tokens-Remaining','Anthropic-RateLimit-Output-Tokens-Reset'
+            )){
                 try{
                     $value=$null
                     if($response.Headers.PSObject.Methods['TryGetValues']){
@@ -492,7 +501,7 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
         try{if($ex.ErrorDetails-and$ex.ErrorDetails.Message){$detail=[string]$ex.ErrorDetails.Message}}catch{}
         if($detail.Length-gt2000){$detail=$detail.Substring(0,2000)}
         $statusText=if($status-gt0){" HTTP $status"}else{''}
-        $metadata=if($headerParts.Count){' '+($headerParts-join'; ')}else{''}
+        $metadata=if($headerParts.Count){[Environment]::NewLine+($headerParts-join[Environment]::NewLine)}else{''}
         $bodyDetail=if($detail){" Body: $detail"}else{''}
         throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$metadata$bodyDetail"
     }
