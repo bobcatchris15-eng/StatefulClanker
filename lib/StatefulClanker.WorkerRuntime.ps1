@@ -366,6 +366,48 @@ function ConvertTo-SCAnthropicMessages($Messages) {
     if($pendingResults){$out+=,[ordered]@{role='user';content=@($pendingResults)}}
     return [ordered]@{system=($system-join"`n`n");messages=@($out)}
 }
+function ConvertTo-SCGeminiTools($Tools) {
+    $decl=@()
+    foreach($t in @($Tools)){
+        $fn=Get-SCField $t 'function';if($null-eq$fn){continue}
+        $decl+=,[ordered]@{
+            name=[string](Get-SCField $fn 'name')
+            description=[string](Get-SCField $fn 'description')
+            parameters=(Get-SCField $fn 'parameters')
+        }
+    }
+    if($decl.Count-eq0){return @()}
+    return @([ordered]@{functionDeclarations=@($decl)})
+}
+function ConvertTo-SCGeminiMessages($Messages) {
+    $system=@();$contents=@();$callNames=@{}
+    foreach($m in @($Messages)){
+        $role=[string](Get-SCField $m 'role')
+        if($role-eq'system'){$system+=,[string](Get-SCField $m 'content');continue}
+        if($role-eq'assistant'){
+            $parts=@();$text=Get-SCField $m 'content'
+            if(-not[string]::IsNullOrWhiteSpace([string]$text)){$parts+=,[ordered]@{text=[string]$text}}
+            $calls=Get-SCField $m 'tool_calls'
+            foreach($call in @($calls)){
+                $fn=Get-SCField $call 'function';if($null-eq$fn){continue}
+                $name=[string](Get-SCField $fn 'name');$id=[string](Get-SCField $call 'id')
+                if($id){$callNames[$id]=$name}
+                $raw=Get-SCField $fn 'arguments'
+                $args=try{if([string]::IsNullOrWhiteSpace([string]$raw)){[pscustomobject]@{}}else{[string]$raw|ConvertFrom-Json}}catch{[pscustomobject]@{}}
+                $parts+=,[ordered]@{functionCall=[ordered]@{name=$name;args=$args}}
+            }
+            if($parts.Count-gt0){$contents+=,[ordered]@{role='model';parts=@($parts)}}
+            continue
+        }
+        if($role-eq'tool'){
+            $id=[string](Get-SCField $m 'tool_call_id');$name=if($callNames.ContainsKey($id)){$callNames[$id]}else{'tool'}
+            $contents+=,[ordered]@{role='user';parts=@([ordered]@{functionResponse=[ordered]@{name=$name;response=[ordered]@{result=[string](Get-SCField $m 'content')}}})}
+            continue
+        }
+        $contents+=,[ordered]@{role='user';parts=@([ordered]@{text=[string](Get-SCField $m 'content')})}
+    }
+    return [ordered]@{system=($system-join[Environment]::NewLine+[Environment]::NewLine);contents=@($contents)}
+}
 function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
     $protocol=Get-SCConnectionProtocol $Connection
     if($protocol-eq'anthropic-messages'){
