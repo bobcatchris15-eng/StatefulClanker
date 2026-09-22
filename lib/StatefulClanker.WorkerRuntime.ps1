@@ -501,7 +501,7 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
         try{if($ex.ErrorDetails-and$ex.ErrorDetails.Message){$detail=[string]$ex.ErrorDetails.Message}}catch{}
         if($detail.Length-gt2000){$detail=$detail.Substring(0,2000)}
         $statusText=if($status-gt0){" HTTP $status"}else{''}
-        $metadata=if($headerParts.Count){' '+($headerParts-join'; ')}else{''}
+        $metadata=if($headerParts.Count){[Environment]::NewLine+($headerParts-join[Environment]::NewLine)}else{''}
         $bodyDetail=if($detail){" Body: $detail"}else{''}
         throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$metadata$bodyDetail"
     }
