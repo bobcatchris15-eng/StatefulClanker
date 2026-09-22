@@ -60,23 +60,38 @@ public static class ProviderProbeCatalog
                 "Dedicated key-validity endpoint; quota telemetry is harvested if headers are present.");
         }
 
-        // These providers currently expose useful quota/reset headers on ordinary
-        // API/control-plane responses. Keep the models/catalog request cheap and
-        // harvest the response metadata instead of spending inference.
-        var telemetryPreferred=id is
-            "groq" or "cerebras" or "anthropic" or "gemini" or "cloudflare" or
-            "openrouter" or "kilo";
-
         var models=ModelsUri(profile);
-        return new ProviderProbePlan(
-            id,ProviderProbeKind.Models,HttpMethod.Get,models,false,true,
-            telemetryPreferred ? Useful : TimeSpan.FromMinutes(10),
-            telemetryPreferred ? Silent : TimeSpan.FromMinutes(45),
-            "models",
-            telemetryPreferred
-                ? "Catalog/control-plane request; harvest rate-limit and reset metadata when returned."
-                : "Generic authenticated model/catalog health probe; back off when quota-silent.");
+        return id switch
+        {
+            "groq" => ModelsPlan(id,models,"groq-models-headers",
+                "Groq documents RPD/TPM remaining and reset headers on API responses; harvest them without inference."),
+            "cerebras" => ModelsPlan(id,models,"cerebras-models-headers",
+                "Cerebras documents request/day and token/minute remaining/reset headers on API responses."),
+            "anthropic" => ModelsPlan(id,models,"anthropic-models-headers",
+                "Harvest Anthropic rate-limit metadata from its authenticated control plane when present."),
+            "gemini" => ModelsPlan(id,models,"gemini-models-rules",
+                "Model-list health plus published midnight-Pacific daily reset rules; explicit RetryInfo remains authoritative."),
+            "cloudflare" => ModelsPlan(id,models,"cloudflare-models-rules",
+                "Workers AI model catalog plus published 00:00 UTC daily free-allocation reset."),
+            "kilo" => ModelsPlan(id,models,"kilo-models-rules",
+                "Public model catalog plus published 200 free-model requests/hour/IP policy."),
+            "mistral" => ModelsPlan(id,models,"mistral-models",
+                "Ordinary API keys can validate/list models; richer usage/rate-limit Admin APIs require a separate Admin API key."),
+            "huggingface" => ModelsPlan(id,models,"huggingface-models",
+                "Inference Providers catalog health; billing/credit detail is primarily exposed in account billing settings."),
+            "vercel" => ModelsPlan(id,models,"vercel-models",
+                "AI Gateway model catalog health. Budget/spend inspection is exposed through Vercel account tooling rather than the gateway key endpoint."),
+            _ => new ProviderProbePlan(
+                id,ProviderProbeKind.Models,HttpMethod.Get,models,false,true,
+                TimeSpan.FromMinutes(10),TimeSpan.FromMinutes(45),
+                "models",
+                "Generic authenticated model/catalog health probe; back off when quota-silent.")
+        };
     }
+
+    static ProviderProbePlan ModelsPlan(string id,Uri uri,string strategy,string note) =>
+        new(id,ProviderProbeKind.Models,HttpMethod.Get,uri,false,true,
+            Useful,Silent,strategy,note);
 
     public static bool IsRetired(ConnectionProfile profile) =>
         string.Equals(profile.presetId,"github-models",StringComparison.OrdinalIgnoreCase);
