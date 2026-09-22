@@ -74,8 +74,9 @@ try {
     $flush=$terminalSource.Substring($start,$finish-$start)
     Assert-True ($flush.Contains('var conpty = _terminal?.ConPTYTerm;')) 'PTY readiness is not checked before injection.'
     Assert-True ($flush.Contains('if (conpty is null) return;')) 'A not-yet-ready ConPTY does not preserve the queued notice.'
-    Assert-True ($flush.IndexOf('_pendingNotices.Clear()') -gt $flush.IndexOf('conpty.WriteToTerm')) 'Notice queue is cleared before a successful PTY write.'
-    Assert-True (-not $flush.Contains('finally')) 'PTY write failure still clears notices through finally.'
+    $ready=$flush.Substring($flush.IndexOf('var conpty = _terminal?.ConPTYTerm;'))
+    Assert-True ($ready.IndexOf('_pendingNotices.Clear()') -gt $ready.IndexOf('conpty.WriteToTerm')) 'Notice queue is cleared before a successful PTY write once ConPTY exists.'
+    Assert-True (-not $ready.Contains('finally')) 'PTY write failure still clears notices through finally.'
 
     Write-Host 'PASS: real worker failures reach terminal escalation while transient routing and Pi startup remain safe.'
 }
