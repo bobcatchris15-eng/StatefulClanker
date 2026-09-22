@@ -235,12 +235,12 @@ sealed class QuotaRemainingPanel : Panel
                 yield return new QuotaCandidate(
                     Number(w, "remaining"),
                     Number(w, "limit"),
-                    Text(w, "kind"),
-                    Text(w, "unit"),
-                    Text(quota, "status") ?? state,
+                    JsonText(w, "kind"),
+                    JsonText(w, "unit"),
+                    JsonText(quota, "status") ?? state,
                     reason,
-                    Text(w, "resetAt") ?? Text(quota, "nextAvailableAt"),
-                    Text(w, "source") ?? Text(quota, "source") ?? "quota");
+                    JsonText(w, "resetAt") ?? JsonText(quota, "nextAvailableAt"),
+                    JsonText(w, "source") ?? JsonText(quota, "source") ?? "quota");
             }
         }
 
@@ -252,12 +252,12 @@ sealed class QuotaRemainingPanel : Panel
             yield return new QuotaCandidate(
                 Number(quota, "remaining"),
                 Number(quota, "limit"),
-                Text(quota, "limiter"),
+                JsonText(quota, "limiter"),
                 null,
-                Text(quota, "status") ?? state,
+                JsonText(quota, "status") ?? state,
                 reason,
-                Text(quota, "nextAvailableAt") ?? Text(quota, "resetAt") ?? retry,
-                Text(quota, "source") ?? "quota");
+                JsonText(quota, "nextAvailableAt") ?? JsonText(quota, "resetAt") ?? retry,
+                JsonText(quota, "source") ?? "quota");
         }
     }
 
@@ -337,7 +337,7 @@ sealed class QuotaRemainingPanel : Panel
         return v.ToString("0.##");
     }
 
-    static string? Text(System.Text.Json.JsonElement e, string name) =>
+    static string? JsonText(System.Text.Json.JsonElement e, string name) =>
         e.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
 
     static double? Number(System.Text.Json.JsonElement e, string name)
