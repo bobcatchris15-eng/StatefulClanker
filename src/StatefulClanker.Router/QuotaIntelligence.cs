@@ -4,6 +4,19 @@ using System.Text.RegularExpressions;
 
 namespace StatefulClanker.Router;
 
+public sealed class QuotaWindow
+{
+    public string kind { get; set; } = "";
+    public string? unit { get; set; }
+    public double? limit { get; set; }
+    public double? remaining { get; set; }
+    public string? resetAt { get; set; }
+    public string source { get; set; } = "none";
+    public string confidence { get; set; } = "unknown";
+    public string? evidence { get; set; }
+    public List<QuotaWindow> windows { get; set; } = new();
+}
+
 public sealed class QuotaObservation
 {
     public string status { get; set; } = "unknown";
@@ -49,38 +62,40 @@ public static partial class QuotaIntelligence
             status=statusCode==429 ? "exhausted" : (success ? "available" : "unknown")
         };
 
-        // Provider/header-specific remaining counters. Request counters take
-        // precedence over token counters because they are the most portable
-        // signal for a scheduler deciding whether another call may be attempted.
-        var remaining=FirstNumber(h,
+        // Preserve independent request and token buckets. Providers such as
+        // Groq expose both simultaneously with different reset windows.
+        var requestRemaining=FirstNumber(h,
             "anthropic-ratelimit-requests-remaining",
             "x-ratelimit-remaining-requests",
             "ratelimit-remaining",
             "x-ratelimit-remaining");
-        var limit=FirstNumber(h,
+        var requestLimit=FirstNumber(h,
             "anthropic-ratelimit-requests-limit",
             "x-ratelimit-limit-requests",
             "ratelimit-limit",
             "x-ratelimit-limit");
-        var limiter="requests";
-        if(remaining is null)
-        {
-            remaining=FirstNumber(h,
-                "anthropic-ratelimit-tokens-remaining",
-                "anthropic-ratelimit-input-tokens-remaining",
-                "anthropic-ratelimit-output-tokens-remaining",
-                "x-ratelimit-remaining-tokens");
-            limit=FirstNumber(h,
-                "anthropic-ratelimit-tokens-limit",
-                "anthropic-ratelimit-input-tokens-limit",
-                "anthropic-ratelimit-output-tokens-limit",
-                "x-ratelimit-limit-tokens");
-            if(remaining is not null) limiter="tokens";
-        }
-        q.remaining=remaining;
-        q.limit=limit;
-        if(remaining is not null) q.limiter=limiter;
-        if(remaining is <= 0) q.status="exhausted";
+        var tokenRemaining=FirstNumber(h,
+            "anthropic-ratelimit-tokens-remaining",
+            "anthropic-ratelimit-input-tokens-remaining",
+            "anthropic-ratelimit-output-tokens-remaining",
+            "x-ratelimit-remaining-tokens");
+        var tokenLimit=FirstNumber(h,
+            "anthropic-ratelimit-tokens-limit",
+            "anthropic-ratelimit-input-tokens-limit",
+            "anthropic-ratelimit-output-tokens-limit",
+            "x-ratelimit-limit-tokens");
+
+        var requestWindow=AddWindow(q,"requests",null,requestLimit,requestRemaining,"headers","reported",
+            requestRemaining is not null || requestLimit is not null ? $"requests remaining={requestRemaining}; limit={requestLimit}" : null);
+        var tokenWindow=AddWindow(q,"tokens",null,tokenLimit,tokenRemaining,"headers","reported",
+            tokenRemaining is not null || tokenLimit is not null ? $"tokens remaining={tokenRemaining}; limit={tokenLimit}" : null);
+
+        // Back-compat summary: requests are the first scheduling gate, then tokens.
+        q.remaining=requestRemaining ?? tokenRemaining;
+        q.limit=requestRemaining is not null || requestLimit is not null ? requestLimit : tokenLimit;
+        q.limiter=requestRemaining is not null || requestLimit is not null ? "requests" :
+            (tokenRemaining is not null || tokenLimit is not null ? "tokens" : null);
+        if(requestRemaining is <= 0 || tokenRemaining is <= 0) q.status="exhausted";
 
         // Retry-After is the strongest generic signal and may be seconds or an
         // HTTP date.
@@ -94,32 +109,38 @@ public static partial class QuotaIntelligence
             if(rem.Success && double.TryParse(rem.Groups[1].Value,NumberStyles.Float,CultureInfo.InvariantCulture,out var r))
             {
                 q.remaining=r;q.limiter ??="requests";
+                var w=AddWindow(q,"requests",null,null,r,"ratelimit","reported",rateLimit);
                 if(r<=0) q.status="exhausted";
             }
             var reset=Regex.Match(rateLimit,@"(?i)(?:^|;)\s*t\s*=\s*(\d+(?:\.\d+)?)");
             if(reset.Success && double.TryParse(reset.Groups[1].Value,NumberStyles.Float,CultureInfo.InvariantCulture,out var seconds))
-                SetTime(q,now.AddSeconds(Math.Max(0,seconds)),"ratelimit:t","reported",rateLimit,q.remaining is <=0 || statusCode==429);
+            {
+                var at=now.AddSeconds(Math.Max(0,seconds));
+                SetTime(q,at,"ratelimit:t","reported",rateLimit,q.remaining is <=0 || statusCode==429);
+                SetWindowReset(q,"requests",at,"ratelimit:t","reported",rateLimit);
+            }
         }
 
         // Standard / provider reset headers. Groq returns compact durations
         // (2m59.56s); Anthropic returns RFC3339; GitHub commonly returns epoch.
-        foreach(var name in new[]
+        foreach(var item in new[]
         {
-            "anthropic-ratelimit-requests-reset",
-            "anthropic-ratelimit-tokens-reset",
-            "anthropic-ratelimit-input-tokens-reset",
-            "anthropic-ratelimit-output-tokens-reset",
-            "x-ratelimit-reset-requests",
-            "x-ratelimit-reset-tokens",
-            "ratelimit-reset",
-            "x-ratelimit-reset"
+            (name:"anthropic-ratelimit-requests-reset",kind:"requests"),
+            (name:"anthropic-ratelimit-tokens-reset",kind:"tokens"),
+            (name:"anthropic-ratelimit-input-tokens-reset",kind:"input_tokens"),
+            (name:"anthropic-ratelimit-output-tokens-reset",kind:"output_tokens"),
+            (name:"x-ratelimit-reset-requests",kind:"requests"),
+            (name:"x-ratelimit-reset-tokens",kind:"tokens"),
+            (name:"ratelimit-reset",kind:q.limiter ?? "requests"),
+            (name:"x-ratelimit-reset",kind:q.limiter ?? "requests")
         })
         {
-            if(!h.TryGetValue(name,out var raw) || string.IsNullOrWhiteSpace(raw)) continue;
+            if(!h.TryGetValue(item.name,out var raw) || string.IsNullOrWhiteSpace(raw)) continue;
             if(TryResetValue(raw,now,out var resetAt))
             {
-                var active=q.remaining is <=0 || statusCode==429;
-                SetTime(q,resetAt,name,"reported",$"{name}: {raw}",active);
+                var active=WindowExhausted(q,item.kind) || statusCode==429;
+                SetTime(q,resetAt,item.name,"reported",$"{item.name}: {raw}",active);
+                SetWindowReset(q,item.kind,resetAt,item.name,"reported",$"{item.name}: {raw}");
             }
         }
 
@@ -153,6 +174,24 @@ public static partial class QuotaIntelligence
         {
             var next=NextPacificMidnight(now);
             SetTime(q,next,"gemini-rpd","inferred","Gemini daily quota; midnight Pacific reset",true);
+        }
+
+        // Published fixed windows are useful telemetry even while healthy. They
+        // describe when the provider's daily bucket rolls over; they do not by
+        // themselves imply exhaustion.
+        if(string.Equals(providerId,"gemini",StringComparison.OrdinalIgnoreCase))
+        {
+            var reset=NextPacificMidnight(now);
+            AddWindow(q,"requests_per_day",null,null,null,"provider-rule","derived",
+                "Gemini RPD resets at midnight Pacific",reset);
+            if(q.resetAt is null) q.resetAt=reset.ToString("O");
+        }
+        if(string.Equals(providerId,"cloudflare",StringComparison.OrdinalIgnoreCase))
+        {
+            var reset=new DateTimeOffset(now.UtcDateTime.Date.AddDays(1),TimeSpan.Zero);
+            AddWindow(q,"free_allocation","neurons/day",10000,null,"provider-rule","derived",
+                "Workers AI free allocation resets at 00:00 UTC",reset);
+            if(q.resetAt is null) q.resetAt=reset.ToString("O");
         }
 
         if(q.nextAvailableAt is not null && DateTimeOffset.TryParse(q.nextAvailableAt,out var n) && n<=now)
@@ -212,6 +251,8 @@ public static partial class QuotaIntelligence
             if(root.TryGetProperty("limit_remaining",out var rem) && rem.ValueKind==JsonValueKind.Number && rem.TryGetDouble(out var remaining))
             {
                 q.remaining=remaining;q.limiter="budget";
+                var budgetWindow=AddWindow(q,"budget",null,null,remaining,"openrouter-key","reported",
+                    $"OpenRouter key budget remaining={remaining}");
                 if(root.TryGetProperty("limit",out var lim) && lim.ValueKind==JsonValueKind.Number && lim.TryGetDouble(out var limit)) q.limit=limit;
                 q.status=remaining<=0 ? "exhausted" : "available";
                 q.source="openrouter-key";
@@ -227,7 +268,11 @@ public static partial class QuotaIntelligence
                         "monthly" => new DateTimeOffset(new DateTime(now.Year,now.Month,1,0,0,0,DateTimeKind.Utc).AddMonths(1)),
                         _ => (DateTimeOffset?)null
                     };
-                    if(next is not null) SetTime(q,next.Value,"openrouter-key-reset","derived",cadence ?? "",true);
+                    if(next is not null)
+                    {
+                        SetTime(q,next.Value,"openrouter-key-reset","derived",cadence ?? "",true);
+                        SetWindowReset(q,"budget",next.Value,"openrouter-key-reset","derived",cadence ?? "");
+                    }
                 }
             }
         }
@@ -320,6 +365,41 @@ public static partial class QuotaIntelligence
         if(u.StartsWith("m") && u!="ms") return value*60;
         if(u=="ms") return value/1000;
         return value;
+    }
+
+    static QuotaWindow? AddWindow(
+        QuotaObservation q,string kind,string? unit,double? limit,double? remaining,
+        string source,string confidence,string? evidence,DateTimeOffset? resetAt=null)
+    {
+        if(limit is null && remaining is null && resetAt is null) return null;
+        var existing=q.windows.FirstOrDefault(x=>string.Equals(x.kind,kind,StringComparison.OrdinalIgnoreCase));
+        if(existing is null)
+        {
+            existing=new QuotaWindow{kind=kind};
+            q.windows.Add(existing);
+        }
+        if(unit is not null) existing.unit=unit;
+        if(limit is not null) existing.limit=limit;
+        if(remaining is not null) existing.remaining=remaining;
+        if(resetAt is not null && resetAt>DateTimeOffset.UtcNow) existing.resetAt=resetAt.Value.ToUniversalTime().ToString("O");
+        if(ConfidenceRank(confidence)>=ConfidenceRank(existing.confidence))
+        {
+            existing.source=source;existing.confidence=confidence;existing.evidence=Bound(evidence,240);
+        }
+        return existing;
+    }
+
+    static void SetWindowReset(
+        QuotaObservation q,string kind,DateTimeOffset at,string source,string confidence,string evidence)
+    {
+        if(at<=DateTimeOffset.UtcNow) return;
+        AddWindow(q,kind,null,null,null,source,confidence,evidence,at);
+    }
+
+    static bool WindowExhausted(QuotaObservation q,string kind)
+    {
+        var w=q.windows.FirstOrDefault(x=>string.Equals(x.kind,kind,StringComparison.OrdinalIgnoreCase));
+        return w?.remaining is <=0;
     }
 
     static double? FirstNumber(Dictionary<string,string> h,params string[] names)
