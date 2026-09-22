@@ -27,6 +27,14 @@ Assert-True ([string]$plan.Strategy-eq'cohere-key-check') 'Cohere did not select
 Assert-True ([string]$plan.Method.Method-eq'POST') 'Cohere key check must use POST.'
 Assert-True ($plan.Uri.AbsoluteUri-eq'http://127.0.0.1:9877/v1/check-api-key') "Unexpected Cohere probe URI: $($plan.Uri)"
 
+Write-Host '  PROBE 2B: Pollinations uses account/key for non-inference budget telemetry'
+$p=New-Profile 'pollinations' 'https://gen.pollinations.ai/v1' 'https://gen.pollinations.ai/text/models'
+$plan=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve($p)
+Assert-True ([string]$plan.Strategy-eq'pollinations-key') 'Pollinations did not select account/key strategy.'
+Assert-True ([string]$plan.Method.Method-eq'GET') 'Pollinations account key probe must use GET.'
+Assert-True ($plan.Uri.AbsoluteUri-eq'https://gen.pollinations.ai/account/key') "Unexpected Pollinations probe URI: $($plan.Uri)"
+Assert-True $plan.ReadSuccessBody 'Pollinations budget probe must read successful JSON body.'
+
 Write-Host '  PROBE 3: quota-capable model probes stay warmer than silent generic probes'
 $groq=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve((New-Profile 'groq' 'https://api.groq.com/openai/v1'))
 $generic=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve((New-Profile 'custom' 'https://example.invalid/v1'))
