@@ -1,4 +1,4 @@
-<# Build the StatefulClanker Windows installer.
+﻿<# Build the StatefulClanker Windows installer.
 
    Generates the application icon, publishes the native WinForms tray host as a
    self-contained win-x64 executable, then compiles the Inno Setup installer.
@@ -12,7 +12,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '0.8.13',
+    [string]$Version = '0.8.14',
     [string]$PiVersion = '0.73.1',
     [switch]$IconOnly
 )
@@ -118,3 +118,4 @@ $isccArgs=@("/DMyAppVersion=$Version","/DRepoRoot=$repoRoot","/DPublishDir=$publ
 if($LASTEXITCODE-ne0){throw "ISCC failed with exit code $LASTEXITCODE"}
 $setup=Get-ChildItem -LiteralPath $outDir -Filter '*.exe'|Sort-Object LastWriteTime -Descending|Select-Object -First 1
 Write-Host '';Write-Host "Built: $($setup.FullName)" -ForegroundColor Green;Write-Host "       $([math]::Round($setup.Length/1MB,1)) MB"
+

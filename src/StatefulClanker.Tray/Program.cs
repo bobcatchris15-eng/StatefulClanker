@@ -1109,9 +1109,9 @@ sealed class QuietSplitContainer : SplitContainer
         return axis >= SplitterDistance - 3 && axis <= SplitterDistance + SplitterWidth + 3;
     }
 
-    protected override void OnLayout(LayoutEventArgs e)
+    protected override void OnCreateControl()
     {
-        base.OnLayout(e);
+        base.OnCreateControl();
         if (_pendingPanel2MinSize.HasValue && base.Panel2MinSize != _pendingPanel2MinSize.Value)
         {
             base.Panel2MinSize = _pendingPanel2MinSize.Value;
