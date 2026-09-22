@@ -205,16 +205,17 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
     if($null-eq$task){throw 'No runnable ready task.'};if($task.status-ne'ready'){throw "Task $($task.id) is $($task.status), not ready."};if($task.humanGate){throw 'Task requires human gate.'}
 
     $task.status='running'
-    $attempt=if($task.PSObject.Properties['attemptCount']){[int]$task.attemptCount+1}else{1}
-    Set-SCProperty $task 'attemptCount' $attempt
+    $attempt=if($task.PSObject.Properties['attemptCount']){[int]$task.attemptCount}else{0}
     $workerSessionId=Get-SCReusableWorkerSessionId $task
     $sessionResumed=-not[string]::IsNullOrWhiteSpace([string]$workerSessionId)
+    $attemptRegistered=$false
+    if($sessionResumed){$attemptRegistered=$null-ne(Get-SCWorkerSessionRoutePin $workerSessionId)}
     if(-not$sessionResumed){$workerSessionId=New-SCId 'wsess'}
     Set-SCProperty $task 'activeWorkerSessionId' $workerSessionId
     Set-SCProperty $task 'latestWorkerSessionId' $workerSessionId
     $task.blockReason=$null;Save-SCTask $task
     if($sessionResumed){
-        Add-SCEvent 'worker.session_resumed' "Resuming worker session $workerSessionId for $($task.id)." @{taskId=$task.id;attempt=$attempt;workerSessionId=$workerSessionId}
+        Add-SCEvent 'worker.session_resumed' "Resuming worker session $workerSessionId for $($task.id)." @{taskId=$task.id;attemptCount=$attempt;workerSessionId=$workerSessionId}
     }else{
         Add-SCEvent 'run.started' 'Worker cycle started' @{taskId=$task.id;attempt=$attempt;workerSessionId=$workerSessionId}
     }
@@ -249,21 +250,30 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
         if([int]$run.exitCode-ne0){
             $task=Get-SCTask $task.id
             $routeUnavailable=($run.PSObject.Properties['routeDeferred'] -and [bool]$run.routeDeferred) -or ($run.PSObject.Properties['routeExhausted'] -and [bool]$run.routeExhausted)
-            if($routeUnavailable){
-                $task.status='blocked'
-                $task.blockReason=if($run.stderr){"Inference routing unavailable: "+([string]$run.stderr).Trim()}else{'Inference routing unavailable; all eligible endpoints failed or are cooling down.'}
-                Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task
-                Close-SCWorkerSession $workerSessionId 'routing-deferred'
-                Add-SCEvent 'routing.deferred' $task.blockReason @{taskId=$task.id;runId=$run.id;workerSessionId=$workerSessionId;compilationId=$compilation.id;retryAfter=if($run.PSObject.Properties['retryAfter']){$run.retryAfter}else{$null};routeHistory=if($run.PSObject.Properties['routeHistory']){@($run.routeHistory)}else{@()}}
-                Add-SCProgressRecord $task $compilation $false 'routing-unavailable' $task.blockReason|Out-Null
-                Write-Warning $task.blockReason;return
-            }
-            $task.status='failed';$task.blockReason="Worker exited $($run.exitCode)"
-            Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task
-            Close-SCWorkerSession $workerSessionId 'failed'
-            Add-SCEvent 'run.failed' $task.blockReason @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;workerSessionId=$workerSessionId;compilationId=$compilation.id}
-            Add-SCProgressRecord $task $compilation $false 'worker-failed' $task.blockReason|Out-Null
-            Write-Warning $task.blockReason;return
+            $routingMessage=if($run.stderr){([string]$run.stderr).Trim()}else{"Provider execution exited $($run.exitCode)."}
+            $retryAt=if($run.PSObject.Properties['retryAfter'] -and $run.retryAfter){[string]$run.retryAfter}else{[datetimeoffset]::UtcNow.AddSeconds(5).ToString('o')}
+            # Transport/provider failures are scheduler events, not task attempts. Put
+            # the task back in the ready queue without consuming maxTaskAttempts.
+            $task.status='ready';$task.blockReason=$null
+            Set-SCProperty $task 'activeWorkerSessionId' $null
+            Set-SCProperty $task 'routingNotBefore' $retryAt
+            Set-SCProperty $task 'lastRoutingError' $routingMessage
+            Save-SCTask $task
+            Close-SCWorkerSession $workerSessionId $(if($routeUnavailable){'routing-deferred'}else{'provider-error'})
+            Add-SCEvent 'routing.deferred' $routingMessage @{taskId=$task.id;runId=$run.id;workerSessionId=$workerSessionId;compilationId=$compilation.id;retryAfter=$retryAt;routeHistory=if($run.PSObject.Properties['routeHistory']){@($run.routeHistory)}else{@()};attemptCount=$task.attemptCount}
+            Add-SCProgressRecord $task $compilation $false 'routing-deferred' $routingMessage|Out-Null
+            Write-Warning $routingMessage;return
+        }
+
+        if(-not$attemptRegistered){
+            $task=Get-SCTask $task.id
+            $attempt=if($task.PSObject.Properties['attemptCount']){[int]$task.attemptCount+1}else{1}
+            Set-SCProperty $task 'attemptCount' $attempt
+            Set-SCProperty $task 'routingNotBefore' $null
+            Set-SCProperty $task 'lastRoutingError' $null
+            Save-SCTask $task
+            $attemptRegistered=$true
+            Add-SCEvent 'task.attempt_started' "Task work attempt $attempt began after successful inference dispatch." @{taskId=$task.id;attemptCount=$attempt;workerSessionId=$workerSessionId;runId=$run.id}
         }
 
         Add-SCEvent 'run.finished' "Worker finished $($run.id)" @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;workerSessionId=$workerSessionId;compilationId=$compilation.id}
@@ -339,13 +349,16 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
             if($validation.verdict-eq'ERROR'){
                 $errDetail=if($validation.stderr){$validation.stderr.Trim()}else{'Validator review encountered an infrastructure error.'}
                 $routeUnavailable=($validation.PSObject.Properties['routeDeferred'] -and [bool]$validation.routeDeferred) -or ($validation.PSObject.Properties['routeExhausted'] -and [bool]$validation.routeExhausted)
-                $task.status=if($routeUnavailable){'blocked'}else{'needs_rework'}
-                $task.blockReason=if($routeUnavailable){"Validator inference routing unavailable: $errDetail"}else{"Validator infrastructure error: $errDetail"}
-                Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task
+                $retryAt=if($validation.PSObject.Properties['retryAfter'] -and $validation.retryAfter){[string]$validation.retryAfter}else{[datetimeoffset]::UtcNow.AddSeconds(5).ToString('o')}
+                $task.status='ready';$task.blockReason=$null
+                Set-SCProperty $task 'activeWorkerSessionId' $null
+                Set-SCProperty $task 'routingNotBefore' $retryAt
+                Set-SCProperty $task 'lastRoutingError' ("Validator infrastructure: "+$errDetail)
+                Save-SCTask $task
                 Close-SCWorkerSession $workerSessionId 'validator-error'
-                Add-SCProgressRecord $task $compilation $false 'validator-error' $task.blockReason|Out-Null
-                Add-SCEvent 'validator.error' $task.blockReason @{taskId=$task.id;receiptId=$validation.id;workerSessionId=$workerSessionId;error=$errDetail}
-                Write-Warning $task.blockReason;return
+                Add-SCProgressRecord $task $compilation $false 'validator-routing-deferred' $errDetail|Out-Null
+                Add-SCEvent 'validator.error' $errDetail @{taskId=$task.id;receiptId=$validation.id;workerSessionId=$workerSessionId;error=$errDetail;retryAfter=$retryAt;attemptCount=$task.attemptCount}
+                Write-Warning $errDetail;return
             }
 
             if($validation.verdict-ne'PASS'){
