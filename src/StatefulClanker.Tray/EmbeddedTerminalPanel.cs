@@ -104,6 +104,7 @@ sealed class EmbeddedTerminalPanel : UserControl
     EasyTerminalControl? _terminal;
     string? _projectPath;
     string _currentCommand = "";
+    bool _nativeControlPlaneSession;
 
     static readonly (string name, string command)[] Presets =
     {
@@ -243,6 +244,7 @@ sealed class EmbeddedTerminalPanel : UserControl
 
         // A shell should be immediately useful without another click.  It has the
         // same cwd semantics as opening PowerShell inside the project directory.
+        _nativeControlPlaneSession = false;
         _ = StartCommandAsync(ShellCommand(), false);
     }
 
@@ -292,6 +294,7 @@ sealed class EmbeddedTerminalPanel : UserControl
     {
         var command = SelectedCommand();
         if (string.IsNullOrWhiteSpace(command)) return;
+        _nativeControlPlaneSession = string.Equals(_preset.SelectedItem?.ToString(), "Pi (bundled)", StringComparison.Ordinal);
         await StartCommandAsync(command, forceRestart);
     }
 
@@ -432,6 +435,12 @@ sealed class EmbeddedTerminalPanel : UserControl
     public bool HasActiveSession => _terminal is not null;
 
     /// <summary>
+    /// True when the active TUI has its own StatefulClanker extension and should
+    /// receive control-plane events through that extension rather than PTY text.
+    /// </summary>
+    public bool HandlesControlPlaneNatively => HasActiveSession && _nativeControlPlaneSession;
+
+    /// <summary>
     /// Writes a short notice into the live PTY's input stream so it appears as text in
     /// front of the running session (agy/opencode/pwsh). No-op if no session is running.
     /// Deliberate accepted tradeoff (ledger D7): this writes into the same input stream
@@ -527,6 +536,7 @@ sealed class EmbeddedTerminalPanel : UserControl
     {
         DisposeTerminal();
         _currentCommand = "";
+        _nativeControlPlaneSession = false;
         _stop.Enabled = false;
         if (!string.IsNullOrWhiteSpace(_projectPath) && Directory.Exists(_projectPath))
         {
