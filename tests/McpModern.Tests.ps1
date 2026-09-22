@@ -35,6 +35,16 @@ try {
     Assert-True ($null-ne$tools.result._meta.'io.modelcontextprotocol/serverInfo') 'Modern tools/list lacks serverInfo response metadata.'
     $task=@($tools.result.tools|Where-Object { $_.name -eq 'task_add' }|Select-Object -First 1)[0];Assert-True ($null-ne$task.inputSchema.properties.capabilityProfile) 'task_add lacks capabilityProfile.';Assert-True ($null-ne$task.inputSchema.properties.toolAllow) 'task_add lacks toolAllow.'
     $wp=Get-ToolPayload (Call-Tool 21 'worker_policy_get' ([pscustomobject]@{}));Assert-True ($null-ne$wp.machine) 'worker_policy_get did not return machine policy.'
+    Write-Host '  MCP MODERN 3b: target-pool writes preserve disabled state and normalize tool capability'
+    $machineDir=Join-Path $env:LOCALAPPDATA 'StatefulClanker';New-Item -ItemType Directory -Force -Path $machineDir|Out-Null
+    [pscustomobject]@{connections=[pscustomobject]@{test=[pscustomobject]@{models=@([pscustomobject]@{id='unknown-tools'},[pscustomobject]@{id='native-tools';supportsTools=$true})}}}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $machineDir 'connections.json') -Encoding UTF8
+    $disabled=Get-ToolPayload (Call-Tool 211 'target_pool_upsert' ([pscustomobject]@{connection='test';model='unknown-tools';enabled=$false}))
+    Assert-True (-not[bool]$disabled.entry.enabled) 'target_pool_upsert did not preserve enabled:false.'
+    Assert-True ([string]$disabled.entry.toolMode-eq'text') 'Unknown tool capability must normalize to text mode.'
+    $pool=Get-ToolPayload (Call-Tool 212 'target_pool_list' ([pscustomobject]@{}));$saved=@($pool.entries|Where-Object{[string]$_.id-eq'test::unknown-tools'}|Select-Object -First 1)[0]
+    Assert-True ($null-ne$saved-and-not[bool]$saved.enabled) 'target_pool_list did not reload enabled:false.'
+    $contradiction=Call-Tool 213 'target_pool_upsert' ([pscustomobject]@{connection='test';model='native-tools';enabled=$true;rationale='DISABLED: authentication failure'})
+    Assert-True ([bool]$contradiction.result.isError) 'Contradictory DISABLED rationale should be rejected.'
     $af=Get-ToolPayload (Call-Tool 22 'autofill_status' ([pscustomobject]@{}));Assert-True (-not[bool]$af.running) 'autofill_status unexpectedly showed running in test dir.'
     $ctrl=Get-ToolPayload (Call-Tool 23 'autofill_control' ([pscustomobject]@{action='pause'}));Assert-True ([bool]$ctrl.success) 'autofill_control pause failed.'
     $resources=Invoke-McpRpc ([pscustomobject]@{jsonrpc='2.0';id=3;method='resources/list';params=[pscustomobject]@{_meta=New-ModernMeta}});$uris=@($resources.result.resources|ForEach-Object{[string]$_.uri});Assert-True ($uris-contains'statefulclanker://project/current/control-events') 'Missing control-events resource.'

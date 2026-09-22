@@ -34,6 +34,22 @@ try {
     }
     function Get-SCConnectionConfigFingerprint([string]$ConnectionName){return "fp-$ConnectionName"}
 
+    # Native tool calling is an explicit capability contract. Unknown or false
+    # capability rows may only run in text-tool mode.
+    $catalogPath=Get-SCTargetPoolPath
+    [pscustomobject]@{entries=[pscustomobject]@{
+        unknownNative=[pscustomobject]@{connection='or-a';model='unknown-native';toolMode='native'}
+        noNative=[pscustomobject]@{connection='or-a';model='no-native';toolMode='native';supportsTools=$false}
+        textFallback=[pscustomobject]@{connection='or-a';model='text-fallback';toolMode='text';supportsTools=$false}
+        toolNative=[pscustomobject]@{connection='or-a';model='tool-native';toolMode='native';supportsTools=$true}
+    }}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath $catalogPath -Encoding UTF8
+    $catalogRecords=@(Get-SCTargetPoolRecords)
+    $catalogNames=@($catalogRecords|ForEach-Object{$_.name})
+    Assert-True ($catalogNames-contains'pool:textFallback') 'Explicit text-tool route was incorrectly excluded.'
+    Assert-True ($catalogNames-contains'pool:toolNative') 'Explicitly tool-capable native route was incorrectly excluded.'
+    Assert-True (-not($catalogNames-contains'pool:unknownNative')) 'Unknown native tool capability was treated as tool-capable.'
+    Assert-True (-not($catalogNames-contains'pool:noNative')) 'Native route with supportsTools:false was treated as tool-capable.'
+
     Assert-True ((Get-SCRouteFailureClass 1 'HTTP 429 Too Many Requests') -eq 'rate_limited') '429 was not classified as rate_limited.'
     Assert-True ((Get-SCRouteFailureClass 1 '503 service unavailable') -eq 'server_error') '503 was not classified as server_error.'
     Assert-True ((Get-SCRouteFailureClass 1 '401 invalid api key') -eq 'auth') '401 was not classified as auth.'
@@ -44,6 +60,8 @@ try {
     Assert-True ((Get-SCProbeDelaySeconds 'rate_limited' '' 2) -eq 3600) 'Repeated 429 recovery should back off to one hour.'
     Assert-True ((Get-SCProbeDelaySeconds 'server_error' '' 1) -eq 300) 'Transport/server recovery should start with a five-minute probe.'
     Assert-True ((Get-SCProbeDelaySeconds 'rate_limited' 'Retry-After: 17' 4) -eq 17) 'Provider Retry-After must override local backoff.'
+    Assert-True ((Get-SCProbeDelaySeconds 'rate_limited' 'google.rpc.RetryInfo retryDelay: 27.5s' 4) -eq 28) 'Google RetryInfo retryDelay was not honored.'
+    Assert-True ((Get-SCProbeDelaySeconds 'rate_limited' '{"retry_after_seconds":0.25}' 4) -eq 1) 'Fractional OpenRouter retry_after_seconds was not honored.'
 
     $script:testPool=@(
         [pscustomobject]@{name='pool:or-a::model-x';poolId='or-a::model-x';config=[pscustomobject]@{type='api';connection='or-a';model='model-x'}},
@@ -61,13 +79,13 @@ try {
     Assert-True ($first.Count-eq5 -and $second.Count-eq5) 'Expected all five target-pool rows to be eligible.'
     Assert-True ($first[0]-ne$second[0]) 'Durable pseudo-round-robin did not rotate the first route between dispatches.'
 
-    # A 429 belongs to the connection/account. Every model beneath that credential
-    # must disappear together, while another OpenRouter key remains usable.
+    # A single endpoint 429 is not proof that every model under a credential is
+    # exhausted. Keep sibling endpoints eligible until a shared scope is evidenced.
     $orA=$script:testPool[0]
     $domain=Register-SCRouteFailureForRecord $orA 'rate_limited' 'HTTP 429 quota exceeded'
-    Assert-True ($domain.scope-eq'connection' -and $domain.key-eq'connection:or-a') '429 was not lifted to connection scope.'
+    Assert-True ($domain.scope-eq'endpoint' -and $domain.key-eq'pool:or-a::model-x') 'Single-endpoint 429 was incorrectly lifted to connection scope.'
     Assert-True (-not(Test-SCRouteRecordAvailable $script:testPool[0])) 'First child of rate-limited connection remained eligible.'
-    Assert-True (-not(Test-SCRouteRecordAvailable $script:testPool[1])) 'Second child of rate-limited connection remained eligible.'
+    Assert-True (Test-SCRouteRecordAvailable $script:testPool[1]) 'Sibling endpoint was incorrectly poisoned by an endpoint 429.'
     Assert-True (Test-SCRouteRecordAvailable $script:testPool[2]) 'Independent OpenRouter connection was incorrectly poisoned by account-level 429.'
 
     # Request-specific failures rotate but do not damage reusable route health.
@@ -102,6 +120,25 @@ try {
     Assert-True ($due -contains 'service:openrouter') 'Expired service circuit was not offered to Route Doctor.'
     Register-SCRouteProbeSuccess 'service:openrouter'
     Assert-True (Test-SCRouteAvailable 'service:openrouter') 'Successful Route Doctor probe did not restore service health.'
+
+    # Deferred messaging must ignore unrelated and already-expired health rows.
+    $now=[datetimeoffset]::UtcNow
+    $health=[pscustomobject]@{schemaVersion=2;endpoints=[pscustomobject]@{
+        'connection:or-a'=[pscustomobject]@{state='cooldown';retryAfter=$now.AddMinutes(3).ToString('o');nextProbeAt=$now.AddMinutes(3).ToString('o')}
+        'connection:ghost'=[pscustomobject]@{state='cooldown';retryAfter=$now.AddSeconds(1).ToString('o');nextProbeAt=$now.AddSeconds(1).ToString('o')}
+        'connection:or-b'=[pscustomobject]@{state='probing';retryAfter=$now.AddMinutes(-2).ToString('o');nextProbeAt=$now.AddMinutes(-2).ToString('o')}
+    }}
+    Save-SCRoutingHealth $health
+    $next=Get-SCNextRouteAvailability
+    Assert-True ($null-ne$next-and$next-ge$now.AddMinutes(2)) 'Next availability used an unrelated or stale health minimum.'
+
+    # A project-configured explicit provider is an operator selection, so stale
+    # catalog health must not suppress it merely because it shares a connection name.
+    $script:testConfig=[pscustomobject]@{routing=[pscustomobject]@{maxRouteAttempts=16};providers=[pscustomobject]@{mock=[pscustomobject]@{type='api';connection='or-a';model='mock-model'}}}
+    function Get-SCConfig { return $script:testConfig }
+    Register-SCRouteFailure 'connection:or-a' 'rate_limited' 'HTTP 429 quota exceeded' 'connection'|Out-Null
+    $explicit=@(Get-SCProviderCandidates $null 'mock' 'worker')
+    Assert-True ($explicit.Count-eq1-and$explicit[0].name-eq'mock') 'Explicit configured provider was suppressed by machine pool health.'
 
     Write-Host 'PASS: target-pool round robin, scoped failure inheritance, service promotion, and adaptive Route Doctor recovery.'
 } finally {

@@ -119,6 +119,22 @@ function Save-SCState($State) {
     }
 }
 function Get-SCConfig { Assert-SCInitialized;$cfg=Read-SCJson (Get-SCPath 'config.json');if($null-eq$cfg){throw 'Missing .statefulclanker/config.json'};return $cfg }
+function Get-SCWorktreeDirtySummary([string]$Root,[int]$PreviewLimit=5) {
+    if([string]::IsNullOrWhiteSpace($Root)){return $null}
+    $old=$ErrorActionPreference
+    try{$ErrorActionPreference='Continue';$dirty=& git -C $Root status --porcelain 2>$null|Out-String}finally{$ErrorActionPreference=$old}
+    if([string]::IsNullOrWhiteSpace($dirty)){return $null}
+    $paths=@($dirty -split "`r?`n"|ForEach-Object{
+        if([string]::IsNullOrWhiteSpace($_)){return}
+        $line=$_.Trim();$path=if($line.Length-gt3){$line.Substring(3).Trim().Trim('"').Trim("'")}else{$line.Trim('"').Trim("'")}
+        if($path -match '(^|[/\\])\.statefulclanker([/\\]|$)' -or $path -eq '.statefulclanker'){return}
+        $path
+    }|Where-Object{$_})
+    if($paths.Count-eq0){return $null}
+    $preview=(@($paths|Select-Object -First $PreviewLimit))-join ', '
+    if($paths.Count-gt$PreviewLimit){$preview+=" (+$($paths.Count-$PreviewLimit) more)"}
+    return [ordered]@{count=$paths.Count;paths=@($paths|Select-Object -First $PreviewLimit);message="main worktree has uncommitted changes: $preview. Commit, stash, or revert these paths before retrying."}
+}
 <# Reads take the same lock as writes.
 
    Write-SCJson writes a unique temp file and atomically replaces the destination. Reads
@@ -164,6 +180,14 @@ function Update-SCReadinessCore {
     $tasks=@(Get-SCTasks);$map=@{}
     foreach($task in $tasks){if($task.id){$map[[string]$task.id]=$task}}
     foreach($task in $tasks){
+        # A routing cooldown is scheduler-owned rather than a task-level gate. Once
+        # it expires, release only an explicitly routing-blocked, non-human task.
+        [datetimeoffset]$retryAt=[datetimeoffset]::MinValue
+        $hasExpiredRoutingCooldown=($task.PSObject.Properties['routingNotBefore'] -and [datetimeoffset]::TryParse([string]$task.routingNotBefore,[ref]$retryAt) -and $retryAt -le [datetimeoffset]::UtcNow)
+        $routingBlocked=([string]$task.status-eq'blocked'-and[string]$task.blockReason-match'(?i)rout|endpoint|provider|cooldown|quota|rate limit')
+        if($hasExpiredRoutingCooldown -and -not [bool]$task.humanGate -and (([string]$task.status -eq 'ready') -or $routingBlocked)){
+            $task.status='ready';$task.blockReason=$null;Set-SCProperty $task 'routingNotBefore' $null;Save-SCTask $task
+        }
         if($task.status-ne'pending'-and$task.status-ne'ready'){continue};$ready=$true
         foreach($dep in @($task.dependsOn)){
             if([string]::IsNullOrWhiteSpace([string]$dep)){continue}
@@ -251,9 +275,12 @@ function Repair-SCOrphanedAgents {
             if ($rec.taskId) {
                 $t = Get-SCTask $rec.taskId
                 if ($t -and (@('running','reviewing','validating') -contains [string]$t.status)) {
+                    $sessionId=if($t.PSObject.Properties['activeWorkerSessionId']){[string]$t.activeWorkerSessionId}else{$null}
                     $t.status = 'needs_rework'
                     $t.blockReason = 'Worker or reviewer process abandoned / timed out.'
+                    Set-SCProperty $t 'activeWorkerSessionId' $null
                     Save-SCTask $t
+                    if($sessionId-and(Get-Command Close-SCWorkerSession -ErrorAction SilentlyContinue)){try{Close-SCWorkerSession $sessionId 'orphaned'}catch{}}
                     Add-SCEvent 'task.recovered' "Reset abandoned task $($t.id) to needs_rework." @{taskId=$t.id;previousStatus=$t.status}
                 }
             }
@@ -273,9 +300,12 @@ function Repair-SCOrphanedAgents {
                 }
                 Write-Warning "Task $($t.id) in status '$($t.status)' has no active telemetry. Recovering to needs_rework..."
                 $was = $t.status
+                $sessionId=if($t.PSObject.Properties['activeWorkerSessionId']){[string]$t.activeWorkerSessionId}else{$null}
                 $t.status = 'needs_rework'
                 $t.blockReason = 'No active telemetry record found for in-flight task.'
+                Set-SCProperty $t 'activeWorkerSessionId' $null
                 Save-SCTask $t
+                if($sessionId-and(Get-Command Close-SCWorkerSession -ErrorAction SilentlyContinue)){try{Close-SCWorkerSession $sessionId 'orphaned'}catch{}}
                 Add-SCEvent 'task.recovered' "Reset untracked in-flight task $($t.id) to needs_rework." @{taskId=$t.id;previousStatus=$was}
             }
         }

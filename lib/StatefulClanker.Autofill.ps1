@@ -33,24 +33,26 @@ function Request-SCAutofillPause { Ensure-SCAutofillLayout;(Get-Date).ToUniversa
 function Request-SCAutofillResume { Ensure-SCAutofillLayout;Remove-Item -LiteralPath (Get-SCAutofillPausePath) -Force -ErrorAction SilentlyContinue;Request-SCAutofillTrigger;Write-Host 'Autofill resumed.' }
 function Request-SCAutofillTrigger { Ensure-SCAutofillLayout;(Get-Date).ToUniversalTime().ToString('o')|Set-Content -LiteralPath (Get-SCAutofillTriggerPath) -Encoding UTF8;Write-Host 'Autofill immediate dispatch requested.' }
 function Get-SCBusyTaskIds { @((Get-SCTasks|Where-Object{@('running','reviewing','validating')-contains[string]$_.status})|ForEach-Object{[string]$_.id}) }
+function Get-SCAutofillQueueSummary {
+    $tasks=@(Get-SCTasks);$retryable=@(Get-SCRetryableTasks);$retryIds=@($retryable|ForEach-Object{[string]$_.id})
+    $now=[datetimeoffset]::UtcNow
+    $routingDeferred=@($tasks|Where-Object{
+        if([string]$_.status-ne'ready'-or-not($_.PSObject.Properties['routingNotBefore']-and$_.routingNotBefore)){return $false}
+        [datetimeoffset]$retryAt=[datetimeoffset]::MinValue
+        return [datetimeoffset]::TryParse([string]$_.routingNotBefore,[ref]$retryAt) -and $retryAt-gt$now
+    })
+    $dependencyPending=@($tasks|Where-Object{[string]$_.status-eq'pending'})
+    $terminalStalled=@($tasks|Where-Object{
+        @('needs_rework','stale','blocked','failed')-contains[string]$_.status -and $retryIds-notcontains[string]$_.id
+    })
+    return [ordered]@{dependencyPending=@($dependencyPending);routingDeferred=@($routingDeferred);retriable=@($retryable);terminalStalled=@($terminalStalled)}
+}
 function Test-SCAutofillMainTreeReady {
     $root=Get-SCStateRoot
     if(-not(Test-SCGitAvailable)){return [ordered]@{ok=$false;reason='git is not available'}}
     if(-not(Test-SCGitRepo $root)){return [ordered]@{ok=$false;reason='project is not a git repository'}}
-    $old=$ErrorActionPreference;try{$ErrorActionPreference='Continue';$dirty=& git -C $root status --porcelain 2>$null|Out-String}finally{$ErrorActionPreference=$old}
-    if([string]::IsNullOrWhiteSpace($dirty)){return [ordered]@{ok=$true;reason=$null}}
-    $dirtyLines=@($dirty -split "`r?`n"|Where-Object{
-        if([string]::IsNullOrWhiteSpace($_)){return $false}
-        $line=$_.Trim()
-        $filePart=if($line.Length -gt 3){$line.Substring(3).Trim().Trim('"').Trim("'")}else{$line.Trim('"').Trim("'")}
-        if($filePart -match '(^|[/\\])\.statefulclanker([/\\]|$)' -or $filePart -eq '.statefulclanker'){return $false}
-        return $true
-    })
-    if($dirtyLines.Count -gt 0){
-        $preview=(@($dirtyLines|Select-Object -First 5)) -join ', '
-        if($dirtyLines.Count -gt 5){$preview+=" (+$($dirtyLines.Count - 5) more)"}
-        return [ordered]@{ok=$false;reason="main worktree has uncommitted changes: $preview"}
-    }
+    $dirtySummary=Get-SCWorktreeDirtySummary $root
+    if($dirtySummary){return [ordered]@{ok=$false;reason=[string]$dirtySummary.message;dirtyPaths=@($dirtySummary.paths);dirtyCount=[int]$dirtySummary.count}}
     return [ordered]@{ok=$true;reason=$null}
 }
 
@@ -166,8 +168,10 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
                     $state='running'
                     $lastBlock=$null
                 }else{
-                    $stalled=@(Get-SCTasks|Where-Object{@('needs_rework','stale','blocked','failed')-contains[string]$_.status})
-                    if($stalled.Count-gt0){
+                    $queue=Get-SCAutofillQueueSummary
+                    $dependencyPending=@($queue.dependencyPending);$routingDeferred=@($queue.routingDeferred);$terminalStalled=@($queue.terminalStalled)
+                    if($terminalStalled.Count-gt0){
+                        $stalled=$terminalStalled
                         $stalledDetails=@($stalled|ForEach-Object{
                             [ordered]@{
                                 id=[string]$_.id;title=[string]$_.title;status=[string]$_.status
@@ -183,9 +187,13 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
                         })
                         $stalledNames=(@($stalled|Select-Object -First 3|ForEach-Object{"$($_.id) ($($_.status))"})) -join ', '
                         if($stalled.Count-gt3){$stalledNames+=" (+$($stalled.Count-3) more)"}
-                        $reason="CONTROL-PLANE RECOVERY REQUIRED: Autofill has no ready or retriable tasks; $($stalled.Count) task(s) are stalled: $stalledNames. Investigate and repair before asking the human. Read task_recovery_context for each affected task and inspect current project files/tests as needed. Repair actual implementation defects when present; otherwise repair stale/incorrect task scope, acceptance, retrieval, dependencies, or other task-graph metadata and retry. If concrete current evidence shows the requested work already satisfies current Human Directives and reconciled Intent but validator/review bookkeeping is wrong, use task_recover_complete as the last resort. Never override a human-gated task or unresolved human intent. Ask the human only when a genuine authority/design decision remains after investigation. Trigger/resume Autofill after recovery."
+                        $reason="CONTROL-PLANE RECOVERY REQUIRED: Autofill has $($dependencyPending.Count) dependency-pending, $($routingDeferred.Count) routing-deferred, $($queue.retriable.Count) retriable, and $($stalled.Count) terminal-stalled task(s): $stalledNames. Investigate and repair before asking the human. Read task_recovery_context for each affected task and inspect current project files/tests as needed. Repair actual implementation defects when present; otherwise repair stale/incorrect task scope, acceptance, retrieval, dependencies, or other task-graph metadata and retry. If concrete current evidence shows the requested work already satisfies current Human Directives and reconciled Intent but validator/review bookkeeping is wrong, use task_recover_complete as the last resort. Never override a human-gated task or unresolved human intent. Ask the human only when a genuine authority/design decision remains after investigation. Trigger/resume Autofill after recovery."
                         $state='blocked'
                         if($lastBlock-ne$reason){Add-SCEvent 'autofill.stalled' $reason @{stalledCount=$stalled.Count;stalledTasks=@($stalledDetails);recoveryPolicy='control-plane-first'};$lastBlock=$reason}
+                    }elseif($dependencyPending.Count-gt0-or$routingDeferred.Count-gt0){
+                        $state='waiting'
+                        $reason="Autofill waiting: $($dependencyPending.Count) dependency-pending, $($routingDeferred.Count) routing-deferred, $($queue.retriable.Count) retriable, and 0 terminal-stalled task(s). Routing-deferred work will be reconsidered when its cooldown expires; complete dependencies or adjust the task graph before retrying dependency-pending work."
+                        $lastBlock=$null
                     }else{
                         $state='idle'
                         $lastBlock=$null

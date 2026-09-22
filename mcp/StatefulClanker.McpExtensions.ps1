@@ -207,7 +207,7 @@ function Save-McpTargetPool([string]$Project,$Pool) {
     $tmp=$path+'.tmp'
     $json=$Pool|ConvertTo-Json -Depth 30
     [IO.File]::WriteAllText($tmp,$json,(New-Object Text.UTF8Encoding($false)))
-    [IO.File]::Move($tmp,$path,$true)
+    Move-Item -LiteralPath $tmp -Destination $path -Force
 }
 
 function Find-McpCatalogModel([string]$Connection,[string]$Model) {
@@ -216,6 +216,29 @@ function Find-McpCatalogModel([string]$Connection,[string]$Model) {
     $match=@($catalog[0].models|Where-Object{[string]::Equals([string]$_.id,$Model,[StringComparison]::OrdinalIgnoreCase)}|Select-Object -First 1)
     if($match.Count-eq 0){throw "Model '$Model' is not in the last discovered catalog for connection '$Connection'. Refresh the connection first."}
     return $match[0]
+}
+
+function Test-McpArgumentPresent($Arguments,[string]$Name) {
+    if($Arguments-is[System.Collections.IDictionary]){return $Arguments.Contains($Name)}
+    return ($null-ne$Arguments-and$null-ne$Arguments.PSObject.Properties[$Name])
+}
+function Get-McpRawArgument($Arguments,[string]$Name) {
+    if($Arguments-is[System.Collections.IDictionary]){if($Arguments.Contains($Name)){return $Arguments[$Name]};return $null}
+    if($null-ne$Arguments-and$Arguments.PSObject.Properties[$Name]){return $Arguments.$Name};return $null
+}
+function ConvertTo-McpBoolean($Value,[string]$Name) {
+    if($Value-is[bool]){return $Value};$parsed=$false
+    if([bool]::TryParse([string]$Value,[ref]$parsed)){return $parsed};throw "Target-pool field '$Name' must be boolean."
+}
+function Get-McpTargetPoolValue($Arguments,[string]$Name,$Existing,$CatalogValue,$Default=$null) {
+    if(Test-McpArgumentPresent $Arguments $Name){return Get-McpRawArgument $Arguments $Name}
+    if($Existing-and$Existing.PSObject.Properties[$Name]){return $Existing.$Name}
+    if($null-ne$CatalogValue){return $CatalogValue};return $Default
+}
+function Resolve-McpTargetPoolToolMode($Arguments,$Existing,$SupportsTools) {
+    $requested=Get-McpTargetPoolValue $Arguments 'toolMode' $Existing $null $null
+    if($requested){$mode=[string]$requested;if(@('native','text')-notcontains$mode){throw "Target-pool field 'toolMode' must be 'native' or 'text'."}}else{$mode=if($SupportsTools-eq$true){'native'}else{'text'}}
+    if($mode-eq'native'-and$SupportsTools-ne$true){throw "Native tool mode requires supportsTools:true; use toolMode:'text' for unknown or unsupported capability."};return $mode
 }
 
 
@@ -466,20 +489,28 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
             $connection=Get-McpArgRequired $Arguments 'connection';$model=Get-McpArgRequired $Arguments 'model'
             $catalogModel=Find-McpCatalogModel $connection $model
             $pool=Get-McpTargetPool $project;$id="$connection::$model";$existing=$pool.entries.PSObject.Properties[$id]
-            $displayName=Get-McpArgOptional $Arguments 'displayName';$enabled=Get-McpArgOptional $Arguments 'enabled';$workhorse=Get-McpArgOptional $Arguments 'workhorse'
-            $free=Get-McpArgOptional $Arguments 'free';$supportsTools=Get-McpArgOptional $Arguments 'supportsTools';$contextLength=Get-McpArgOptional $Arguments 'contextLength'
+            $displayName=Get-McpArgOptional $Arguments 'displayName';$enabled=Get-McpRawArgument $Arguments 'enabled';$workhorse=Get-McpRawArgument $Arguments 'workhorse'
+            $free=Get-McpRawArgument $Arguments 'free';$supportsTools=Get-McpRawArgument $Arguments 'supportsTools';$contextLength=Get-McpArgOptional $Arguments 'contextLength'
             $toolMode=Get-McpArgOptional $Arguments 'toolMode';$source=Get-McpArgOptional $Arguments 'source';$rationale=Get-McpArgOptional $Arguments 'rationale';$researchedAt=Get-McpArgOptional $Arguments 'researchedAt'
+            $existingValue=if($existing){$existing.Value}else{$null}
+            $effectiveRationale=if($null-ne$rationale){[string]$rationale}elseif($existingValue-and$existingValue.PSObject.Properties['rationale']){[string]$existingValue.rationale}else{$null}
+            $disabledRationale=$effectiveRationale-match'(?i)^\s*DISABLED\s*:'
+            $effectiveEnabled=if(Test-McpArgumentPresent $Arguments 'enabled'){ConvertTo-McpBoolean $enabled 'enabled'}elseif($disabledRationale){$false}else{ConvertTo-McpBoolean (Get-McpTargetPoolValue $Arguments 'enabled' $existingValue $null $true) 'enabled'}
+            if($disabledRationale-and$effectiveEnabled){throw "A rationale beginning 'DISABLED:' requires enabled:false."}
+            $effectiveSupports=Get-McpTargetPoolValue $Arguments 'supportsTools' $existingValue $catalogModel.supportsTools $null
+            if($null-ne$effectiveSupports){$effectiveSupports=ConvertTo-McpBoolean $effectiveSupports 'supportsTools'}
+            $effectiveToolMode=Resolve-McpTargetPoolToolMode $Arguments $existingValue $effectiveSupports
             $value=[ordered]@{
                 id=$id;connection=$connection;model=$model
                 displayName=if($displayName){[string]$displayName}elseif($catalogModel.displayName){[string]$catalogModel.displayName}else{$model}
-                enabled=if($null-ne$enabled){[bool]$enabled}else{$true}
-                workhorse=if($null-ne$workhorse){[bool]$workhorse}else{$true}
-                free=if($null-ne$free){[bool]$free}else{$catalogModel.isFree}
-                supportsTools=if($null-ne$supportsTools){[bool]$supportsTools}else{$catalogModel.supportsTools}
-                contextLength=if($contextLength){[long]$contextLength}else{$catalogModel.contextLength}
-                toolMode=if($toolMode){[string]$toolMode}elseif($catalogModel.supportsTools-eq$false){'text'}else{'native'}
+                enabled=$effectiveEnabled
+                workhorse=ConvertTo-McpBoolean (Get-McpTargetPoolValue $Arguments 'workhorse' $existingValue $null $true) 'workhorse'
+                free=Get-McpTargetPoolValue $Arguments 'free' $existingValue $catalogModel.isFree $null
+                supportsTools=$effectiveSupports
+                contextLength=if($contextLength){[long]$contextLength}elseif($existingValue-and$existingValue.PSObject.Properties['contextLength']){$existingValue.contextLength}else{$catalogModel.contextLength}
+                toolMode=$effectiveToolMode
                 source=if($source){[string]$source}else{'clanker'}
-                rationale=if($null-ne$rationale){[string]$rationale}elseif($existing-and$existing.Value.PSObject.Properties['rationale']){$existing.Value.rationale}else{$null}
+                rationale=$effectiveRationale
                 researchedAt=if($researchedAt){[string]$researchedAt}elseif($rationale){[datetimeoffset]::UtcNow.ToString('o')}elseif($existing-and$existing.Value.PSObject.Properties['researchedAt']){$existing.Value.researchedAt}else{$null}
                 updatedAt=[datetimeoffset]::UtcNow.ToString('o')
             }

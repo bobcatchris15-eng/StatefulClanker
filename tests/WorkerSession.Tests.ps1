@@ -70,27 +70,64 @@ try {
     Assert-True ((Get-Content -Raw -LiteralPath 'artifact.txt').Trim()-eq'candidate-two') 'Checkpoint restore did not recover the candidate artifact.'
     Assert-True (-not(Test-Path -LiteralPath 'untracked.tmp')) 'Checkpoint restore did not remove post-checkpoint untracked work.'
 
-    Write-Host '  WS 4: worker session pins to its first responding endpoint and is reusable while unfinished'
+    Write-Host '  WS 4: worker route pins are preferences and can migrate when the pinned route is unavailable'
     Set-SCWorkerSessionRoutePin $sessionId 'endpoint-a' 'connection-a' 'model-a'
     $pin=Get-SCWorkerSessionRoutePin $sessionId
     Assert-True ($pin.endpoint-eq'endpoint-a'-and$pin.connection-eq'connection-a'-and$pin.model-eq'model-a') 'Worker route pin was not persisted.'
     $task|Add-Member -NotePropertyName latestWorkerSessionId -NotePropertyValue $sessionId -Force
     Assert-True ((Get-SCReusableWorkerSessionId $task)-eq$sessionId) 'Active worker session was not reusable.'
-    $mismatchRejected=$false
-    try{Set-SCWorkerSessionRoutePin $sessionId 'endpoint-b' 'connection-b' 'model-b'}catch{$mismatchRejected=$true}
-    Assert-True $mismatchRejected 'Pinned session accepted a different endpoint/model.'
+    Set-SCWorkerSessionRoutePin $sessionId 'endpoint-b' 'connection-b' 'model-b'
+    $migratedPin=Get-SCWorkerSessionRoutePin $sessionId
+    Assert-True ($migratedPin.endpoint-eq'endpoint-b'-and$migratedPin.connection-eq'connection-b'-and$migratedPin.model-eq'model-b') 'Unavailable worker route pin could not migrate to a compatible replacement.'
     Close-SCWorkerSession $sessionId 'validator-error'
     Assert-True ((Get-SCReusableWorkerSessionId $task)-eq$sessionId) 'Validator-error session should be resumable.'
     Close-SCWorkerSession $sessionId 'completed'
     Assert-True ($null-eq(Get-SCReusableWorkerSessionId $task)) 'Completed worker session should not be reused.'
 
-    Write-Host '  WS 5: cold worker turn budget makes the legacy 24-turn connection default irrelevant'
+    Write-Host '  WS 5: closing a crashed session clears the task active-session handle'
+    $crashedTask=[pscustomobject]@{id='crashed-session-task';stateRevision=0;activeWorkerSessionId='wsess-crashed';latestWorkerSessionId='wsess-crashed'}
+    New-Item -ItemType Directory -Force -Path (Join-Path $stateDir 'tasks')|Out-Null
+    Write-SCJson (Join-Path $stateDir 'tasks/crashed-session-task.json') $crashedTask
+    [void](New-SCWorkerSession 'wsess-crashed' $crashedTask $comp 'make a material change' 'native' $registry)
+    Close-SCWorkerSession 'wsess-crashed' 'provider-error'
+    Assert-True ($null-eq(Get-SCTask 'crashed-session-task').activeWorkerSessionId) 'Terminal provider failure left activeWorkerSessionId set.'
+
+    Write-Host '  WS 6: a route receipt records the exact route-catalog snapshot used for selection'
+    $script:SCWorkerSessionCatalogPath=Join-Path $temp 'endpoints.json'
+    '{"entries":{}}'|Set-Content -LiteralPath $script:SCWorkerSessionCatalogPath -Encoding UTF8
+    function Get-SCTargetPoolPath { return $script:SCWorkerSessionCatalogPath }
+    $before=Get-SCRouteSnapshotReceipt
+    Start-Sleep -Milliseconds 20
+    '{"entries":{"replacement":{"enabled":true}}}'|Set-Content -LiteralPath $script:SCWorkerSessionCatalogPath -Encoding UTF8
+    $after=Get-SCRouteSnapshotReceipt
+    Assert-True ($before.catalogFingerprint-ne$after.catalogFingerprint) 'Route catalog snapshot did not change after catalog content changed.'
+
+    Write-Host '  WS 7: dispatch falls back from an unavailable preferred route and records its snapshot'
+    Set-SCWorkerSessionRoutePin $sessionId 'endpoint-a' 'connection-a' 'model-a'
+    function Invoke-SCRouteDoctor { param([int]$MaxProbes) }
+    function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage) {
+        if($Override-eq'endpoint-a'){return @()}
+        return @([pscustomobject]@{name='endpoint-c';config=[pscustomobject]@{type='api';connection='connection-c';model='model-c'}})
+    }
+    function Enter-SCEndpointLease([string]$EndpointName) { return [pscustomobject]@{acquired=$true} }
+    function Exit-SCEndpointLease($Lease) {}
+    function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$ProviderRecord,[string]$ParentAgentId,$Compilation,[string]$WorkerSessionId,[string]$ContinuationMessage) {
+        return [pscustomobject]@{id='fallback-receipt';taskId=$Task.id;stage=$Stage;provider=$ProviderRecord.name;endpoint=$ProviderRecord.name;exitCode=0;stdout='ok';stderr=''}
+    }
+    function Register-SCRouteSuccess([string]$Name,[string]$Scope='endpoint') {}
+    function Get-SCConnectionServiceName([string]$ConnectionName) { return $null }
+    $fallback=Invoke-SCProvider $task 'resume work' 'run' $null $null $comp $sessionId $null
+    Assert-True ($fallback.endpoint-eq'endpoint-c') 'Unavailable preferred route did not fall back to an eligible route.'
+    Assert-True ([bool]$fallback.routeSnapshot.catalogFingerprint) 'Route receipt omitted the catalog snapshot used for selection.'
+    Assert-True ((Get-SCWorkerSessionRoutePin $sessionId).endpoint-eq'endpoint-c') 'Successful fallback did not update the session route preference.'
+
+    Write-Host '  WS 8: cold worker turn budget makes the legacy 24-turn connection default irrelevant'
     $budgetTask=[pscustomobject]@{id='budget-task';role='worker';size='small'}
     $legacyConnection=[pscustomobject]@{maxSteps=24}
     Assert-True ((Get-SCWorkerMaxSteps $legacyConnection $budgetTask 'run')-ge512) 'Cold run retained a low legacy turn limit.'
     Assert-True ((Get-SCWorkerMaxSteps $legacyConnection $budgetTask 'validator')-eq24) 'Reviewer turn budget should still respect the connection setting.'
 
-    Write-Host '  WS 6: diagnosis tasks may legitimately produce zero diff'
+    Write-Host '  WS 9: diagnosis tasks may legitimately produce zero diff'
     $diagnosis=[pscustomobject]@{id='diagnosis-task';title='diagnosis';role='worker';outputKind='diagnosis'}
     $diagId='wsess-diagnosis'
     [void](New-SCWorkerSession $diagId $diagnosis $comp 'inspect only' 'native' $registry)
@@ -98,7 +135,7 @@ try {
     $diag=Get-SCWorkerCandidatePreflight $diagId $diagnosis
     Assert-True ([bool]$diag.material) 'Explicit diagnosis output kind incorrectly required a worktree mutation.'
 
-    Write-Host 'PASS: durable worker sessions, pre-validator materiality gate, route pinning, and restorable API-boundary Git checkpoints.'
+    Write-Host 'PASS: durable worker sessions, migration-safe route preferences, terminal cleanup, catalog snapshots, pre-validator materiality gate, and restorable API-boundary Git checkpoints.'
 }
 finally {
     Pop-Location

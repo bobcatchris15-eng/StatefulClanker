@@ -76,6 +76,14 @@ function Get-SCRetryableTasks {
     return @($retryable | Sort-Object updatedAt)
 }
 
+function Close-SCFailedTaskWorkerSession($Task,[string]$Status='failed') {
+    if($null-eq$Task){return}
+    $sessionId=if($Task.PSObject.Properties['activeWorkerSessionId']){[string]$Task.activeWorkerSessionId}else{$null}
+    Set-SCProperty $Task 'activeWorkerSessionId' $null
+    Save-SCTask $Task
+    if($sessionId-and(Get-Command Close-SCWorkerSession -ErrorAction SilentlyContinue)){try{Close-SCWorkerSession $sessionId $Status}catch{}}
+}
+
 function Get-SCMaxConcurrent([int]$Override = 0) {
     if ($Override -gt 0) { return $Override }
     $cfg = Get-SCConfig
@@ -175,6 +183,7 @@ function Get-SCParallelChildOutput($Run) {
 
 function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
     $task = Get-SCTask $Run.taskId
+    $child=$null
     $entry = [ordered]@{ taskId = $Run.taskId; status = $task.status; committed = $false; merged = $false; reason = $null; logPath = $Run.logPath }
     if ($Run.process.ExitCode -ne 0) {
         $child=Get-SCParallelChildOutput $Run
@@ -211,7 +220,7 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
         if (@('running','reviewing','validating') -contains $task.status) {
             $task.status = 'failed'
             $task.blockReason = "Worker crashed with exit code $($Run.process.ExitCode)"
-            Save-SCTask $task
+            Close-SCFailedTaskWorkerSession $task 'crashed'
         }
     }
     if ($task.status -ne 'complete') {
@@ -292,21 +301,8 @@ function Invoke-SCParallel([int]$Limit=0, [string]$Provider, [switch]$NoMerge, [
 
     if (-not (Test-SCGitAvailable)) { throw 'parallel execution requires git on PATH' }
     if (-not (Test-SCGitRepo $stateRoot)) { throw "$stateRoot is not a git repository" }
-    $dirty = & git -C $stateRoot status --porcelain 2>$null | Out-String
-    if (-not [string]::IsNullOrWhiteSpace($dirty)) {
-        $dirtyLines=@($dirty -split "`r?`n"|Where-Object{
-            if([string]::IsNullOrWhiteSpace($_)){return $false}
-            $line=$_.Trim()
-            $filePart=if($line.Length -gt 3){$line.Substring(3).Trim().Trim('"').Trim("'")}else{$line.Trim('"').Trim("'")}
-            if($filePart -match '(^|[/\\])\.statefulclanker([/\\]|$)' -or $filePart -eq '.statefulclanker'){return $false}
-            return $true
-        })
-        if($dirtyLines.Count -gt 0){
-            $preview=(@($dirtyLines|Select-Object -First 5)) -join ', '
-            if($dirtyLines.Count -gt 5){$preview+=" (+$($dirtyLines.Count - 5) more)"}
-            throw "main worktree has uncommitted changes: $preview"
-        }
-    }
+    $dirtySummary=Get-SCWorktreeDirtySummary $stateRoot
+    if($dirtySummary){throw [string]$dirtySummary.message}
 
     $candidates = @(Get-SCDispatchableTasks)
     if ($candidates.Count -eq 0) { Write-Host 'No runnable ready tasks.'; return }

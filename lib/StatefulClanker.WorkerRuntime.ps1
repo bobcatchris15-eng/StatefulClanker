@@ -55,6 +55,19 @@ function Get-SCConnectionProtocol($Connection) {
     if($Connection.PSObject.Properties['protocol']-and$Connection.protocol){return [string]$Connection.protocol}
     return 'openai-chat'
 }
+function Get-SCEffectiveWorkerToolMode($Connection) {
+    $toolMode=if($Connection.PSObject.Properties['toolMode']-and$Connection.toolMode){[string]$Connection.toolMode}else{'native'}
+    if($toolMode-eq'native'){
+        $model=if($Connection.PSObject.Properties['model']){[string]$Connection.model}else{''}
+        $baseUrl=if($Connection.PSObject.Properties['baseUrl']){[string]$Connection.baseUrl}else{''}
+        # Cohere's OpenAI-compatible surfaces do not reliably accept the canonical
+        # role=tool continuation used by this worker (their tool_results require
+        # provider-specific outputs). Use the text protocol so no native tool
+        # request is emitted until a dedicated Cohere adapter exists.
+        if($model-match'(?i)^cohere/'-or$baseUrl-match'(?i)(^|\.)cohere\.ai(?:/|$)'){return 'text'}
+    }
+    return $toolMode
+}
 function Get-SCConnectionAuthKind($Connection) {
     if($Connection.PSObject.Properties['authKind']-and$Connection.authKind){return ([string]$Connection.authKind).ToLowerInvariant()}
     if((Get-SCConnectionProtocol $Connection)-eq'anthropic-messages'){return 'x-api-key'}
@@ -484,15 +497,32 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
         throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$metadata$bodyDetail"
     }
 }
+function Get-SCResponseDiagnostic($Response,[int]$MaximumLength=240) {
+    if($null-eq$Response){return 'response was null'}
+    $detail=''
+    $error=Get-SCField $Response 'error'
+    if($error){$detail=[string](Get-SCField $error 'message')}
+    if([string]::IsNullOrWhiteSpace($detail)){$detail=[string](Get-SCField $Response 'message')}
+    if([string]::IsNullOrWhiteSpace($detail)){
+        try{$detail=$Response|ConvertTo-Json -Depth 6 -Compress -ErrorAction Stop}catch{$detail=$Response.GetType().FullName}
+    }
+    $detail=($detail -replace '[\r\n\t]+',' ').Trim()
+    if($detail.Length-gt$MaximumLength){$detail=$detail.Substring(0,$MaximumLength)+'…'}
+    return $detail
+}
 function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
     if($Protocol-eq'gemini-native'){
-        if($null-eq$Response-or-not$Response.PSObject.Properties['candidates']-or@($Response.candidates).Count-eq0){throw 'Gemini endpoint returned no candidates.'}
-        $parts=@($Response.candidates[0].content.parts);$texts=@();$calls=@();$n=0
+        $candidates=Get-SCField $Response 'candidates'
+        if($null-eq$candidates-or@($candidates).Count-eq0){throw ('Gemini endpoint returned no candidates. Diagnostic: '+(Get-SCResponseDiagnostic $Response))}
+        $content=Get-SCField (@($candidates)[0]) 'content';$parts=Get-SCField $content 'parts'
+        if(@($parts).Count-eq0){throw ('Gemini endpoint returned no message parts. Diagnostic: '+(Get-SCResponseDiagnostic $Response))}
+        $texts=@();$calls=@();$n=0
         foreach($part in $parts){
-            if($part.PSObject.Properties['text'] -and -not[string]::IsNullOrWhiteSpace([string]$part.text)){$texts+=,[string]$part.text}
-            if($part.PSObject.Properties['functionCall'] -and $part.functionCall){
-                $n++;$fc=$part.functionCall;$args=if($fc.PSObject.Properties['args']){$fc.args}else{[pscustomobject]@{}}
-                $calls+=,[pscustomobject]@{id=('gemini-{0}-{1}'-f$n,[string]$fc.name);type='function';function=[pscustomobject]@{name=[string]$fc.name;arguments=($args|ConvertTo-Json -Depth 30 -Compress)}}
+            $text=Get-SCField $part 'text';if(-not[string]::IsNullOrWhiteSpace([string]$text)){$texts+=,[string]$text}
+            $fc=Get-SCField $part 'functionCall'
+            if($fc){
+                $n++;$args=Get-SCField $fc 'args';if($null-eq$args){$args=[pscustomobject]@{}}
+                $calls+=,[pscustomobject]@{id=('gemini-{0}-{1}'-f$n,[string](Get-SCField $fc 'name'));type='function';function=[pscustomobject]@{name=[string](Get-SCField $fc 'name');arguments=($args|ConvertTo-Json -Depth 30 -Compress)}}
             }
         }
         return [pscustomobject]@{content=($texts-join[Environment]::NewLine);tool_calls=@($calls)}
@@ -501,20 +531,24 @@ function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
         # Normalize Anthropic's content-block array into the same {content;tool_calls}
         # shape OpenAI's choices[0].message already has, so the rest of the worker
         # loop (Invoke-SCDirectWorkerLoop) never needs to know which protocol answered.
-        if($null-eq$Response-or-not$Response.PSObject.Properties['content']){throw 'Inference endpoint returned no content.'}
+        $content=Get-SCField $Response 'content'
+        if($null-eq$content){throw ('Inference endpoint returned no content. Diagnostic: '+(Get-SCResponseDiagnostic $Response))}
         $textParts=@();$toolCalls=@()
-        foreach($block in @($Response.content)){
-            $type=[string]$block.type
-            if($type-eq'text'){$textParts+=,[string]$block.text}
+        foreach($block in @($content)){
+            $type=[string](Get-SCField $block 'type')
+            if($type-eq'text'){$textParts+=,[string](Get-SCField $block 'text')}
             elseif($type-eq'tool_use'){
-                $argsJson=($block.input|ConvertTo-Json -Depth 30 -Compress)
-                $toolCalls+=,[pscustomobject]@{id=[string]$block.id;type='function';function=[pscustomobject]@{name=[string]$block.name;arguments=$argsJson}}
+                $argsJson=((Get-SCField $block 'input')|ConvertTo-Json -Depth 30 -Compress)
+                $toolCalls+=,[pscustomobject]@{id=[string](Get-SCField $block 'id');type='function';function=[pscustomobject]@{name=[string](Get-SCField $block 'name');arguments=$argsJson}}
             }
         }
         return [pscustomobject]@{content=($textParts-join"`n");tool_calls=@($toolCalls)}
     }
-    if($null-eq$Response-or$null-eq$Response.choices-or@($Response.choices).Count-eq0){throw 'Inference endpoint returned no choices.'}
-    return $Response.choices[0].message
+    $choices=Get-SCField $Response 'choices'
+    if($null-eq$choices-or@($choices).Count-eq0){throw ('Inference endpoint returned no choices. Diagnostic: '+(Get-SCResponseDiagnostic $Response))}
+    $message=Get-SCField (@($choices)[0]) 'message'
+    if($null-eq$message){throw ('Inference endpoint returned no choice message. Diagnostic: '+(Get-SCResponseDiagnostic $Response))}
+    return $message
 }
 function Get-SCApiUsageValue($Usage,[string[]]$Names) {
     if($null-eq$Usage){return 0L}
@@ -548,6 +582,32 @@ function Get-SCWorkerSession([string]$SessionId) {
 function Save-SCWorkerSession($Session) {
     Set-SCProperty $Session 'updatedAt' ([datetimeoffset]::UtcNow.ToString('o'))
     Write-SCJson (Get-SCWorkerSessionPath ([string]$Session.id)) $Session
+}
+function Get-SCRouteSnapshotReceipt {
+    $selectedAt=[datetimeoffset]::UtcNow.ToString('o')
+    $catalogPath=$null
+    $catalogFingerprint=$null
+    $catalogLastWriteUtc=$null
+    $configPath=$null
+    $configFingerprint=$null
+    $configLastWriteUtc=$null
+    try{
+        if(Get-Command Get-SCTargetPoolPath -ErrorAction SilentlyContinue){
+            $catalogPath=[string](Get-SCTargetPoolPath)
+            if(Test-Path -LiteralPath $catalogPath -PathType Leaf){
+                $catalogFingerprint=Get-SCFileHashValue $catalogPath
+                $catalogLastWriteUtc=(Get-Item -LiteralPath $catalogPath).LastWriteTimeUtc.ToString('o')
+            }
+        }
+    }catch{}
+    try{
+        $configPath=Get-SCPath 'config.json'
+        if(Test-Path -LiteralPath $configPath -PathType Leaf){
+            $configFingerprint=Get-SCFileHashValue $configPath
+            $configLastWriteUtc=(Get-Item -LiteralPath $configPath).LastWriteTimeUtc.ToString('o')
+        }
+    }catch{}
+    return [pscustomobject][ordered]@{selectedAt=$selectedAt;catalogPath=$catalogPath;catalogFingerprint=$catalogFingerprint;catalogLastWriteUtc=$catalogLastWriteUtc;configPath=$configPath;configFingerprint=$configFingerprint;configLastWriteUtc=$configLastWriteUtc}
 }
 function New-SCWorkerSession([string]$SessionId,$Task,$Compilation,[string]$Prompt,[string]$ToolMode,$Registry) {
     if([string]::IsNullOrWhiteSpace($SessionId)){$SessionId=New-SCId 'wsess'}
@@ -595,15 +655,17 @@ function Set-SCWorkerSessionRoutePin([string]$SessionId,[string]$Endpoint,[strin
     $old=if($s.PSObject.Properties['pinnedEndpoint']){[string]$s.pinnedEndpoint}else{''}
     $oldConnection=if($s.PSObject.Properties['pinnedConnection']){[string]$s.pinnedConnection}else{''}
     $oldModel=if($s.PSObject.Properties['pinnedModel']){[string]$s.pinnedModel}else{''}
-    if($old-and($old-ne$Endpoint-or($oldConnection-and$oldConnection-ne$Connection)-or($oldModel-and$oldModel-ne$Model))){
-        throw "Worker session $SessionId is pinned to $old ($oldConnection / $oldModel) and cannot resume on $Endpoint ($Connection / $Model)."
-    }
-    if(-not$old){
+    $changed=$old-and($old-ne$Endpoint-or($oldConnection-and$oldConnection-ne$Connection)-or($oldModel-and$oldModel-ne$Model))
+    if(-not$old-or$changed){
         Set-SCProperty $s 'pinnedEndpoint' $Endpoint
         Set-SCProperty $s 'pinnedConnection' $Connection
         Set-SCProperty $s 'pinnedModel' $Model
         Save-SCWorkerSession $s
-        Add-SCEvent 'worker.session_route_pinned' "Pinned worker session $SessionId to $Endpoint / $Model." @{sessionId=$SessionId;taskId=$s.taskId;endpoint=$Endpoint;connection=$Connection;model=$Model}
+        if($changed){
+            Add-SCEvent 'worker.session_route_migrated' "Migrated worker session $SessionId from $old / $oldModel to $Endpoint / $Model." @{sessionId=$SessionId;taskId=$s.taskId;previousEndpoint=$old;previousConnection=$oldConnection;previousModel=$oldModel;endpoint=$Endpoint;connection=$Connection;model=$Model}
+        }else{
+            Add-SCEvent 'worker.session_route_pinned' "Pinned worker session $SessionId to $Endpoint / $Model." @{sessionId=$SessionId;taskId=$s.taskId;endpoint=$Endpoint;connection=$Connection;model=$Model}
+        }
     }
 }
 function Get-SCReusableWorkerSessionId($Task) {
@@ -738,10 +800,17 @@ function Close-SCWorkerSession([string]$SessionId,[string]$Status) {
     Set-SCProperty $s 'status' $Status
     if($Status-eq'completed'){Set-SCProperty $s 'completedAt' ([datetimeoffset]::UtcNow.ToString('o'))}
     Save-SCWorkerSession $s
+    try{
+        $task=Get-SCTask ([string]$s.taskId)
+        if($task.PSObject.Properties['activeWorkerSessionId']-and[string]$task.activeWorkerSessionId-eq$SessionId){
+            Set-SCProperty $task 'activeWorkerSessionId' $null
+            Save-SCTask $task
+        }
+    }catch{}
 }
 
 function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$Stage='worker',$UsageAccumulator=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,$ProviderRecord=$null,$Compilation=$null) {
-    $toolMode=if($Connection.PSObject.Properties['toolMode']-and$Connection.toolMode){[string]$Connection.toolMode}else{'native'};if(@('native','text')-notcontains$toolMode){throw "Unsupported toolMode '$toolMode'."}
+    $toolMode=Get-SCEffectiveWorkerToolMode $Connection;if(@('native','text')-notcontains$toolMode){throw "Unsupported toolMode '$toolMode'."}
     $maxSteps=Get-SCWorkerMaxSteps $Connection $Task $Stage
     $registry=@(Get-SCWorkerToolRecords $Task $Stage);if($registry.Count-eq0){throw 'No worker capabilities are authorized for this invocation.'}
     if($Stage-eq'run' -and $WorkerSessionId){
@@ -898,13 +967,16 @@ function Invoke-SCRouteDoctor([int]$MaxProbes=1) {
 function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null) {
     try{Invoke-SCRouteDoctor 1|Out-Null}catch{}
     $history=@()
+    $routeSnapshot=Get-SCRouteSnapshotReceipt
     $routeOverride=$ProviderOverride;$pinnedEndpoint=$null
     if($Stage-eq'run' -and $WorkerSessionId){
         $pin=Get-SCWorkerSessionRoutePin $WorkerSessionId
         if($pin){
             $pinnedEndpoint=[string]$pin.endpoint
-            if($ProviderOverride -and [string]$ProviderOverride-ne$pinnedEndpoint){throw "Worker session $WorkerSessionId is already pinned to '$pinnedEndpoint'; provider override '$ProviderOverride' would break session continuity."}
-            $routeOverride=$pinnedEndpoint
+            # A session pin preserves continuity while it remains eligible. It is
+            # deliberately not a hard constraint: catalog edits and health changes
+            # must be able to move a resumable session onto another eligible route.
+            if(-not$ProviderOverride){$routeOverride=$pinnedEndpoint}
         }
     }
     $candidates=@()
@@ -912,11 +984,20 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
         if(-not$pinnedEndpoint){throw}
         $history+=,[ordered]@{endpoint=$pinnedEndpoint;exitCode=-3;failureClass='session_route_unavailable';scope='endpoint';error=$_.Exception.Message}
     }
+    if($candidates.Count-eq0-and$pinnedEndpoint-and-not$ProviderOverride){
+        # The preferred pin is disabled, cooling down, or otherwise unavailable.
+        # Re-read the automatic candidate set so a compatible route can resume the
+        # persisted transcript; the successful route becomes the new preference.
+        try{$candidates=@(Get-SCProviderCandidates $Task $null $Stage)}catch{throw}
+        if($candidates.Count-gt0){
+            Add-SCEvent 'worker.session_route_fallback' "Pinned route $pinnedEndpoint is unavailable; selecting an eligible replacement for worker session $WorkerSessionId." @{taskId=$Task.id;sessionId=$WorkerSessionId;pinnedEndpoint=$pinnedEndpoint;routeSnapshot=$routeSnapshot}
+        }
+    }
     if($candidates.Count-eq0){
         $next=Get-SCNextRouteAvailability
-        $message=if($pinnedEndpoint){"Worker session $WorkerSessionId is pinned to '$pinnedEndpoint', which is unavailable. The session will not migrate to another endpoint."}elseif($next){"All eligible inference endpoints are cooling down until at least $($next.ToLocalTime().ToString('o'))."}else{'No eligible inference endpoint is available.'}
+        $message=if($pinnedEndpoint){"Worker session $WorkerSessionId preferred '$pinnedEndpoint', but no compatible eligible replacement is currently available."}elseif($next){"All eligible inference endpoints are cooling down until at least $($next.ToLocalTime().ToString('o'))."}else{'No eligible inference endpoint is available.'}
         $now=(Get-Date).ToUniversalTime().ToString('o')
-        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$pinnedEndpoint;endpoint=$pinnedEndpoint;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId);compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr=$message;routeDeferred=$true;retryAfter=if($next){$next.ToString('o')}else{$null};routeAttempts=0;routeHistory=@($history)}
+        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$pinnedEndpoint;endpoint=$pinnedEndpoint;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId);compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr=$message;routeDeferred=$true;retryAfter=if($next){$next.ToString('o')}else{$null};routeAttempts=0;routeHistory=@($history);routeSnapshot=$routeSnapshot}
     }
     $last=$null
     foreach($record in $candidates){
@@ -938,6 +1019,11 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
             $last=$receipt
             $text=(([string]$receipt.stderr)+[Environment]::NewLine+([string]$receipt.stdout)).Trim()
             if([int]$receipt.exitCode-eq0){
+                if($WorkerSessionId){
+                    $routeConnection=if($record.config.PSObject.Properties['connection']){[string]$record.config.connection}else{$null}
+                    $routeModel=if($record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null}
+                    Set-SCWorkerSessionRoutePin $WorkerSessionId ([string]$record.name) $routeConnection $routeModel
+                }
                 Register-SCRouteSuccess ([string]$record.name)|Out-Null
                 if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection){
                     $connectionName=[string]$record.config.connection
@@ -946,7 +1032,7 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
                     if($service){Register-SCRouteSuccess ("service:"+$service) 'service'|Out-Null}
                 }
                 $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='success';failureClass=$null;healthScope=$null}
-                Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
+                Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history);Set-SCProperty $receipt 'routeSnapshot' $routeSnapshot
                 if($history.Count-gt1){Add-SCEvent 'routing.failover_succeeded' "Endpoint failover succeeded on $($record.name)." @{taskId=$Task.id;stage=$Stage;attempts=$history.Count;history=@($history)}}
                 return $receipt
             }
@@ -964,12 +1050,12 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
         }
     }
     if($last){
-        Set-SCProperty $last 'routeAttempts' $history.Count;Set-SCProperty $last 'routeHistory' @($history);Set-SCProperty $last 'routeExhausted' $true
+        Set-SCProperty $last 'routeAttempts' $history.Count;Set-SCProperty $last 'routeHistory' @($history);Set-SCProperty $last 'routeExhausted' $true;Set-SCProperty $last 'routeSnapshot' $routeSnapshot
         return $last
     }
     if(@($history|Where-Object{$_.outcome-eq'busy'}).Count-gt0){
         $now=(Get-Date).ToUniversalTime().ToString('o');$retry=[datetimeoffset]::UtcNow.AddSeconds(2).ToString('o')
-        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$pinnedEndpoint;endpoint=$pinnedEndpoint;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId);compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr='All healthy endpoints are currently occupied by another worker.';routeDeferred=$true;retryAfter=$retry;routeAttempts=$history.Count;routeHistory=@($history)}
+        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$pinnedEndpoint;endpoint=$pinnedEndpoint;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId);compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr='All healthy endpoints are currently occupied by another worker.';routeDeferred=$true;retryAfter=$retry;routeAttempts=$history.Count;routeHistory=@($history);routeSnapshot=$routeSnapshot}
     }
     throw 'Routing produced no endpoint receipt.'
 }

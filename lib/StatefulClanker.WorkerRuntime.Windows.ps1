@@ -36,7 +36,7 @@ function Unprotect-SCApiKey([string]$Protected) {
 # message history). Anything else is refused loudly here rather than silently
 # sent in the wrong shape.
 $script:SCOpenAiChatInvokeBase=${function:Invoke-SCApiChat}
-$script:SCSupportedApiProtocols=@('openai-chat','anthropic-messages')
+$script:SCSupportedApiProtocols=@('openai-chat','anthropic-messages','gemini-native')
 function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
     $protocol=if($Connection.PSObject.Properties['protocol']-and-not[string]::IsNullOrWhiteSpace([string]$Connection.protocol)){[string]$Connection.protocol}else{'openai-chat'}
     if($script:SCSupportedApiProtocols-notcontains$protocol){throw "Direct inference protocol '$protocol' is not supported by this runtime. Add/select a matching protocol adapter rather than sending an incompatible request shape."}

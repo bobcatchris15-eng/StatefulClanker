@@ -19,13 +19,14 @@ Assert-True ($taskLoop.Contains('VALIDATOR REJECTED CANDIDATE')) 'Validator feed
 Assert-True ($taskLoop.Contains('worker.session_repair')) 'Same-session repair event is missing.'
 Assert-True ($taskLoop.Contains('Get-SCReusableWorkerSessionId')) 'Task dispatch does not attempt to reuse an unfinished worker session.'
 
-Write-Host '  REVIEW 3: resumed direct sessions are endpoint/model pinned'
+Write-Host '  REVIEW 3: resumed direct sessions preserve a route preference but can migrate'
 Assert-True ($runtime.Contains('function Set-SCWorkerSessionRoutePin')) 'Worker route pin helper is missing.'
 Assert-True ($runtime.Contains('function Get-SCWorkerSessionRoutePin')) 'Worker route pin reader is missing.'
-Assert-True ($runtime.Contains('The session will not migrate to another endpoint.')) 'Pinned-session routing does not fail closed against migration.'
+Assert-True ($runtime.Contains('worker.session_route_fallback')) 'Pinned-session routing does not fall back when the preferred route is unavailable.'
+Assert-True ($runtime.Contains('worker.session_route_migrated')) 'Successful fallback does not persist the new route preference.'
 
 Write-Host '  REVIEW 4: cold workers have a high turn ceiling'
 Assert-True ($runtime.Contains('$hardCap=1024')) 'Direct worker hard ceiling is not 1024.'
 Assert-True ($runtime.Contains("'small'{512}")) 'Small cold worker floor is not 512.'
 
-Write-Host 'PASS: ordinary task review is validator-only; failures resume the pinned worker session; cold-worker turn budget is raised.'
+Write-Host 'PASS: ordinary task review is validator-only; failures resume a migration-safe worker session; cold-worker turn budget is raised.'

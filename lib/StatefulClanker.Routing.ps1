@@ -53,12 +53,16 @@ function Get-SCTargetPoolRecords {
         if($e.PSObject.Properties['enabled'] -and $null-ne$e.enabled -and -not[bool]$e.enabled){continue}
         if(-not$e.PSObject.Properties['connection'] -or [string]::IsNullOrWhiteSpace([string]$e.connection)){continue}
         if(-not$e.PSObject.Properties['model'] -or [string]::IsNullOrWhiteSpace([string]$e.model)){continue}
-        $toolMode=if($e.PSObject.Properties['toolMode'] -and $e.toolMode){[string]$e.toolMode}else{'native'}
+        $supportsTools=if($e.PSObject.Properties['supportsTools'] -and $null-ne$e.supportsTools){[bool]$e.supportsTools}else{$null}
+        $toolMode=if($e.PSObject.Properties['toolMode'] -and $e.toolMode){[string]$e.toolMode}elseif($supportsTools-eq$true){'native'}else{'text'}
+        if(@('native','text')-notcontains$toolMode){continue}
+        if($toolMode-eq'native'-and$supportsTools-ne$true){continue}
         $cfg=[pscustomobject]@{
             type='api'
             connection=[string]$e.connection
             model=[string]$e.model
             toolMode=$toolMode
+            supportsTools=$supportsTools
             disabled=$false
         }
         $records += [pscustomobject]@{
@@ -223,7 +227,16 @@ function Get-SCConnectionConfigFingerprint([string]$ConnectionName) {
 function Get-SCExplicitRetryAfterSeconds([string]$Text) {
     if([string]::IsNullOrWhiteSpace($Text)){return $null}
     $now=[datetimeoffset]::UtcNow
-    if($Text-match'(?i)retry[- ]after\s*[:=]?\s*(\d+)'){return [Math]::Max(1,[int]$Matches[1])}
+    # Providers surface retry hints in both HTTP headers and structured error
+    # payloads. Preserve fractional values until rounding them up: retrying even
+    # slightly early merely creates another 429.
+    if($Text-match'(?i)(?:retry[-_ ]after|retryDelay)(?:_seconds)?\s*["'']?\s*[:=]\s*["'']?(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)?'){
+        $n=[double]$Matches[1];$u=([string]$Matches[2]).ToLowerInvariant()
+        if($u-eq'ms'){return [Math]::Max(1,[int][Math]::Ceiling($n/1000))}
+        if($u.StartsWith('h')){return [Math]::Max(1,[int][Math]::Ceiling($n*3600))}
+        if($u.StartsWith('m')){return [Math]::Max(1,[int][Math]::Ceiling($n*60))}
+        return [Math]::Max(1,[int][Math]::Ceiling($n))
+    }
     if($Text-match'(?i)(?:x-)?ratelimit-reset(?:-requests|-tokens)?\s*[:=]\s*(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)?'){
         $n=[double]$Matches[1];$u=([string]$Matches[2]).ToLowerInvariant()
         if([string]::IsNullOrWhiteSpace($u) -and $n-gt1000000000){
@@ -368,7 +381,11 @@ function Get-SCFailureHealthScope($Record,[string]$Class) {
     $cfg=$Record.config;$type=if($cfg.PSObject.Properties['type']){[string]$cfg.type}else{'cli'}
     if($type-ne'api'){return [ordered]@{scope='endpoint';key=[string]$Record.name;connection=$null;service=$null}}
     $connection=if($cfg.PSObject.Properties['connection']){[string]$cfg.connection}else{$null};$service=if($connection){Get-SCConnectionServiceName $connection}else{$null}
-    if(@('rate_limited','auth','permission','configuration','billing_exhausted','timeout','server_error')-contains$Class -and $connection){return [ordered]@{scope='connection';key="connection:$connection";connection=$connection;service=$service}}
+    # One 429 identifies a saturated endpoint, not an exhausted account. Broader
+    # scope is reserved for evidence that independently failing connections share
+    # an outage (the service corroboration path below).
+    if(@('auth','permission','configuration','billing_exhausted','timeout','server_error')-contains$Class -and $connection){return [ordered]@{scope='connection';key="connection:$connection";connection=$connection;service=$service}}
+    if($Class-eq'rate_limited'){return [ordered]@{scope='endpoint';key=[string]$Record.name;connection=$connection;service=$service}}
     if(@('capacity','model_unavailable','malformed_response','empty_response','protocol_error')-contains$Class){return [ordered]@{scope='endpoint';key=[string]$Record.name;connection=$connection;service=$service}}
     if($Class-eq'session_incompatible'){return [ordered]@{scope='request';key=$null;connection=$connection;service=$service}}
     return [ordered]@{scope='request';key=$null;connection=$connection;service=$service}
@@ -528,7 +545,10 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
         if($null-eq$property){throw "Route '$Override' is not configured."}
         if(-not(Test-SCProviderEnabled $property.Value)){throw "Route '$Override' is disabled."}
         $record=[pscustomobject]@{name=$Override;config=$property.Value;priority=-1;preferred=$true;targetPool=$false}
-        if(-not(Test-SCRouteRecordAvailable $record)){throw "Route '$Override' is currently unavailable."}
+        # An explicit configured provider is an operator-selected escape hatch.
+        # Do not let unrelated machine-catalog connection/service health suppress
+        # it; only health recorded for this exact configured route applies.
+        if(-not(Test-SCRouteAvailable ([string]$record.name))){throw "Route '$Override' is currently unavailable."}
         return @($record)
     }
 
@@ -557,13 +577,36 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
     return @($ordered|Select-Object -First $max)
 }
 
-function Get-SCNextRouteAvailability {
-    $h=Get-SCRoutingHealth;$next=$null
-    foreach($p in $h.endpoints.PSObject.Properties){
-        $e=$p.Value;if([string]$e.state-eq'healthy'){continue};$raw=$null
-        if($e.PSObject.Properties['nextProbeAt'] -and $e.nextProbeAt){$raw=[string]$e.nextProbeAt}elseif($e.PSObject.Properties['retryAfter'] -and $e.retryAfter){$raw=[string]$e.retryAfter}
-        if(-not$raw){continue};$dto=[datetimeoffset]::MinValue
-        if([datetimeoffset]::TryParse($raw,[ref]$dto)){if($null-eq$next -or $dto-lt$next){$next=$dto}}
+function Get-SCNextRouteAvailability($Task=$null,[string]$Override=$null,[string]$Stage='worker') {
+    # Only report windows governing routes this dispatch could actually use. Raw
+    # health minima can belong to disabled, unrelated, or already-due probes.
+    $cfg=Get-SCConfig;$records=@(Get-SCTargetPoolRecords)
+    if($Override){
+        $poolMatch=$records|Where-Object{[string]$_.name-eq$Override -or [string]$_.poolId-eq$Override}|Select-Object -First 1
+        if($poolMatch){$records=@($poolMatch)}else{
+            $property=if($cfg.providers){$cfg.providers.PSObject.Properties[$Override]}else{$null}
+            if($property-and(Test-SCProviderEnabled $property.Value)){$records=@([pscustomobject]@{name=$Override;config=$property.Value;targetPool=$false})}else{$records=@()}
+        }
+    }elseif($records.Count-eq0){
+        foreach($p in @(Get-SCPrioritizedProviders $cfg)){$records+=,[pscustomobject]@{name=$p.Name;config=$p.Config;targetPool=$false}}
+    }
+    $now=[datetimeoffset]::UtcNow;$next=$null
+    foreach($record in $records){
+        $keys=@([string]$record.name)
+        $routeConfig=$record.config
+        $isPool=($record.PSObject.Properties['targetPool'] -and [bool]$record.targetPool) -or ([string]$record.name).StartsWith('pool:')
+        if($isPool -and $routeConfig.PSObject.Properties['connection'] -and $routeConfig.connection){
+            $connection=[string]$routeConfig.connection;$keys+="connection:$connection"
+            $service=Get-SCConnectionServiceName $connection;if($service){$keys+="service:$service"}
+        }
+        foreach($key in $keys){
+            $entry=Get-SCRouteHealthEntry $key;if($null-eq$entry){continue}
+            $state=if($entry.PSObject.Properties['state']){[string]$entry.state}else{'healthy'}
+            if($state-in @('healthy','probing','quarantined')){continue}
+            $raw=if($entry.PSObject.Properties['nextProbeAt'] -and $entry.nextProbeAt){[string]$entry.nextProbeAt}elseif($entry.PSObject.Properties['retryAfter'] -and $entry.retryAfter){[string]$entry.retryAfter}else{$null}
+            $at=[datetimeoffset]::MinValue
+            if($raw-and[datetimeoffset]::TryParse($raw,[ref]$at)-and$at-gt$now-and($null-eq$next-or$at-lt$next)){$next=$at}
+        }
     }
     return $next
 }
@@ -573,7 +616,7 @@ function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
     if ($candidates.Count -gt 0) {
         return [ordered]@{ name=$candidates[0].name; config=$candidates[0].config }
     }
-    $next = Get-SCNextRouteAvailability
+    $next = Get-SCNextRouteAvailability $Task $Override $Stage
     if ($next) { throw "All eligible endpoint-catalog routes are cooling down. Next retry window: $($next.ToLocalTime().ToString('o'))" }
     throw "No eligible inference route is available. Add/enable models in the machine endpoint catalog or configure a fallback connection."
 }
