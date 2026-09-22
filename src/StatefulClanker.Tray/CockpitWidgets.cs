@@ -161,3 +161,229 @@ sealed class OrchestratorStatusPanel : Control
         }
     }
 }
+
+
+sealed class EndpointQueuePreview
+{
+    public string EndpointId = "";
+    public string Connection = "";
+    public string Model = "";
+    public string State = "empty";
+    public string Detail = "";
+    public int EnabledCount;
+    public int ReadyCount;
+    public string Display => string.IsNullOrWhiteSpace(Connection)
+        ? "NO READY ENDPOINT"
+        : Connection + " / " + Model;
+}
+
+static class RoutingQueueInspector
+{
+    public static EndpointQueuePreview Snapshot()
+    {
+        var preview = new EndpointQueuePreview();
+        try
+        {
+            var pool = TargetPoolStore.LoadActive();
+            var enabled = pool.entries
+                .Where(x => x.Value.enabled)
+                .Select(x => new { Id=x.Key, Route="pool:"+x.Key, Entry=x.Value })
+                .OrderBy(x => x.Route, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            preview.EnabledCount = enabled.Count;
+            if (enabled.Count == 0) { preview.Detail="endpoint catalog empty"; return preview; }
+
+            var health = ReadHealth();
+            var connections = ApiConnectionStore.Load();
+            var cursor = ReadCursor(enabled.Count);
+            var ready = new List<(string id,string route,TargetPoolEntry entry)>();
+            foreach (var x in enabled)
+            {
+                if (!IsHealthy(health,x.Route)) continue;
+                if (!IsHealthy(health,"connection:"+x.Entry.connection)) continue;
+                if (connections.TryGetValue(x.Entry.connection,out var profile))
+                {
+                    var service = ServiceName(profile);
+                    if (!string.IsNullOrWhiteSpace(service) && !IsHealthy(health,"service:"+service)) continue;
+                }
+                ready.Add((x.Id,x.Route,x.Entry));
+            }
+            preview.ReadyCount = ready.Count;
+            if (ready.Count == 0)
+            {
+                preview.State="waiting";
+                preview.Detail="all endpoints busy, cooling, or quarantined";
+                return preview;
+            }
+
+            for (var offset=0; offset<enabled.Count; offset++)
+            {
+                var index=(cursor+offset)%enabled.Count;
+                var candidate=enabled[index];
+                var match=ready.FirstOrDefault(x=>string.Equals(x.route,candidate.Route,StringComparison.OrdinalIgnoreCase));
+                if (match.entry is null) continue;
+                if (!LeaseLooksFree(candidate.Route)) continue;
+                preview.EndpointId=candidate.Route;
+                preview.Connection=candidate.Entry.connection;
+                preview.Model=candidate.Entry.displayName == candidate.Entry.model ? candidate.Entry.model : candidate.Entry.displayName;
+                preview.State="ready";
+                preview.Detail=$"{ready.Count}/{enabled.Count} ready";
+                return preview;
+            }
+
+            preview.State="busy";
+            preview.Detail=$"{ready.Count}/{enabled.Count} healthy; all presently occupied";
+            return preview;
+        }
+        catch (Exception ex)
+        {
+            preview.State="error";
+            preview.Detail=ex.Message;
+            return preview;
+        }
+    }
+
+    static int ReadCursor(int count)
+    {
+        if (count<=0) return 0;
+        var path=System.IO.Path.Combine(AppStore.Root,"routing","round-robin.json");
+        try
+        {
+            if (!File.Exists(path)) return 0;
+            using var doc=System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            if (doc.RootElement.TryGetProperty("cursor",out var c) && c.TryGetInt32(out var n))
+                return ((n%count)+count)%count;
+        }
+        catch { }
+        return 0;
+    }
+
+    static Dictionary<string,string> ReadHealth()
+    {
+        var output=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        var path=System.IO.Path.Combine(AppStore.Root,"routing","health.json");
+        try
+        {
+            if (!File.Exists(path)) return output;
+            using var doc=System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty("endpoints",out var endpoints) || endpoints.ValueKind!=System.Text.Json.JsonValueKind.Object) return output;
+            foreach (var p in endpoints.EnumerateObject())
+            {
+                var state=p.Value.TryGetProperty("state",out var s) && s.ValueKind==System.Text.Json.JsonValueKind.String ? s.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(state)) output[p.Name]=state!;
+            }
+        }
+        catch { }
+        return output;
+    }
+
+    static bool IsHealthy(Dictionary<string,string> health,string name)
+        => !health.TryGetValue(name,out var state) || string.Equals(state,"healthy",StringComparison.OrdinalIgnoreCase);
+
+    static string? ServiceName(ApiConnectionProfile p)
+    {
+        if (!string.IsNullOrWhiteSpace(p.presetId) && !string.Equals(p.presetId,"custom",StringComparison.OrdinalIgnoreCase))
+            return p.presetId.ToLowerInvariant();
+        try { return new Uri(p.baseUrl).Host.ToLowerInvariant(); } catch { return null; }
+    }
+
+    static bool LeaseLooksFree(string route)
+    {
+        try
+        {
+            var material=AppStore.Root+"|"+route;
+            var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(material))).ToLowerInvariant();
+            using var mutex=new Mutex(false,"Local\\StatefulClankerEndpoint-"+hash[..24]);
+            var acquired=false;
+            try { acquired=mutex.WaitOne(0); }
+            catch (AbandonedMutexException) { acquired=true; }
+            if (acquired) { try { mutex.ReleaseMutex(); } catch { } }
+            return acquired;
+        }
+        catch { return true; }
+    }
+}
+
+sealed class OverviewReadoutPanel : Control
+{
+    ProjectMetrics _project=new();
+    AutofillSnapshot _autofill=new();
+    EndpointQueuePreview _next=new();
+    bool _mcpRunning;
+    bool _hasProject;
+
+    public OverviewReadoutPanel()
+    {
+        Dock=DockStyle.Fill;
+        DoubleBuffered=true;
+        MinimumSize=new Size(420,82);
+        BackColor=Color.FromArgb(9,13,16);
+    }
+
+    public void SetState(ProjectMetrics project,AutofillSnapshot autofill,bool mcpRunning,bool hasProject,EndpointQueuePreview next)
+    {
+        _project=project;_autofill=autofill;_mcpRunning=mcpRunning;_hasProject=hasProject;_next=next;
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        var g=e.Graphics;
+        g.Clear(Color.FromArgb(9,13,16));
+        using var edge=new Pen(Color.FromArgb(37,48,55));
+        g.DrawRectangle(edge,0,0,Math.Max(0,Width-1),Math.Max(0,Height-1));
+
+        var gap=5;
+        var usable=Math.Max(1,Width-gap*5);
+        var col=usable/4;
+        var rowH=Math.Max(28,(Height-18)/2);
+        DrawCell(g,new Rectangle(gap,5,col,rowH),"PROJECT",_hasProject?"ACTIVE":"NO PROJECT",_hasProject?Theme.Good:Theme.Muted,_hasProject);
+        DrawCell(g,new Rectangle(gap*2+col,5,col,rowH),"MCP",_mcpRunning?"ONLINE":"OFFLINE",_mcpRunning?Theme.Good:Theme.Error,_mcpRunning);
+        var af=_autofill.Paused?"PAUSED":_autofill.Running?"RUNNING":"STOPPED";
+        DrawCell(g,new Rectangle(gap*3+col*2,5,col,rowH),"AUTOFILL",af,_autofill.Paused?Theme.Warn:_autofill.Running?Theme.Good:Theme.Muted,_autofill.Running&&!_autofill.Paused);
+        DrawCell(g,new Rectangle(gap*4+col*3,5,col,rowH),"WORKERS",$"{_project.ActiveAgents}/{Math.Max(1,_autofill.MaxConcurrent)}",_project.ActiveAgents>0?Theme.Accent:Theme.Muted,_project.ActiveAgents>0);
+
+        var y=8+rowH;
+        DrawCell(g,new Rectangle(gap,y,col*2+gap,rowH),"NEXT ENDPOINT IN QUEUE",_next.Display,EndpointColor(_next.State),string.Equals(_next.State,"ready",StringComparison.OrdinalIgnoreCase),_next.Detail);
+        DrawCell(g,new Rectangle(gap*3+col*2,y,col,rowH),"QUEUE",$"{_autofill.ReadyCount} READY / {_autofill.RetryCount} RETRY",_autofill.RetryCount>0?Theme.Warn:Theme.Text,_autofill.ReadyCount>0);
+        var intent=string.IsNullOrWhiteSpace(_project.IntentRevision)?"—":"R"+_project.IntentRevision;
+        DrawCell(g,new Rectangle(gap*4+col*3,y,col,rowH),"INTENT",intent,Theme.Text,!string.IsNullOrWhiteSpace(_project.IntentRevision));
+    }
+
+    static Color EndpointColor(string state) => state.ToLowerInvariant() switch
+    {
+        "ready"=>Theme.Good,
+        "busy"=>Theme.Accent,
+        "waiting"=>Theme.Warn,
+        "error"=>Theme.Error,
+        _=>Theme.Muted
+    };
+
+    static void DrawCell(Graphics g,Rectangle r,string label,string value,Color color,bool lit,string? sub=null)
+    {
+        using var fill=new SolidBrush(Color.FromArgb(15,21,24));
+        using var border=new Pen(Color.FromArgb(31,43,48));
+        g.FillRectangle(fill,r);g.DrawRectangle(border,r);
+        using var labelFont=new Font("Cascadia Mono",6.9f,FontStyle.Bold);
+        using var valueFont=new Font("Cascadia Mono",8.4f,FontStyle.Bold);
+        using var tinyFont=new Font("Cascadia Mono",6.5f);
+        using var muted=new SolidBrush(Color.FromArgb(104,121,126));
+        using var valueBrush=new SolidBrush(color);
+        var led=new Rectangle(r.X+7,r.Y+8,7,7);
+        if(lit)
+        {
+            using var glow=new SolidBrush(Color.FromArgb(65,color));
+            g.FillEllipse(glow,led.X-2,led.Y-2,11,11);
+        }
+        using(var lamp=new SolidBrush(lit?color:Color.FromArgb(42,54,57))) g.FillEllipse(lamp,led);
+        g.DrawString(label,labelFont,muted,r.X+19,r.Y+4);
+        var valueRect=new Rectangle(r.X+8,r.Y+17,Math.Max(0,r.Width-16),15);
+        TextRenderer.DrawText(g,value,valueFont,valueRect,color,TextFormatFlags.EndEllipsis|TextFormatFlags.NoPadding|TextFormatFlags.SingleLine);
+        if(!string.IsNullOrWhiteSpace(sub)&&r.Height>=42)
+        {
+            var subRect=new Rectangle(r.X+8,r.Y+32,Math.Max(0,r.Width-16),11);
+            TextRenderer.DrawText(g,sub,tinyFont,subRect,Color.FromArgb(88,108,113),TextFormatFlags.EndEllipsis|TextFormatFlags.NoPadding|TextFormatFlags.SingleLine);
+        }
+    }
+}
