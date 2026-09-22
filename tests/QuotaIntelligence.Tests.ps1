@@ -42,6 +42,9 @@ try {
                         'X-RateLimit-Limit-Requests: 30'+$crlf+
                         'X-RateLimit-Remaining-Requests: 7'+$crlf+
                         'X-RateLimit-Reset-Requests: 45s'+$crlf+
+                        'X-RateLimit-Limit-Tokens: 8000'+$crlf+
+                        'X-RateLimit-Remaining-Tokens: 6000'+$crlf+
+                        'X-RateLimit-Reset-Tokens: 7.66s'+$crlf+
                         'Connection: close'+$crlf+$crlf)
                     $headBytes=[Text.Encoding]::ASCII.GetBytes($head)
                     $stream.Write($headBytes,0,$headBytes.Length)
@@ -123,6 +126,27 @@ try {
     Assert-True ([double]$mock.health.quota.limit-eq30) 'Healthy probe did not capture request limit.'
     Assert-True ($null-ne$mock.health.quota.resetAt) 'Healthy probe did not capture reset window.'
     Assert-True ([string]$mock.health.quota.source -like 'probe:*') 'Background quota metadata was not labeled as probe-derived.'
+
+    Write-Host '  QUOTA 5B: simultaneous request/token windows are retained independently'
+    $mock=Route (Call-Router @('snapshot')).data 'pool:mock::m'
+    $windows=@($mock.health.quota.windows)
+    $requestWindow=@($windows|Where-Object { [string]$_.kind -eq 'requests' }|Select-Object -First 1)
+    $tokenWindow=@($windows|Where-Object { [string]$_.kind -eq 'tokens' }|Select-Object -First 1)
+    Assert-True ($requestWindow.Count-eq1) 'Request quota window was not retained.'
+    Assert-True ($tokenWindow.Count-eq1) 'Token quota window was not retained.'
+    Assert-True ([double]$requestWindow[0].remaining-eq7) 'Request remaining count was wrong.'
+    Assert-True ([double]$tokenWindow[0].remaining-eq6000) 'Token remaining count was wrong.'
+    Assert-True ($null-ne$requestWindow[0].resetAt -and $null-ne$tokenWindow[0].resetAt) 'Independent reset times were not retained.'
+
+    Write-Host '  QUOTA 5C: fixed provider reset rules are available without inference'
+    $cf=Route (Call-Router @('snapshot')).data 'pool:cf::m'
+    $cfWindow=@($cf.health.quota.windows|Where-Object { [string]$_.kind -eq 'free_allocation' }|Select-Object -First 1)
+    Assert-True ($cfWindow.Count-eq1) 'Cloudflare daily free-allocation window was not derived.'
+    Assert-True ([string]$cfWindow[0].unit-eq'neurons/day') 'Cloudflare quota unit was not preserved.'
+    Assert-True ([double]$cfWindow[0].limit-eq10000) 'Cloudflare daily free allocation limit was not recorded.'
+    $gem=Route (Call-Router @('snapshot')).data 'pool:gem::m'
+    $gemWindow=@($gem.health.quota.windows|Where-Object { [string]$_.kind -eq 'requests_per_day' }|Select-Object -First 1)
+    Assert-True ($gemWindow.Count-eq1) 'Gemini daily reset window was not derived without inference.'
 
     Write-Host '  QUOTA 6: Retry-After outranks a longer generic reset timer'
     $lease=Call-Router @('acquire','--preferred','pool:mock::m','--owner-pid',[string]$PID)
