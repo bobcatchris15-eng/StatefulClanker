@@ -146,13 +146,19 @@ sealed class EndpointsRoutingPanel : UserControl
                     double? limit=q.TryGetProperty("limit",out var ql)&&ql.ValueKind==JsonValueKind.Number&&ql.TryGetDouble(out var ld)?ld:null;
                     var at=q.TryGetProperty("nextAvailableAt",out var qn)?qn.GetString():null;
                     if(string.IsNullOrWhiteSpace(at)&&q.TryGetProperty("resetAt",out var qra))at=qra.GetString();
+                    var windowOnly=false;
+                    if(string.IsNullOrWhiteSpace(at)&&q.TryGetProperty("windowResetAt",out var qwr))
+                    {
+                        at=qwr.GetString();
+                        windowOnly=!string.IsNullOrWhiteSpace(at);
+                    }
 
                     var parts=new List<string>();
                     if(remaining is not null&&limit is not null)parts.Add($"{remaining:0.##}/{limit:0.##}");
                     else if(remaining is not null)parts.Add($"{remaining:0.##} left");
                     else if(string.Equals(status,"exhausted",StringComparison.OrdinalIgnoreCase))parts.Add("exhausted");
                     if(DateTimeOffset.TryParse(at,out var reset)&&reset>DateTimeOffset.UtcNow)
-                        parts.Add($"reset {reset.ToLocalTime():HH:mm:ss}");
+                        parts.Add($"{(windowOnly?"window":"reset")} {reset.ToLocalTime():HH:mm:ss}");
                     if(parts.Count>0)display.Quota=(probed?"probe ":"")+string.Join(" · ",parts);
                 }
                 output[p.Name]=display;
