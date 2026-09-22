@@ -4,6 +4,9 @@ $repo=Split-Path -Parent $PSScriptRoot
 function Assert-True([bool]$Condition,[string]$Message){if(-not$Condition){throw "ROUTING TEST FAILED: $Message"}}
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('statefulclanker-routing-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp|Out-Null
+$oldLocal=$env:LOCALAPPDATA
+$env:LOCALAPPDATA=Join-Path $temp 'local'
+New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA|Out-Null
 try {
     function Get-SCPath([string]$Path) {
         if($Path-eq'routing'){return Join-Path $temp 'routing'}
@@ -102,5 +105,6 @@ try {
 
     Write-Host 'PASS: target-pool round robin, scoped failure inheritance, service promotion, and adaptive Route Doctor recovery.'
 } finally {
+    $env:LOCALAPPDATA=$oldLocal
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
