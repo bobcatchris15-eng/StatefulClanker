@@ -27,9 +27,31 @@ public sealed class EndpointMonitor
 
     public async Task RunAsync(CancellationToken token)
     {
+        await Task.WhenAll(
+            RunHealthLoopAsync(token),
+            RunQuotaLoopAsync(token));
+    }
+
+    async Task RunHealthLoopAsync(CancellationToken token)
+    {
         while(!token.IsCancellationRequested)
         {
             try { await TickAsync(token); } catch { }
+            try { await Task.Delay(TimeSpan.FromSeconds(2),token); }
+            catch(OperationCanceledException) { break; }
+        }
+    }
+
+    async Task RunQuotaLoopAsync(CancellationToken token)
+    {
+        while(!token.IsCancellationRequested)
+        {
+            try
+            {
+                var connections=_store.LoadConnections().connections;
+                await ObserveOneConnectionAsync(connections,DateTimeOffset.UtcNow,token);
+            }
+            catch { }
             try { await Task.Delay(TimeSpan.FromSeconds(2),token); }
             catch(OperationCanceledException) { break; }
         }
@@ -122,9 +144,6 @@ public sealed class EndpointMonitor
             }
         }
 
-        // Independently sample one healthy/non-quarantined connection per tick. This
-        // gradually learns provider-reported quota windows without a startup burst.
-        await ObserveOneConnectionAsync(connections,now,token);
     }
 
     async Task ObserveOneConnectionAsync(
