@@ -15,6 +15,9 @@ sealed class EndpointStatus
     public bool Enabled=true;
     public bool? Free;
     public bool? SupportsTools;
+    public string? ManagedBy;
+    public string? UserOverride;
+    public string? RetiredReason;
 }
 
 static class EndpointsRoutingUiBootstrap
@@ -117,7 +120,9 @@ sealed class EndpointsRoutingPanel : UserControl
                 h=connectionHealth.Health=="ready"?"ready":connectionHealth.Health+" [connection]";
                 quota=connectionHealth.Quota;
             }
-            result.Add(new EndpointStatus{Id=kv.Key,Connection=e.connection,Model=e.model,DisplayName=string.IsNullOrWhiteSpace(e.displayName)?e.model:e.displayName,Enabled=e.enabled,Free=e.free,SupportsTools=e.supportsTools,Health=h,Quota=quota});
+            if(!string.IsNullOrWhiteSpace(e.retiredReason) && !e.enabled)
+                h="retired: "+e.retiredReason;
+            result.Add(new EndpointStatus{Id=kv.Key,Connection=e.connection,Model=e.model,DisplayName=string.IsNullOrWhiteSpace(e.displayName)?e.model:e.displayName,Enabled=e.enabled,Free=e.free,SupportsTools=e.supportsTools,Health=h,Quota=quota,ManagedBy=e.managedBy,UserOverride=e.userOverride,RetiredReason=e.retiredReason});
         }
         return result.OrderBy(x=>x.Connection,StringComparer.OrdinalIgnoreCase).ThenBy(x=>x.Model,StringComparer.OrdinalIgnoreCase).ToList();
     }
@@ -164,14 +169,30 @@ sealed class EndpointsRoutingPanel : UserControl
     void Toggle(int row,bool enabled)
     {
         if(_grid.Rows[row].Tag is not EndpointStatus status)return;
-        var pool=TargetPoolStore.LoadActive();if(!pool.entries.TryGetValue(status.Id,out var entry))return;entry.enabled=enabled;entry.updatedAt=DateTimeOffset.UtcNow.ToString("O");pool.entries[status.Id]=entry;TargetPoolStore.SaveActive(pool);Reload();
+        var pool=TargetPoolStore.LoadActive();if(!pool.entries.TryGetValue(status.Id,out var entry))return;
+        entry.enabled=enabled;
+        if(string.Equals(entry.managedBy,"free-capacity",StringComparison.OrdinalIgnoreCase))
+            entry.userOverride=enabled?"enabled":"disabled";
+        entry.updatedAt=DateTimeOffset.UtcNow.ToString("O");pool.entries[status.Id]=entry;TargetPoolStore.SaveActive(pool);Reload();
     }
 
     void RemoveSelected(object? s,EventArgs e)
     {
         var ep=Selected;if(ep is null)return;
         if(MessageBox.Show(_owner,$"Remove endpoint '{ep.Connection} / {ep.Model}' from the machine routing pool? The provider connection and discovered model remain available on Connections.","Remove endpoint",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
-        var pool=TargetPoolStore.LoadActive();pool.entries.Remove(ep.Id);TargetPoolStore.SaveActive(pool);Reload();
+        var pool=TargetPoolStore.LoadActive();
+        if(pool.entries.TryGetValue(ep.Id,out var entry) && string.Equals(entry.managedBy,"free-capacity",StringComparison.OrdinalIgnoreCase))
+        {
+            // Removing an auto-managed endpoint must persist as an operator
+            // suppression; otherwise the next catalog sync would recreate it.
+            entry.enabled=false;
+            entry.userOverride="disabled";
+            entry.retiredReason="suppressed-by-user";
+            entry.updatedAt=DateTimeOffset.UtcNow.ToString("O");
+            pool.entries[ep.Id]=entry;
+        }
+        else pool.entries.Remove(ep.Id);
+        TargetPoolStore.SaveActive(pool);Reload();
     }
 
     protected override void Dispose(bool disposing){if(disposing)_timer.Dispose();base.Dispose(disposing);}
