@@ -331,12 +331,9 @@ sealed class EmbeddedTerminalPanel : UserControl
             _hostPanel.Controls.Add(_elementHost);
             _elementHost.BringToFront();
 
-            // ElementHost/WPF keyboard focus can visually appear to be in the terminal
-            // while Win32 focus is still owned by the WinForms host. Reassert focus when
-            // the user clicks into either side of the bridge.
+            // Reassert focus only for explicit user interaction. Calling the focus bridge
+            // from ElementHost Enter/GotFocus recursively retriggers those events.
             _elementHost.MouseDown += (_, _) => FocusTerminal();
-            _elementHost.Enter += (_, _) => BeginInvoke(new Action(FocusTerminal));
-            _elementHost.GotFocus += (_, _) => BeginInvoke(new Action(FocusTerminal));
             _terminal.PreviewMouseDown += (_, _) => FocusTerminal();
             _terminal.PreviewMouseWheel += (_, _) => FocusTerminal();
             _terminal.GotKeyboardFocus += (_, _) => { _lastKeyUtc = DateTime.UtcNow; _status.Text = "KEYBOARD READY  |  " + _currentCommand; _status.ForeColor = Theme.Good; };
