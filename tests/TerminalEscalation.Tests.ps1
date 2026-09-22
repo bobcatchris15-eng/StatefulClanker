@@ -66,19 +66,28 @@ try {
     Assert-True (@($script:events|Where-Object type -eq 'run.failed').Count-eq0) 'Transient provider failure was incorrectly escalated as a task crash.'
     Assert-True (@($script:events|Where-Object type -eq 'task.retried.transient').Count-eq1) 'Transient provider retry event is missing.'
 
-    Write-Host '  ESCALATION 3: bundled-Pi PTY startup cannot silently discard queued notices'
+    Write-Host '  ESCALATION 3: bundled Pi owns control-plane delivery through an extension'
     $terminalSource=[IO.File]::ReadAllText((Join-Path $repo 'src\StatefulClanker.Tray\EmbeddedTerminalPanel.cs'))
-    $start=$terminalSource.IndexOf('    void FlushPendingNotices()')
-    $finish=$terminalSource.IndexOf('    public void StopSession()',$start)
-    Assert-True ($start-ge0-and$finish-gt$start) 'Could not isolate FlushPendingNotices.'
-    $flush=$terminalSource.Substring($start,$finish-$start)
-    Assert-True ($flush.Contains('var conpty = _terminal?.ConPTYTerm;')) 'PTY readiness is not checked before injection.'
-    Assert-True ($flush.Contains('if (conpty is null) return;')) 'A not-yet-ready ConPTY does not preserve the queued notice.'
-    $ready=$flush.Substring($flush.IndexOf('var conpty = _terminal?.ConPTYTerm;'))
-    Assert-True ($ready.IndexOf('_pendingNotices.Clear()') -gt $ready.IndexOf('conpty.WriteToTerm')) 'Notice queue is cleared before a successful PTY write once ConPTY exists.'
-    Assert-True (-not $ready.Contains('finally')) 'PTY write failure still clears notices through finally.'
+    Assert-True ($terminalSource.Contains('HandlesControlPlaneNatively')) 'Terminal does not expose native Pi control-plane ownership.'
+    Assert-True ($terminalSource.Contains('Pi (bundled)')) 'Bundled Pi preset is missing.'
 
-    Write-Host 'PASS: real worker failures reach terminal escalation while transient routing and Pi startup remain safe.'
+    $programSource=[IO.File]::ReadAllText((Join-Path $repo 'src\StatefulClanker.Tray\Program.cs'))
+    Assert-True ($programSource.Contains('.statefulclanker", "control", "events.jsonl"')) 'Tray escalation is not reading the durable control-event stream.'
+    Assert-True ($programSource.Contains('_terminal.HandlesControlPlaneNatively')) 'Tray does not suppress duplicate PTY injection for bundled Pi.'
+    Assert-True (-not $programSource.Contains('EscalatedEventTypes')) 'Tray still depends on the obsolete hard-coded raw event whitelist.'
+
+    $piCmd=[IO.File]::ReadAllText((Join-Path $repo 'pi\pi.cmd'))
+    Assert-True ($piCmd.Contains('--extension "%~dp0extensions\statefulclanker.ts"')) 'Bundled Pi launcher does not load the StatefulClanker extension.'
+    $piExtension=Join-Path $repo 'pi\extensions\statefulclanker.ts'
+    Assert-True (Test-Path -LiteralPath $piExtension) 'Bundled StatefulClanker Pi extension is missing.'
+    $extensionSource=[IO.File]::ReadAllText($piExtension)
+    Assert-True ($extensionSource.Contains('rpc("tools/list"')) 'Pi extension does not discover StatefulClanker MCP tools.'
+    Assert-True ($extensionSource.Contains('rpc("tools/call"')) 'Pi extension does not bridge StatefulClanker MCP tool calls.'
+    Assert-True ($extensionSource.Contains('display: false')) 'Pi control events are not hidden extension context.'
+    Assert-True ($extensionSource.Contains('triggerTurn: true')) 'Pi control events do not wake an idle conversational agent.'
+    Assert-True ($extensionSource.Contains('event.level === "attention" || event.level === "human_required"')) 'Pi extension is not filtering for actionable control levels.'
+
+    Write-Host 'PASS: real worker failures escalate, transient routing requeues, and Pi receives native control-plane tools/events.'
 }
 finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
