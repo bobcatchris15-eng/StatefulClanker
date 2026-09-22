@@ -117,15 +117,17 @@ public static class ProviderProbeCatalog
 
     static Uri BaseUri(ConnectionProfile profile)
     {
-        if(!Uri.TryCreate(profile.baseUrl.TrimEnd('/')+"/",UriKind.Absolute,out var uri))
+        var expanded=Expand(profile,profile.baseUrl).TrimEnd('/')+"/";
+        if(!Uri.TryCreate(expanded,UriKind.Absolute,out var uri))
             throw new InvalidOperationException("Connection base URL is invalid.");
         return uri;
     }
 
     static Uri? ModelsAuthority(ConnectionProfile profile)
     {
-        if(!string.IsNullOrWhiteSpace(profile.modelsPath) &&
-           Uri.TryCreate(profile.modelsPath,UriKind.Absolute,out var absolute))
+        var modelsPath=Expand(profile,profile.modelsPath);
+        if(!string.IsNullOrWhiteSpace(modelsPath) &&
+           Uri.TryCreate(modelsPath,UriKind.Absolute,out var absolute))
             return new Uri(absolute.GetLeftPart(UriPartial.Authority)+"/");
 
         try { return new Uri(BaseUri(profile).GetLeftPart(UriPartial.Authority)+"/"); }
@@ -134,11 +136,14 @@ public static class ProviderProbeCatalog
 
     static Uri ModelsUri(ConnectionProfile profile)
     {
-        var baseUri=profile.baseUrl.TrimEnd('/');
-        var path=string.IsNullOrWhiteSpace(profile.modelsPath)?"/models":profile.modelsPath;
+        var baseUri=Expand(profile,profile.baseUrl).TrimEnd('/');
+        var path=Expand(profile,string.IsNullOrWhiteSpace(profile.modelsPath)?"/models":profile.modelsPath);
         if(Uri.TryCreate(path,UriKind.Absolute,out var absolute)) return absolute;
         return new Uri(baseUri+"/"+path.TrimStart('/'));
     }
+
+    static string Expand(ConnectionProfile profile,string? value) =>
+        (value ?? "").Replace("{accountId}",profile.accountId?.Trim() ?? "",StringComparison.OrdinalIgnoreCase);
 
     static Uri Append(Uri baseUri,string segment)
     {
