@@ -181,6 +181,8 @@ static class RoutingQueueInspector
 {
     public static EndpointQueuePreview Snapshot()
     {
+        var compiled = TryCompiledRouter();
+        if (compiled is not null) return compiled;
         var preview = new EndpointQueuePreview();
         try
         {
@@ -241,6 +243,44 @@ static class RoutingQueueInspector
             preview.Detail=ex.Message;
             return preview;
         }
+    }
+
+    static EndpointQueuePreview? TryCompiledRouter()
+    {
+        try
+        {
+            var store = new StatefulClanker.Router.RouterStore();
+            var pipe = StatefulClanker.Router.RouterNames.PipeName(store.Root);
+            var response = StatefulClanker.Router.RouterPipeClient
+                .SendAsync(pipe, new StatefulClanker.Router.RouterRequest { op = "snapshot" }, 120)
+                .GetAwaiter().GetResult();
+            if (!response.ok || response.data is not System.Text.Json.JsonElement root ||
+                root.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+
+            static string? Text(System.Text.Json.JsonElement e,string name) =>
+                e.TryGetProperty(name,out var v) && v.ValueKind==System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+            static int Number(System.Text.Json.JsonElement e,string name) =>
+                e.TryGetProperty(name,out var v) && v.TryGetInt32(out var n) ? n : 0;
+
+            var next = Text(root,"nextEndpoint");
+            var connection = Text(root,"nextConnection");
+            var model = Text(root,"nextModel");
+            var enabled = Number(root,"enabledRoutes");
+            var healthy = Number(root,"healthyRoutes");
+            var leases = Number(root,"activeLeases");
+
+            return new EndpointQueuePreview
+            {
+                EndpointId = next ?? "",
+                Connection = connection ?? "",
+                Model = model ?? "",
+                EnabledCount = enabled,
+                ReadyCount = healthy,
+                State = !string.IsNullOrWhiteSpace(next) ? "ready" : (healthy > 0 && leases >= healthy ? "busy" : "waiting"),
+                Detail = $"{healthy}/{enabled} healthy · {leases} leased"
+            };
+        }
+        catch { return null; }
     }
 
     static int ReadCursor(int count)
