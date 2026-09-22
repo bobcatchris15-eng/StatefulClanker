@@ -930,7 +930,24 @@ static class Inspector
 
 static class Theme
 {
-    public static readonly Color Back = Color.FromArgb(23, 29, 38), Surface = Color.FromArgb(30, 40, 52), Surface2 = Color.FromArgb(36, 47, 60), Border = Color.FromArgb(43, 55, 68), Separator = Color.FromArgb(16, 21, 28), Text = Color.FromArgb(232, 239, 245), Muted = Color.FromArgb(135, 153, 171), Accent = Color.FromArgb(85, 198, 232), Good = Color.FromArgb(73, 217, 145), Warn = Color.FromArgb(255, 174, 74), Error = Color.FromArgb(255, 85, 85);
+    // Precision-monocoque palette: graphite structure, recessed black machinery
+    // voids, and restrained signal colours. Keep the hierarchy tonal; bright
+    // colour means state, never decoration.
+    public static readonly Color
+        Back = Color.FromArgb(15, 20, 25),
+        Surface = Color.FromArgb(20, 27, 33),
+        Surface2 = Color.FromArgb(27, 36, 44),
+        Recess = Color.FromArgb(9, 13, 17),
+        Border = Color.FromArgb(43, 55, 64),
+        Separator = Color.FromArgb(7, 10, 13),
+        EdgeHi = Color.FromArgb(54, 67, 76),
+        EdgeLo = Color.FromArgb(6, 9, 12),
+        Text = Color.FromArgb(220, 229, 234),
+        Muted = Color.FromArgb(116, 132, 142),
+        Accent = Color.FromArgb(82, 202, 181),
+        Good = Color.FromArgb(72, 216, 136),
+        Warn = Color.FromArgb(224, 170, 72),
+        Error = Color.FromArgb(225, 82, 76);
     public static void Apply(Control root)
     {
         root.BackColor = Back;
@@ -953,11 +970,11 @@ static class Theme
                 // this false is what actually hands the whole button to FlatAppearance.
                 b.UseVisualStyleBackColor = false;
                 b.FlatStyle = FlatStyle.Flat;
-                b.FlatAppearance.BorderColor = Surface2;
-                b.FlatAppearance.BorderSize = 0;
-                b.FlatAppearance.MouseOverBackColor = Color.FromArgb(42, 55, 69);
-                b.FlatAppearance.MouseDownBackColor = Color.FromArgb(31, 43, 55);
-                b.BackColor = Surface2;
+                b.FlatAppearance.BorderColor = Border;
+                b.FlatAppearance.BorderSize = 1;
+                b.FlatAppearance.MouseOverBackColor = Color.FromArgb(31, 42, 50);
+                b.FlatAppearance.MouseDownBackColor = Recess;
+                b.BackColor = Surface;
                 b.ForeColor = Text;
                 if (b.Padding == Padding.Empty) b.Padding = new Padding(6, 0, 6, 0);
                 b.UseCompatibleTextRendering = false;
@@ -993,13 +1010,13 @@ static class Theme
             }
             else if (c is DataGridView dg)
             {
-                dg.BackgroundColor = Surface;
-                dg.GridColor = Border;
+                dg.BackgroundColor = Recess;
+                dg.GridColor = Separator;
                 dg.BorderStyle = BorderStyle.None;
                 dg.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
                 dg.DefaultCellStyle.BackColor = Surface;
                 dg.DefaultCellStyle.ForeColor = Text;
-                dg.DefaultCellStyle.SelectionBackColor = Surface2;
+                dg.DefaultCellStyle.SelectionBackColor = Color.FromArgb(31, 43, 50);
                 dg.DefaultCellStyle.SelectionForeColor = Text;
                 dg.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
                 dg.ColumnHeadersDefaultCellStyle.BackColor = Surface2;
@@ -1036,21 +1053,28 @@ static class Theme
         return path;
     }
 
-    public static void PaintCard(Graphics g, Rectangle bounds, Color fill, int radius = 7)
+    public static void PaintCard(Graphics g, Rectangle bounds, Color fill, int radius = 0)
     {
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        // Deliberately hard-edged. The UI should read as one machined shell with
+        // precision seams, not a stack of floating rounded SaaS cards.
+        if (bounds.Width <= 1 || bounds.Height <= 1) return;
         var r = new Rectangle(bounds.X, bounds.Y, bounds.Width - 1, bounds.Height - 1);
-        using var path = RoundedRect(r, radius);
         using var fillBrush = new SolidBrush(fill);
-        g.FillPath(fillBrush, path);
+        using var border = new Pen(Border);
+        using var hi = new Pen(Color.FromArgb(115, EdgeHi));
+        using var lo = new Pen(EdgeLo);
+        g.FillRectangle(fillBrush, r);
+        g.DrawRectangle(border, r);
+        g.DrawLine(hi, r.Left + 1, r.Top + 1, r.Right - 1, r.Top + 1);
+        g.DrawLine(lo, r.Left + 1, r.Bottom - 1, r.Right - 1, r.Bottom - 1);
     }
 }
 
-// A flat-modern rounded card, replacing plain rectangular Panels for the boxes
-// that group related controls (worker status, provider summary, etc).
+// A hard-edged machined panel for related controls. The entire shell uses
+// precision seams instead of floating rounded cards.
 class CardPanel : Panel
 {
-    public int Radius { get; set; } = 7;
+    public int Radius { get; set; } = 0;
     public Color Fill { get; set; } = Theme.Surface;
 
     public CardPanel()
@@ -1063,6 +1087,64 @@ class CardPanel : Panel
     {
         Theme.PaintCard(e.Graphics, new Rectangle(0, 0, Width, Height), Fill, Radius);
         base.OnPaint(e);
+    }
+}
+
+sealed class PrecisionTabControl : TabControl
+{
+    public PrecisionTabControl()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        Appearance = TabAppearance.Normal;
+        SizeMode = TabSizeMode.Fixed;
+        ItemSize = new Size(118, 28);
+        Padding = new Point(0, 0);
+        BackColor = Theme.Back;
+        ForeColor = Theme.Text;
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e) => e.Graphics.Clear(Theme.Back);
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.Clear(Theme.Back);
+        using var seam = new Pen(Theme.Border);
+        using var selectedFill = new SolidBrush(Theme.Surface2);
+        using var idleFill = new SolidBrush(Theme.Surface);
+        using var accent = new SolidBrush(Theme.Accent);
+
+        var stripBottom = 0;
+        for (var i = 0; i < TabCount; i++)
+        {
+            var r = GetTabRect(i);
+            if (r.Width <= 0 || r.Height <= 0) continue;
+            stripBottom = Math.Max(stripBottom, r.Bottom);
+            var selected = i == SelectedIndex;
+            var cell = new Rectangle(r.X, r.Y, Math.Max(1, r.Width - 1), Math.Max(1, r.Height - 1));
+            g.FillRectangle(selected ? selectedFill : idleFill, cell);
+            g.DrawRectangle(seam, cell);
+
+            var textRect = Rectangle.Inflate(cell, -6, -2);
+            using var font = new Font("Cascadia Mono", 8f, selected ? FontStyle.Bold : FontStyle.Regular);
+            TextRenderer.DrawText(
+                g, TabPages[i].Text, font, textRect, selected ? Theme.Text : Theme.Muted,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+                TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+
+            if (selected)
+                g.FillRectangle(accent, cell.X + 1, cell.Bottom - 2, Math.Max(1, cell.Width - 1), 2);
+        }
+
+        if (stripBottom > 0)
+            g.DrawLine(seam, 0, stripBottom, Width, stripBottom);
+    }
+
+    protected override void OnSelectedIndexChanged(EventArgs e)
+    {
+        base.OnSelectedIndexChanged(e);
+        Invalidate();
     }
 }
 
@@ -1079,7 +1161,7 @@ sealed class QuietSplitContainer : SplitContainer
         Dock = DockStyle.Fill;
         Orientation = orientation;
         BorderStyle = BorderStyle.None;
-        SplitterWidth = 2;
+        SplitterWidth = 1;
         BackColor = Theme.Back;
         Panel1.BackColor = Theme.Back;
         Panel2.BackColor = Theme.Back;
@@ -1150,23 +1232,23 @@ sealed class AgentBlinkenBank : Control
     public bool IsActive { get; set; }
 
     const int Rows = 4;
-    const int Cols = 10;
+    const int Cols = 16;
     const int TotalLamps = Rows * Cols;
     readonly bool[] _lamps = new bool[TotalLamps];
     readonly int[] _lampColors = new int[TotalLamps];
     readonly Random _rng = new();
     int _sweepStep;
 
-    static readonly Color[] LampPalette = new[]
+    static readonly Color[] LampPalette =
     {
-        Color.FromArgb(65, 235, 95),   // Vivid Green
-        Color.FromArgb(255, 175, 35),  // Warm Amber
-        Color.FromArgb(255, 65, 65),   // Crimson Red
-        Color.FromArgb(50, 215, 255),  // Bright Cyan
-        Color.FromArgb(255, 235, 60),  // Vivid Yellow
-        Color.FromArgb(220, 85, 255),  // Electric Violet
-        Color.FromArgb(255, 110, 180), // Hot Pink
-        Color.FromArgb(120, 180, 255)  // Ice Blue
+        Color.FromArgb(68, 222, 126),
+        Color.FromArgb(224, 170, 72),
+        Color.FromArgb(222, 78, 72),
+        Color.FromArgb(70, 196, 205),
+        Color.FromArgb(205, 193, 74),
+        Color.FromArgb(157, 112, 195),
+        Color.FromArgb(197, 101, 151),
+        Color.FromArgb(104, 155, 205)
     };
 
     public AgentBlinkenBank(string? agentId, string? taskId, string agentType)
@@ -1176,13 +1258,11 @@ sealed class AgentBlinkenBank : Control
         AgentType = agentType;
         IsActive = !string.Equals(agentType, "standby", StringComparison.OrdinalIgnoreCase);
         DoubleBuffered = true;
-        Size = new Size(225, 84);
-        Margin = new Padding(4);
+        Size = new Size(232, 80);
+        Margin = new Padding(2);
 
         for (var i = 0; i < TotalLamps; i++)
-        {
             _lampColors[i] = _rng.Next(LampPalette.Length);
-        }
     }
 
     public void Step()
@@ -1193,19 +1273,17 @@ sealed class AgentBlinkenBank : Control
             Invalidate();
             return;
         }
-        _sweepStep = (_sweepStep + 1) % 32;
+
+        _sweepStep = (_sweepStep + 1) % (Cols * 3);
         for (var i = 0; i < TotalLamps; i++)
         {
             var col = i % Cols;
-            var sweepHit = (col == (_sweepStep % Cols));
-            if (_rng.NextDouble() < 0.65)
+            var sweepHit = col == (_sweepStep % Cols);
+            if (_rng.NextDouble() < 0.68)
             {
-                _lamps[i] = sweepHit ? (_rng.NextDouble() < 0.85) : (_rng.NextDouble() < 0.38);
-                // Each lamp changes color dynamically as it operates
-                if (_rng.NextDouble() < 0.22)
-                {
+                _lamps[i] = sweepHit ? _rng.NextDouble() < 0.86 : _rng.NextDouble() < 0.36;
+                if (_rng.NextDouble() < 0.18)
                     _lampColors[i] = (_lampColors[i] + _rng.Next(1, LampPalette.Length)) % LampPalette.Length;
-                }
             }
         }
         Invalidate();
@@ -1215,116 +1293,96 @@ sealed class AgentBlinkenBank : Control
     {
         base.OnPaint(e);
         var g = e.Graphics;
-        g.Clear(Parent?.BackColor ?? Color.FromArgb(10, 14, 18));
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+        g.Clear(Parent?.BackColor ?? Theme.Recess);
 
-        var r = new Rectangle(0, 0, Width - 1, Height - 1);
-
-        Color borderColor, headerColor;
-        switch (AgentType.ToLowerInvariant())
+        var r = new Rectangle(0, 0, Math.Max(0, Width - 1), Math.Max(0, Height - 1));
+        Color signal = AgentType.ToLowerInvariant() switch
         {
-            case "project critic":
-                borderColor = IsActive ? Color.FromArgb(240, 60, 60) : Color.FromArgb(48, 58, 68);
-                headerColor = Color.FromArgb(255, 95, 95);
-                break;
-            case "validator":
-                borderColor = IsActive ? Color.FromArgb(245, 210, 45) : Color.FromArgb(48, 58, 68);
-                headerColor = Color.FromArgb(255, 220, 70);
-                break;
-            case "researcher":
-                borderColor = IsActive ? Color.FromArgb(50, 215, 255) : Color.FromArgb(48, 58, 68);
-                headerColor = Color.FromArgb(70, 215, 255);
-                break;
-            case "worker":
-                borderColor = IsActive ? Color.FromArgb(60, 225, 95) : Color.FromArgb(48, 58, 68);
-                headerColor = Color.FromArgb(85, 225, 115);
-                break;
-            default:
-                borderColor = Color.FromArgb(45, 55, 65);
-                headerColor = Color.FromArgb(90, 105, 120);
-                break;
-        }
+            "project critic" => Theme.Error,
+            "validator" => Theme.Warn,
+            "researcher" => Color.FromArgb(70, 196, 205),
+            "worker" => Theme.Good,
+            _ => Theme.Muted
+        };
 
-        using var panelBrush = new SolidBrush(Color.FromArgb(18, 24, 30));
-        using var edgePen = new Pen(borderColor, IsActive ? 1.5f : 1.0f);
-        using var innerPen = new Pen(Color.FromArgb(28, 36, 44));
-
-        using (var cardPath = Theme.RoundedRect(r, 6))
-        {
-            g.FillPath(panelBrush, cardPath);
-            g.DrawPath(edgePen, cardPath);
-        }
-        if (IsActive)
-        {
-            using var glowPen = new Pen(Color.FromArgb(65, borderColor));
-            using var glowPath = Theme.RoundedRect(new Rectangle(r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2), 5);
-            g.DrawPath(glowPen, glowPath);
-        }
-
-        using var screwBrush = new SolidBrush(Color.FromArgb(70, 82, 94));
-        g.FillEllipse(screwBrush, r.Left + 2, r.Top + 2, 3, 3);
-        g.FillEllipse(screwBrush, r.Right - 5, r.Top + 2, 3, 3);
-        g.FillEllipse(screwBrush, r.Left + 2, r.Bottom - 5, 3, 3);
-        g.FillEllipse(screwBrush, r.Right - 5, r.Bottom - 5, 3, 3);
+        using var body = new SolidBrush(Color.FromArgb(14, 19, 23));
+        using var border = new Pen(IsActive ? Color.FromArgb(110, signal) : Theme.Border);
+        using var inner = new Pen(Color.FromArgb(34, 44, 50));
+        g.FillRectangle(body, r);
+        g.DrawRectangle(border, r);
+        using (var topLine = new Pen(Color.FromArgb(92, Theme.EdgeHi)))
+            g.DrawLine(topLine, r.Left + 1, r.Top + 1, r.Right - 1, r.Top + 1);
+        using (var roleBar = new SolidBrush(IsActive ? signal : Color.FromArgb(54, 64, 70)))
+            g.FillRectangle(roleBar, r.Left + 1, r.Top + 1, 2, 23);
 
         var labelText = string.IsNullOrEmpty(TaskId) ? AgentType.ToUpperInvariant() : $"{AgentType.ToUpperInvariant()}: {TaskId}";
-        using var font = new Font("Cascadia Mono", 7.5f, FontStyle.Bold);
-        using var subFont = new Font("Cascadia Mono", 6.6f);
-        using var textBrush = new SolidBrush(headerColor);
-        using var subBrush = new SolidBrush(Color.FromArgb(115, 132, 145));
-        g.DrawString(labelText, font, textBrush, 8, 3);
-        var route = string.IsNullOrWhiteSpace(Endpoint) ? (string.IsNullOrWhiteSpace(Model) ? "UNASSIGNED ENDPOINT" : Model) :
-            (string.IsNullOrWhiteSpace(Model) ? Endpoint : $"{Endpoint} / {Model}");
-        g.DrawString(route, subFont, subBrush, 8, 14);
+        using var font = new Font("Cascadia Mono", 7.25f, FontStyle.Bold);
+        using var subFont = new Font("Cascadia Mono", 6.35f);
+        using var textBrush = new SolidBrush(IsActive ? signal : Theme.Muted);
+        using var subBrush = new SolidBrush(Color.FromArgb(100, 117, 126));
+        TextRenderer.DrawText(g, labelText, font, new Rectangle(7, 3, Width - 12, 11), textBrush.Color,
+            TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
 
-        var padX = 8;
+        var route = string.IsNullOrWhiteSpace(Endpoint)
+            ? (string.IsNullOrWhiteSpace(Model) ? "UNASSIGNED ENDPOINT" : Model)
+            : (string.IsNullOrWhiteSpace(Model) ? Endpoint : $"{Endpoint} / {Model}");
+        TextRenderer.DrawText(g, route, subFont, new Rectangle(7, 14, Width - 12, 10), subBrush.Color,
+            TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+
+        using (var headerSeam = new Pen(Theme.Separator))
+            g.DrawLine(headerSeam, 4, 26, Width - 4, 26);
+
+        const int gap = 1;
+        var padX = 5;
         var padY = 29;
         var drawW = r.Width - padX * 2;
         var drawH = r.Height - padY - 4;
         if (drawW <= 0 || drawH <= 0) return;
 
-        var ledW = Math.Max(4, (drawW - (Cols - 1) * 3) / Cols);
-        var ledH = Math.Max(4, (drawH - (Rows - 1) * 3) / Rows);
-        var spacingX = (drawW - ledW * Cols) / Math.Max(1, Cols - 1) + ledW;
-        var spacingY = (drawH - ledH * Rows) / Math.Max(1, Rows - 1) + ledH;
+        var cellW = Math.Max(3, (drawW - (Cols - 1) * gap) / Cols);
+        var cellH = Math.Max(3, (drawH - (Rows - 1) * gap) / Rows);
+        var lamp = Math.Max(3, Math.Min(cellW, cellH));
+        var gridW = lamp * Cols + gap * (Cols - 1);
+        var gridH = lamp * Rows + gap * (Rows - 1);
+        var startX = r.X + padX + Math.Max(0, (drawW - gridW) / 2);
+        var startY = r.Y + padY + Math.Max(0, (drawH - gridH) / 2);
 
         for (var row = 0; row < Rows; row++)
         {
             for (var col = 0; col < Cols; col++)
             {
                 var idx = row * Cols + col;
-                var x = r.X + padX + col * spacingX;
-                var y = r.Y + padY + row * spacingY;
-                var on = IsActive && _lamps[idx];
+                var x = startX + col * (lamp + gap);
+                var y = startY + row * (lamp + gap);
+                var rect = new Rectangle(x, y, lamp, lamp);
                 var baseColor = LampPalette[_lampColors[idx]];
-                var litColor = baseColor;
-                var unlitColor = Color.FromArgb(Math.Max(12, baseColor.R / 7), Math.Max(14, baseColor.G / 7), Math.Max(16, baseColor.B / 7));
-                var c = on ? litColor : unlitColor;
-                var d = Math.Min(ledW, ledH);
-                var cx = x + ledW / 2f - d / 2f;
-                var cy = y + ledH / 2f - d / 2f;
+                var on = IsActive && _lamps[idx];
+                var off = Color.FromArgb(
+                    Math.Max(12, baseColor.R / 8),
+                    Math.Max(14, baseColor.G / 8),
+                    Math.Max(15, baseColor.B / 8));
 
                 if (on)
                 {
-                    using (var glow = new SolidBrush(Color.FromArgb(90, c)))
-                        g.FillEllipse(glow, cx - d * 0.35f, cy - d * 0.35f, d * 1.7f, d * 1.7f);
+                    using var glow = new SolidBrush(Color.FromArgb(45, baseColor));
+                    g.FillRectangle(glow, rect.X - 1, rect.Y - 1, rect.Width + 2, rect.Height + 2);
                 }
-                using (var b = new SolidBrush(c))
-                    g.FillEllipse(b, cx, cy, d, d);
 
-                if (on)
+                using (var fill = new SolidBrush(on ? baseColor : off))
+                    g.FillRectangle(fill, rect);
+                g.DrawRectangle(inner, rect);
+
+                if (on && lamp >= 5)
                 {
-                    using var hot = new SolidBrush(Color.FromArgb(190, 255, 255, 255));
-                    g.FillEllipse(hot, cx + d * 0.2f, cy + d * 0.15f, Math.Max(1, d * 0.35f), Math.Max(1, d * 0.35f));
-                }
-                else
-                {
-                    g.DrawEllipse(innerPen, cx, cy, d, d);
+                    using var hi = new Pen(Color.FromArgb(120, 255, 255, 255));
+                    g.DrawLine(hi, rect.Left + 1, rect.Top + 1, rect.Right - 2, rect.Top + 1);
                 }
             }
         }
     }
 }
+
 
 sealed class BlinkenRack : Panel
 {
@@ -1333,7 +1391,7 @@ sealed class BlinkenRack : Panel
         Dock = DockStyle.Fill,
         AutoScroll = true,
         WrapContents = true,
-        BackColor = Color.FromArgb(10, 14, 18),
+        BackColor = Theme.Recess,
         Padding = new Padding(2)
     };
     readonly System.Windows.Forms.Timer _pulse = new() { Interval = 110 };
@@ -1343,7 +1401,7 @@ sealed class BlinkenRack : Panel
     public BlinkenRack()
     {
         Dock = DockStyle.Fill;
-        BackColor = Color.FromArgb(10, 14, 18);
+        BackColor = Theme.Recess;
         Controls.Add(_flow);
         _flow.Controls.Add(_standbyBank);
         _pulse.Tick += (_, _) =>
@@ -1435,19 +1493,21 @@ sealed class LedIndicator : Control
     {
         base.OnPaint(e);
         var g = e.Graphics;
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
 
-        var d = Math.Max(4, Math.Min(Width, Height) - 8);
+        var d = Math.Max(5, Math.Min(Width, Height) - 10);
         var rect = new Rectangle((Width - d) / 2, (Height - d) / 2, d, d);
-
-        using (var glow = new SolidBrush(Color.FromArgb(70, OnColor)))
-            g.FillEllipse(glow, rect.X - 2, rect.Y - 2, rect.Width + 4, rect.Height + 4);
+        using (var glow = new SolidBrush(Color.FromArgb(42, OnColor)))
+            g.FillRectangle(glow, rect.X - 1, rect.Y - 1, rect.Width + 2, rect.Height + 2);
         using (var body = new SolidBrush(OnColor))
-            g.FillEllipse(body, rect);
-        using (var highlight = new SolidBrush(Color.FromArgb(150, 255, 255, 255)))
-            g.FillEllipse(highlight, rect.X + rect.Width / 4, rect.Y + rect.Height / 5, Math.Max(1, rect.Width / 3), Math.Max(1, rect.Height / 3));
-        using var ring = new Pen(Color.FromArgb(10, 14, 18), 1.2f);
-        g.DrawEllipse(ring, rect);
+            g.FillRectangle(body, rect);
+        using var ring = new Pen(Theme.EdgeLo);
+        g.DrawRectangle(ring, rect);
+        if (rect.Width >= 6)
+        {
+            using var hi = new Pen(Color.FromArgb(110, 255, 255, 255));
+            g.DrawLine(hi, rect.Left + 1, rect.Top + 1, rect.Right - 2, rect.Top + 1);
+        }
     }
 }
 
@@ -1839,7 +1899,7 @@ sealed class TaskBoardPanel : Panel
     {
         Dock = DockStyle.Fill;
         AutoScroll = true;
-        BackColor = Color.FromArgb(10, 14, 18);
+        BackColor = Theme.Recess;
         Padding = new Padding(2);
         Controls.Add(_empty);
         Controls.Add(_list);
@@ -1887,7 +1947,7 @@ sealed class MainForm : Form
     readonly string _root = Runtime.FindRoot();
     readonly AppSettings _settings = AppStore.Load();
     readonly TreeView _projects = new();
-    readonly TabControl _tabs = new();
+    readonly PrecisionTabControl _tabs = new();
     readonly Label _header = new(), _mcpState = new(), _intent = new(), _goal = new();
     readonly Label[] _metrics = Enumerable.Range(0, 5).Select(_ => new Label()).ToArray();
     readonly TextBox _usage = new(), _allActivity = new(), _workerTelemetry = new(), _endpoint = new(), _stdio = new(), _integrationNote = new();
@@ -1975,9 +2035,9 @@ sealed class MainForm : Form
         return results;
     }
 
-    static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 32, Margin = new Padding(0, 4, 8, 0) };
-    static Label Section(string text) => new() { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.BottomLeft, Font = new Font("Segoe UI Semibold", 8, FontStyle.Bold), ForeColor = Theme.Muted, AutoEllipsis = true, Padding = new Padding(1, 0, 1, 3) };
-    TabPage Page(string name) => new(name) { Padding = new Padding(12), BackColor = Theme.Back, ForeColor = Theme.Text };
+    static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 30, Margin = new Padding(0, 2, 5, 0) };
+    static Label Section(string text) => new() { Text = text, Dock = DockStyle.Fill, TextAlign = ContentAlignment.BottomLeft, Font = new Font("Cascadia Mono", 7.5f, FontStyle.Bold), ForeColor = Theme.Muted, AutoEllipsis = true, Padding = new Padding(0, 0, 0, 2) };
+    TabPage Page(string name) => new(name) { Padding = new Padding(6), BackColor = Theme.Back, ForeColor = Theme.Text, UseVisualStyleBackColor = false };
 
     void QueueLayoutSave()
     {
@@ -2013,7 +2073,7 @@ sealed class MainForm : Form
         Controls.Add(shell);
         shell.Panel2.Controls.Add(workspace);
 
-        var leftRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0), BackColor = Theme.Back };
+        var leftRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(8), Margin = new Padding(0), BackColor = Theme.Back };
         leftRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         leftRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         leftRoot.Controls.Add(new Label { Text = "STATEFULCLANKER", Dock = DockStyle.Fill, Font = new Font("Segoe UI Semibold", 12, FontStyle.Bold), ForeColor = Theme.Accent, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
@@ -2029,7 +2089,7 @@ sealed class MainForm : Form
         projectPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         projectPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         projectPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        _projects.Dock = DockStyle.Fill; _projects.HideSelection = false; _projects.BorderStyle = BorderStyle.None; _projects.ShowLines = false; _projects.ShowPlusMinus = false; _projects.FullRowSelect = true; _projects.ItemHeight = 28;
+        _projects.Dock = DockStyle.Fill; _projects.HideSelection = false; _projects.BorderStyle = BorderStyle.None; _projects.ShowLines = false; _projects.ShowPlusMinus = false; _projects.FullRowSelect = true; _projects.ItemHeight = 26;
         _projects.AfterSelect += (_, _) => SelectProject(); projectPanel.Controls.Add(_projects, 0, 0);
         var add = Btn("+ Add / open project", 210); add.Dock = DockStyle.Fill; add.Click += (_, _) => AddProject(); projectPanel.Controls.Add(add, 0, 1);
         var remove = Btn("Remove from list", 210); remove.Dock = DockStyle.Fill; remove.Click += (_, _) => RemoveProject(); projectPanel.Controls.Add(remove, 0, 2);
@@ -2045,8 +2105,8 @@ sealed class MainForm : Form
         var targetPanel = BuildTargetPoolPanel();
         leftTargetSplit.Panel1.Controls.Add(targetPanel);
 
-        var quotaPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(0), Padding = new Padding(0, 4, 0, 0), BackColor = Theme.Back };
-        quotaPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        var quotaPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(0), Padding = new Padding(0), BackColor = Theme.Back };
+        quotaPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         quotaPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         quotaPanel.Controls.Add(Section("QUOTA REMAINING"), 0, 0);
         quotaPanel.Controls.Add(_quotaRemaining, 0, 1);
@@ -2055,41 +2115,19 @@ sealed class MainForm : Form
         leftRoot.Controls.Add(leftBody, 0, 1);
         shell.Panel1.Controls.Add(leftRoot);
 
-        var center = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(14), Margin = new Padding(0), BackColor = Theme.Back };
-        center.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        var center = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(8), Margin = new Padding(0), BackColor = Theme.Back };
+        center.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         center.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        top.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
-        _header.Dock = DockStyle.Fill; _header.Font = new Font("Segoe UI Semibold", 15, FontStyle.Bold); _header.TextAlign = ContentAlignment.MiddleLeft;
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 184));
+        _header.Dock = DockStyle.Fill; _header.Font = new Font("Segoe UI Semibold", 14, FontStyle.Bold); _header.TextAlign = ContentAlignment.MiddleLeft;
         _mcpState.Dock = DockStyle.Fill; _mcpState.TextAlign = ContentAlignment.MiddleCenter; _mcpState.Font = new Font("Cascadia Mono", 8.5f, FontStyle.Bold);
         top.Controls.Add(_header, 0, 0); top.Controls.Add(_mcpState, 1, 0); center.Controls.Add(top, 0, 0);
 
         _tabs.Dock = DockStyle.Fill;
-        _tabs.Appearance = TabAppearance.FlatButtons;
-        _tabs.ItemSize = new Size(118, 30);
+        _tabs.ItemSize = new Size(118, 28);
         _tabs.SizeMode = TabSizeMode.Fixed;
-        _tabs.DrawMode = TabDrawMode.OwnerDrawFixed;
-        _tabs.Padding = new Point(14, 6);
-        _tabs.DrawItem += (s, e) =>
-        {
-            var g = e.Graphics;
-            var tab = _tabs.TabPages[e.Index];
-            var selected = e.Index == _tabs.SelectedIndex;
-            var bounds = e.Bounds;
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using var back = new SolidBrush(selected ? Theme.Surface2 : Theme.Back);
-            g.FillRectangle(back, bounds);
-            using var text = new SolidBrush(selected ? Theme.Text : Theme.Muted);
-            using var font = new Font("Segoe UI Semibold", 9f, selected ? FontStyle.Bold : FontStyle.Regular);
-            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            g.DrawString(tab.Text, font, text, bounds, sf);
-            if (selected)
-            {
-                using var accent = new SolidBrush(Theme.Accent);
-                g.FillRectangle(accent, bounds.X + 8, bounds.Bottom - 1, bounds.Width - 16, 1);
-            }
-        };
         _tabs.TabPages.Add(BuildOverview());
         _tabs.TabPages.Add(BuildActivity());
         _tabs.TabPages.Add(BuildIntegrations());
@@ -2098,7 +2136,7 @@ sealed class MainForm : Form
         workspace.Panel1.Controls.Add(center);
 
         var taskRail = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(12), Margin = new Padding(0), BackColor = Theme.Back };
-        taskRail.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        taskRail.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         taskRail.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _metrics[0].Dock = DockStyle.Fill; _metrics[0].Margin = new Padding(0); _metrics[0].TextAlign = ContentAlignment.MiddleLeft;
         _metrics[0].Font = new Font("Cascadia Mono", 10, FontStyle.Bold); _metrics[0].Text = "TASK STATE";
@@ -2134,14 +2172,14 @@ sealed class MainForm : Form
             RowCount = 3,
             ColumnCount = 1,
             Margin = new Padding(0),
-            Padding = new Padding(8),
+            Padding = new Padding(4),
             BackColor = Theme.Back
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 98));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        _overviewReadout.Margin = new Padding(0,0,0,6);
+        _overviewReadout.Margin = new Padding(0,0,0,3);
         root.Controls.Add(_overviewReadout,0,0);
 
         var controls = new FlowLayoutPanel
@@ -2150,16 +2188,16 @@ sealed class MainForm : Form
             WrapContents = false,
             AutoScroll = false,
             Margin = new Padding(0),
-            Padding = new Padding(0,2,0,2),
+            Padding = new Padding(0),
             BackColor = Theme.Back
         };
         _btnAutofillToggle.Click += (_, _) => ToggleAutofill();
         _btnAutofillPause.Click += (_, _) => ToggleAutofillPause();
         _btnAutofillTrigger.Click += (_, _) => TriggerAutofill();
         _numMaxConcurrent.ValueChanged += (_, _) => OnMaxConcurrentChanged();
-        _btnAutofillToggle.Width=102;_btnAutofillPause.Width=72;_btnAutofillTrigger.Width=88;
-        var maxLbl = new Label { Text = "WORKER CAP", AutoSize = true, Margin = new Padding(8,9,5,0), ForeColor = Theme.Muted, Font = new Font("Cascadia Mono",7.5f,FontStyle.Bold) };
-        _numMaxConcurrent.Margin = new Padding(0,4,0,0);
+        _btnAutofillToggle.Width=98;_btnAutofillPause.Width=68;_btnAutofillTrigger.Width=82;
+        var maxLbl = new Label { Text = "WORKER CAP", AutoSize = true, Margin = new Padding(7,8,4,0), ForeColor = Theme.Muted, Font = new Font("Cascadia Mono",7.5f,FontStyle.Bold) };
+        _numMaxConcurrent.Margin = new Padding(0,3,0,0);
         controls.Controls.AddRange(new Control[] { _btnAutofillToggle,_btnAutofillPause,_btnAutofillTrigger,maxLbl,_numMaxConcurrent });
         root.Controls.Add(controls,0,1);
 
@@ -2170,9 +2208,9 @@ sealed class MainForm : Form
             ResetDistance = 205
         };
 
-        var blinkenFrame = new Panel { Dock=DockStyle.Fill, BackColor=Color.FromArgb(9,13,16), Padding=new Padding(5), Margin=new Padding(0) };
-        var blinkenLayout = new TableLayoutPanel { Dock=DockStyle.Fill, RowCount=2, ColumnCount=1, Margin=new Padding(0), BackColor=Color.FromArgb(9,13,16) };
-        blinkenLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,22));
+        var blinkenFrame = new Panel { Dock=DockStyle.Fill, BackColor=Theme.Recess, Padding=new Padding(1), Margin=new Padding(0) };
+        var blinkenLayout = new TableLayoutPanel { Dock=DockStyle.Fill, RowCount=2, ColumnCount=1, Margin=new Padding(0), BackColor=Theme.Recess };
+        blinkenLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,20));
         blinkenLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         blinkenLayout.Controls.Add(new Label
         {
@@ -2200,7 +2238,7 @@ sealed class MainForm : Form
 
     Control BuildTargetPoolPanel()
     {
-        var card = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(8), Margin = new Padding(0, 0, 0, 4) };
+        var card = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(4), Margin = new Padding(0, 0, 0, 2), Fill = Theme.Surface };
         var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
         rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 22)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _overviewTargetSummary.Dock = DockStyle.Fill; _overviewTargetSummary.Font = new Font("Segoe UI Semibold", 8f, FontStyle.Bold); _overviewTargetSummary.ForeColor = Theme.Muted; _overviewTargetSummary.Text = "TARGET POOL";

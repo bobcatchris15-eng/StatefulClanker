@@ -18,8 +18,19 @@ Assert-True (-not$overview.Contains('usageCard')) 'Usage card crept back into Ov
 Assert-True (-not$overview.Contains('PROJECT AUTHORITY')) 'Large authority card crept back into Overview.'
 Assert-True (-not$overview.Contains('AutoScroll = true')) 'Overview reintroduced scroll-bar chrome.'
 
-Assert-True ($program.Contains('SplitterWidth = 2')) 'Quiet splitter widened again.'
+Assert-True ($program.Contains('SplitterWidth = 1')) 'Quiet splitter is not a precision 1px seam.'
 Assert-True ($program.Contains('FillRectangle(brush, SplitterRectangle)')) 'Splitter is not explicitly dark-painted.'
+Assert-True ($program.Contains('sealed class PrecisionTabControl')) 'Native tab chrome was not replaced by the precision-painted tab strip.'
+Assert-True ($program.Contains('const int Cols = 16')) 'Blinkenlight bank is not using the dense square-lamp grid.'
+Assert-True ($program.Contains('g.FillRectangle(fill, rect)')) 'Blinkenlights are not square filled lamps.'
+$bankStart=$program.IndexOf('sealed class AgentBlinkenBank')
+$bankEnd=$program.IndexOf('sealed class BlinkenRack',$bankStart)
+Assert-True ($bankStart-ge0-and$bankEnd-gt$bankStart) 'Could not isolate AgentBlinkenBank.'
+$bank=$program.Substring($bankStart,$bankEnd-$bankStart)
+Assert-True (-not$bank.Contains('FillEllipse')) 'Blinkenlight bank still draws circular lamps or faux fasteners.'
+Assert-True (-not$bank.Contains('screwBrush')) 'Blinkenlight bank still has decorative fasteners.'
+Assert-True (-not$bank.Contains('RoundedRect')) 'Blinkenlight bank still uses rounded card geometry.'
+Assert-True ($widgets.Contains('BackColor=Theme.Recess')) 'Overview readout is not seated in the recessed monocoque surface.'
 Assert-True ($widgets.Contains('NEXT ENDPOINT IN QUEUE')) 'Next endpoint readout is missing.'
 Assert-True ($widgets.Contains('RoutingQueueInspector')) 'Next endpoint does not read live machine routing state.'
 
@@ -31,4 +42,4 @@ Assert-True ($terminal.Contains('ConsoleHasKeyboardFocus')) 'Terminal keyboard-f
 Assert-True ($terminal.Contains('Keys.PageUp') -and $terminal.Contains('Keys.Home') -and $terminal.Contains('Keys.Escape')) 'Special navigation keys are not claimed by the ElementHost bridge.'
 Assert-True ($terminal.Contains('Pi (bundled)')) 'Bundled Pi is missing from the embedded TUI presets.'
 
-Write-Host 'PASS: Overview is blinkenlights + interactive TUI with compact machine readouts and next-endpoint telemetry.'
+Write-Host 'PASS: Overview uses precision seams, square blinkenlights, hard-edged machine readouts, and an interactive TUI.'

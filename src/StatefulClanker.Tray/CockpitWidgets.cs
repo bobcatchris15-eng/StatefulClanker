@@ -93,7 +93,7 @@ sealed class QuotaRemainingPanel : Panel
         ColumnCount = 1,
         AutoSize = true,
         AutoSizeMode = AutoSizeMode.GrowAndShrink,
-        BackColor = Theme.Surface
+        BackColor = Theme.Recess
     };
 
     readonly Label _empty = new()
@@ -103,14 +103,15 @@ sealed class QuotaRemainingPanel : Panel
         Height = 30,
         ForeColor = Theme.Muted,
         Font = new Font("Cascadia Mono", 8.25f),
-        Padding = new Padding(8, 7, 4, 0)
+        Padding = new Padding(6, 6, 4, 0),
+        BackColor = Theme.Recess
     };
 
     public QuotaRemainingPanel()
     {
         Dock = DockStyle.Fill;
-        BackColor = Theme.Surface;
-        Padding = new Padding(1);
+        BackColor = Theme.Recess;
+        Padding = new Padding(0);
         AutoScroll = true;
         Controls.Add(_empty);
         Controls.Add(_rows);
@@ -132,10 +133,10 @@ sealed class QuotaRemainingPanel : Panel
                 var row = new QuotaBarRow(item)
                 {
                     Dock = DockStyle.Top,
-                    Height = 48,
-                    Margin = new Padding(0, 0, 0, 1)
+                    Height = 42,
+                    Margin = new Padding(0)
                 };
-                _rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 49));
+                _rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
                 _rows.Controls.Add(row, 0, _rows.RowCount++);
             }
 
@@ -365,7 +366,7 @@ sealed class QuotaRemainingPanel : Panel
         {
             _item = item;
             DoubleBuffered = true;
-            BackColor = Theme.Surface;
+            BackColor = Theme.Recess;
             Cursor = Cursors.Default;
         }
 
@@ -373,42 +374,51 @@ sealed class QuotaRemainingPanel : Panel
         {
             base.OnPaint(e);
             var g = e.Graphics;
-            g.Clear(Theme.Surface);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+            g.Clear(Theme.Recess);
 
-            using var nameFont = new Font("Cascadia Mono", 8f, FontStyle.Bold);
-            using var detailFont = new Font("Cascadia Mono", 7.25f);
-            using var nameBrush = new SolidBrush(Theme.Text);
-            using var mutedBrush = new SolidBrush(Theme.Muted);
+            using var separator = new Pen(Theme.Border);
+            g.DrawLine(separator, 0, Height - 1, Width, Height - 1);
 
+            using var nameFont = new Font("Cascadia Mono", 7.7f, FontStyle.Bold);
+            using var detailFont = new Font("Cascadia Mono", 6.7f);
             var stateColor = StateColor(_item.RawState, _item.Fraction);
-            using var stateBrush = new SolidBrush(stateColor);
 
-            g.DrawString(_item.Connection, nameFont, nameBrush, 7, 4);
-            var stateSize = g.MeasureString(_item.State, detailFont);
-            g.DrawString(_item.State, detailFont, stateBrush, Math.Max(7, Width - stateSize.Width - 7), 5);
+            TextRenderer.DrawText(g, _item.Connection, nameFont,
+                new Rectangle(6, 3, Math.Max(20, Width - 88), 12), Theme.Text,
+                TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(g, _item.State, detailFont,
+                new Rectangle(Math.Max(0, Width - 78), 4, 72, 10), stateColor,
+                TextFormatFlags.Right | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
 
-            var bar = new Rectangle(7, 21, Math.Max(20, Width - 14), 9);
-            using (var track = new SolidBrush(Color.FromArgb(32, 42, 50)))
+            var bar = new Rectangle(6, 18, Math.Max(20, Width - 12), 7);
+            using (var track = new SolidBrush(Color.FromArgb(19, 26, 31)))
                 g.FillRectangle(track, bar);
 
             if (_item.Fraction is double fraction)
             {
-                var fill = new Rectangle(bar.X, bar.Y,
-                    (int)Math.Round(bar.Width * Math.Clamp(fraction, 0d, 1d)), bar.Height);
-                using var fillBrush = new SolidBrush(stateColor);
-                if (fill.Width > 0) g.FillRectangle(fillBrush, fill);
+                var fillWidth = (int)Math.Round(bar.Width * Math.Clamp(fraction, 0d, 1d));
+                if (fillWidth > 0)
+                {
+                    using var fillBrush = new SolidBrush(stateColor);
+                    g.FillRectangle(fillBrush, bar.X, bar.Y, fillWidth, bar.Height);
+                    using var hi = new Pen(Color.FromArgb(100, 255, 255, 255));
+                    g.DrawLine(hi, bar.X, bar.Y, bar.X + fillWidth - 1, bar.Y);
+                }
             }
             else
             {
-                using var pen = new Pen(Color.FromArgb(75, Theme.Muted), 1);
-                for (var x = bar.X - bar.Height; x < bar.Right; x += 8)
-                    g.DrawLine(pen, x, bar.Bottom, x + bar.Height, bar.Top);
+                using var pen = new Pen(Color.FromArgb(62, Theme.Muted));
+                for (var x = bar.X - bar.Height; x < bar.Right; x += 7)
+                    g.DrawLine(pen, x, bar.Bottom - 1, x + bar.Height, bar.Top);
             }
 
-            using (var edge = new Pen(Color.FromArgb(70, Theme.Muted), 1))
+            using (var edge = new Pen(Theme.Border))
                 g.DrawRectangle(edge, bar);
 
-            g.DrawString(_item.Detail, detailFont, mutedBrush, 7, 32);
+            TextRenderer.DrawText(g, _item.Detail, detailFont,
+                new Rectangle(6, 29, Math.Max(20, Width - 12), 10), Theme.Muted,
+                TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
         }
 
         static Color StateColor(string? state, double? fraction)
@@ -426,7 +436,6 @@ sealed class QuotaRemainingPanel : Panel
         }
     }
 }
-
 
 sealed class OrchestratorStatusPanel : Control
 {
@@ -700,8 +709,8 @@ sealed class OverviewReadoutPanel : Control
     {
         Dock=DockStyle.Fill;
         DoubleBuffered=true;
-        MinimumSize=new Size(420,82);
-        BackColor=Color.FromArgb(9,13,16);
+        MinimumSize=new Size(420,80);
+        BackColor=Theme.Recess;
     }
 
     public void SetState(ProjectMetrics project,AutofillSnapshot autofill,bool mcpRunning,bool hasProject,EndpointQueuePreview next)
@@ -714,25 +723,31 @@ sealed class OverviewReadoutPanel : Control
     {
         base.OnPaint(e);
         var g=e.Graphics;
-        g.Clear(Color.FromArgb(9,13,16));
-        using var edge=new Pen(Color.FromArgb(37,48,55));
-        g.DrawRectangle(edge,0,0,Math.Max(0,Width-1),Math.Max(0,Height-1));
+        g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.None;
+        g.Clear(Theme.Recess);
 
-        var gap=5;
-        var usable=Math.Max(1,Width-gap*5);
-        var col=usable/4;
-        var rowH=Math.Max(28,(Height-18)/2);
-        DrawCell(g,new Rectangle(gap,5,col,rowH),"PROJECT",_hasProject?"ACTIVE":"NO PROJECT",_hasProject?Theme.Good:Theme.Muted,_hasProject);
-        DrawCell(g,new Rectangle(gap*2+col,5,col,rowH),"MCP",_mcpRunning?"ONLINE":"OFFLINE",_mcpRunning?Theme.Good:Theme.Error,_mcpRunning);
+        using(var shell=new Pen(Theme.Border))
+            g.DrawRectangle(shell,0,0,Math.Max(0,Width-1),Math.Max(0,Height-1));
+        using(var top=new Pen(Color.FromArgb(92,Theme.EdgeHi)))
+            g.DrawLine(top,1,1,Math.Max(1,Width-2),1);
+
+        const int outer=3;
+        const int gap=2;
+        var usable=Math.Max(1,Width-outer*2-gap*3);
+        var col=Math.Max(1,usable/4);
+        var rowH=Math.Max(27,(Height-outer*2-gap)/2);
+
+        DrawCell(g,new Rectangle(outer,outer,col,rowH),"PROJECT",_hasProject?"ACTIVE":"NO PROJECT",_hasProject?Theme.Good:Theme.Muted,_hasProject);
+        DrawCell(g,new Rectangle(outer+col+gap,outer,col,rowH),"MCP",_mcpRunning?"ONLINE":"OFFLINE",_mcpRunning?Theme.Good:Theme.Error,_mcpRunning);
         var af=_autofill.Paused?"PAUSED":_autofill.Running?"RUNNING":"STOPPED";
-        DrawCell(g,new Rectangle(gap*3+col*2,5,col,rowH),"AUTOFILL",af,_autofill.Paused?Theme.Warn:_autofill.Running?Theme.Good:Theme.Muted,_autofill.Running&&!_autofill.Paused);
-        DrawCell(g,new Rectangle(gap*4+col*3,5,col,rowH),"WORKERS",$"{_project.ActiveAgents}/{Math.Max(1,_autofill.MaxConcurrent)}",_project.ActiveAgents>0?Theme.Accent:Theme.Muted,_project.ActiveAgents>0);
+        DrawCell(g,new Rectangle(outer+(col+gap)*2,outer,col,rowH),"AUTOFILL",af,_autofill.Paused?Theme.Warn:_autofill.Running?Theme.Good:Theme.Muted,_autofill.Running&&!_autofill.Paused);
+        DrawCell(g,new Rectangle(outer+(col+gap)*3,outer,Math.Max(1,Width-outer-(outer+(col+gap)*3)),rowH),"WORKERS",$"{_project.ActiveAgents}/{Math.Max(1,_autofill.MaxConcurrent)}",_project.ActiveAgents>0?Theme.Accent:Theme.Muted,_project.ActiveAgents>0);
 
-        var y=8+rowH;
-        DrawCell(g,new Rectangle(gap,y,col*2+gap,rowH),"NEXT ENDPOINT IN QUEUE",_next.Display,EndpointColor(_next.State),string.Equals(_next.State,"ready",StringComparison.OrdinalIgnoreCase),_next.Detail);
-        DrawCell(g,new Rectangle(gap*3+col*2,y,col,rowH),"QUEUE",$"{_autofill.ReadyCount} READY / {_autofill.RetryCount} RETRY",_autofill.RetryCount>0?Theme.Warn:Theme.Text,_autofill.ReadyCount>0);
+        var y=outer+rowH+gap;
+        DrawCell(g,new Rectangle(outer,y,col*2+gap,rowH),"NEXT ENDPOINT IN QUEUE",_next.Display,EndpointColor(_next.State),string.Equals(_next.State,"ready",StringComparison.OrdinalIgnoreCase),_next.Detail);
+        DrawCell(g,new Rectangle(outer+(col+gap)*2,y,col,rowH),"QUEUE",$"{_autofill.ReadyCount} READY / {_autofill.RetryCount} RETRY",_autofill.RetryCount>0?Theme.Warn:Theme.Text,_autofill.ReadyCount>0);
         var intent=string.IsNullOrWhiteSpace(_project.IntentRevision)?"—":"R"+_project.IntentRevision;
-        DrawCell(g,new Rectangle(gap*4+col*3,y,col,rowH),"INTENT",intent,Theme.Text,!string.IsNullOrWhiteSpace(_project.IntentRevision));
+        DrawCell(g,new Rectangle(outer+(col+gap)*3,y,Math.Max(1,Width-outer-(outer+(col+gap)*3)),rowH),"INTENT",intent,Theme.Text,!string.IsNullOrWhiteSpace(_project.IntentRevision));
     }
 
     static Color EndpointColor(string state) => state.ToLowerInvariant() switch
@@ -746,28 +761,34 @@ sealed class OverviewReadoutPanel : Control
 
     static void DrawCell(Graphics g,Rectangle r,string label,string value,Color color,bool lit,string? sub=null)
     {
-        using var fill=new SolidBrush(Color.FromArgb(15,21,24));
-        using var border=new Pen(Color.FromArgb(31,43,48));
-        g.FillRectangle(fill,r);g.DrawRectangle(border,r);
-        using var labelFont=new Font("Cascadia Mono",6.9f,FontStyle.Bold);
-        using var valueFont=new Font("Cascadia Mono",8.4f,FontStyle.Bold);
-        using var tinyFont=new Font("Cascadia Mono",6.5f);
-        using var muted=new SolidBrush(Color.FromArgb(104,121,126));
-        using var valueBrush=new SolidBrush(color);
-        var led=new Rectangle(r.X+7,r.Y+8,7,7);
+        if(r.Width<=1||r.Height<=1) return;
+        using var fill=new SolidBrush(Theme.Surface);
+        using var border=new Pen(Theme.Border);
+        using var topEdge=new Pen(Color.FromArgb(72,Theme.EdgeHi));
+        g.FillRectangle(fill,r);
+        g.DrawRectangle(border,r);
+        g.DrawLine(topEdge,r.Left+1,r.Top+1,r.Right-1,r.Top+1);
+
+        using var labelFont=new Font("Cascadia Mono",6.7f,FontStyle.Bold);
+        using var valueFont=new Font("Cascadia Mono",8.1f,FontStyle.Bold);
+        using var tinyFont=new Font("Cascadia Mono",6.2f);
+
+        var lamp=new Rectangle(r.X+7,r.Y+7,6,6);
+        using(var lampFill=new SolidBrush(lit?color:Color.FromArgb(38,48,53))) g.FillRectangle(lampFill,lamp);
+        using(var lampEdge=new Pen(lit?Color.FromArgb(125,color):Theme.EdgeLo)) g.DrawRectangle(lampEdge,lamp);
         if(lit)
         {
-            using var glow=new SolidBrush(Color.FromArgb(65,color));
-            g.FillEllipse(glow,led.X-2,led.Y-2,11,11);
+            using var hi=new Pen(Color.FromArgb(115,255,255,255));
+            g.DrawLine(hi,lamp.Left+1,lamp.Top+1,lamp.Right-1,lamp.Top+1);
         }
-        using(var lamp=new SolidBrush(lit?color:Color.FromArgb(42,54,57))) g.FillEllipse(lamp,led);
-        g.DrawString(label,labelFont,muted,r.X+19,r.Y+4);
-        var valueRect=new Rectangle(r.X+8,r.Y+17,Math.Max(0,r.Width-16),15);
-        TextRenderer.DrawText(g,value,valueFont,valueRect,color,TextFormatFlags.EndEllipsis|TextFormatFlags.NoPadding|TextFormatFlags.SingleLine);
-        if(!string.IsNullOrWhiteSpace(sub)&&r.Height>=42)
-        {
-            var subRect=new Rectangle(r.X+8,r.Y+32,Math.Max(0,r.Width-16),11);
-            TextRenderer.DrawText(g,sub,tinyFont,subRect,Color.FromArgb(88,108,113),TextFormatFlags.EndEllipsis|TextFormatFlags.NoPadding|TextFormatFlags.SingleLine);
-        }
+
+        TextRenderer.DrawText(g,label,labelFont,new Rectangle(r.X+18,r.Y+4,Math.Max(0,r.Width-23),11),Theme.Muted,
+            TextFormatFlags.EndEllipsis|TextFormatFlags.NoPadding|TextFormatFlags.SingleLine);
+        TextRenderer.DrawText(g,value,valueFont,new Rectangle(r.X+7,r.Y+16,Math.Max(0,r.Width-14),14),color,
+            TextFormatFlags.EndEllipsis|TextFormatFlags.NoPadding|TextFormatFlags.SingleLine);
+
+        if(!string.IsNullOrWhiteSpace(sub)&&r.Height>=39)
+            TextRenderer.DrawText(g,sub,tinyFont,new Rectangle(r.X+7,r.Y+30,Math.Max(0,r.Width-14),10),Color.FromArgb(89,104,111),
+                TextFormatFlags.EndEllipsis|TextFormatFlags.NoPadding|TextFormatFlags.SingleLine);
     }
 }
