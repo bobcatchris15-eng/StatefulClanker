@@ -21,6 +21,21 @@ public sealed class EndpointEntry
     public bool? supportsTools { get; set; }
     public long? contextLength { get; set; }
     public string toolMode { get; set; } = "native";
+
+    // Lifecycle metadata. Existing/user-managed entries remain untouched unless
+    // explicitly adopted by the free-capacity manager.
+    public string source { get; set; } = "user";
+    public string? rationale { get; set; }
+    public string? researchedAt { get; set; }
+    public string updatedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
+    public string? managedBy { get; set; }
+    public string? freeClass { get; set; }
+    public string? freeEvidence { get; set; }
+    public string? lastSeenAt { get; set; }
+    public string? missingSince { get; set; }
+    public int discoveryMisses { get; set; }
+    public string? retiredReason { get; set; }
+    public string? userOverride { get; set; }
 }
 
 public sealed class ConnectionDocument
@@ -42,6 +57,40 @@ public sealed class ConnectionProfile
     public string? apiKeyProtected { get; set; }
     public string? apiKeyEnv { get; set; }
     public Dictionary<string,string> headers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class CapacityDiscoveryDocument
+{
+    public int schemaVersion { get; set; } = 1;
+    public string? updatedAt { get; set; }
+    public Dictionary<string, CapacityConnectionState> connections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class CapacityConnectionState
+{
+    public string? lastSyncAt { get; set; }
+    public string? lastSuccessAt { get; set; }
+    public string? lastError { get; set; }
+    public int modelCount { get; set; }
+    public int confirmedFree { get; set; }
+    public int paid { get; set; }
+    public int unknown { get; set; }
+    public int workhorseFree { get; set; }
+    public List<CapacityModelState> models { get; set; } = new();
+}
+
+public sealed class CapacityModelState
+{
+    public string model { get; set; } = "";
+    public string displayName { get; set; } = "";
+    public string classification { get; set; } = "unknown";
+    public string evidence { get; set; } = "";
+    public bool workhorse { get; set; }
+    public bool? supportsTools { get; set; }
+    public long? contextLength { get; set; }
+    public double? inputPrice { get; set; }
+    public double? outputPrice { get; set; }
+    public string seenAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
 }
 
 public sealed class RoutingHealthDocument

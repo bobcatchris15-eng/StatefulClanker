@@ -19,6 +19,7 @@ public sealed class RouterStore
     public string HealthPath => Path.Combine(RoutingDir, "health.json");
     public string CursorPath => Path.Combine(RoutingDir, "round-robin.json");
     public string LeasePath => Path.Combine(RoutingDir, "leases.json");
+    public string CapacityDiscoveryPath => Path.Combine(RoutingDir, "free-capacity.json");
 
     readonly Mutex _mutex;
 
@@ -49,10 +50,16 @@ public sealed class RouterStore
     public RoutingHealthDocument LoadHealth() => WithLock(() => Load<RoutingHealthDocument>(HealthPath) ?? new());
     public RoundRobinDocument LoadCursor() => WithLock(() => Load<RoundRobinDocument>(CursorPath) ?? new());
     public LeaseDocument LoadLeases() => WithLock(() => Load<LeaseDocument>(LeasePath) ?? new());
+    public CapacityDiscoveryDocument LoadCapacityDiscovery() => WithLock(() => Load<CapacityDiscoveryDocument>(CapacityDiscoveryPath) ?? new());
 
+    public void SaveEndpoints(EndpointCatalog doc) => WithLock(() => { doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(EndpointPath,doc); return 0; });
     public void SaveHealth(RoutingHealthDocument doc) => WithLock(() => { Save(HealthPath, doc); return 0; });
     public void SaveCursor(RoundRobinDocument doc) => WithLock(() => { Save(CursorPath, doc); return 0; });
     public void SaveLeases(LeaseDocument doc) => WithLock(() => { doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(LeasePath,doc); return 0; });
+    public void SaveCapacityDiscovery(CapacityDiscoveryDocument doc) => WithLock(() => { doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(CapacityDiscoveryPath,doc); return 0; });
+
+    public TResult UpdateEndpoints<TResult>(Func<EndpointCatalog,TResult> update) =>
+        WithLock(() => { var doc=Load<EndpointCatalog>(EndpointPath) ?? new(); var r=update(doc); doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(EndpointPath,doc); return r; });
 
     public TResult UpdateHealth<TResult>(Func<RoutingHealthDocument,TResult> update) =>
         WithLock(() => { var doc=Load<RoutingHealthDocument>(HealthPath) ?? new(); var r=update(doc); Save(HealthPath,doc); return r; });
@@ -62,6 +69,9 @@ public sealed class RouterStore
 
     public TResult UpdateLeases<TResult>(Func<LeaseDocument,TResult> update) =>
         WithLock(() => { var doc=Load<LeaseDocument>(LeasePath) ?? new(); var r=update(doc); doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(LeasePath,doc); return r; });
+
+    public TResult UpdateCapacityDiscovery<TResult>(Func<CapacityDiscoveryDocument,TResult> update) =>
+        WithLock(() => { var doc=Load<CapacityDiscoveryDocument>(CapacityDiscoveryPath) ?? new(); var r=update(doc); doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(CapacityDiscoveryPath,doc); return r; });
 
     public string ConnectionFingerprint(ConnectionProfile profile)
     {

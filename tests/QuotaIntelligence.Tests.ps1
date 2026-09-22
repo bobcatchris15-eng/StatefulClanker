@@ -125,7 +125,7 @@ try {
     Assert-True ([double]$mock.health.quota.remaining-eq7) 'Healthy probe did not capture remaining request quota.'
     Assert-True ([double]$mock.health.quota.limit-eq30) 'Healthy probe did not capture request limit.'
     Assert-True ($null-ne$mock.health.quota.resetAt) 'Healthy probe did not capture reset window.'
-    Assert-True ([string]$mock.health.quota.source -like 'probe:*') 'Background quota metadata was not labeled as probe-derived.'
+    Assert-True (([string]$mock.health.quota.source -like 'probe:*') -or ([string]$mock.health.quota.source -like 'catalog:*')) 'Background quota metadata was not labeled as non-inference control-plane telemetry.'
 
     Write-Host '  QUOTA 5B: simultaneous request/token windows are retained independently'
     $mock=Route (Call-Router @('snapshot')).data 'pool:mock::m'

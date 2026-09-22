@@ -64,6 +64,16 @@ sealed class TargetPoolEntry
     public string? rationale { get; set; }
     public string? researchedAt { get; set; }
     public string updatedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
+
+    // Preserved when the compiled router owns automatic free-capacity lifecycle.
+    public string? managedBy { get; set; }
+    public string? freeClass { get; set; }
+    public string? freeEvidence { get; set; }
+    public string? lastSeenAt { get; set; }
+    public string? missingSince { get; set; }
+    public int discoveryMisses { get; set; }
+    public string? retiredReason { get; set; }
+    public string? userOverride { get; set; }
 }
 
 sealed class TargetPoolDocument

@@ -27,6 +27,14 @@ Assert-True ([string]$plan.Strategy-eq'cohere-key-check') 'Cohere did not select
 Assert-True ([string]$plan.Method.Method-eq'POST') 'Cohere key check must use POST.'
 Assert-True ($plan.Uri.AbsoluteUri-eq'http://127.0.0.1:9877/v1/check-api-key') "Unexpected Cohere probe URI: $($plan.Uri)"
 
+Write-Host '  PROBE 2B: Pollinations uses account/key for non-inference budget telemetry'
+$p=New-Profile 'pollinations' 'https://gen.pollinations.ai/v1' 'https://gen.pollinations.ai/text/models'
+$plan=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve($p)
+Assert-True ([string]$plan.Strategy-eq'pollinations-key') 'Pollinations did not select account/key strategy.'
+Assert-True ([string]$plan.Method.Method-eq'GET') 'Pollinations account key probe must use GET.'
+Assert-True ($plan.Uri.AbsoluteUri-eq'https://gen.pollinations.ai/account/key') "Unexpected Pollinations probe URI: $($plan.Uri)"
+Assert-True $plan.ReadSuccessBody 'Pollinations budget probe must read successful JSON body.'
+
 Write-Host '  PROBE 3: quota-capable model probes stay warmer than silent generic probes'
 $groq=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve((New-Profile 'groq' 'https://api.groq.com/openai/v1'))
 $generic=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve((New-Profile 'custom' 'https://example.invalid/v1'))
@@ -41,6 +49,13 @@ $gh=New-Profile 'github-models' 'https://models.github.ai/inference'
 $retired=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve($gh)
 Assert-True (-not$retired.Enabled) 'Retired GitHub Models provider was still probe-enabled.'
 Assert-True ([StatefulClanker.Router.ProviderProbeCatalog]::IsRetired($gh)) 'GitHub Models was not classified retired.'
+
+Write-Host '  PROBE 4B: account-id templates expand before control-plane probing'
+$cf=New-Profile 'cloudflare' 'https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1' 'https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/models/search?format=openrouter&per_page=1000'
+$cf.accountId='abc123'
+$plan=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve($cf)
+Assert-True (-not $plan.Uri.AbsoluteUri.Contains('{accountId}')) 'Cloudflare probe URI retained accountId placeholder.'
+Assert-True ($plan.Uri.AbsoluteUri.Contains('/accounts/abc123/ai/models/search')) "Cloudflare account ID was not expanded: $($plan.Uri)"
 
 Write-Host '  PROBE 5: Cerebras request/day and token/minute headers become distinct windows'
 $h=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
