@@ -10,6 +10,11 @@ public sealed class QuotaObservation
     public string observedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public string? nextAvailableAt { get; set; }
     public string? resetAt { get; set; }
+    public string? windowResetAt { get; set; }
+    public string? windowCadence { get; set; }
+    public string? windowSource { get; set; }
+    public string? windowConfidence { get; set; }
+    public string appliesTo { get; set; } = "inference";
     public string? limiter { get; set; }
     public double? limit { get; set; }
     public double? remaining { get; set; }
@@ -211,7 +216,7 @@ public static partial class QuotaIntelligence
             if(root.TryGetProperty("data",out var data)) root=data;
             if(root.TryGetProperty("limit_remaining",out var rem) && rem.ValueKind==JsonValueKind.Number && rem.TryGetDouble(out var remaining))
             {
-                q.remaining=remaining;q.limiter="budget";
+                q.remaining=remaining;q.limiter="budget";q.appliesTo="account-budget";
                 if(root.TryGetProperty("limit",out var lim) && lim.ValueKind==JsonValueKind.Number && lim.TryGetDouble(out var limit)) q.limit=limit;
                 q.status=remaining<=0 ? "exhausted" : "available";
                 q.source="openrouter-key";
