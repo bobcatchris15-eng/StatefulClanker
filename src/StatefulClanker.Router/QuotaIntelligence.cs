@@ -28,7 +28,7 @@ public static partial class QuotaIntelligence
     private static partial Regex AbsoluteTextRx();
     [GeneratedRegex(@"(?i)(?:x-)?ratelimit(?:-reset|-reset-after)?\s*[:=]\s*(\d{10,})")]
     private static partial Regex EpochRx();
-    [GeneratedRegex(@"(?i)(\d+(?:\.\d+)?)(d|h|m|s|ms)")]
+    [GeneratedRegex(@"(?i)(\d+(?:\.\d+)?)(ms|d|h|m|s)")]
     private static partial Regex DurationPartRx();
 
     public static QuotaObservation Observe(
@@ -193,7 +193,9 @@ public static partial class QuotaIntelligence
             "Anthropic-RateLimit-Output-Tokens-Limit","Anthropic-RateLimit-Output-Tokens-Remaining","Anthropic-RateLimit-Output-Tokens-Reset"
         })
         {
-            var m=Regex.Match(text,$@"(?i)(?:^|[;\r\n ]){Regex.Escape(name)}\s*:\s*([^;\r\n]+)");
+            var m=Regex.Match(text,$@"(?im)(?:^|\r?\n)\s*{Regex.Escape(name)}\s*:\s*([^\r\n]+)");
+            if(!m.Success)
+                m=Regex.Match(text,$@"(?i)(?:^|;\s*){Regex.Escape(name)}\s*:\s*([^;\r\n]+)");
             if(m.Success) result[name]=m.Groups[1].Value.Trim();
         }
         return result;
