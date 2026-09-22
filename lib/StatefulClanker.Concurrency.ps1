@@ -218,9 +218,21 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
         }
 
         if (@('running','reviewing','validating') -contains $task.status) {
+            $workerSessionId=if($task.PSObject.Properties['activeWorkerSessionId']){[string]$task.activeWorkerSessionId}else{$null}
+            $detail=@(([string]$child.stderr -split "\r?\n")+([string]$child.stdout -split "\r?\n") |
+                Where-Object{-not[string]::IsNullOrWhiteSpace($_)} | Select-Object -Last 4) -join ' | '
+            if($detail.Length-gt320){$detail=$detail.Substring(0,317)+'...'}
             $task.status = 'failed'
-            $task.blockReason = "Worker crashed with exit code $($Run.process.ExitCode)"
+            $task.blockReason = "Worker crashed with exit code $($Run.process.ExitCode)"+$(if($detail){": $detail"}else{''})
             Close-SCFailedTaskWorkerSession $task 'crashed'
+            Add-SCEvent 'run.failed' $task.blockReason @{
+                taskId=$task.id
+                exitCode=[int]$Run.process.ExitCode
+                provider=$Run.provider
+                workerSessionId=$workerSessionId
+                logPath=$Run.logPath
+                detail=$detail
+            }
         }
     }
     if ($task.status -ne 'complete') {
