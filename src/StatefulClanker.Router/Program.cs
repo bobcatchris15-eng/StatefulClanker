@@ -45,12 +45,16 @@ internal static class Program
         var engine=new RouterEngine(store);
         var server=new RouterPipeServer(pipeName,engine);
         var monitor=new EndpointMonitor(engine);
+        var freeCapacity=new FreeCapacityManager(store);
         using var cts=new CancellationTokenSource();
 
         Console.CancelKeyPress+=(s,e)=>{e.Cancel=true;cts.Cancel();};
         AppDomain.CurrentDomain.ProcessExit+=(s,e)=>cts.Cancel();
 
-        await Task.WhenAll(server.RunAsync(cts.Token),monitor.RunAsync(cts.Token));
+        await Task.WhenAll(
+            server.RunAsync(cts.Token),
+            monitor.RunAsync(cts.Token),
+            freeCapacity.RunAsync(cts.Token));
         return 0;
     }
 
