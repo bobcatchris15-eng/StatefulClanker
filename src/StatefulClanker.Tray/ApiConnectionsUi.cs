@@ -187,6 +187,9 @@ static class ApiConnectionTester
                     case "x-api-key":
                         h.DefaultRequestHeaders.TryAddWithoutValidation("x-api-key",key);
                         break;
+                    case "x-goog-api-key":
+                        h.DefaultRequestHeaders.TryAddWithoutValidation("x-goog-api-key",key);
+                        break;
                     case "none":
                         break;
                     default:
@@ -250,9 +253,19 @@ static class ApiConnectionTester
             if (x.ValueKind != JsonValueKind.Object) continue;
             var id = Str(x,"id") ?? Str(x,"name") ?? Str(x,"model");
             if (string.IsNullOrWhiteSpace(id)) continue;
+            if (string.Equals(kind,"gemini",StringComparison.OrdinalIgnoreCase) && id.StartsWith("models/",StringComparison.OrdinalIgnoreCase))
+                id=id["models/".Length..];
             var display = Str(x,"display_name") ?? Str(x,"displayName") ?? Str(x,"name") ?? id;
-            long? context = Long(x,"context_length") ?? Long(x,"max_context_length");
+            long? context = Long(x,"context_length") ?? Long(x,"max_context_length") ?? Long(x,"inputTokenLimit");
             bool? tools = Bool(x,"supports_tools");
+            if (string.Equals(kind,"gemini",StringComparison.OrdinalIgnoreCase))
+            {
+                var generative=false;
+                if(x.TryGetProperty("supportedGenerationMethods",out var methods)&&methods.ValueKind==JsonValueKind.Array)
+                    generative=methods.EnumerateArray().Any(v=>v.ValueKind==JsonValueKind.String&&string.Equals(v.GetString(),"generateContent",StringComparison.OrdinalIgnoreCase));
+                if(!generative)continue;
+                tools=true;
+            }
             if (tools is null && x.TryGetProperty("capabilities",out var caps) && caps.ValueKind==JsonValueKind.Object)
                 tools = Bool(caps,"function_calling");
             if (tools is null && x.TryGetProperty("supported_parameters",out var supported) && supported.ValueKind==JsonValueKind.Array)
@@ -338,13 +351,13 @@ sealed class ApiConnectionsPage : TabPage
         rows.Controls.Add(bar,0,0);
 
         ConfigureConnectionGrid(); rows.Controls.Add(_connections,0,1);
-        rows.Controls.Add(SectionLabel("DISCOVERED MODELS / ACTIVE PROJECT TARGET POOL"),0,2);
+        rows.Controls.Add(SectionLabel("DISCOVERED MODELS / MACHINE ENDPOINT POOL"),0,2);
         ConfigureModelGrid(); rows.Controls.Add(_models,0,3);
 
         var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
         bottom.Controls.Add(Make("Save target selection",SaveTargetSelection,170));
         bottom.Controls.Add(Make("Auto-target free workhorses",AutoTargetFreeWorkhorses,205));
-        var note=new Label{Text="Connections are machine-local. The endpoint catalog is project-local and is the scheduler's pseudo-round-robin workhorse set.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
+        var note=new Label{Text="Connections and enabled endpoints are machine-local. The currently active project simply consumes that shared round-robin worker pool.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
         bottom.Controls.Add(note);rows.Controls.Add(bottom,0,4);
 
         Controls.Add(rows); Theme.Apply(this); Reload();
@@ -364,7 +377,7 @@ sealed class ApiConnectionsPage : TabPage
     {
         _models.Dock=DockStyle.Fill;_models.AllowUserToAddRows=false;_models.RowHeadersVisible=false;_models.SelectionMode=DataGridViewSelectionMode.FullRowSelect;_models.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
         _models.Columns.Add(new DataGridViewCheckBoxColumn{Name="use",HeaderText="Target",Width=58,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});
-        _models.Columns.Add("name","Model");_models.Columns.Add("id","Model ID");_models.Columns.Add("state","Current project target");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");_models.Columns.Add("free","Free");
+        _models.Columns.Add("name","Model");_models.Columns.Add("id","Model ID");_models.Columns.Add("state","Endpoint state");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");_models.Columns.Add("free","Free");
         foreach(DataGridViewColumn c in _models.Columns) if(c.Name!="use") c.ReadOnly=true;
     }
 
