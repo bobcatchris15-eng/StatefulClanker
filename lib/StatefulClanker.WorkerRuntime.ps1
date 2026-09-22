@@ -471,7 +471,7 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
                         $values=$null
                         if($response.Headers.TryGetValues($name,[ref]$values)){$value=(@($values)-join',')}
                     }elseif($response.Headers[$name]){$value=[string]$response.Headers[$name]}
-                    if($value){$headerParts+=("$name: $value")}
+                    if($value){$headerParts+=("${name}: $value")}
                 }catch{}
             }
         }
@@ -481,7 +481,7 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
         $statusText=if($status-gt0){" HTTP $status"}else{''}
         $metadata=if($headerParts.Count){' '+($headerParts-join'; ')}else{''}
         $bodyDetail=if($detail){" Body: $detail"}else{''}
-        throw "Direct inference request failed$statusText: $($ex.Exception.Message)$metadata$bodyDetail"
+        throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$metadata$bodyDetail"
     }
 }
 function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
