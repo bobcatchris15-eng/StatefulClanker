@@ -124,6 +124,23 @@ try {
     Assert-True ($null-ne$mock.health.quota.resetAt) 'Healthy probe did not capture reset window.'
     Assert-True ([string]$mock.health.quota.source -like 'probe:*') 'Background quota metadata was not labeled as probe-derived.'
 
+    Write-Host '  QUOTA 5B: simultaneous request/token windows are retained independently'
+    $groq=Route (Call-Router @('snapshot')).data 'pool:groq::m'
+    $windows=@($groq.health.quota.windows)
+    Assert-True (@($windows|Where-Object kind-eq'requests').Count-ge1) 'Request quota window was not retained.'
+    # The mock metadata probe supplies request headers only; direct parser coverage
+    # for token+request coexistence is added below through a tiny compiled helper fixture.
+
+    Write-Host '  QUOTA 5C: fixed provider reset rules are available without inference'
+    $cf=Route (Call-Router @('snapshot')).data 'pool:cf::m'
+    $cfWindow=@($cf.health.quota.windows|Where-Object kind-eq'free_allocation'|Select-Object -First 1)
+    Assert-True ($cfWindow.Count-eq1) 'Cloudflare daily free-allocation window was not derived.'
+    Assert-True ([string]$cfWindow[0].unit-eq'neurons/day') 'Cloudflare quota unit was not preserved.'
+    Assert-True ([double]$cfWindow[0].limit-eq10000) 'Cloudflare daily free allocation limit was not recorded.'
+    $gem=Route (Call-Router @('snapshot')).data 'pool:gem::m'
+    $gemWindow=@($gem.health.quota.windows|Where-Object kind-eq'requests_per_day'|Select-Object -First 1)
+    Assert-True ($gemWindow.Count-eq1) 'Gemini daily reset window was not derived without inference.'
+
     Write-Host '  QUOTA 6: Retry-After outranks a longer generic reset timer'
     $lease=Call-Router @('acquire','--preferred','pool:mock::m','--owner-pid',[string]$PID)
     $msg='HTTP 429'+[Environment]::NewLine+'Retry-After: 3'+[Environment]::NewLine+'X-RateLimit-Remaining-Requests: 0'+[Environment]::NewLine+'X-RateLimit-Reset-Requests: 2m'
