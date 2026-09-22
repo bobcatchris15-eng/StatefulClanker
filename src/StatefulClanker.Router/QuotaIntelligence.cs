@@ -177,6 +177,8 @@ public static partial class QuotaIntelligence
         // still useful because a zero key budget makes the connection unusable.
         if(string.Equals(providerId,"openrouter",StringComparison.OrdinalIgnoreCase))
             ApplyOpenRouterKeyBody(q,text,now);
+        if(string.Equals(providerId,"pollinations",StringComparison.OrdinalIgnoreCase))
+            ApplyPollinationsKeyBody(q,text);
 
         // Gemini requests-per-day reset at midnight Pacific. Use this only when
         // the error itself identifies a daily limiter and Google supplied no
@@ -296,6 +298,30 @@ public static partial class QuotaIntelligence
                         SetWindowReset(q,"budget",next.Value,"openrouter-key-reset","derived",cadence ?? "");
                     }
                 }
+            }
+        }
+        catch { }
+    }
+
+    static void ApplyPollinationsKeyBody(QuotaObservation q,string text)
+    {
+        if(string.IsNullOrWhiteSpace(text)) return;
+        try
+        {
+            using var doc=JsonDocument.Parse(text);
+            var root=doc.RootElement;
+            if(root.ValueKind!=JsonValueKind.Object) return;
+            if(root.TryGetProperty("pollenBudget",out var budget) &&
+               budget.ValueKind==JsonValueKind.Number && budget.TryGetDouble(out var remaining))
+            {
+                q.remaining=remaining;
+                q.limiter="pollen_budget";
+                AddWindow(q,"pollen_budget","pollen",null,remaining,
+                    "pollinations-key","reported",$"Pollinations key pollen budget remaining={remaining}");
+                q.status=remaining<=0 ? "exhausted" : "available";
+                q.source="pollinations-key";
+                q.confidence="reported";
+                q.evidence=Bound($"Pollinations key pollen budget remaining={remaining}",180);
             }
         }
         catch { }
