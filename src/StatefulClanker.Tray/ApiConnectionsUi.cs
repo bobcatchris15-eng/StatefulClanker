@@ -85,6 +85,25 @@ static class TargetPoolStore
     public static TargetPoolDocument LoadActive()
     {
         var path = ActivePoolPath();
+        if (!File.Exists(path))
+        {
+            // One-time migration from the old per-project catalog. The destination
+            // is machine operational state and is shared by whichever project is active.
+            try
+            {
+                if (File.Exists(AppStore.ActiveProjectPointer))
+                {
+                    var project=File.ReadAllText(AppStore.ActiveProjectPointer).Trim();
+                    var legacy=System.IO.Path.Combine(project,".statefulclanker","routing","target-pool.json");
+                    if (File.Exists(legacy))
+                    {
+                        Directory.CreateDirectory(AppStore.Root);
+                        File.Copy(legacy,path,false);
+                    }
+                }
+            }
+            catch { }
+        }
         if (!File.Exists(path)) return new();
         try
         {
@@ -355,8 +374,8 @@ sealed class ApiConnectionsPage : TabPage
         ConfigureModelGrid(); rows.Controls.Add(_models,0,3);
 
         var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
-        bottom.Controls.Add(Make("Save target selection",SaveTargetSelection,170));
-        bottom.Controls.Add(Make("Auto-target free workhorses",AutoTargetFreeWorkhorses,205));
+        bottom.Controls.Add(Make("Save endpoints",SaveTargetSelection,170));
+        bottom.Controls.Add(Make("Auto-enable free endpoints",AutoTargetFreeWorkhorses,205));
         var note=new Label{Text="Connections and enabled endpoints are machine-local. The currently active project simply consumes that shared round-robin worker pool.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
         bottom.Controls.Add(note);rows.Controls.Add(bottom,0,4);
 
@@ -376,7 +395,7 @@ sealed class ApiConnectionsPage : TabPage
     void ConfigureModelGrid()
     {
         _models.Dock=DockStyle.Fill;_models.AllowUserToAddRows=false;_models.RowHeadersVisible=false;_models.SelectionMode=DataGridViewSelectionMode.FullRowSelect;_models.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
-        _models.Columns.Add(new DataGridViewCheckBoxColumn{Name="use",HeaderText="Target",Width=58,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});
+        _models.Columns.Add(new DataGridViewCheckBoxColumn{Name="use",HeaderText="Use",Width=58,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});
         _models.Columns.Add("name","Model");_models.Columns.Add("id","Model ID");_models.Columns.Add("state","Endpoint state");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");_models.Columns.Add("free","Free");
         foreach(DataGridViewColumn c in _models.Columns) if(c.Name!="use") c.ReadOnly=true;
     }
