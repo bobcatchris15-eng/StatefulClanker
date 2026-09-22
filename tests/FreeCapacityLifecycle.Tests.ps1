@@ -44,7 +44,8 @@ try {
     } -ArgumentList $port,$catalogs
 
     $store=[StatefulClanker.Router.RouterStore]::new($temp)
-    $manager=[StatefulClanker.Router.FreeCapacityManager]::new($store)
+    $engine=[StatefulClanker.Router.RouterEngine]::new($store)
+    $manager=[StatefulClanker.Router.FreeCapacityManager]::new($engine)
     $profile=[StatefulClanker.Router.ConnectionProfile]::new()
     $profile.name='configured'
     $profile.presetId='custom'
