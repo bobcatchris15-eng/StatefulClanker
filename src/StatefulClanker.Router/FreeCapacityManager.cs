@@ -111,7 +111,7 @@ public sealed class FreeCapacityManager
     void ApplyLifecycle(string connectionName,List<CapacityModelState> states,DateTimeOffset now)
     {
         var byId=states.ToDictionary(x=>x.model,StringComparer.OrdinalIgnoreCase);
-        var eligible=states.Where(x=>x.classification=="confirmed_free" && x.workhorse).ToList();
+        var eligible=states.Where(x=>IsZeroCostCapacityClass(x.classification) && x.workhorse).ToList();
 
         _store.UpdateEndpoints(doc =>
         {
@@ -182,9 +182,9 @@ public sealed class FreeCapacityManager
                     e.supportsTools=discovered.supportsTools;
                     e.contextLength=discovered.contextLength;
                     e.displayName=discovered.displayName;
-                    e.free=discovered.classification=="confirmed_free";
+                    e.free=IsZeroCostCapacityClass(discovered.classification);
 
-                    if(discovered.classification!="confirmed_free")
+                    if(!IsZeroCostCapacityClass(discovered.classification))
                     {
                         e.enabled=false;
                         e.retiredReason=discovered.classification=="paid"?"no-longer-zero-cost":
@@ -246,10 +246,10 @@ public sealed class FreeCapacityManager
                 lastSuccessAt=now.ToString("O"),
                 lastError=null,
                 modelCount=models.Count,
-                confirmedFree=models.Count(x=>x.classification=="confirmed_free"),
+                confirmedFree=models.Count(x=>IsZeroCostCapacityClass(x.classification)),
                 paid=models.Count(x=>x.classification=="paid"),
                 unknown=models.Count(x=>x.classification=="unknown"),
-                workhorseFree=models.Count(x=>x.classification=="confirmed_free"&&x.workhorse),
+                workhorseFree=models.Count(x=>IsZeroCostCapacityClass(x.classification)&&x.workhorse),
                 models=models.OrderBy(x=>x.displayName,StringComparer.OrdinalIgnoreCase).ToList()
             };
             return 0;
@@ -270,30 +270,45 @@ public sealed class FreeCapacityManager
 
     static CapacityModelState Classify(ConnectionProfile profile,DiscoveredModel model,DateTimeOffset now)
     {
+        var family=ProviderFamily(profile);
         var classification="unknown";
         var evidence="Catalog does not prove zero cost.";
 
-        if(model.AnyPositivePrice)
+        if(model.ExplicitPaid==true || model.AnyPositivePrice)
         {
             classification="paid";
-            evidence="Live catalog reports a positive price.";
+            evidence=model.ExplicitPaid==true
+                ? "Live catalog marks this model paid-only."
+                : "Live catalog reports a positive price.";
         }
         else if(model.ExplicitFree==true || model.AllKnownPricesZero)
         {
             classification="confirmed_free";
-            evidence=model.ExplicitFree==true?"Live catalog marks this model free.":"Live catalog reports zero input/output pricing.";
+            evidence=model.ExplicitFree==true
+                ? "Live catalog marks this model free."
+                : "Live catalog reports zero pricing.";
         }
-        else if(IsExplicitFreeId(profile.presetId,model.Id))
+        else if(IsExplicitFreeId(family,model.Id))
         {
             classification="confirmed_free";
             evidence="Provider-defined model ID explicitly selects a free route.";
         }
-        else if(string.Equals(profile.presetId,"freellmapi",StringComparison.OrdinalIgnoreCase))
+        else if(family=="opencode-zen" && IsOpenCodeZenFreeId(model.Id))
+        {
+            classification="confirmed_free";
+            evidence="OpenCode Zen model ID explicitly identifies a promotional free model.";
+        }
+        else if(family=="nvidia")
+        {
+            classification="trial_free";
+            evidence="Configured NVIDIA hosted NIM catalog uses API Catalog trial/free-endpoint capacity; subject to NVIDIA trial terms.";
+        }
+        else if(family=="freellmapi")
         {
             classification="confirmed_free";
             evidence="FreeLLMAPI exposes a curated free-provider catalog.";
         }
-        else if(profile.presetId is "ollama" or "lmstudio" or "vllm")
+        else if(family is "ollama" or "lmstudio" or "vllm")
         {
             classification="confirmed_free";
             evidence="Configured local inference endpoint.";
@@ -314,16 +329,50 @@ public sealed class FreeCapacityManager
         };
     }
 
-    static bool IsExplicitFreeId(string? presetId,string id)
+    static bool IsZeroCostCapacityClass(string? classification) =>
+        classification is "confirmed_free" or "trial_free";
+
+    static string ProviderFamily(ConnectionProfile profile)
+    {
+        var id=(profile.presetId??"custom").Trim().ToLowerInvariant();
+        if(id!="custom") return id;
+        try
+        {
+            var uri=new Uri(profile.baseUrl);
+            var host=uri.Host.ToLowerInvariant();
+            var path=uri.AbsolutePath.ToLowerInvariant();
+            if(host.EndsWith("opencode.ai"))
+                return path.Contains("/zen/go/") ? "opencode-go" : (path.Contains("/zen/") ? "opencode-zen" : id);
+            if(host=="gen.pollinations.ai") return "pollinations";
+            if(host=="integrate.api.nvidia.com") return "nvidia";
+            if(host=="api.kilo.ai") return "kilo";
+            if(host.EndsWith("openrouter.ai")) return "openrouter";
+        }
+        catch { }
+        return id;
+    }
+
+    static bool IsExplicitFreeId(string? family,string id)
     {
         var s=id.ToLowerInvariant();
         if(s.EndsWith(":free") || s.Contains("/free") || s.Contains("auto:free") || s.StartsWith("free/"))
             return true;
-        if(string.Equals(presetId,"openrouter",StringComparison.OrdinalIgnoreCase) && s=="openrouter/free")
+        if(s.EndsWith("-free")) return true;
+        if(string.Equals(family,"openrouter",StringComparison.OrdinalIgnoreCase) && s=="openrouter/free")
             return true;
-        if(string.Equals(presetId,"kilo",StringComparison.OrdinalIgnoreCase) && s=="kilo-auto/free")
+        if(string.Equals(family,"kilo",StringComparison.OrdinalIgnoreCase) && s=="kilo-auto/free")
             return true;
         return false;
+    }
+
+    static bool IsOpenCodeZenFreeId(string id)
+    {
+        var s=id.Trim().ToLowerInvariant();
+        // Zen's catalog is intentionally OpenAI-sparse and does not include
+        // pricing. Stable "-free" suffixes are safe to automate. Big Pickle is
+        // intentionally not hard-coded here because its free promotion can end
+        // without its model id changing.
+        return s.EndsWith("-free");
     }
 
     static bool IsWorkhorse(DiscoveredModel model)
@@ -371,14 +420,22 @@ public sealed class FreeCapacityManager
             var m=new DiscoveredModel
             {
                 Id=id,
-                DisplayName=Str(x,"display_name")??Str(x,"displayName")??Str(x,"name")??id,
+                DisplayName=Str(x,"display_name")??Str(x,"displayName")??Str(x,"title")??Str(x,"name")??id,
                 ContextLength=Long(x,"context_length")??Long(x,"max_context_length")??Long(x,"inputTokenLimit"),
-                SupportsTools=Bool(x,"supports_tools"),
-                ExplicitFree=Bool(x,"is_free")??Bool(x,"free")
+                SupportsTools=Bool(x,"supports_tools")??Bool(x,"tools"),
+                ExplicitFree=Bool(x,"is_free")??Bool(x,"isFree")??Bool(x,"free"),
+                ExplicitPaid=Bool(x,"paid_only")??Bool(x,"isPaid")
             };
 
-            if(m.SupportsTools is null && x.TryGetProperty("capabilities",out var caps)&&caps.ValueKind==JsonValueKind.Object)
-                m.SupportsTools=Bool(caps,"function_calling");
+            if(m.SupportsTools is null && x.TryGetProperty("capabilities",out var caps))
+            {
+                if(caps.ValueKind==JsonValueKind.Object)
+                    m.SupportsTools=Bool(caps,"function_calling");
+                else if(caps.ValueKind==JsonValueKind.Array)
+                    m.SupportsTools=caps.EnumerateArray().Any(v=>v.ValueKind==JsonValueKind.String &&
+                        (string.Equals(v.GetString(),"tool_calling",StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(v.GetString(),"function_calling",StringComparison.OrdinalIgnoreCase)));
+            }
             if(m.SupportsTools is null && x.TryGetProperty("supported_parameters",out var supported)&&supported.ValueKind==JsonValueKind.Array)
                 m.SupportsTools=supported.EnumerateArray().Any(v=>v.ValueKind==JsonValueKind.String&&(v.GetString()=="tools"||v.GetString()=="tool_choice"));
             if(string.Equals(profile.discoveryKind,"gemini",StringComparison.OrdinalIgnoreCase)) m.SupportsTools=true;
@@ -394,17 +451,30 @@ public sealed class FreeCapacityManager
         var values=new List<double>();
         if(x.TryGetProperty("pricing",out var pricing)&&pricing.ValueKind==JsonValueKind.Object)
         {
-            m.InputPrice=Number(pricing,"input")??Number(pricing,"prompt");
-            m.OutputPrice=Number(pricing,"output")??Number(pricing,"completion");
-            foreach(var name in new[]{"input","output","prompt","completion","request"})
-                if(Number(pricing,name) is double n) values.Add(n);
+            m.InputPrice=Number(pricing,"input")??Number(pricing,"prompt")??Number(pricing,"promptTextTokens");
+            m.OutputPrice=Number(pricing,"output")??Number(pricing,"completion")??Number(pricing,"completionTextTokens");
+            foreach(var p in pricing.EnumerateObject())
+            {
+                if(string.Equals(p.Name,"currency",StringComparison.OrdinalIgnoreCase)) continue;
+                if(TryNumber(p.Value,out var n)) values.Add(n);
+            }
         }
         m.InputPrice ??= Number(x,"input_price");
         m.OutputPrice ??= Number(x,"output_price");
-        if(m.InputPrice is double input) values.Add(input);
-        if(m.OutputPrice is double output) values.Add(output);
+        if(m.InputPrice is double input && !values.Contains(input)) values.Add(input);
+        if(m.OutputPrice is double output && !values.Contains(output)) values.Add(output);
         m.AnyPositivePrice=values.Any(v=>v>0);
         m.AllKnownPricesZero=values.Count>=2 && values.All(v=>Math.Abs(v)<1e-15);
+    }
+
+    static bool TryNumber(JsonElement v,out double value)
+    {
+        if(v.ValueKind==JsonValueKind.Number && v.TryGetDouble(out value)) return true;
+        if(v.ValueKind==JsonValueKind.String &&
+           double.TryParse(v.GetString(),System.Globalization.NumberStyles.Float,
+               System.Globalization.CultureInfo.InvariantCulture,out value)) return true;
+        value=0;
+        return false;
     }
 
     void RecordQuota(string connectionName,ConnectionProfile profile,QuotaObservation quota)
@@ -493,6 +563,7 @@ public sealed class FreeCapacityManager
         public long? ContextLength;
         public bool? SupportsTools;
         public bool? ExplicitFree;
+        public bool? ExplicitPaid;
         public double? InputPrice;
         public double? OutputPrice;
         public bool AnyPositivePrice;
