@@ -84,6 +84,350 @@ sealed class RecentActivityPanel : Panel
     }
 }
 
+
+sealed class QuotaRemainingPanel : Panel
+{
+    readonly TableLayoutPanel _rows = new()
+    {
+        Dock = DockStyle.Top,
+        ColumnCount = 1,
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        BackColor = Theme.Surface
+    };
+
+    readonly Label _empty = new()
+    {
+        Text = "No quota telemetry yet.",
+        Dock = DockStyle.Top,
+        Height = 30,
+        ForeColor = Theme.Muted,
+        Font = new Font("Cascadia Mono", 8.25f),
+        Padding = new Padding(8, 7, 4, 0)
+    };
+
+    public QuotaRemainingPanel()
+    {
+        Dock = DockStyle.Fill;
+        BackColor = Theme.Surface;
+        Padding = new Padding(1);
+        AutoScroll = true;
+        Controls.Add(_empty);
+        Controls.Add(_rows);
+    }
+
+    public void RefreshQuota()
+    {
+        var items = ReadQuotaRows();
+
+        _rows.SuspendLayout();
+        try
+        {
+            _rows.Controls.Clear();
+            _rows.RowStyles.Clear();
+            _rows.RowCount = 0;
+
+            foreach (var item in items)
+            {
+                var row = new QuotaBarRow(item)
+                {
+                    Dock = DockStyle.Top,
+                    Height = 48,
+                    Margin = new Padding(0, 0, 0, 1)
+                };
+                _rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 49));
+                _rows.Controls.Add(row, 0, _rows.RowCount++);
+            }
+
+            _empty.Visible = items.Count == 0;
+        }
+        finally { _rows.ResumeLayout(); }
+    }
+
+    static List<QuotaDisplayItem> ReadQuotaRows()
+    {
+        var root = AppStore.Root;
+        var connectionsPath = System.IO.Path.Combine(root, "connections.json");
+        var endpointsPath = System.IO.Path.Combine(root, "endpoints.json");
+        var healthPath = System.IO.Path.Combine(root, "routing", "health.json");
+        var output = new List<QuotaDisplayItem>();
+
+        try
+        {
+            var connectionNames = new List<string>();
+            if (File.Exists(connectionsPath))
+            {
+                using var connections = System.Text.Json.JsonDocument.Parse(File.ReadAllText(connectionsPath));
+                if (connections.RootElement.TryGetProperty("connections", out var c) &&
+                    c.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    connectionNames.AddRange(c.EnumerateObject().Select(x => x.Name));
+            }
+
+            var endpointConnections = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+            if (File.Exists(endpointsPath))
+            {
+                using var endpoints = System.Text.Json.JsonDocument.Parse(File.ReadAllText(endpointsPath));
+                if (endpoints.RootElement.TryGetProperty("entries", out var entries) &&
+                    entries.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    foreach (var entry in entries.EnumerateObject())
+                    {
+                        if (entry.Value.TryGetProperty("connection", out var conn) &&
+                            conn.ValueKind == System.Text.Json.JsonValueKind.String)
+                            endpointConnections["pool:" + entry.Name] = conn.GetString() ?? "";
+                    }
+                }
+            }
+
+            var healthByKey = new Dictionary<string,System.Text.Json.JsonElement>(StringComparer.OrdinalIgnoreCase);
+            if (File.Exists(healthPath))
+            {
+                using var health = System.Text.Json.JsonDocument.Parse(File.ReadAllText(healthPath));
+                if (health.RootElement.TryGetProperty("endpoints", out var entries) &&
+                    entries.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    foreach (var item in entries.EnumerateObject())
+                        healthByKey[item.Name] = item.Value.Clone();
+                }
+            }
+
+            foreach (var connection in connectionNames.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                var candidates = new List<QuotaCandidate>();
+                if (healthByKey.TryGetValue("connection:" + connection, out var connectionHealth))
+                    candidates.AddRange(ParseHealth(connectionHealth));
+
+                foreach (var route in endpointConnections.Where(x =>
+                    string.Equals(x.Value, connection, StringComparison.OrdinalIgnoreCase)))
+                    if (healthByKey.TryGetValue(route.Key, out var endpointHealth))
+                        candidates.AddRange(ParseHealth(endpointHealth));
+
+                output.Add(BuildItem(connection, candidates));
+            }
+        }
+        catch
+        {
+            // Overview telemetry must never destabilize the tray.
+        }
+
+        return output;
+    }
+
+    static IEnumerable<QuotaCandidate> ParseHealth(System.Text.Json.JsonElement health)
+    {
+        var state = health.TryGetProperty("state", out var st) ? st.GetString() ?? "" : "";
+        var reason = health.TryGetProperty("reason", out var rs) ? rs.GetString() ?? "" : "";
+        var retry = health.TryGetProperty("retryAfter", out var ra) ? ra.GetString() : null;
+
+        if (!health.TryGetProperty("quota", out var quota) ||
+            quota.ValueKind != System.Text.Json.JsonValueKind.Object)
+        {
+            if (!string.IsNullOrWhiteSpace(state) && !string.Equals(state, "healthy", StringComparison.OrdinalIgnoreCase))
+                yield return new QuotaCandidate(null, null, null, null, state, reason, retry, "health");
+            yield break;
+        }
+
+        if (quota.TryGetProperty("windows", out var windows) &&
+            windows.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var w in windows.EnumerateArray())
+            {
+                yield return new QuotaCandidate(
+                    Number(w, "remaining"),
+                    Number(w, "limit"),
+                    Text(w, "kind"),
+                    Text(w, "unit"),
+                    Text(quota, "status") ?? state,
+                    reason,
+                    Text(w, "resetAt") ?? Text(quota, "nextAvailableAt"),
+                    Text(w, "source") ?? Text(quota, "source") ?? "quota");
+            }
+        }
+
+        // Compatibility with older single-window observations.
+        if (!quota.TryGetProperty("windows", out var ws) ||
+            ws.ValueKind != System.Text.Json.JsonValueKind.Array ||
+            ws.GetArrayLength() == 0)
+        {
+            yield return new QuotaCandidate(
+                Number(quota, "remaining"),
+                Number(quota, "limit"),
+                Text(quota, "limiter"),
+                null,
+                Text(quota, "status") ?? state,
+                reason,
+                Text(quota, "nextAvailableAt") ?? Text(quota, "resetAt") ?? retry,
+                Text(quota, "source") ?? "quota");
+        }
+    }
+
+    static QuotaDisplayItem BuildItem(string connection, List<QuotaCandidate> candidates)
+    {
+        var measurable = candidates
+            .Where(x => x.Remaining is not null && x.Limit is > 0)
+            .Select(x => (candidate:x, fraction:Math.Clamp(x.Remaining!.Value / x.Limit!.Value, 0d, 1d)))
+            .OrderBy(x => x.fraction)
+            .FirstOrDefault();
+
+        if (measurable.candidate is not null)
+        {
+            var c = measurable.candidate;
+            var pct = measurable.fraction;
+            var kind = PrettyKind(c.Kind, c.Unit);
+            var detail = $"{Format(c.Remaining)} / {Format(c.Limit)}";
+            if (!string.IsNullOrWhiteSpace(kind)) detail += " " + kind;
+            detail += ResetSuffix(c.ResetAt);
+            return new QuotaDisplayItem(connection, pct, detail, StateText(c), c.Status, true);
+        }
+
+        var timed = candidates
+            .Where(x => DateTimeOffset.TryParse(x.ResetAt, out var t) && t > DateTimeOffset.UtcNow)
+            .OrderBy(x => DateTimeOffset.Parse(x.ResetAt!))
+            .FirstOrDefault();
+        if (timed is not null)
+        {
+            var detail = PrettyKind(timed.Kind, timed.Unit);
+            if (string.IsNullOrWhiteSpace(detail)) detail = StateText(timed);
+            detail += ResetSuffix(timed.ResetAt);
+            return new QuotaDisplayItem(connection, null, detail.Trim(), StateText(timed), timed.Status, false);
+        }
+
+        var informative = candidates.FirstOrDefault();
+        if (informative is not null)
+        {
+            var detail = PrettyKind(informative.Kind, informative.Unit);
+            if (informative.Limit is > 0)
+                detail = (string.IsNullOrWhiteSpace(detail) ? "" : detail + " · ") + $"limit {Format(informative.Limit)}";
+            if (string.IsNullOrWhiteSpace(detail)) detail = StateText(informative);
+            return new QuotaDisplayItem(connection, null, detail, StateText(informative), informative.Status, false);
+        }
+
+        return new QuotaDisplayItem(connection, null, "quota unknown", "UNKNOWN", "unknown", false);
+    }
+
+    static string StateText(QuotaCandidate c)
+    {
+        if (string.Equals(c.Status, "exhausted", StringComparison.OrdinalIgnoreCase)) return "EXHAUSTED";
+        if (string.Equals(c.Status, "cooldown", StringComparison.OrdinalIgnoreCase)) return "COOLING";
+        if (string.Equals(c.Status, "quarantined", StringComparison.OrdinalIgnoreCase)) return "QUARANTINED";
+        if (!string.IsNullOrWhiteSpace(c.Reason)) return c.Reason!.ToUpperInvariant();
+        return "READY";
+    }
+
+    static string PrettyKind(string? kind, string? unit)
+    {
+        if (!string.IsNullOrWhiteSpace(unit)) return unit!;
+        return (kind ?? "").Replace('_', ' ').Replace("per ", "/").Trim();
+    }
+
+    static string ResetSuffix(string? raw)
+    {
+        if (!DateTimeOffset.TryParse(raw, out var at) || at <= DateTimeOffset.UtcNow) return "";
+        var local = at.ToLocalTime();
+        var sameDay = local.Date == DateTimeOffset.Now.Date;
+        return sameDay ? $" · reset {local:HH:mm:ss}" : $" · reset {local:ddd HH:mm}";
+    }
+
+    static string Format(double? value)
+    {
+        if (value is null) return "?";
+        var v = value.Value;
+        if (Math.Abs(v) >= 1_000_000) return (v / 1_000_000d).ToString("0.##") + "M";
+        if (Math.Abs(v) >= 1_000) return (v / 1_000d).ToString("0.##") + "K";
+        return v.ToString("0.##");
+    }
+
+    static string? Text(System.Text.Json.JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+
+    static double? Number(System.Text.Json.JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name, out var v)) return null;
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetDouble(out var n)) return n;
+        if (v.ValueKind == System.Text.Json.JsonValueKind.String &&
+            double.TryParse(v.GetString(), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out n)) return n;
+        return null;
+    }
+
+    sealed record QuotaCandidate(
+        double? Remaining, double? Limit, string? Kind, string? Unit,
+        string? Status, string? Reason, string? ResetAt, string Source);
+
+    sealed record QuotaDisplayItem(
+        string Connection, double? Fraction, string Detail, string State, string? RawState, bool Measured);
+
+    sealed class QuotaBarRow : Control
+    {
+        readonly QuotaDisplayItem _item;
+
+        public QuotaBarRow(QuotaDisplayItem item)
+        {
+            _item = item;
+            DoubleBuffered = true;
+            BackColor = Theme.Surface;
+            Cursor = Cursors.Default;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            var g = e.Graphics;
+            g.Clear(Theme.Surface);
+
+            using var nameFont = new Font("Cascadia Mono", 8f, FontStyle.Bold);
+            using var detailFont = new Font("Cascadia Mono", 7.25f);
+            using var nameBrush = new SolidBrush(Theme.Text);
+            using var mutedBrush = new SolidBrush(Theme.Muted);
+
+            var stateColor = StateColor(_item.RawState, _item.Fraction);
+            using var stateBrush = new SolidBrush(stateColor);
+
+            g.DrawString(_item.Connection, nameFont, nameBrush, 7, 4);
+            var stateSize = g.MeasureString(_item.State, detailFont);
+            g.DrawString(_item.State, detailFont, stateBrush, Math.Max(7, Width - stateSize.Width - 7), 5);
+
+            var bar = new Rectangle(7, 21, Math.Max(20, Width - 14), 9);
+            using (var track = new SolidBrush(Color.FromArgb(32, 42, 50)))
+                g.FillRectangle(track, bar);
+
+            if (_item.Fraction is double fraction)
+            {
+                var fill = new Rectangle(bar.X, bar.Y,
+                    (int)Math.Round(bar.Width * Math.Clamp(fraction, 0d, 1d)), bar.Height);
+                using var fillBrush = new SolidBrush(stateColor);
+                if (fill.Width > 0) g.FillRectangle(fillBrush, fill);
+            }
+            else
+            {
+                using var pen = new Pen(Color.FromArgb(75, Theme.Muted), 1);
+                for (var x = bar.X - bar.Height; x < bar.Right; x += 8)
+                    g.DrawLine(pen, x, bar.Bottom, x + bar.Height, bar.Top);
+            }
+
+            using (var edge = new Pen(Color.FromArgb(70, Theme.Muted), 1))
+                g.DrawRectangle(edge, bar);
+
+            g.DrawString(_item.Detail, detailFont, mutedBrush, 7, 32);
+        }
+
+        static Color StateColor(string? state, double? fraction)
+        {
+            var s = (state ?? "").ToLowerInvariant();
+            if (s.Contains("quarant") || s.Contains("auth") || s.Contains("retired")) return Theme.Error;
+            if (s.Contains("cool") || s.Contains("exhaust") || s.Contains("rate")) return Theme.Warn;
+            if (fraction is double f)
+            {
+                if (f <= 0.1) return Theme.Error;
+                if (f <= 0.3) return Theme.Warn;
+                return Theme.Good;
+            }
+            return Theme.Accent;
+        }
+    }
+}
+
+
 sealed class OrchestratorStatusPanel : Control
 {
     ProjectMetrics _project = new();
