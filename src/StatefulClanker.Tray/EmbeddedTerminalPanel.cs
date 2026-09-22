@@ -501,16 +501,25 @@ sealed class EmbeddedTerminalPanel : UserControl
             _oldestPendingUtc = null;
             return;
         }
+
+        // EasyTerminalControl creates the ConPTY asynchronously. A notice can arrive
+        // after _terminal exists but before ConPTYTerm is ready (especially while
+        // launching bundled Pi). Keep it queued so the 400ms retry timer can deliver it
+        // instead of silently clearing the notice during that startup window.
+        var conpty = _terminal?.ConPTYTerm;
+        if (conpty is null) return;
+
         try
         {
             var joined = string.Join("\r\n", _pendingNotices);
-            _terminal!.ConPTYTerm?.WriteToTerm(("\r\n" + joined + "\r\n").AsSpan());
-        }
-        catch { }
-        finally
-        {
+            conpty.WriteToTerm(("\r\n" + joined + "\r\n").AsSpan());
             _pendingNotices.Clear();
             _oldestPendingUtc = null;
+        }
+        catch
+        {
+            // Preserve the queue on a transient PTY write failure. The idle timer will
+            // retry; losing a control-plane escalation is worse than delivering it late.
         }
     }
 
