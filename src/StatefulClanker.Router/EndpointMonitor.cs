@@ -11,18 +11,21 @@ public sealed class EndpointMonitor
         int StatusCode,
         string FailureClass,
         string Message,
-        QuotaObservation Quota);
+        QuotaObservation Quota,
+        ProviderProbePlan Plan);
 
     readonly RouterEngine _engine;
     readonly RouterStore _store;
     readonly HttpClient _http=new(){Timeout=TimeSpan.FromSeconds(15)};
     readonly Dictionary<string,DateTimeOffset> _nextQuotaProbe=new(StringComparer.OrdinalIgnoreCase);
+    DateTimeOffset _nextPolicyRefreshAt=DateTimeOffset.MinValue;
     static readonly TimeSpan HealthyProbeInterval=TimeSpan.FromMinutes(5);
+    static readonly TimeSpan PolicyRefreshInterval=TimeSpan.FromMinutes(1);
 
     public EndpointMonitor(RouterEngine engine)
     {
         _engine=engine;_store=engine.Store;
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("StatefulClanker-Router/0.2");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("StatefulClanker-Router/0.3");
     }
 
     public async Task RunAsync(CancellationToken token)
@@ -49,7 +52,13 @@ public sealed class EndpointMonitor
             try
             {
                 var connections=_store.LoadConnections().connections;
-                await ObserveOneConnectionAsync(connections,DateTimeOffset.UtcNow,token);
+                var now=DateTimeOffset.UtcNow;
+                if(now>=_nextPolicyRefreshAt)
+                {
+                    ApplyProgrammaticWindows(connections,now);
+                    _nextPolicyRefreshAt=now.Add(PolicyRefreshInterval);
+                }
+                await ObserveOneConnectionAsync(connections,now,token);
             }
             catch { }
             try { await Task.Delay(TimeSpan.FromSeconds(2),token); }
@@ -83,19 +92,11 @@ public sealed class EndpointMonitor
             var raw=entry.nextProbeAt ?? entry.retryAfter;
             if(DateTimeOffset.TryParse(raw,out var due) && due>now) continue;
 
-            // Endpoint cooldowns are restored by one real request after the exact
-            // provider window (when known) or fallback backoff expires. A synthetic
-            // metadata request may have an entirely separate quota and must not burn
-            // free inference just to test the bucket.
-            if(string.Equals(entry.scope,"endpoint",StringComparison.OrdinalIgnoreCase))
-            {
-                _engine.MarkHealthy(key);
-                continue;
-            }
-
-            // Billing windows likewise become eligible at the observed reset time.
-            // The next real inference is authoritative.
-            if(entry.reason=="billing_exhausted")
+            // Endpoint/billing cooldowns are clocks, not invitations to send a
+            // sacrificial model request. Once the known/inferred window expires,
+            // the route simply becomes eligible for actual work again.
+            if(string.Equals(entry.scope,"endpoint",StringComparison.OrdinalIgnoreCase) ||
+               entry.reason=="billing_exhausted")
             {
                 _engine.MarkHealthy(key);
                 continue;
@@ -116,8 +117,10 @@ public sealed class EndpointMonitor
                     string.Equals(RouterEngine.ServiceName(x.Value),service,StringComparison.OrdinalIgnoreCase));
                 if(!string.IsNullOrWhiteSpace(candidate.Key))
                 {
-                    var result=await ProbeAsync(candidate.Value,token);
-                    RecordQuota(candidate.Key,candidate.Value,result.Quota);
+                    var plan=ProviderProbePolicy.For(candidate.Value);
+                    var result=await ProbeAsync(candidate.Value,plan,token);
+                    RecordQuota(candidate.Key,candidate.Value,result);
+
                     if(result.Success)
                     {
                         _engine.MarkHealthy(key);
@@ -128,22 +131,38 @@ public sealed class EndpointMonitor
                     }
                     else
                     {
-                        // A service probe made through one credential can reveal that
-                        // credential/model is bad without proving the provider host is
-                        // down.
+                        // A non-inference metadata response proves the service is
+                        // reachable. Credential failures apply to the credential;
+                        // quota/model/read-bucket failures do not poison inference.
                         _engine.MarkHealthy(key);
-                        _engine.RegisterFailureKey(
-                            "connection:"+candidate.Key,
-                            "connection",
-                            result.FailureClass,
-                            result.Message,
-                            candidate.Value);
+                        if(result.FailureClass is "auth" or "permission" or "configuration")
+                            _engine.RegisterFailureKey(
+                                "connection:"+candidate.Key,
+                                "connection",
+                                result.FailureClass,
+                                result.Message,
+                                candidate.Value);
                     }
                 }
                 else _engine.MarkHealthy(key);
             }
         }
+    }
 
+    void ApplyProgrammaticWindows(
+        Dictionary<string,ConnectionProfile> connections,
+        DateTimeOffset now)
+    {
+        foreach(var kv in connections)
+        {
+            var observation=ProviderProbePolicy.ProgrammaticWindow(kv.Value,now);
+            if(observation is null) continue;
+            _engine.RecordQuotaObservation(
+                "connection:"+kv.Key,
+                "connection",
+                observation,
+                kv.Value);
+        }
     }
 
     async Task ObserveOneConnectionAsync(
@@ -153,16 +172,16 @@ public sealed class EndpointMonitor
     {
         foreach(var kv in connections.OrderBy(x=>x.Key,StringComparer.OrdinalIgnoreCase))
         {
-            if(SkipPeriodicProbe(kv.Value)) continue;
+            if(ProviderProbePolicy.SkipNetworkProbe(kv.Value)) continue;
             if(_nextQuotaProbe.TryGetValue(kv.Key,out var due) && due>now) continue;
 
             _nextQuotaProbe[kv.Key]=now.Add(HealthyProbeInterval);
-            var result=await ProbeAsync(kv.Value,token);
-            RecordQuota(kv.Key,kv.Value,result.Quota);
+            var plan=ProviderProbePolicy.For(kv.Value);
+            var result=await ProbeAsync(kv.Value,plan,token);
+            RecordQuota(kv.Key,kv.Value,result);
 
-            // A metadata probe is evidence of a broken credential, but its own
-            // 429/5xx window is not necessarily the inference window. Record those
-            // quota signals without poisoning healthy inference routes.
+            // A read/account probe may prove credentials are invalid. Its own
+            // quota/capacity bucket never disables healthy inference.
             if(!result.Success && result.FailureClass is "auth" or "permission" or "configuration")
                 _engine.RegisterFailureKey(
                     "connection:"+kv.Key,
@@ -180,30 +199,75 @@ public sealed class EndpointMonitor
         }
     }
 
-    async Task ProbeConnectionHealthAsync(string name,ConnectionProfile profile,CancellationToken token)
+    async Task ProbeConnectionHealthAsync(
+        string name,
+        ConnectionProfile profile,
+        CancellationToken token)
     {
-        var result=await ProbeAsync(profile,token);
-        RecordQuota(name,profile,result.Quota);
+        var plan=ProviderProbePolicy.For(profile);
+        var result=await ProbeAsync(profile,plan,token);
+        RecordQuota(name,profile,result);
         var key="connection:"+name;
-        if(result.Success) _engine.MarkHealthy(key);
-        else _engine.RegisterFailureKey(key,"connection",result.FailureClass,result.Message,profile);
+
+        if(result.Success)
+        {
+            _engine.MarkHealthy(key);
+            return;
+        }
+
+        if(result.FailureClass is "auth" or "permission" or "configuration")
+        {
+            _engine.RegisterFailureKey(key,"connection",result.FailureClass,result.Message,profile);
+            return;
+        }
+
+        if(result.FailureClass is "timeout" or "server_error")
+        {
+            _engine.RegisterFailureKey(key,"connection",result.FailureClass,result.Message,profile);
+            return;
+        }
+
+        // The metadata/account surface answered. Its own 429, model-list error,
+        // or budget response does not prove inference is unavailable.
+        _engine.MarkHealthy(key);
     }
 
-    void RecordQuota(string connectionName,ConnectionProfile profile,QuotaObservation quota)
+    void RecordQuota(
+        string connectionName,
+        ConnectionProfile profile,
+        ProbeResult result)
     {
-        if(quota.source!="none"&&!quota.source.StartsWith("probe:",StringComparison.OrdinalIgnoreCase))
-            quota.source="probe:"+quota.source;
-        if(!string.IsNullOrWhiteSpace(quota.evidence)&&!quota.evidence.StartsWith("metadata probe:",StringComparison.OrdinalIgnoreCase))
-            quota.evidence="metadata probe: "+quota.evidence;
-        _engine.RecordQuotaObservation("connection:"+connectionName,"connection",quota,profile);
+        var quota=result.Quota;
+        quota.appliesTo=result.Plan.AppliesTo;
+
+        if(quota.source!="none")
+        {
+            var prefix=result.Plan.AppliesTo=="metadata"
+                ? "probe:metadata:"
+                : "probe:"+result.Plan.Kind+":";
+            if(!quota.source.StartsWith("probe:",StringComparison.OrdinalIgnoreCase))
+                quota.source=prefix+quota.source;
+        }
+
+        if(!string.IsNullOrWhiteSpace(quota.evidence) &&
+           !quota.evidence.StartsWith("non-inference probe:",StringComparison.OrdinalIgnoreCase))
+            quota.evidence="non-inference probe: "+quota.evidence;
+
+        _engine.RecordQuotaObservation(
+            "connection:"+connectionName,
+            "connection",
+            quota,
+            profile);
     }
 
-    async Task<ProbeResult> ProbeAsync(ConnectionProfile p,CancellationToken token)
+    async Task<ProbeResult> ProbeAsync(
+        ConnectionProfile p,
+        ProviderProbePlan plan,
+        CancellationToken token)
     {
         try
         {
-            var uri=ProbeUri(p);
-            using var request=new HttpRequestMessage(HttpMethod.Get,uri);
+            using var request=new HttpRequestMessage(HttpMethod.Get,plan.Uri);
             foreach(var h in p.headers) request.Headers.TryAddWithoutValidation(h.Key,h.Value);
             var key=ResolveKey(p);
             if(!string.IsNullOrWhiteSpace(key))
@@ -219,18 +283,20 @@ public sealed class EndpointMonitor
 
             using var response=await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,token);
             var headers=Headers(response);
-            var readBody=!response.IsSuccessStatusCode ||
-                         string.Equals(p.presetId,"openrouter",StringComparison.OrdinalIgnoreCase);
-            var body=readBody ? await ReadBodyBounded(response,token) : "";
+            var body=(!response.IsSuccessStatusCode || plan.ReadBody)
+                ? await ReadBodyBounded(response,token)
+                : "";
             var quota=QuotaIntelligence.Observe(
                 p.presetId,
                 (int)response.StatusCode,
                 headers,
                 body,
                 response.IsSuccessStatusCode);
+            quota.appliesTo=plan.AppliesTo;
 
             if(response.IsSuccessStatusCode)
-                return new ProbeResult(true,(int)response.StatusCode,"","",quota);
+                return new ProbeResult(
+                    true,(int)response.StatusCode,"","",quota,plan);
 
             var metadata=string.Join(" ",headers.Select(h=>$"{h.Key}: {h.Value}"));
             var text=$"HTTP {(int)response.StatusCode} {response.ReasonPhrase} {metadata} {body}".Trim();
@@ -239,19 +305,21 @@ public sealed class EndpointMonitor
                 (int)response.StatusCode,
                 FailurePolicy.Classify(text,(int)response.StatusCode),
                 text,
-                quota);
+                quota,
+                plan);
         }
         catch(TaskCanceledException ex) when(!token.IsCancellationRequested)
         {
-            return new ProbeResult(
-                false,0,"timeout",ex.Message,
-                QuotaIntelligence.Observe(p.presetId,null,null,ex.Message,false));
+            var quota=QuotaIntelligence.Observe(p.presetId,null,null,ex.Message,false);
+            quota.appliesTo=plan.AppliesTo;
+            return new ProbeResult(false,0,"timeout",ex.Message,quota,plan);
         }
         catch(Exception ex)
         {
+            var quota=QuotaIntelligence.Observe(p.presetId,null,null,ex.Message,false);
+            quota.appliesTo=plan.AppliesTo;
             return new ProbeResult(
-                false,0,FailurePolicy.Classify(ex.Message),ex.Message,
-                QuotaIntelligence.Observe(p.presetId,null,null,ex.Message,false));
+                false,0,FailurePolicy.Classify(ex.Message),ex.Message,quota,plan);
         }
     }
 
@@ -263,36 +331,12 @@ public sealed class EndpointMonitor
         return result;
     }
 
-    static async Task<string> ReadBodyBounded(HttpResponseMessage response,CancellationToken token)
+    static async Task<string> ReadBodyBounded(
+        HttpResponseMessage response,
+        CancellationToken token)
     {
         var body=await response.Content.ReadAsStringAsync(token);
         return body.Length<=16384 ? body : body[..16384];
-    }
-
-    static Uri ProbeUri(ConnectionProfile p)
-    {
-        // OpenRouter exposes authenticated key budget/reset metadata without
-        // consuming inference. Other providers are sampled through their existing
-        // model-list endpoint, harvesting whatever quota headers they return.
-        if(string.Equals(p.presetId,"openrouter",StringComparison.OrdinalIgnoreCase))
-            return new Uri("https://openrouter.ai/api/v1/key");
-        return ModelsUri(p);
-    }
-
-    static Uri ModelsUri(ConnectionProfile p)
-    {
-        var baseUri=p.baseUrl.TrimEnd('/');
-        var path=string.IsNullOrWhiteSpace(p.modelsPath)?"/models":p.modelsPath;
-        if(Uri.TryCreate(path,UriKind.Absolute,out var absolute)) return absolute;
-        return new Uri(baseUri+"/"+path.TrimStart('/'));
-    }
-
-    static bool SkipPeriodicProbe(ConnectionProfile p)
-    {
-        var id=(p.presetId??"").Trim().ToLowerInvariant();
-        if(id is "ollama" or "lmstudio" or "vllm") return true;
-        if(string.IsNullOrWhiteSpace(p.baseUrl)) return true;
-        return false;
     }
 
     static string? ResolveKey(ConnectionProfile p)
