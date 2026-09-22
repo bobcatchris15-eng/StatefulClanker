@@ -47,8 +47,10 @@ public static class ProviderProbePolicy
                     windowCadence="daily",
                     limiter="free-allocation",
                     appliesTo="inference-policy",
-                    source="policy:cloudflare-free-allocation",
-                    confidence="documented",
+                    source="none",
+                    confidence="unknown",
+                    windowSource="policy:cloudflare-free-allocation",
+                    windowConfidence="documented",
                     evidence="Workers AI free allocation resets daily at 00:00 UTC."
                 };
 
@@ -61,8 +63,10 @@ public static class ProviderProbePolicy
                     windowCadence="daily",
                     limiter="RPD",
                     appliesTo="inference-policy",
-                    source="policy:gemini-rpd",
-                    confidence="documented",
+                    source="none",
+                    confidence="unknown",
+                    windowSource="policy:gemini-rpd",
+                    windowConfidence="documented",
                     evidence="Gemini requests-per-day quota resets at midnight Pacific."
                 };
 
