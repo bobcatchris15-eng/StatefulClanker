@@ -76,27 +76,15 @@ static class TargetPoolStore
 {
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
 
-    public static string? ActiveProject()
-    {
-        try
-        {
-            if (!File.Exists(AppStore.ActiveProjectPointer)) return null;
-            var p = File.ReadAllText(AppStore.ActiveProjectPointer).Trim();
-            return Directory.Exists(p) ? p : null;
-        }
-        catch { return null; }
-    }
-
-    public static string? ActivePoolPath()
-    {
-        var project = ActiveProject();
-        return project is null ? null : System.IO.Path.Combine(project,".statefulclanker","routing","target-pool.json");
-    }
+    // Endpoint selection is machine-operational state, not project truth. StatefulClanker
+    // has one active project at a time; the same connection/model catalog simply services
+    // whichever project is active now.
+    public static string ActivePoolPath() => System.IO.Path.Combine(AppStore.Root,"endpoints.json");
 
     public static TargetPoolDocument LoadActive()
     {
         var path = ActivePoolPath();
-        if (path is null || !File.Exists(path)) return new();
+        if (!File.Exists(path)) return new();
         try
         {
             var doc = JsonSerializer.Deserialize<TargetPoolDocument>(File.ReadAllText(path),Json) ?? new();
@@ -108,9 +96,9 @@ static class TargetPoolStore
 
     public static void SaveActive(TargetPoolDocument doc)
     {
-        var path = ActivePoolPath() ?? throw new InvalidOperationException("Select an active project first.");
+        var path = ActivePoolPath();
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
-        doc.schemaVersion = 1;
+        doc.schemaVersion = 2;
         doc.updatedAt = DateTimeOffset.UtcNow.ToString("O");
         var tmp = path + ".tmp";
         File.WriteAllText(tmp,JsonSerializer.Serialize(doc,Json),new UTF8Encoding(false));
@@ -340,7 +328,7 @@ sealed class ApiConnectionsPage : TabPage
         var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
         bottom.Controls.Add(Make("Save target selection",SaveTargetSelection,170));
         bottom.Controls.Add(Make("Auto-target free workhorses",AutoTargetFreeWorkhorses,205));
-        var note=new Label{Text="Connections are machine-local. The target pool is project-local and is the scheduler's pseudo-round-robin workhorse set.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
+        var note=new Label{Text="Connections are machine-local. The endpoint catalog is project-local and is the scheduler's pseudo-round-robin workhorse set.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
         bottom.Controls.Add(note);rows.Controls.Add(bottom,0,4);
 
         Controls.Add(rows); Theme.Apply(this); Reload();
@@ -378,7 +366,7 @@ sealed class ApiConnectionsPage : TabPage
             else if(string.Equals(p.health,"failed",StringComparison.OrdinalIgnoreCase))_connections.Rows[i].Cells["health"].Style.ForeColor=Theme.Error;
         }
         var pool=TargetPoolStore.LoadActive();
-        _summary.Text=$"{_profiles.Count} connection(s) • {pool.entries.Count} targeted model(s)";
+        _summary.Text=$"{_profiles.Count} connection(s) • {pool.entries.Count} enabled endpoint(s)";
         if(_connections.Rows.Count>0)
         {
             var row=_connections.Rows.Cast<DataGridViewRow>().FirstOrDefault(x=>string.Equals(x.Cells["id"].Value?.ToString(),select,StringComparison.OrdinalIgnoreCase))??_connections.Rows[0];
@@ -435,7 +423,7 @@ sealed class ApiConnectionsPage : TabPage
     void Remove(object? s,EventArgs e)
     {
         var id=SelectedId;if(id is null)return;
-        if(MessageBox.Show(FindForm(),$"Remove machine connection '{id}'? Target-pool rows that reference it will remain visible to Clanker but cannot route until the connection is restored or those rows are removed.","Remove connection",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
+        if(MessageBox.Show(FindForm(),$"Remove machine connection '{id}'? Endpoint catalog rows that reference it will remain visible to Clanker but cannot route until the connection is restored or those rows are removed.","Remove connection",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
         _profiles.Remove(id);ApiConnectionStore.Save(_profiles);Reload();
     }
 
@@ -449,7 +437,7 @@ sealed class ApiConnectionsPage : TabPage
     void SaveTargetSelection(object? s,EventArgs e)
     {
         var connection=SelectedId;if(connection is null)return;
-        if(TargetPoolStore.ActiveProject() is null){MessageBox.Show(FindForm(),"Select an active project first.");return;}
+        if(false){}
         try
         {
             var pool=TargetPoolStore.LoadActive();
@@ -470,12 +458,12 @@ sealed class ApiConnectionsPage : TabPage
             }
             TargetPoolStore.SaveActive(pool);Reload(connection);
         }
-        catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not save target pool",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+        catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not save endpoint catalog",MessageBoxButtons.OK,MessageBoxIcon.Error);}
     }
 
     void AutoTargetFreeWorkhorses(object? s,EventArgs e)
     {
-        if(TargetPoolStore.ActiveProject() is null){MessageBox.Show(FindForm(),"Select an active project first.");return;}
+        if(false){}
         try
         {
             var pool=TargetPoolStore.LoadActive();var added=0;
@@ -505,7 +493,7 @@ sealed class ApiConnectionsPage : TabPage
                 }
             }
             TargetPoolStore.SaveActive(pool);Reload(SelectedId);
-            MessageBox.Show(FindForm(),$"Seeded {added} new target-pool row(s). Existing user/Clanker choices were preserved.");
+            MessageBox.Show(FindForm(),$"Seeded {added} new endpoint(s). Existing user/Clanker choices were preserved.");
         }
         catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not auto-target models",MessageBoxButtons.OK,MessageBoxIcon.Error);}
     }
