@@ -1968,13 +1968,7 @@ sealed class MainForm : Form
     bool _updatingAutofillUi;
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
     readonly System.Windows.Forms.Timer _layoutSaveTimer = new() { Interval = 450 };
-    string? _eventCursorTs = DateTimeOffset.UtcNow.ToString("o");
-    static readonly HashSet<string> EscalatedEventTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "run.failed", "critic.error", "validator.error", "project.hold.set", "project.review.failed",
-        "state.proposal_rejected", "task.plan_repair_required", "autofill.stalled",
-        "worker.session_abandoned", "routing.failover_stopped", "merge.conflict"
-    };
+    long _controlEventCursor;
     int _refreshing;
     int _mcpDiscoveryRunning;
     readonly McpHost _mcp;
@@ -1994,26 +1988,27 @@ sealed class MainForm : Form
         _timer.Tick += async (_, _) => { await RefreshAllAsync(); EscalateNewEvents(); }; _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
     }
 
-    // Surface failures and holds in the active terminal. QueueNotice displays a
-    // toast and flushes the notice into the PTY at the next input boundary.
+    // Surface classified control-plane events in generic terminal sessions.
+    // Bundled Pi consumes the same durable inbox through its native extension,
+    // so PTY text injection is deliberately disabled for that session.
     void EscalateNewEvents()
     {
-        if (!_terminal.HasActiveSession) return;
+        if (!_terminal.HasActiveSession || _terminal.HandlesControlPlaneNatively) return;
         var project = _settings.ActiveProjectPath;
         if (string.IsNullOrWhiteSpace(project) || !Directory.Exists(project)) return;
-        var eventsPath = System.IO.Path.Combine(project, ".statefulclanker", "events.jsonl");
-        foreach (var (ts, type, message) in ReadNewEvents(eventsPath, ref _eventCursorTs))
+        var eventsPath = System.IO.Path.Combine(project, ".statefulclanker", "control", "events.jsonl");
+        foreach (var (sequence, level, type, message) in ReadNewControlEvents(eventsPath, ref _controlEventCursor))
         {
             var text = string.IsNullOrWhiteSpace(message) ? type : $"{type}: {message}";
-            _terminal.QueueNotice($"# [StatefulClanker] {text}");
+            _terminal.QueueNotice($"# [StatefulClanker/{level}] {text}");
         }
     }
 
-    static List<(string ts, string type, string message)> ReadNewEvents(string path, ref string? cursorTs)
+    static List<(long sequence, string level, string type, string message)> ReadNewControlEvents(string path, ref long cursor)
     {
-        var results = new List<(string ts, string type, string message)>();
+        var results = new List<(long sequence, string level, string type, string message)>();
         if (!File.Exists(path)) return results;
-        string? newCursor = cursorTs;
+        var newCursor = cursor;
         foreach (var line in File.ReadLines(path))
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
@@ -2021,19 +2016,33 @@ sealed class MainForm : Form
             {
                 using var d = JsonDocument.Parse(line);
                 var r = d.RootElement;
-                var ts = r.TryGetProperty("ts", out var t) ? t.GetString() : null;
-                var type = r.TryGetProperty("type", out var ty) ? ty.GetString() : null;
-                if (string.IsNullOrEmpty(ts) || string.IsNullOrEmpty(type)) continue;
-                if (cursorTs is not null && string.CompareOrdinal(ts, cursorTs) <= 0) continue;
-                if (!EscalatedEventTypes.Contains(type)) { if (newCursor is null || string.CompareOrdinal(ts, newCursor) > 0) newCursor = ts; continue; }
+                var sequence = r.TryGetProperty("sequence", out var sq) && sq.TryGetInt64(out var n) ? n : 0;
+                if (sequence <= cursor) continue;
+                if (sequence > newCursor) newCursor = sequence;
+                var level = r.TryGetProperty("level", out var lv) ? lv.GetString() ?? "fyi" : "fyi";
+                if (!string.Equals(level, "attention", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(level, "human_required", StringComparison.OrdinalIgnoreCase)) continue;
+                var type = r.TryGetProperty("type", out var ty) ? ty.GetString() ?? "event" : "event";
                 var message = r.TryGetProperty("message", out var mm) ? mm.GetString() ?? "" : "";
-                results.Add((ts, type, message));
-                if (newCursor is null || string.CompareOrdinal(ts, newCursor) > 0) newCursor = ts;
+                results.Add((sequence, level, type, message));
             }
             catch { }
         }
-        cursorTs = newCursor;
+        cursor = newCursor;
         return results;
+    }
+
+    static long ReadControlCursor(string? project)
+    {
+        if (string.IsNullOrWhiteSpace(project) || !Directory.Exists(project)) return 0;
+        var statePath = System.IO.Path.Combine(project, ".statefulclanker", "control", "state.json");
+        if (!File.Exists(statePath)) return 0;
+        try
+        {
+            using var d = JsonDocument.Parse(File.ReadAllText(statePath));
+            return d.RootElement.TryGetProperty("lastSequence", out var seq) && seq.TryGetInt64(out var n) ? n : 0;
+        }
+        catch { return 0; }
     }
 
     static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 30, Margin = new Padding(0, 2, 5, 0) };
@@ -2600,6 +2609,7 @@ sealed class MainForm : Form
         AppStore.SetActiveProject(path);
         _header.Text = path is null ? "No active project" : (SelectedProject?.Name ?? new DirectoryInfo(path).Name);
         Text = path is null ? "StatefulClanker" : $"StatefulClanker — {_header.Text}";
+        _controlEventCursor = ReadControlCursor(path);
         _terminal.SetProject(path);
         _ = RefreshAllAsync();
     }
