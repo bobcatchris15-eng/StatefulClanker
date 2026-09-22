@@ -180,7 +180,41 @@ public static partial class QuotaIntelligence
     public static QuotaObservation ObserveFailure(string? providerId,string failureClass,string? text)
     {
         var status=failureClass=="rate_limited" ? 429 : (int?)null;
-        return Observe(providerId,status,ParseHeaderText(text),text,false);
+        var q=Observe(providerId,status,ParseHeaderText(text),text,false);
+
+        // If the provider exposes a documented deterministic quota boundary,
+        // keep that clock alongside the observed failure. Use it as the actual
+        // next-available time only when the failure clearly refers to that
+        // window and the provider did not return a more precise Retry-After.
+        var policy=ProviderProbePolicy.ProgrammaticWindow(providerId,DateTimeOffset.UtcNow);
+        if(policy is not null)
+        {
+            q.windowResetAt=policy.windowResetAt;
+            q.windowCadence=policy.windowCadence;
+            q.windowSource=policy.windowSource;
+            q.windowConfidence=policy.windowConfidence;
+            q.windowEvidence=policy.windowEvidence;
+
+            var t=text ?? "";
+            var dailyWindow=
+                string.Equals(providerId,"gemini",StringComparison.OrdinalIgnoreCase)
+                    ? Regex.IsMatch(t,@"(?i)requests?\s+per\s+day|\bRPD\b|perday|per_day")
+                    : string.Equals(providerId,"cloudflare",StringComparison.OrdinalIgnoreCase) &&
+                      Regex.IsMatch(t,@"(?i)neurons?|free\s+allocation|daily\s+(?:quota|limit)|quota\s+exceeded");
+
+            if(q.nextAvailableAt is null && dailyWindow &&
+               DateTimeOffset.TryParse(policy.windowResetAt,out var resetAt) &&
+               resetAt>DateTimeOffset.UtcNow)
+            {
+                q.nextAvailableAt=resetAt.ToUniversalTime().ToString("O");
+                q.resetAt=q.nextAvailableAt;
+                q.source=policy.windowSource ?? "policy";
+                q.confidence=policy.windowConfidence ?? "documented";
+                q.evidence=policy.windowEvidence;
+                q.appliesTo="inference";
+            }
+        }
+        return q;
     }
 
     public static Dictionary<string,string> ParseHeaderText(string? text)
