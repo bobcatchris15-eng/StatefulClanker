@@ -29,6 +29,7 @@ sealed class ApiConnectionProfile
     public string baseUrl { get; set; } = "";
     public string modelsPath { get; set; } = "/models";
     public string discoveryKind { get; set; } = "openai";
+    public string authKind { get; set; } = "bearer";
     public string? accountId { get; set; }
     public string toolModeDefault { get; set; } = "native";
     public string? apiKeyProtected { get; set; }
@@ -127,6 +128,9 @@ static class ApiConnectionStore
                 profile.name = string.IsNullOrWhiteSpace(profile.name) ? p.Name : profile.name;
                 profile.models ??= new();
                 profile.headers ??= new(StringComparer.OrdinalIgnoreCase);
+                if (string.Equals(profile.protocol,"anthropic-messages",StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(profile.authKind,"bearer",StringComparison.OrdinalIgnoreCase))
+                    profile.authKind="x-api-key";
                 if (profile.models.Count == 0 && !string.IsNullOrWhiteSpace(profile.model))
                 {
                     profile.models.Add(new ApiDiscoveredModel {
@@ -178,14 +182,26 @@ static class ApiConnectionTester
             var key = !string.IsNullOrWhiteSpace(rawKey) ? rawKey : ApiConnectionStore.ResolveKey(p);
             if (!string.IsNullOrWhiteSpace(key))
             {
-                // Anthropic's native API authenticates with x-api-key, not a Bearer
-                // token; everything else here is an OpenAI-compatible gateway.
-                if (string.Equals(p.protocol,"anthropic-messages",StringComparison.OrdinalIgnoreCase))
-                    h.DefaultRequestHeaders.TryAddWithoutValidation("x-api-key", key);
-                else
-                    h.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key);
+                switch ((p.authKind ?? "bearer").Trim().ToLowerInvariant())
+                {
+                    case "x-api-key":
+                        h.DefaultRequestHeaders.TryAddWithoutValidation("x-api-key",key);
+                        break;
+                    case "none":
+                        break;
+                    default:
+                        h.DefaultRequestHeaders.Authorization=new AuthenticationHeaderValue("Bearer",key);
+                        break;
+                }
             }
-            foreach (var x in p.headers) h.DefaultRequestHeaders.TryAddWithoutValidation(x.Key,x.Value);
+            foreach (var x in p.headers)
+            {
+                var value=x.Value;
+                if (string.Equals(x.Key,"x-opencode-session",StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(value,"project",StringComparison.OrdinalIgnoreCase))
+                    value="statefulclanker-discovery";
+                h.DefaultRequestHeaders.TryAddWithoutValidation(x.Key,value);
+            }
 
             var baseUrl = InferencePresets.Expand(p.baseUrl,p.accountId).TrimEnd('/');
             var modelsPath = InferencePresets.Expand(p.modelsPath,p.accountId);
@@ -505,11 +521,10 @@ sealed class ApiConnectionsPage : TabPage
         if(model.isFree==false)return false;
         var id=(model.id+" "+model.displayName).ToLowerInvariant();
         if(id.Contains(":free")||id.Contains("/free")||id.Contains("auto:free")||id.Contains("free/"))return true;
-        // FreeLLMAPI intentionally exposes a curated free catalog. Pollinations'
-        // anonymous text catalog is also non-billable. Other providers with a
-        // free tier can expose mixed paid/free catalogs, so unknown cost stays out
-        // until model metadata or Clanker research positively identifies it.
-        return preset.Id is "freellmapi" or "pollinations";
+        // FreeLLMAPI intentionally exposes a curated free catalog. Other providers
+        // with mixed paid/free catalogs stay out until model metadata or research
+        // positively identifies a zero-cost route.
+        return preset.Id is "freellmapi";
     }
 
     static bool IsLikelyWorkhorse(ApiDiscoveredModel model)
@@ -600,10 +615,14 @@ sealed class ApiConnectionDialog : Form
     void ApplyPreset(bool overwrite=true)
     {
         if(_preset.SelectedItem is not InferencePreset p)return;
+        var custom=string.Equals(p.Id,"custom",StringComparison.OrdinalIgnoreCase);
         if(overwrite||string.IsNullOrWhiteSpace(_url.Text))_url.Text=p.BaseUrlTemplate;
-        if((overwrite||string.IsNullOrWhiteSpace(_headers.Text))&&!string.IsNullOrWhiteSpace(p.DefaultHeaders))_headers.Text=p.DefaultHeaders;
-        _account.Enabled=p.RequiresAccountId;_account.PlaceholderText=p.RequiresAccountId?"required":"not required";
-        _key.PlaceholderText=p.RequiresApiKey?p.KeyPlaceholder:"optional / not required";
+        if(overwrite||string.IsNullOrWhiteSpace(_headers.Text))_headers.Text=p.DefaultHeaders;
+        _url.ReadOnly=!custom;_url.Enabled=custom;_url.PlaceholderText=custom?"required":"managed by provider preset";
+        _headers.ReadOnly=!custom;_headers.Enabled=custom;_headers.PlaceholderText=custom?"Header: value; Header2: value":"managed by provider preset";
+        _env.Enabled=custom;_env.PlaceholderText=custom?"optional":"managed by provider preset";
+        _account.Enabled=p.RequiresAccountId||custom;_account.PlaceholderText=p.RequiresAccountId?"required":custom?"optional":"not used";
+        _key.Enabled=p.RequiresApiKey||custom;_key.PlaceholderText=p.RequiresApiKey?p.KeyPlaceholder:custom?"optional":"not required";
         _instructions.Text=$"{p.FreeLabel}\r\n\r\n{p.Instructions}";
         InvalidateTest();
     }
@@ -616,13 +635,18 @@ sealed class ApiConnectionDialog : Form
         if(string.IsNullOrWhiteSpace(_id.Text))throw new Exception("Connection name is required.");
         if(string.IsNullOrWhiteSpace(_url.Text))throw new Exception("Base URL is required.");
         if(preset.RequiresAccountId&&string.IsNullOrWhiteSpace(_account.Text))throw new Exception("This service requires an Account ID.");
+        var custom=string.Equals(preset.Id,"custom",StringComparison.OrdinalIgnoreCase);
         var headers=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
-        foreach(var part in _headers.Text.Split(';',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)){var i=part.IndexOf(':');if(i>0)headers[part[..i].Trim()]=part[(i+1)..].Trim();}
+        var headerText=custom?_headers.Text:preset.DefaultHeaders;
+        foreach(var part in headerText.Split(';',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)){var i=part.IndexOf(':');if(i>0)headers[part[..i].Trim()]=part[(i+1)..].Trim();}
+        var baseTemplate=custom?_url.Text.Trim().TrimEnd('/'):preset.BaseUrlTemplate;
         var p=new ApiConnectionProfile{
-            name=_id.Text.Trim(),presetId=preset.Id,protocol=preset.Protocol,baseUrl=InferencePresets.Expand(_url.Text.Trim().TrimEnd('/'), string.IsNullOrWhiteSpace(_account.Text)?null:_account.Text.Trim()),
+            name=_id.Text.Trim(),presetId=preset.Id,protocol=preset.Protocol,authKind=preset.AuthKind,
+            baseUrl=InferencePresets.Expand(baseTemplate, string.IsNullOrWhiteSpace(_account.Text)?null:_account.Text.Trim()),
             modelsPath=preset.ModelsPathTemplate,discoveryKind=preset.DiscoveryKind,accountId=string.IsNullOrWhiteSpace(_account.Text)?null:_account.Text.Trim(),
-            apiKeyEnv=string.IsNullOrWhiteSpace(_env.Text)?null:_env.Text.Trim(),headers=headers,toolModeDefault="native"
+            apiKeyEnv=custom&& !string.IsNullOrWhiteSpace(_env.Text)?_env.Text.Trim():null,headers=headers,toolModeDefault="native"
         };
+        if(preset.RequiresApiKey && string.IsNullOrWhiteSpace(_key.Text) && (_previous is null || string.IsNullOrWhiteSpace(_previous.apiKeyProtected)))throw new Exception("This service requires an API key.");
         if(!string.IsNullOrWhiteSpace(_key.Text))p.apiKeyProtected=ApiConnectionStore.Protect(_key.Text.Trim());
         else if(_previous is not null)p.apiKeyProtected=_previous.apiKeyProtected;
         return p;
