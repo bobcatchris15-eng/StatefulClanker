@@ -8,12 +8,22 @@ $env:LOCALAPPDATA=$temp
 try {
     $root=Join-Path $temp 'StatefulClanker'
     New-Item -ItemType Directory -Force -Path $root|Out-Null
+
+    Add-Type -AssemblyName System.Security
+    $testSecret='pi-dpapi-regression-secret'
+    $protected=[Convert]::ToBase64String(
+        [System.Security.Cryptography.ProtectedData]::Protect(
+            [Text.Encoding]::UTF8.GetBytes($testSecret),
+            $null,
+            [System.Security.Cryptography.DataProtectionScope]::CurrentUser))
+
     @{
         schemaVersion=1
         connections=[ordered]@{
             Gemini=[ordered]@{protocol='gemini-native';authKind='x-goog-api-key';baseUrl='https://generativelanguage.googleapis.com/v1beta';apiKeyProtected='dummy'}
             Anthropic=[ordered]@{protocol='anthropic-messages';authKind='x-api-key';baseUrl='https://api.anthropic.com/v1';apiKeyProtected='dummy'}
             Local=[ordered]@{protocol='openai-chat';authKind='none';baseUrl='http://127.0.0.1:1234/v1'}
+            Dpapi=[ordered]@{protocol='openai-chat';authKind='bearer';baseUrl='https://example.invalid/v1';apiKeyProtected=$protected}
         }
     }|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $root 'connections.json') -Encoding UTF8
     @{
@@ -44,6 +54,12 @@ try {
     Assert-True ($l.api-eq'openai-completions') 'Keyless OpenAI-compatible endpoint mapped incorrectly.'
     Assert-True ($l.apiKey-eq'statefulclanker-keyless') 'Keyless endpoint did not receive Pi placeholder key.'
     Assert-True ((Get-Content -Raw -LiteralPath $path) -notmatch 'dummy') 'Stored credential material leaked into Pi models.json.'
+
+    Write-Host '  PI DPAPI: Windows PowerShell 5.1 resolves a DPAPI-backed connection key'
+    $credentialScript=Join-Path $repo 'pi\Get-Credential.ps1'
+    $resolved=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $credentialScript -Connection 'Dpapi'
+    Assert-True ($LASTEXITCODE-eq0) 'Get-Credential.ps1 failed under Windows PowerShell 5.1.'
+    Assert-True ([string]$resolved-eq$testSecret) 'Windows PowerShell 5.1 did not resolve the expected DPAPI secret.'
 
     Write-Host 'PASS: Pi catalog maps Gemini/Anthropic/keyless endpoints and keeps credentials behind the DPAPI bridge.'
 } finally {
