@@ -60,6 +60,17 @@ public static class ProviderProbeCatalog
                 "Dedicated key-validity endpoint; quota telemetry is harvested if headers are present.");
         }
 
+        if(id=="pollinations")
+        {
+            var authority=ModelsAuthority(profile) ?? new Uri("https://gen.pollinations.ai/");
+            return new ProviderProbePlan(
+                id,ProviderProbeKind.DedicatedQuota,HttpMethod.Get,
+                new Uri(authority,"account/key"),true,true,
+                TimeSpan.FromMinutes(5),TimeSpan.FromMinutes(20),
+                "pollinations-key",
+                "Authenticated key metadata exposes pollen budget, expiry and rate-limit state without generation.");
+        }
+
         var models=ModelsUri(profile);
         return id switch
         {
@@ -75,6 +86,10 @@ public static class ProviderProbeCatalog
                 "Workers AI model catalog plus published 00:00 UTC daily free-allocation reset."),
             "kilo" => ModelsPlan(id,models,"kilo-models-rules",
                 "Public model catalog plus published 200 free-model requests/hour/IP policy."),
+            "nvidia" => ModelsPlan(id,models,"nvidia-nim-models",
+                "Hosted NIM model catalog; configured API Catalog capacity is treated separately as trial/free-endpoint capacity."),
+            "opencode-zen" => ModelsPlan(id,models,"opencode-zen-models",
+                "Sparse Zen catalog; free routes are identified conservatively from explicit free model IDs."),
             "mistral" => ModelsPlan(id,models,"mistral-models",
                 "Ordinary API keys can validate/list models; richer usage/rate-limit Admin APIs require a separate Admin API key."),
             "huggingface" => ModelsPlan(id,models,"huggingface-models",
