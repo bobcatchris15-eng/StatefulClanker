@@ -1,4 +1,4 @@
-﻿<# Build the StatefulClanker Windows installer.
+<# Build the StatefulClanker Windows installer.
 
    Generates the application icon, publishes the native WinForms tray host as a
    self-contained win-x64 executable, then compiles the Inno Setup installer.
@@ -12,8 +12,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '0.8.14',
-    [string]$PiVersion = '0.73.1',
+    [string]$Version = '0.8.15',
+    [string]$PiVersion = '0.87.0',
     [switch]$IconOnly
 )
 
@@ -94,10 +94,10 @@ $npmPath=Find-NodeTool 'npm'
 if(Test-Path -LiteralPath $piRuntimeDir){Remove-Item -LiteralPath $piRuntimeDir -Recurse -Force}
 New-Item -ItemType Directory -Force -Path $piRuntimeDir|Out-Null
 Write-Host "Bundling Pi coding agent $PiVersion..."
-& $npmPath install --prefix $piRuntimeDir --omit=dev --no-audit --no-fund "@mariozechner/pi-coding-agent@$PiVersion"
+& $npmPath install --prefix $piRuntimeDir --omit=dev --no-audit --no-fund "@earendil-works/pi-coding-agent@$PiVersion"
 if($LASTEXITCODE-ne0){throw "npm install for Pi failed with exit code $LASTEXITCODE"}
 Copy-Item -LiteralPath $nodePath -Destination (Join-Path $piRuntimeDir 'node.exe') -Force
-$piCli=Join-Path $piRuntimeDir 'node_modules\@mariozechner\pi-coding-agent\dist\cli.js'
+$piCli=Join-Path $piRuntimeDir 'node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js'
 if(-not(Test-Path -LiteralPath $piCli)){throw "Pi package installed but CLI was not found at $piCli"}
 Write-Host "  Pi runtime: $piRuntimeDir"
 

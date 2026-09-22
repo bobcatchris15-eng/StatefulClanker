@@ -261,7 +261,7 @@ function Get-SCProviderPresets {
             note = 'UNVERIFIED. OpenHands CLI flags vary by version; check openhands --help.' },
         [ordered]@{ id = 'pi'; name = 'Pi (bundled)'; command = (Get-SCBundledPiCommand)
             args = @('-p'); mode = 'stdin'; verified = $true
-            note = 'Bundled @mariozechner/pi-coding-agent. Print mode consumes stdin. Its machine-local models.json is regenerated from StatefulClanker connections/endpoints before launch; API secrets stay in StatefulClanker DPAPI storage.' },
+            note = 'Bundled @earendil-works/pi-coding-agent. Print mode consumes stdin. Its machine-local models.json is regenerated from StatefulClanker connections/endpoints before launch; API secrets stay in StatefulClanker DPAPI storage.' },
         [ordered]@{ id = 'codex'; name = 'Codex CLI'; command = 'codex'
             args = @('exec'); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. Check codex exec --help.' },
