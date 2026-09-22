@@ -33,9 +33,14 @@ public static class ProviderProbePolicy
 
     public static QuotaObservation? ProgrammaticWindow(
         ConnectionProfile profile,
+        DateTimeOffset now) =>
+        ProgrammaticWindow(profile.presetId,now);
+
+    public static QuotaObservation? ProgrammaticWindow(
+        string? presetId,
         DateTimeOffset now)
     {
-        var id=(profile.presetId??"custom").Trim().ToLowerInvariant();
+        var id=(presetId??"custom").Trim().ToLowerInvariant();
         switch(id)
         {
             case "cloudflare":
