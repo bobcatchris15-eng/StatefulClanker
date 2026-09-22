@@ -212,7 +212,7 @@ Use the Windows installer release when available. To build from source:
 ```powershell
 winget install Microsoft.DotNet.SDK.8
 winget install JRSoftware.InnoSetup
-.\install\Build-Installer.ps1 -Version 0.8.14
+.\install\Build-Installer.ps1 -Version 0.8.15
 ```
 
 The build publishes a self-contained `win-x64` WinForms executable plus the PowerShell runtime, MCP scripts, docs, skills, examples, and tests.
