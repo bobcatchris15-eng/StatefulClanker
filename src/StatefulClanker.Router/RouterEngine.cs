@@ -9,7 +9,12 @@ public sealed class RouterEngine
     readonly Dictionary<string,LeaseRecord> _leasesByToken = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string,string> _tokenByRoute = new(StringComparer.OrdinalIgnoreCase);
 
-    public RouterEngine(RouterStore store) => _store=store;
+    public RouterEngine(RouterStore store)
+    {
+        _store=store;
+        RestoreLeases();
+        ReapExpiredLeases();
+    }
     public RouterStore Store => _store;
 
     public IReadOnlyList<EndpointRoute> Routes()
@@ -31,7 +36,7 @@ public sealed class RouterEngine
             .ToArray();
     }
 
-    public RouterResponse Acquire(string? preferred,string? sessionId,bool requireTools)
+    public RouterResponse Acquire(string? preferred,string? sessionId,bool requireTools,int ownerPid=0)
     {
         ReapExpiredLeases();
         var health=_store.LoadHealth();
@@ -79,6 +84,7 @@ public sealed class RouterEngine
             connection=selected.Endpoint.connection,
             model=selected.Endpoint.model,
             sessionId=sessionId,
+            ownerPid=ownerPid,
             acquiredAt=DateTimeOffset.UtcNow.ToString("O"),
             expiresAt=DateTimeOffset.UtcNow.AddMinutes(45).ToString("O")
         };
@@ -87,6 +93,7 @@ public sealed class RouterEngine
         {
             _leasesByToken[lease.token]=lease;
             _tokenByRoute[lease.route]=lease.token;
+            PersistLeasesLocked();
         }
 
         return RouterResponse.Ok(new
@@ -113,7 +120,10 @@ public sealed class RouterEngine
         lock(_leaseLock)
         {
             if(_leasesByToken.Remove(token,out lease) && lease is not null)
+            {
                 _tokenByRoute.Remove(lease.route);
+                PersistLeasesLocked();
+            }
         }
         return lease is null ? RouterResponse.Fail("Lease was not found.") : RouterResponse.Ok(new { released=lease.route });
     }
@@ -125,6 +135,7 @@ public sealed class RouterEngine
         {
             if(!_leasesByToken.TryGetValue(token,out var lease)) return RouterResponse.Fail("Lease was not found.");
             lease.expiresAt=DateTimeOffset.UtcNow.AddMinutes(45).ToString("O");
+            PersistLeasesLocked();
             return RouterResponse.Ok(new { endpoint=lease.route,expiresAt=lease.expiresAt });
         }
     }
@@ -210,15 +221,58 @@ public sealed class RouterEngine
     public void ReapExpiredLeases()
     {
         var now=DateTimeOffset.UtcNow;
+        var changed=false;
         lock(_leaseLock)
         {
             foreach(var kv in _leasesByToken.ToArray())
             {
-                if(DateTimeOffset.TryParse(kv.Value.expiresAt,out var at) && at>now) continue;
+                var expired=!DateTimeOffset.TryParse(kv.Value.expiresAt,out var at) || at<=now;
+                var ownerGone=kv.Value.ownerPid>0 && !ProcessAlive(kv.Value.ownerPid);
+                if(!expired && !ownerGone) continue;
                 _leasesByToken.Remove(kv.Key);
                 _tokenByRoute.Remove(kv.Value.route);
+                changed=true;
+            }
+            if(changed) PersistLeasesLocked();
+        }
+    }
+
+    void RestoreLeases()
+    {
+        var persisted=_store.LoadLeases();
+        lock(_leaseLock)
+        {
+            _leasesByToken.Clear();
+            _tokenByRoute.Clear();
+            foreach(var kv in persisted.leases)
+            {
+                var lease=kv.Value;
+                if(string.IsNullOrWhiteSpace(lease.token)) lease.token=kv.Key;
+                if(string.IsNullOrWhiteSpace(lease.route)) continue;
+                _leasesByToken[lease.token]=lease;
+                _tokenByRoute[lease.route]=lease.token;
             }
         }
+    }
+
+    void PersistLeasesLocked()
+    {
+        var doc=new LeaseDocument
+        {
+            updatedAt=DateTimeOffset.UtcNow.ToString("O"),
+            leases=_leasesByToken.ToDictionary(x=>x.Key,x=>x.Value,StringComparer.OrdinalIgnoreCase)
+        };
+        _store.SaveLeases(doc);
+    }
+
+    static bool ProcessAlive(int pid)
+    {
+        try
+        {
+            using var process=System.Diagnostics.Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch { return false; }
     }
 
     public void MarkHealthy(string key)
