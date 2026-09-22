@@ -195,7 +195,6 @@ static class RoutingQueueInspector
 
             var health = ReadHealth();
             var connections = ApiConnectionStore.Load();
-            var cursor = ReadCursor(enabled.Count);
             var ready = new List<(string id,string route,TargetPoolEntry entry)>();
             foreach (var x in enabled)
             {
@@ -212,22 +211,23 @@ static class RoutingQueueInspector
             if (ready.Count == 0)
             {
                 preview.State="waiting";
-                preview.Detail="all endpoints busy, cooling, or quarantined";
+                preview.Detail="all endpoints cooling or quarantined";
                 return preview;
             }
 
-            for (var offset=0; offset<enabled.Count; offset++)
+            // Match Get-SCProviderCandidates exactly: health filtering happens first,
+            // then the durable cursor rotates that eligible sorted set. Occupancy is
+            // checked afterward by the dispatch loop, so skip leased routes in that order.
+            var cursor = ReadCursor(ready.Count);
+            for (var offset=0; offset<ready.Count; offset++)
             {
-                var index=(cursor+offset)%enabled.Count;
-                var candidate=enabled[index];
-                var match=ready.FirstOrDefault(x=>string.Equals(x.route,candidate.Route,StringComparison.OrdinalIgnoreCase));
-                if (match.entry is null) continue;
-                if (!LeaseLooksFree(candidate.Route)) continue;
-                preview.EndpointId=candidate.Route;
-                preview.Connection=candidate.Entry.connection;
-                preview.Model=candidate.Entry.displayName == candidate.Entry.model ? candidate.Entry.model : candidate.Entry.displayName;
+                var candidate=ready[(cursor+offset)%ready.Count];
+                if (!LeaseLooksFree(candidate.route)) continue;
+                preview.EndpointId=candidate.route;
+                preview.Connection=candidate.entry.connection;
+                preview.Model=candidate.entry.displayName == candidate.entry.model ? candidate.entry.model : candidate.entry.displayName;
                 preview.State="ready";
-                preview.Detail=$"{ready.Count}/{enabled.Count} ready";
+                preview.Detail=$"{ready.Count}/{enabled.Count} healthy";
                 return preview;
             }
 
