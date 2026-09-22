@@ -21,5 +21,6 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="EasyWindowsTerminalControl" Version="1.0.38" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" />
+    <ProjectReference Include="..\StatefulClanker.Router\StatefulClanker.Router.csproj" />
   </ItemGroup>
 </Project>
