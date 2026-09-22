@@ -191,6 +191,10 @@ public sealed class EndpointMonitor
 
     void RecordQuota(string connectionName,ConnectionProfile profile,QuotaObservation quota)
     {
+        if(quota.source!="none"&&!quota.source.StartsWith("probe:",StringComparison.OrdinalIgnoreCase))
+            quota.source="probe:"+quota.source;
+        if(!string.IsNullOrWhiteSpace(quota.evidence)&&!quota.evidence.StartsWith("metadata probe:",StringComparison.OrdinalIgnoreCase))
+            quota.evidence="metadata probe: "+quota.evidence;
         _engine.RecordQuotaObservation("connection:"+connectionName,"connection",quota,profile);
     }
 
