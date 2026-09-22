@@ -1070,8 +1070,8 @@ static class Theme
     }
 }
 
-// A flat-modern rounded card, replacing plain rectangular Panels for the boxes
-// that group related controls (worker status, provider summary, etc).
+// A hard-edged machined panel for related controls. The entire shell uses
+// precision seams instead of floating rounded cards.
 class CardPanel : Panel
 {
     public int Radius { get; set; } = 0;
@@ -1127,9 +1127,9 @@ sealed class PrecisionTabControl : TabControl
             g.DrawRectangle(seam, cell);
 
             var textRect = Rectangle.Inflate(cell, -6, -2);
+            using var font = new Font("Cascadia Mono", 8f, selected ? FontStyle.Bold : FontStyle.Regular);
             TextRenderer.DrawText(
-                g, TabPages[i].Text, new Font("Cascadia Mono", 8f, selected ? FontStyle.Bold : FontStyle.Regular),
-                textRect, selected ? Theme.Text : Theme.Muted,
+                g, TabPages[i].Text, font, textRect, selected ? Theme.Text : Theme.Muted,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
                 TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
 
