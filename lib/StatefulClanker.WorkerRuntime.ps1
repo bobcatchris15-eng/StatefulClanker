@@ -965,6 +965,11 @@ function Invoke-SCRouteDoctor([int]$MaxProbes=1) {
 }
 
 function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null) {
+    if(-not$ProviderOverride -and (Get-Command Test-SCCompiledRouterAvailable -ErrorAction SilentlyContinue) -and (Test-SCCompiledRouterAvailable)){
+        try{return Invoke-SCProviderViaCompiledRouter $Task $Prompt $Stage $ParentAgentId $Compilation $WorkerSessionId $ContinuationMessage}catch{
+            Add-SCEvent 'routing.compiled_router_fallback' 'Compiled router was unavailable during dispatch; falling back to the PowerShell router for this call.' @{taskId=$Task.id;stage=$Stage;error=$_.Exception.Message}
+        }
+    }
     try{Invoke-SCRouteDoctor 1|Out-Null}catch{}
     $history=@()
     $routeSnapshot=Get-SCRouteSnapshotReceipt

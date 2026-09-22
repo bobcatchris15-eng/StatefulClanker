@@ -1,1 +1,15 @@
-.statefulclanker/\n.clanker/\n*.tmp\n*.log\n\n# Installer build output and generated icon\ninstall/output/\ninstall/publish/\ninstall/StatefulClanker.ico\nbin/\nobj/\n
+.statefulclanker/
+.clanker/
+*.tmp
+*.log
+
+# Installer build output and generated assets
+install/output/
+install/publish/
+install/router-publish/
+install/pi-runtime/
+install/StatefulClanker.ico
+
+# .NET build outputs
+**/bin/
+**/obj/
