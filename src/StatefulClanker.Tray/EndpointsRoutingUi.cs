@@ -140,6 +140,8 @@ sealed class EndpointsRoutingPanel : UserControl
                 if(p.Value.TryGetProperty("quota",out var q)&&q.ValueKind==JsonValueKind.Object)
                 {
                     var status=q.TryGetProperty("status",out var qs)?qs.GetString():null;
+                    var source=q.TryGetProperty("source",out var qso)?qso.GetString():null;
+                    var probed=source?.StartsWith("probe:",StringComparison.OrdinalIgnoreCase)==true;
                     double? remaining=q.TryGetProperty("remaining",out var qr)&&qr.ValueKind==JsonValueKind.Number&&qr.TryGetDouble(out var rd)?rd:null;
                     double? limit=q.TryGetProperty("limit",out var ql)&&ql.ValueKind==JsonValueKind.Number&&ql.TryGetDouble(out var ld)?ld:null;
                     var at=q.TryGetProperty("nextAvailableAt",out var qn)?qn.GetString():null;
@@ -151,7 +153,7 @@ sealed class EndpointsRoutingPanel : UserControl
                     else if(string.Equals(status,"exhausted",StringComparison.OrdinalIgnoreCase))parts.Add("exhausted");
                     if(DateTimeOffset.TryParse(at,out var reset)&&reset>DateTimeOffset.UtcNow)
                         parts.Add($"reset {reset.ToLocalTime():HH:mm:ss}");
-                    if(parts.Count>0)display.Quota=string.Join(" · ",parts);
+                    if(parts.Count>0)display.Quota=(probed?"probe ":"")+string.Join(" · ",parts);
                 }
                 output[p.Name]=display;
             }
