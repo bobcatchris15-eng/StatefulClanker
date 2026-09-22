@@ -537,8 +537,10 @@ public sealed class FreeCapacityManager
 
     static Uri ModelsUri(ConnectionProfile p)
     {
-        var baseUri=p.baseUrl.TrimEnd('/');
-        var path=string.IsNullOrWhiteSpace(p.modelsPath)?"/models":p.modelsPath;
+        var account=p.accountId?.Trim() ?? "";
+        var baseUri=(p.baseUrl ?? "").Replace("{accountId}",account,StringComparison.OrdinalIgnoreCase).TrimEnd('/');
+        var path=(string.IsNullOrWhiteSpace(p.modelsPath)?"/models":p.modelsPath)
+            .Replace("{accountId}",account,StringComparison.OrdinalIgnoreCase);
         if(Uri.TryCreate(path,UriKind.Absolute,out var absolute)) return absolute;
         return new Uri(baseUri+"/"+path.TrimStart('/'));
     }
