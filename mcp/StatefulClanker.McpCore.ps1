@@ -1,7 +1,7 @@
 <# StatefulClanker MCP core: tool definitions and dispatch, shared by the stdio
    and HTTP hosts. Hosts own transport only; everything below is transport-free. #>
 
-$script:McpVersion = '0.8.17'
+$script:McpVersion = '0.8.18'
 $script:McpProtocol = '2025-06-18'
 $script:McpHarness = Join-Path (Split-Path -Parent $PSScriptRoot) 'StatefulClanker.ps1'
 $script:McpDefaultProject = $null
