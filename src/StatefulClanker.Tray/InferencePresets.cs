@@ -26,6 +26,10 @@ sealed record InferencePreset(
     // candidates is a reasonable default. Mixed paid/free gateways stay false and
     // rely on per-model metadata or Clanker research instead.
     bool FreePoolProvider = false,
+    // Authentication belongs to the provider adapter, not the user. The UI asks
+    // only for the credential/identifier values; presets own header mechanics.
+    // Supported values: bearer, x-api-key, none.
+    string AuthKind = "bearer",
     // Provenance for maintenance: these presets are intentionally pillaged from
     // the provider catalogs maintained by FreeLLMAPI and 9Router.
     string Provenance = "StatefulClanker");
@@ -40,7 +44,7 @@ static class InferencePresets
         new("anthropic","Anthropic","https://api.anthropic.com","/v1/models","openai",false,true,
             "No ongoing free tier; pay-as-you-go (new accounts may get limited trial credit)","sk-ant-...","https://console.anthropic.com/settings/keys",
             "Create an Anthropic account, open Console > API Keys, create a key, and paste it here. This preset uses Anthropic's native Messages API (x-api-key authentication and the anthropic-version header, not OpenAI-style Bearer tokens) -- StatefulClanker translates the worker/critic/validator tool-calling loop to and from Anthropic's wire format automatically, so it's used exactly like any other endpoint once saved.",
-            "anthropic-messages","anthropic-version: 2023-06-01"),
+            "anthropic-messages","anthropic-version: 2023-06-01",AuthKind:"x-api-key"),
         new("groq","GroqCloud","https://api.groq.com/openai/v1","/models","openai",false,true,
             "Free rate-limited developer access","gsk_...","https://console.groq.com/keys",
             "Create a GroqCloud account, create an API key in the Groq console, and paste it here. The free developer limits vary by model and are returned/enforced by Groq.", FreePoolProvider:true, Provenance:"FreeLLMAPI + 9Router"),
@@ -94,18 +98,18 @@ static class InferencePresets
             "Recurring free cloud plan with model/session limits","Ollama API key","https://ollama.com/settings/keys",
             "Create an Ollama Cloud key. The free plan exposes a changing subset of the cloud catalog, so Test & refresh before targeting models.",
             FreePoolProvider:true,Provenance:"FreeLLMAPI + 9Router"),
-        new("pollinations","Pollinations","https://text.pollinations.ai/openai/v1","/models","openai",false,false,
-            "Anonymous recurring-free inference","","https://pollinations.ai",
-            "No key is required for the anonymous OpenAI-compatible text endpoint. Capacity is intentionally small and can queue/429, so it is useful as a flaky workhorse rather than a preferred source.",
-            FreePoolProvider:true,Provenance:"FreeLLMAPI"),
+        new("pollinations","Pollinations","https://gen.pollinations.ai/v1","/models","openai",false,true,
+            "Account-backed credits / budgets; model catalog is public","sk_...","https://enter.pollinations.ai",
+            "Create a Pollinations secret key and paste it here. The current generation API requires Bearer authentication; the model catalog itself is public. StatefulClanker treats HTTP 402 as exhausted budget rather than a bad credential.",
+            Provenance:"FreeLLMAPI"),
         new("llm7","LLM7","https://api.llm7.io/v1","/models","openai",false,false,
             "Anonymous/basic free models; optional key improves access","","https://llm7.io",
             "LLM7 exposes an OpenAI-compatible model catalog and free basic access. Add a key if your account provides one; otherwise test anonymously.",
             FreePoolProvider:true,Provenance:"FreeLLMAPI + 9Router"),
         new("opencode-zen","OpenCode Zen","https://opencode.ai/zen/v1","/models","openai",false,true,
             "Promotional/free model roster changes over time","OpenCode key","https://opencode.ai/auth",
-            "Create an OpenCode account key and discover the current Zen catalog. Only target models that are currently documented/returned as free.",
-            FreePoolProvider:true,Provenance:"FreeLLMAPI"),
+            "Create an OpenCode account key and discover the current Zen catalog. StatefulClanker supplies the required per-project x-opencode-session header automatically.",
+            DefaultHeaders:"x-opencode-session: project",FreePoolProvider:true,Provenance:"FreeLLMAPI"),
         new("ovh","OVHcloud AI Endpoints","https://oai.endpoints.kepler.ai.cloud.ovh.net/v1","/models","openai",false,false,
             "Anonymous free inference is available on selected models","","https://endpoints.ai.cloud.ovh.net",
             "Test anonymously first. OVH also supports authenticated higher limits, but the no-card anonymous path is useful for the free workhorse pool.",
@@ -124,8 +128,8 @@ static class InferencePresets
             FreePoolProvider:true,Provenance:"FreeLLMAPI + 9Router"),
         new("routeway","Routeway","https://api.routeway.ai/v1","/models","openai",false,true,
             "Free :free model routes","Routeway API key","https://routeway.ai",
-            "Create a free key. Routeway may reject generic programmatic User-Agent values, so add a browser-style User-Agent header if testing reports Cloudflare error 1010.",
-            FreePoolProvider:true,Provenance:"FreeLLMAPI"),
+            "Create a free key. StatefulClanker supplies a browser-compatible User-Agent automatically for Routeway's Cloudflare edge.",
+            DefaultHeaders:"User-Agent: Mozilla/5.0 StatefulClanker",FreePoolProvider:true,Provenance:"FreeLLMAPI"),
         new("bazaarlink","BazaarLink","https://bazaarlink.ai/api/v1","/models","openai",false,true,
             "auto:free route and changing free catalog","BazaarLink API key","https://bazaarlink.ai",
             "Create a key and discover the current catalog. The auto:free route is intentionally useful when named direct models are paid.",
@@ -144,8 +148,8 @@ static class InferencePresets
             FreePoolProvider:true,Provenance:"FreeLLMAPI"),
         new("navy","NavyAI","https://api.navy/v1","/models","openai",false,true,
             "Free daily-token allocation","NavyAI API key","https://api.navy",
-            "Create a key and discover the catalog. If requests are rejected despite a valid key, add User-Agent: FreeLLMAPI/1.0 in Extra headers.",
-            FreePoolProvider:true,Provenance:"FreeLLMAPI"),
+            "Create a key and discover the catalog. StatefulClanker supplies NavyAI's required-compatible User-Agent automatically.",
+            DefaultHeaders:"User-Agent: FreeLLMAPI/1.0",FreePoolProvider:true,Provenance:"FreeLLMAPI"),
         new("nara","NaraRouter","https://router.bynara.id/v1","/models","openai",false,true,
             "Free plan after account/community verification","NaraRouter API key","https://router.bynara.id",
             "Create and verify a NaraRouter account, then discover which models currently answer on the free plan.",
