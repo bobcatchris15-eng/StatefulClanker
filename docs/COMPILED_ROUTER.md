@@ -160,6 +160,28 @@ The Windows installer publishes `StatefulClanker.Router.exe` as a self-contained
 
 The tray references the router IPC types and asks the live daemon for the Overview's **Next Endpoint In Queue** readout. If the service is not active, the UI falls back to the previous file-based predictor.
 
+## Automatic free-capacity lifecycle
+
+The router treats the user's configured connections as the complete trust boundary. It does not discover or add new providers on its own.
+
+A background free-capacity manager refreshes the live model catalog for configured connections and automatically maintains only endpoints whose zero-cost status can be positively established. Auto-managed endpoints carry lifecycle metadata in `endpoints.json` and discovery inventory is persisted in `routing/free-capacity.json`.
+
+Safety rules:
+
+- positive live pricing immediately retires an auto-managed endpoint,
+- unknown cost never enters the automatic free pool,
+- two consecutive successful catalog misses retire a disappeared model,
+- a reappearing confirmed-free model returns automatically,
+- manually-created endpoints are never deleted or rewritten by the manager,
+- disabling/removing an auto-managed endpoint becomes a persistent operator suppression,
+- obvious embedding, reranking, speech, media, safety and other specialist models are excluded from the workhorse pool.
+
+Current high-confidence automatic sources include live zero-price/`isFree` metadata, explicit free route identifiers such as `:free`, `-free` and `auto:free`, curated free gateways, and local inference. NVIDIA hosted NIM/API Catalog entries are tracked separately as `trial_free` capacity because NVIDIA describes those hosted endpoints as trial/evaluation capacity.
+
+Sparse or account-dependent catalogs remain conservative. For example, OpenCode Zen can safely contribute explicit `-free` model IDs, while OpenCode GO subscription models are not treated as $0. Gemini and Cloudflare catalogs are not blanket-classified free merely because those providers offer a free tier; existing manually selected endpoints remain untouched and continue to benefit from quota/health monitoring.
+
+Pollinations uses its rich public text-model catalog for pricing/capabilities and its authenticated `/account/key` endpoint for pollen-budget telemetry without generation. It will automatically contribute models only if the live catalog actually proves zero price.
+
 ## Direction
 
 This service is the home for quota-aware routing intelligence. The current implementation actively probes provider control planes, learns reported reset windows and remaining counters, retains simultaneous quota buckets, and applies documented provider reset rules without changing task semantics or provider execution code. Future work can add optional secondary credentials for admin-only usage APIs, historical throughput/error scoring, and richer prediction while keeping reported facts distinct from inferred availability.
