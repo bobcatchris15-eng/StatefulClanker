@@ -14,7 +14,6 @@ public sealed class QuotaWindow
     public string source { get; set; } = "none";
     public string confidence { get; set; } = "unknown";
     public string? evidence { get; set; }
-    public List<QuotaWindow> windows { get; set; } = new();
 }
 
 public sealed class QuotaObservation
@@ -29,6 +28,7 @@ public sealed class QuotaObservation
     public string source { get; set; } = "none";
     public string confidence { get; set; } = "unknown";
     public string? evidence { get; set; }
+    public List<QuotaWindow> windows { get; set; } = new();
 }
 
 public static partial class QuotaIntelligence
