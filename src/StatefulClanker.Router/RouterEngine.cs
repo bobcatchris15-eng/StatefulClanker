@@ -373,6 +373,7 @@ public sealed class RouterEngine
 
     bool Available(EndpointRoute route,RoutingHealthDocument health)
     {
+        if(route.Connection is not null && ProviderProbeCatalog.IsRetired(route.Connection)) return false;
         return KeyAvailable(route.RouteName,health) &&
                KeyAvailable("connection:"+route.Endpoint.connection,health) &&
                (string.IsNullOrWhiteSpace(route.Service)||KeyAvailable("service:"+route.Service,health));
@@ -386,6 +387,8 @@ public sealed class RouterEngine
 
     object HealthStateFor(EndpointRoute route,RoutingHealthDocument health)
     {
+        if(route.Connection is not null && ProviderProbeCatalog.IsRetired(route.Connection))
+            return new { key="connection:"+route.Endpoint.connection,state="retired",reason="provider_retired",retryAfter=(string?)null,nextProbeAt=(string?)null,quota=(QuotaObservation?)null };
         var keys=new[]{route.RouteName,"connection:"+route.Endpoint.connection,string.IsNullOrWhiteSpace(route.Service)?null:"service:"+route.Service};
         foreach(var key in keys)
             if(key is not null && health.endpoints.TryGetValue(key,out var e) && !string.Equals(e.state,"healthy",StringComparison.OrdinalIgnoreCase))
