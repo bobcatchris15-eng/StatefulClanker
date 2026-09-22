@@ -91,6 +91,7 @@ public sealed class LeaseRecord
     public string model { get; set; } = "";
     public string? sessionId { get; set; }
     public int ownerPid { get; set; }
+    public string? ownerStartedAt { get; set; }
     public string acquiredAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public string expiresAt { get; set; } = DateTimeOffset.UtcNow.AddMinutes(45).ToString("O");
 }
