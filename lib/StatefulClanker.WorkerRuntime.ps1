@@ -415,10 +415,21 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
         $body=[ordered]@{model=[string]$Connection.model;messages=$translated.messages}
         if($translated.system){$body.system=$translated.system}
         if($ToolMode-ne'text'){$body.tools=ConvertTo-SCAnthropicTools $Tools}
-        # Anthropic requires max_tokens on every request; the other providers here
-        # default it server-side, so only Anthropic needs a client-side fallback.
         $body.max_tokens=if($Connection.PSObject.Properties['maxTokens']-and[int]$Connection.maxTokens-gt0){[int]$Connection.maxTokens}else{4096}
         if($Connection.PSObject.Properties['temperature']-and$null-ne$Connection.temperature){$body.temperature=[double]$Connection.temperature}
+        if($Connection.PSObject.Properties['body']-and$Connection.body){foreach($p in $Connection.body.PSObject.Properties){$body[$p.Name]=$p.Value}}
+    } elseif($protocol-eq'gemini-native'){
+        $translated=ConvertTo-SCGeminiMessages $Messages
+        $body=[ordered]@{contents=@($translated.contents)}
+        if($translated.system){$body.systemInstruction=[ordered]@{parts=@([ordered]@{text=$translated.system})}}
+        if($ToolMode-ne'text'){
+            $geminiTools=@(ConvertTo-SCGeminiTools $Tools)
+            if($geminiTools.Count-gt0){$body.tools=$geminiTools;$body.toolConfig=[ordered]@{functionCallingConfig=[ordered]@{mode='AUTO'}}}
+        }
+        $generation=[ordered]@{}
+        if($Connection.PSObject.Properties['temperature']-and$null-ne$Connection.temperature){$generation.temperature=[double]$Connection.temperature}
+        if($Connection.PSObject.Properties['maxTokens']-and[int]$Connection.maxTokens-gt0){$generation.maxOutputTokens=[int]$Connection.maxTokens}
+        if($generation.Count-gt0){$body.generationConfig=$generation}
         if($Connection.PSObject.Properties['body']-and$Connection.body){foreach($p in $Connection.body.PSObject.Properties){$body[$p.Name]=$p.Value}}
     } else {
         $body=[ordered]@{model=[string]$Connection.model;messages=@($Messages)}
