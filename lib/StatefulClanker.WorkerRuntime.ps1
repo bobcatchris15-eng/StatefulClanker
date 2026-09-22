@@ -838,37 +838,56 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
     }
     $last=$null
     foreach($record in $candidates){
-        $type=if($record.config.PSObject.Properties['type']){[string]$record.config.type}else{'cli'}
+        $lease=Enter-SCEndpointLease ([string]$record.name)
+        if(-not$lease.acquired){
+            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($record.config.PSObject.Properties['connection']){[string]$record.config.connection}else{$null};model=if($record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='busy';failureClass=$null;healthScope=$null}
+            continue
+        }
         try{
-            if($type-eq'api'){$receipt=Invoke-SCDirectApiProvider $Task $Prompt $Stage $record $ParentAgentId $Compilation $WorkerSessionId $ContinuationMessage}
-            else{$receipt=& $script:SCInvokeProviderCliBase $Task $Prompt $Stage ([string]$record.name) $ParentAgentId $Compilation}
-        }catch{
-            $now=(Get-Date).ToUniversalTime().ToString('o')
-            $receipt=[pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=[string]$record.name;endpoint=[string]$record.name;compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-1;stdout='';stderr=($_|Out-String)}
-        }
-        if(-not$receipt.PSObject.Properties['workerSessionId']){Set-SCProperty $receipt 'workerSessionId' $WorkerSessionId;Set-SCProperty $receipt 'workerSessionResumable' $false}
-        $last=$receipt
-        $text=(([string]$receipt.stderr)+[Environment]::NewLine+([string]$receipt.stdout)).Trim()
-        if([int]$receipt.exitCode-eq0){
-            Register-SCRouteSuccess ([string]$record.name)|Out-Null
-            if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection){
-                $connectionName=[string]$record.config.connection
-                Register-SCRouteSuccess ("connection:"+$connectionName) 'connection'|Out-Null
-                $service=Get-SCConnectionServiceName $connectionName
-                if($service){Register-SCRouteSuccess ("service:"+$service) 'service'|Out-Null}
+            $type=if($record.config.PSObject.Properties['type']){[string]$record.config.type}else{'cli'}
+            try{
+                if($type-eq'api'){$receipt=Invoke-SCDirectApiProvider $Task $Prompt $Stage $record $ParentAgentId $Compilation $WorkerSessionId $ContinuationMessage}
+                else{$receipt=& $script:SCInvokeProviderCliBase $Task $Prompt $Stage ([string]$record.name) $ParentAgentId $Compilation}
+            }catch{
+                $now=(Get-Date).ToUniversalTime().ToString('o')
+                $receipt=[pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=[string]$record.name;endpoint=[string]$record.name;compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-1;stdout='';stderr=($_|Out-String)}
             }
-            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='success';failureClass=$null;healthScope=$null}
+            if(-not$receipt.PSObject.Properties['workerSessionId']){Set-SCProperty $receipt 'workerSessionId' $WorkerSessionId;Set-SCProperty $receipt 'workerSessionResumable' $false}
+            $last=$receipt
+            $text=(([string]$receipt.stderr)+[Environment]::NewLine+([string]$receipt.stdout)).Trim()
+            if([int]$receipt.exitCode-eq0){
+                Register-SCRouteSuccess ([string]$record.name)|Out-Null
+                if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection){
+                    $connectionName=[string]$record.config.connection
+                    Register-SCRouteSuccess ("connection:"+$connectionName) 'connection'|Out-Null
+                    $service=Get-SCConnectionServiceName $connectionName
+                    if($service){Register-SCRouteSuccess ("service:"+$service) 'service'|Out-Null}
+                }
+                $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='success';failureClass=$null;healthScope=$null}
+                Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
+                if($history.Count-gt1){Add-SCEvent 'routing.failover_succeeded' "Endpoint failover succeeded on $($record.name)." @{taskId=$Task.id;stage=$Stage;attempts=$history.Count;history=@($history)}}
+                return $receipt
+            }
+            $class=Get-SCRouteFailureClass ([int]$receipt.exitCode) $text
+            $domain=Register-SCRouteFailureForRecord $record $class $text
+            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='failed';failureClass=$class;healthScope=[string]$domain.scope;healthKey=$domain.key}
             Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
-            if($history.Count-gt1){Add-SCEvent 'routing.failover_succeeded' "Endpoint failover succeeded on $($record.name)." @{taskId=$Task.id;stage=$Stage;attempts=$history.Count;history=@($history)}}
-            return $receipt
+            if(-not(Test-SCRouteFailureTransient $class) -and $class-ne'auth'){
+                Add-SCEvent 'routing.failover_stopped' "Endpoint failure is not safe to replay: $class" @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class}
+                return $receipt
+            }
+            Add-SCEvent 'routing.failover' "Endpoint $($record.name) failed ($class); trying another endpoint." @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class;attempt=$history.Count}
+        }finally{
+            Exit-SCEndpointLease $lease
         }
-        $class=Get-SCRouteFailureClass ([int]$receipt.exitCode) $text
-        $domain=Register-SCRouteFailureForRecord $record $class $text
-        $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='failed';failureClass=$class;healthScope=[string]$domain.scope;healthKey=$domain.key}
-        Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
-        if(-not(Test-SCRouteFailureTransient $class) -and $class-ne'auth'){Add-SCEvent 'routing.failover_stopped' "Endpoint failure is not safe to replay: $class" @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class};return $receipt}
-        Add-SCEvent 'routing.failover' "Endpoint $($record.name) failed ($class); trying another endpoint." @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class;attempt=$history.Count}
     }
-    if($last){Set-SCProperty $last 'routeAttempts' $history.Count;Set-SCProperty $last 'routeHistory' @($history);Set-SCProperty $last 'routeExhausted' $true;return $last}
+    if($last){
+        Set-SCProperty $last 'routeAttempts' $history.Count;Set-SCProperty $last 'routeHistory' @($history);Set-SCProperty $last 'routeExhausted' $true
+        return $last
+    }
+    if(@($history|Where-Object{$_.outcome-eq'busy'}).Count-gt0){
+        $now=(Get-Date).ToUniversalTime().ToString('o');$retry=[datetimeoffset]::UtcNow.AddSeconds(2).ToString('o')
+        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$pinnedEndpoint;endpoint=$pinnedEndpoint;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId);compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr='All healthy endpoints are currently occupied by another worker.';routeDeferred=$true;retryAfter=$retry;routeAttempts=$history.Count;routeHistory=@($history)}
+    }
     throw 'Routing produced no endpoint receipt.'
 }
