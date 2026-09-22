@@ -75,6 +75,13 @@ public sealed class RoundRobinDocument
 
 public sealed record EndpointRoute(string RouteName, string CatalogId, EndpointEntry Endpoint, ConnectionProfile? Connection, string? Service);
 
+public sealed class LeaseDocument
+{
+    public int schemaVersion { get; set; } = 1;
+    public string? updatedAt { get; set; }
+    public Dictionary<string, LeaseRecord> leases { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
 public sealed class LeaseRecord
 {
     public string token { get; set; } = Guid.NewGuid().ToString("N");
@@ -83,6 +90,7 @@ public sealed class LeaseRecord
     public string connection { get; set; } = "";
     public string model { get; set; } = "";
     public string? sessionId { get; set; }
+    public int ownerPid { get; set; }
     public string acquiredAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public string expiresAt { get; set; } = DateTimeOffset.UtcNow.AddMinutes(45).ToString("O");
 }
@@ -93,6 +101,7 @@ public sealed class RouterRequest
     public string? preferred { get; set; }
     public string? sessionId { get; set; }
     public bool requireTools { get; set; }
+    public int ownerPid { get; set; }
     public string? lease { get; set; }
     public string? endpoint { get; set; }
     public string? failureClass { get; set; }
