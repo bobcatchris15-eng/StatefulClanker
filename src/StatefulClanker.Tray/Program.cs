@@ -1895,7 +1895,7 @@ sealed class MainForm : Form
     readonly Label _overviewTargetSummary = new();
     readonly BlinkenRack _blinkenRack = new();
     readonly TaskBoardPanel _taskBoard = new();
-    readonly RecentActivityPanel _recentActivity = new();
+    readonly QuotaRemainingPanel _quotaRemaining = new();
     readonly OverviewReadoutPanel _overviewReadout = new();
     readonly EmbeddedTerminalPanel _terminal = new();
     readonly DataGridView _integrations = new(), _providers = new(), _mcpImport = new();
@@ -2045,13 +2045,12 @@ sealed class MainForm : Form
         var targetPanel = BuildTargetPoolPanel();
         leftTargetSplit.Panel1.Controls.Add(targetPanel);
 
-        var recentPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(0), Padding = new Padding(0, 4, 0, 0), BackColor = Theme.Back };
-        recentPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        recentPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        recentPanel.Controls.Add(Section("RECENT ACTIVITY"), 0, 0);
-        _recentActivity.OpenActivityRequested += () => _tabs.SelectedIndex = 1;
-        recentPanel.Controls.Add(_recentActivity, 0, 1);
-        leftTargetSplit.Panel2.Controls.Add(recentPanel);
+        var quotaPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new Padding(0), Padding = new Padding(0, 4, 0, 0), BackColor = Theme.Back };
+        quotaPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        quotaPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        quotaPanel.Controls.Add(Section("QUOTA REMAINING"), 0, 0);
+        quotaPanel.Controls.Add(_quotaRemaining, 0, 1);
+        leftTargetSplit.Panel2.Controls.Add(quotaPanel);
         leftBody.Panel2.Controls.Add(leftTargetSplit);
         leftRoot.Controls.Add(leftBody, 0, 1);
         shell.Panel1.Controls.Add(leftRoot);
@@ -2628,7 +2627,7 @@ sealed class MainForm : Form
             SetAutofillUi(snapshot.Autofill, snapshot.Project, true);
             _allActivity.Text = snapshot.Project.Activity;
             _workerTelemetry.Text = snapshot.Project.Telemetry;
-            _recentActivity.SetActivity(snapshot.Project.Activity);
+            _quotaRemaining.RefreshQuota();
             _overviewReadout.SetState(snapshot.Project, snapshot.Autofill, d is not null, true, snapshot.NextEndpoint);
             PopulateOverviewTargets();
         }
@@ -2638,7 +2637,7 @@ sealed class MainForm : Form
             SetAutofillUi(snapshot.Autofill, new(), false);
             _allActivity.Text = "Select a project at left. StatefulClanker does not silently substitute a default project.";
             _workerTelemetry.Text = "Select a project to inspect worker telemetry.";
-            _recentActivity.SetActivity("");
+            _quotaRemaining.RefreshQuota();
             _overviewReadout.SetState(new(), snapshot.Autofill, d is not null, false, snapshot.NextEndpoint);
             PopulateOverviewTargets();
         }
