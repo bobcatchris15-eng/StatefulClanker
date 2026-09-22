@@ -14,6 +14,7 @@ public sealed class QuotaObservation
     public string? windowCadence { get; set; }
     public string? windowSource { get; set; }
     public string? windowConfidence { get; set; }
+    public string? windowEvidence { get; set; }
     public string appliesTo { get; set; } = "inference";
     public string? limiter { get; set; }
     public double? limit { get; set; }
