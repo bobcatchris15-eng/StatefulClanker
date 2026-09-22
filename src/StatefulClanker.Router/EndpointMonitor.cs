@@ -82,8 +82,23 @@ public sealed class EndpointMonitor
                 if(!string.IsNullOrWhiteSpace(candidate.Key))
                 {
                     var result=await ProbeAsync(candidate.Value,token);
-                    if(result.Success) _engine.MarkHealthy(key);
-                    else _engine.RegisterFailureKey(key,"service",result.FailureClass,result.Message);
+                    if(result.Success)
+                    {
+                        _engine.MarkHealthy(key);
+                    }
+                    else if(result.FailureClass is "timeout" or "server_error")
+                    {
+                        _engine.RegisterFailureKey(key,"service",result.FailureClass,result.Message);
+                    }
+                    else
+                    {
+                        // A service probe made through one credential can reveal that
+                        // credential/model is bad without proving the provider host is
+                        // down. Do not let a 401/403/billing/model error poison every
+                        // independent account on the service.
+                        _engine.MarkHealthy(key);
+                        _engine.RegisterFailureKey("connection:"+candidate.Key,"connection",result.FailureClass,result.Message,candidate.Value);
+                    }
                 }
                 else _engine.MarkHealthy(key);
             }
