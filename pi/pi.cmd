@@ -8,7 +8,7 @@ if exist "%~dp0runtime\node.exe" (
 )
 where pi >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
-  pi %*
+  pi --extension "%~dp0extensions\\statefulclanker.ts" %*
   exit /b %ERRORLEVEL%
 )
 echo Bundled Pi runtime is missing. Reinstall StatefulClanker or install @earendil-works/pi-coding-agent. 1>&2
