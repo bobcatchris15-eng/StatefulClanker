@@ -45,10 +45,10 @@ try {
     Assert-True $ready 'Router daemon did not become ready.'
 
     Write-Host '  ROUTER 1: one active lease per exact endpoint and round-robin spreads work'
-    $a=Call-Router @('acquire','--session','s1')
-    $b=Call-Router @('acquire','--session','s2')
+    $a=Call-Router @('acquire','--session','s1','--owner-pid',[string]$PID)
+    $b=Call-Router @('acquire','--session','s2','--owner-pid',[string]$PID)
     Assert-True ([string]$a.data.endpoint -ne [string]$b.data.endpoint) 'Second worker received an already-leased endpoint.'
-    $c=Call-Router @('acquire','--session','s3','--preferred',[string]$a.data.endpoint)
+    $c=Call-Router @('acquire','--session','s3','--preferred',[string]$a.data.endpoint,'--owner-pid',[string]$PID)
     Assert-True ([string]$c.data.endpoint -ne [string]$a.data.endpoint) 'Preferred endpoint bypassed an active lease.'
     Assert-True (-not [bool]$c.data.preferredHonored) 'Busy preferred route was reported as honored.'
 
@@ -85,8 +85,33 @@ try {
     } while(@($same|Where-Object { [bool]$_.available }).Count -eq 0 -and (Get-Date) -lt $deadline)
     Assert-True (@($same|Where-Object { [bool]$_.available }).Count -gt 0) 'Configuration change did not release auth quarantine.'
 
+    Write-Host '  ROUTER 6: live worker lease survives router daemon restart'
+    $leasedEndpoint=[string]$c.data.endpoint
+    Stop-Process -Id $daemon.Id -Force
+    $daemon.WaitForExit()
+    $daemon=Start-Process -FilePath $router -ArgumentList 'daemon' -PassThru -WindowStyle Hidden
+    $ready=$false
+    foreach($i in 1..30){Start-Sleep -Milliseconds 100;try{[void](Call-Router @('ping'));$ready=$true;break}catch{}}
+    Assert-True $ready 'Restarted router daemon did not become ready.'
+    $snap=(Call-Router @('snapshot')).data
+    $persisted=@($snap.routes|Where-Object { [string]$_.endpoint -eq $leasedEndpoint })[0]
+    Assert-True ([bool]$persisted.leased) 'Live worker lease disappeared across router restart.'
+    Assert-True ([int]$snap.activeLeases -ge 1) 'Restarted router did not restore durable leases.'
     [void](Call-Router @('release','--lease',[string]$c.data.lease))
-    Write-Host 'PASS: compiled router owns leases, scopes failures correctly, recovers cooldowns, and notices connection changes.'
+
+    Write-Host '  ROUTER 7: dead worker PID causes monitor to reclaim its endpoint'
+    $owner=Start-Process -FilePath $PSHOME\pwsh.exe -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 30' -PassThru -WindowStyle Hidden
+    $deadLease=Call-Router @('acquire','--session','dead-owner','--owner-pid',[string]$owner.Id)
+    Stop-Process -Id $owner.Id -Force
+    $owner.WaitForExit()
+    $deadline=(Get-Date).AddSeconds(6)
+    do {
+        Start-Sleep -Milliseconds 300
+        $snap=(Call-Router @('snapshot')).data
+    } while([int]$snap.activeLeases -gt 0 -and (Get-Date) -lt $deadline)
+    Assert-True ([int]$snap.activeLeases -eq 0) 'Dead worker process left a durable endpoint lease behind.'
+
+    Write-Host 'PASS: compiled router owns durable worker leases, scopes failures correctly, recovers cooldowns, and notices connection changes.'
 }
 finally {
     if($daemon -and -not $daemon.HasExited){Stop-Process -Id $daemon.Id -Force -ErrorAction SilentlyContinue}
