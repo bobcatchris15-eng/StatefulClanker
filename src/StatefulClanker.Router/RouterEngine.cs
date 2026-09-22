@@ -85,6 +85,7 @@ public sealed class RouterEngine
             model=selected.Endpoint.model,
             sessionId=sessionId,
             ownerPid=ownerPid,
+            ownerStartedAt=OwnerStartedAt(ownerPid),
             acquiredAt=DateTimeOffset.UtcNow.ToString("O"),
             expiresAt=DateTimeOffset.UtcNow.AddMinutes(45).ToString("O")
         };
@@ -227,8 +228,14 @@ public sealed class RouterEngine
             foreach(var kv in _leasesByToken.ToArray())
             {
                 var expired=!DateTimeOffset.TryParse(kv.Value.expiresAt,out var at) || at<=now;
-                var ownerGone=kv.Value.ownerPid>0 && !ProcessAlive(kv.Value.ownerPid);
-                if(!expired && !ownerGone) continue;
+                // For process-owned leases, worker identity is authoritative. A long
+                // inference may legitimately outlive the nominal TTL; do not double-book
+                // that endpoint while the same worker process is still alive. The stored
+                // start time also protects against Windows PID reuse after router restart.
+                var stale=kv.Value.ownerPid>0
+                    ? !ProcessMatches(kv.Value.ownerPid,kv.Value.ownerStartedAt)
+                    : expired;
+                if(!stale) continue;
                 _leasesByToken.Remove(kv.Key);
                 _tokenByRoute.Remove(kv.Value.route);
                 changed=true;
@@ -265,12 +272,27 @@ public sealed class RouterEngine
         _store.SaveLeases(doc);
     }
 
-    static bool ProcessAlive(int pid)
+    static string? OwnerStartedAt(int pid)
+    {
+        if(pid<=0) return null;
+        try
+        {
+            using var process=System.Diagnostics.Process.GetProcessById(pid);
+            return process.StartTime.ToUniversalTime().ToString("O");
+        }
+        catch { return null; }
+    }
+
+    static bool ProcessMatches(int pid,string? expectedStartedAt)
     {
         try
         {
             using var process=System.Diagnostics.Process.GetProcessById(pid);
-            return !process.HasExited;
+            if(process.HasExited) return false;
+            if(string.IsNullOrWhiteSpace(expectedStartedAt)) return true;
+            if(!DateTimeOffset.TryParse(expectedStartedAt,out var expected)) return true;
+            var actual=new DateTimeOffset(process.StartTime.ToUniversalTime(),TimeSpan.Zero);
+            return Math.Abs((actual-expected).TotalSeconds)<1;
         }
         catch { return false; }
     }
