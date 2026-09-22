@@ -55,6 +55,11 @@ function Get-SCConnectionProtocol($Connection) {
     if($Connection.PSObject.Properties['protocol']-and$Connection.protocol){return [string]$Connection.protocol}
     return 'openai-chat'
 }
+function Get-SCConnectionAuthKind($Connection) {
+    if($Connection.PSObject.Properties['authKind']-and$Connection.authKind){return ([string]$Connection.authKind).ToLowerInvariant()}
+    if((Get-SCConnectionProtocol $Connection)-eq'anthropic-messages'){return 'x-api-key'}
+    return 'bearer'
+}
 function Get-SCApiUri($Connection) {
     $base=[string]$Connection.baseUrl;if([string]::IsNullOrWhiteSpace($base)){throw 'API connection baseUrl is required.'}
     if($Connection.PSObject.Properties['chatPath']-and$Connection.chatPath){return $base.TrimEnd('/')+'/'+([string]$Connection.chatPath).TrimStart('/')}
@@ -83,19 +88,18 @@ function New-SCApiHeaders($Connection) {
     $headers=@{'Accept'='application/json'}
     $key=Get-SCApiKey $Connection
     if($key){
-        # Anthropic's native Messages API authenticates with x-api-key, not a Bearer
-        # token -- everything else this project talks to (OpenAI-compatible gateways)
-        # uses Authorization: Bearer.
-        if((Get-SCConnectionProtocol $Connection)-eq'anthropic-messages'){$headers['x-api-key']=$key}
-        else{$headers['Authorization']='Bearer '+$key}
+        switch(Get-SCConnectionAuthKind $Connection){
+            'x-api-key' {$headers['x-api-key']=$key}
+            'none' {}
+            default {$headers['Authorization']='Bearer '+$key}
+        }
     }
-    if($Connection.PSObject.Properties['headers']-and$Connection.headers){foreach($k in (ConvertTo-SCHashtable $Connection.headers).Keys){$headers[$k]=(ConvertTo-SCHashtable $Connection.headers)[$k]}}
-    # OpenCode Zen/Go require x-opencode-session. It is not an auth token: it is a
-    # per-project session id used server-side for prompt-cache routing. The stored
-    # value in the machine connection is only a marker that this header is required.
-    # The actual id is a stable UUID derived from the project root, so each project
-    # gets its own session (good cache reuse within a project) and different projects
-    # never share one (no cross-project cache bleed).
+    if($Connection.PSObject.Properties['headers']-and$Connection.headers){
+        $extra=ConvertTo-SCHashtable $Connection.headers
+        foreach($k in $extra.Keys){$headers[$k]=$extra[$k]}
+    }
+    # OpenCode uses a stable project session id for cache routing. The preset merely
+    # declares the header; the user never has to manufacture or maintain its value.
     if($headers.ContainsKey('x-opencode-session')){$headers['x-opencode-session']=Get-SCProjectSessionId}
     return $headers
 }
@@ -389,30 +393,41 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
     $uri=Get-SCApiUri $Connection
     $headers=New-SCApiHeaders $Connection
-    $maxAttempts=2
-    for($attempt=1;$attempt-le$maxAttempts;$attempt++){
-        try{
-            return Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 300
-        }catch{
-            $ex=$_;$status=0
-            if($ex.Exception -and $ex.Exception.PSObject.Properties['Response'] -and $ex.Exception.Response){try{$status=[int]$ex.Exception.Response.StatusCode}catch{}}
-            $network=$ex.Exception.Message -match '(?i)timeout|timed out|forcibly closed|connection refused|reset by peer|network is unreachable'
-            $sameEndpointRetry=($status -in @(408,500,502,503,504)) -or $network
-            if($attempt-lt$maxAttempts -and $sameEndpointRetry){Start-Sleep -Milliseconds (Get-Random -Minimum 900 -Maximum 1500);continue}
-            $retryAfter=''
-            try{
-                if($ex.Exception.Response -and $ex.Exception.Response.Headers){
-                    $ra=$ex.Exception.Response.Headers.RetryAfter
-                    if($ra){
-                        if($ra.Delta){$retryAfter=" Retry-After: $([Math]::Max(1,[int][Math]::Ceiling($ra.Delta.TotalSeconds)))"}
-                        elseif($ra.Date){$retryAfter=" Retry-After: $($ra.Date.ToUniversalTime().ToString('R'))"}
-                        else{$retryAfter=" Retry-After: $ra"}
-                    }
-                }
-            }catch{}
-            $statusText=if($status-gt0){" HTTP $status"}else{''}
-            throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$retryAfter"
+    $timeout=300
+    if($Connection.PSObject.Properties['requestTimeoutSeconds'] -and [int]$Connection.requestTimeoutSeconds-gt0){
+        $timeout=[Math]::Min(1800,[Math]::Max(15,[int]$Connection.requestTimeoutSeconds))
+    }
+    try{
+        # Do not automatically replay an ambiguous failed POST against the same
+        # endpoint. The router owns failover; a timeout may have reached the model
+        # and duplicating it can waste quota or mutate a persistent session twice.
+        return Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec $timeout
+    }catch{
+        $ex=$_;$status=0;$response=$null
+        if($ex.Exception -and $ex.Exception.PSObject.Properties['Response'] -and $ex.Exception.Response){
+            $response=$ex.Exception.Response
+            try{$status=[int]$response.StatusCode}catch{}
         }
+        $headerParts=@()
+        if($response-and$response.PSObject.Properties['Headers']-and$response.Headers){
+            foreach($name in @('Retry-After','RateLimit-Reset','X-RateLimit-Reset','X-RateLimit-Reset-Requests','X-RateLimit-Reset-Tokens','X-RateLimit-Remaining','X-RateLimit-Limit')){
+                try{
+                    $value=$null
+                    if($response.Headers.PSObject.Methods['TryGetValues']){
+                        $values=$null
+                        if($response.Headers.TryGetValues($name,[ref]$values)){$value=(@($values)-join',')}
+                    }elseif($response.Headers[$name]){$value=[string]$response.Headers[$name]}
+                    if($value){$headerParts+=("$name: $value")}
+                }catch{}
+            }
+        }
+        $detail=''
+        try{if($ex.ErrorDetails-and$ex.ErrorDetails.Message){$detail=[string]$ex.ErrorDetails.Message}}catch{}
+        if($detail.Length-gt2000){$detail=$detail.Substring(0,2000)}
+        $statusText=if($status-gt0){" HTTP $status"}else{''}
+        $metadata=if($headerParts.Count){' '+($headerParts-join'; ')}else{''}
+        $bodyDetail=if($detail){" Body: $detail"}else{''}
+        throw "Direct inference request failed$statusText: $($ex.Exception.Message)$metadata$bodyDetail"
     }
 }
 function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
