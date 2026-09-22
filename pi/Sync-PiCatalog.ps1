@@ -45,17 +45,31 @@ foreach($connectionName in $groups.Keys){
             $headers[$h.Name]=$value
         }
     }
+    $piApi=switch($protocol){
+        'anthropic-messages' {'anthropic-messages'}
+        'gemini-native' {'google-generative-ai'}
+        default {'openai-completions'}
+    }
     $provider=[ordered]@{
         baseUrl=[string]$c.baseUrl
-        api=if($protocol-eq'anthropic-messages'){'anthropic-messages'}else{'openai-completions'}
+        api=$piApi
         authHeader=$false
         models=@()
     }
-    if($authKind-eq'x-api-key'){
-        $provider.apiKey='statefulclanker-header-auth'
-        if($hasKey){$headers['x-api-key']=$credential}
-    }elseif($authKind-eq'none' -or -not$hasKey){
+    if($authKind-eq'none' -or -not$hasKey){
+        # Pi requires an apiKey field when defining custom models even for local/keyless
+        # services. This placeholder is never sent as Bearer because authHeader is false.
         $provider.apiKey='statefulclanker-keyless'
+    }elseif($protocol-eq'anthropic-messages' -or $protocol-eq'gemini-native'){
+        # Pi's native Anthropic/Google transports consume apiKey themselves and emit
+        # x-api-key / x-goog-api-key as appropriate.
+        $provider.apiKey=$credential
+    }elseif($authKind-eq'x-api-key'){
+        $provider.apiKey='statefulclanker-header-auth'
+        $headers['x-api-key']=$credential
+    }elseif($authKind-eq'x-goog-api-key'){
+        $provider.apiKey='statefulclanker-header-auth'
+        $headers['x-goog-api-key']=$credential
     }else{
         $provider.apiKey=$credential;$provider.authHeader=$true
     }
