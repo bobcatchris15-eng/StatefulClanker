@@ -338,7 +338,8 @@ sealed class EmbeddedTerminalPanel : UserControl
             _elementHost.Enter += (_, _) => BeginInvoke(new Action(FocusTerminal));
             _elementHost.GotFocus += (_, _) => BeginInvoke(new Action(FocusTerminal));
             _terminal.PreviewMouseDown += (_, _) => FocusTerminal();
-            _terminal.GotKeyboardFocus += (_, _) => _lastKeyUtc = DateTime.UtcNow;
+            _terminal.PreviewMouseWheel += (_, _) => FocusTerminal();
+            _terminal.GotKeyboardFocus += (_, _) => { _lastKeyUtc = DateTime.UtcNow; _status.Text = "KEYBOARD READY  |  " + _currentCommand; _status.ForeColor = Theme.Good; };
 
             _currentCommand = command;
             _status.Text = $"RUNNING  {command}   @   {_projectPath}";
@@ -397,6 +398,11 @@ sealed class EmbeddedTerminalPanel : UserControl
         _preset.SelectedItem = "OpenCode";
         _ = StartCommandAsync(ToolViaShell("opencode"), true);
     }
+
+    public bool ConsoleHasKeyboardFocus =>
+        (_elementHost?.ContainsFocus ?? false) ||
+        (_terminal?.IsKeyboardFocusWithin ?? false) ||
+        (_terminal?.Terminal?.IsKeyboardFocusWithin ?? false);
 
     public void FocusConsole() => FocusTerminal();
 
