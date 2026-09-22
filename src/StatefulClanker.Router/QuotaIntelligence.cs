@@ -66,11 +66,13 @@ public static partial class QuotaIntelligence
         // Groq expose both simultaneously with different reset windows.
         var requestRemaining=FirstNumber(h,
             "anthropic-ratelimit-requests-remaining",
+            "x-ratelimit-remaining-requests-day",
             "x-ratelimit-remaining-requests",
             "ratelimit-remaining",
             "x-ratelimit-remaining");
         var requestLimit=FirstNumber(h,
             "anthropic-ratelimit-requests-limit",
+            "x-ratelimit-limit-requests-day",
             "x-ratelimit-limit-requests",
             "ratelimit-limit",
             "x-ratelimit-limit");
@@ -78,16 +80,25 @@ public static partial class QuotaIntelligence
             "anthropic-ratelimit-tokens-remaining",
             "anthropic-ratelimit-input-tokens-remaining",
             "anthropic-ratelimit-output-tokens-remaining",
+            "x-ratelimit-remaining-tokens-minute",
             "x-ratelimit-remaining-tokens");
         var tokenLimit=FirstNumber(h,
             "anthropic-ratelimit-tokens-limit",
             "anthropic-ratelimit-input-tokens-limit",
             "anthropic-ratelimit-output-tokens-limit",
+            "x-ratelimit-limit-tokens-minute",
             "x-ratelimit-limit-tokens");
 
-        var requestWindow=AddWindow(q,"requests",null,requestLimit,requestRemaining,"headers","reported",
+        var dayMinuteProvider=string.Equals(providerId,"groq",StringComparison.OrdinalIgnoreCase) ||
+                              string.Equals(providerId,"cerebras",StringComparison.OrdinalIgnoreCase);
+        var requestKind=dayMinuteProvider ? "requests_per_day" : "requests";
+        var tokenKind=dayMinuteProvider ? "tokens_per_minute" : "tokens";
+        var requestUnit=dayMinuteProvider ? "requests/day" : null;
+        var tokenUnit=dayMinuteProvider ? "tokens/minute" : null;
+
+        var requestWindow=AddWindow(q,requestKind,requestUnit,requestLimit,requestRemaining,"headers","reported",
             requestRemaining is not null || requestLimit is not null ? $"requests remaining={requestRemaining}; limit={requestLimit}" : null);
-        var tokenWindow=AddWindow(q,"tokens",null,tokenLimit,tokenRemaining,"headers","reported",
+        var tokenWindow=AddWindow(q,tokenKind,tokenUnit,tokenLimit,tokenRemaining,"headers","reported",
             tokenRemaining is not null || tokenLimit is not null ? $"tokens remaining={tokenRemaining}; limit={tokenLimit}" : null);
 
         // Back-compat summary: requests are the first scheduling gate, then tokens.
@@ -129,8 +140,10 @@ public static partial class QuotaIntelligence
             (name:"anthropic-ratelimit-tokens-reset",kind:"tokens"),
             (name:"anthropic-ratelimit-input-tokens-reset",kind:"input_tokens"),
             (name:"anthropic-ratelimit-output-tokens-reset",kind:"output_tokens"),
-            (name:"x-ratelimit-reset-requests",kind:"requests"),
-            (name:"x-ratelimit-reset-tokens",kind:"tokens"),
+            (name:"x-ratelimit-reset-requests-day",kind:"requests_per_day"),
+            (name:"x-ratelimit-reset-tokens-minute",kind:"tokens_per_minute"),
+            (name:"x-ratelimit-reset-requests",kind:dayMinuteProvider ? "requests_per_day" : "requests"),
+            (name:"x-ratelimit-reset-tokens",kind:dayMinuteProvider ? "tokens_per_minute" : "tokens"),
             (name:"ratelimit-reset",kind:q.limiter ?? "requests"),
             (name:"x-ratelimit-reset",kind:q.limiter ?? "requests")
         })
@@ -194,6 +207,13 @@ public static partial class QuotaIntelligence
             if(q.resetAt is null) q.resetAt=reset.ToString("O");
         }
 
+        if(string.Equals(providerId,"kilo",StringComparison.OrdinalIgnoreCase))
+        {
+            AddWindow(q,"free_model_requests_per_ip","requests/hour",200,null,
+                "provider-rule","derived",
+                "Kilo free-model traffic is limited to 200 requests/hour/IP; rolling-window reset is not published.");
+        }
+
         if(q.nextAvailableAt is not null && DateTimeOffset.TryParse(q.nextAvailableAt,out var n) && n<=now)
             q.nextAvailableAt=null;
         if(q.resetAt is not null && DateTimeOffset.TryParse(q.resetAt,out var rAt) && rAt<=now)
@@ -226,6 +246,8 @@ public static partial class QuotaIntelligence
             "X-RateLimit-Limit","X-RateLimit-Remaining","X-RateLimit-Reset",
             "X-RateLimit-Limit-Requests","X-RateLimit-Remaining-Requests","X-RateLimit-Reset-Requests",
             "X-RateLimit-Limit-Tokens","X-RateLimit-Remaining-Tokens","X-RateLimit-Reset-Tokens",
+            "X-RateLimit-Limit-Requests-Day","X-RateLimit-Remaining-Requests-Day","X-RateLimit-Reset-Requests-Day",
+            "X-RateLimit-Limit-Tokens-Minute","X-RateLimit-Remaining-Tokens-Minute","X-RateLimit-Reset-Tokens-Minute",
             "Anthropic-RateLimit-Requests-Limit","Anthropic-RateLimit-Requests-Remaining","Anthropic-RateLimit-Requests-Reset",
             "Anthropic-RateLimit-Tokens-Limit","Anthropic-RateLimit-Tokens-Remaining","Anthropic-RateLimit-Tokens-Reset",
             "Anthropic-RateLimit-Input-Tokens-Limit","Anthropic-RateLimit-Input-Tokens-Remaining","Anthropic-RateLimit-Input-Tokens-Reset",

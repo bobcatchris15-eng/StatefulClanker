@@ -17,7 +17,6 @@ public sealed class EndpointMonitor
     readonly RouterStore _store;
     readonly HttpClient _http=new(){Timeout=TimeSpan.FromSeconds(15)};
     readonly Dictionary<string,DateTimeOffset> _nextQuotaProbe=new(StringComparer.OrdinalIgnoreCase);
-    static readonly TimeSpan HealthyProbeInterval=TimeSpan.FromMinutes(5);
 
     public EndpointMonitor(RouterEngine engine)
     {
@@ -153,12 +152,15 @@ public sealed class EndpointMonitor
     {
         foreach(var kv in connections.OrderBy(x=>x.Key,StringComparer.OrdinalIgnoreCase))
         {
-            if(SkipPeriodicProbe(kv.Value)) continue;
+            var plan=ProviderProbeCatalog.Resolve(kv.Value);
+            if(!plan.Enabled) continue;
             if(_nextQuotaProbe.TryGetValue(kv.Key,out var due) && due>now) continue;
 
-            _nextQuotaProbe[kv.Key]=now.Add(HealthyProbeInterval);
-            var result=await ProbeAsync(kv.Value,token);
+            var result=await ProbeAsync(kv.Value,plan,token);
             RecordQuota(kv.Key,kv.Value,result.Quota);
+
+            var useful=HasQuotaSignal(result.Quota);
+            _nextQuotaProbe[kv.Key]=now.Add(useful ? plan.UsefulInterval : plan.SilentInterval);
 
             // A metadata probe is evidence of a broken credential, but its own
             // 429/5xx window is not necessarily the inference window. Record those
@@ -182,7 +184,9 @@ public sealed class EndpointMonitor
 
     async Task ProbeConnectionHealthAsync(string name,ConnectionProfile profile,CancellationToken token)
     {
-        var result=await ProbeAsync(profile,token);
+        var plan=ProviderProbeCatalog.Resolve(profile);
+        if(!plan.Enabled) return;
+        var result=await ProbeAsync(profile,plan,token);
         RecordQuota(name,profile,result.Quota);
         var key="connection:"+name;
         if(result.Success) _engine.MarkHealthy(key);
@@ -198,15 +202,21 @@ public sealed class EndpointMonitor
         _engine.RecordQuotaObservation("connection:"+connectionName,"connection",quota,profile);
     }
 
-    async Task<ProbeResult> ProbeAsync(ConnectionProfile p,CancellationToken token)
+    async Task<ProbeResult> ProbeAsync(ConnectionProfile p,CancellationToken token) =>
+        await ProbeAsync(p,ProviderProbeCatalog.Resolve(p),token);
+
+    async Task<ProbeResult> ProbeAsync(ConnectionProfile p,ProviderProbePlan plan,CancellationToken token)
     {
         try
         {
-            var uri=ProbeUri(p);
-            using var request=new HttpRequestMessage(HttpMethod.Get,uri);
+            if(!plan.Enabled || plan.Uri is null)
+                return new ProbeResult(true,0,"","",
+                    QuotaIntelligence.Observe(p.presetId,null,null,"",true));
+
+            using var request=new HttpRequestMessage(plan.Method,plan.Uri);
             foreach(var h in p.headers) request.Headers.TryAddWithoutValidation(h.Key,h.Value);
             var key=ResolveKey(p);
-            if(!string.IsNullOrWhiteSpace(key))
+            if(plan.ApplyConnectionAuth && !string.IsNullOrWhiteSpace(key))
             {
                 switch((p.authKind??"bearer").Trim().ToLowerInvariant())
                 {
@@ -219,8 +229,7 @@ public sealed class EndpointMonitor
 
             using var response=await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,token);
             var headers=Headers(response);
-            var readBody=!response.IsSuccessStatusCode ||
-                         string.Equals(p.presetId,"openrouter",StringComparison.OrdinalIgnoreCase);
+            var readBody=!response.IsSuccessStatusCode || plan.ReadSuccessBody;
             var body=readBody ? await ReadBodyBounded(response,token) : "";
             var quota=QuotaIntelligence.Observe(
                 p.presetId,
@@ -269,31 +278,10 @@ public sealed class EndpointMonitor
         return body.Length<=16384 ? body : body[..16384];
     }
 
-    static Uri ProbeUri(ConnectionProfile p)
-    {
-        // OpenRouter exposes authenticated key budget/reset metadata without
-        // consuming inference. Other providers are sampled through their existing
-        // model-list endpoint, harvesting whatever quota headers they return.
-        if(string.Equals(p.presetId,"openrouter",StringComparison.OrdinalIgnoreCase))
-            return new Uri("https://openrouter.ai/api/v1/key");
-        return ModelsUri(p);
-    }
-
-    static Uri ModelsUri(ConnectionProfile p)
-    {
-        var baseUri=p.baseUrl.TrimEnd('/');
-        var path=string.IsNullOrWhiteSpace(p.modelsPath)?"/models":p.modelsPath;
-        if(Uri.TryCreate(path,UriKind.Absolute,out var absolute)) return absolute;
-        return new Uri(baseUri+"/"+path.TrimStart('/'));
-    }
-
-    static bool SkipPeriodicProbe(ConnectionProfile p)
-    {
-        var id=(p.presetId??"").Trim().ToLowerInvariant();
-        if(id is "ollama" or "lmstudio" or "vllm") return true;
-        if(string.IsNullOrWhiteSpace(p.baseUrl)) return true;
-        return false;
-    }
+    static bool HasQuotaSignal(QuotaObservation q) =>
+        q.nextAvailableAt is not null || q.resetAt is not null ||
+        q.remaining is not null || q.limit is not null ||
+        q.windows.Count>0 || !string.Equals(q.source,"none",StringComparison.OrdinalIgnoreCase);
 
     static string? ResolveKey(ConnectionProfile p)
     {
