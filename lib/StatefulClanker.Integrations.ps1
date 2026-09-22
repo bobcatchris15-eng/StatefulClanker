@@ -35,6 +35,11 @@ function Get-SCInstallRoot {
     # lib/ lives directly under the install root.
     return (Split-Path -Parent $PSScriptRoot)
 }
+function Get-SCBundledPiCommand {
+    $bundled=Join-Path (Get-SCInstallRoot) 'pi\pi.cmd'
+    if(Test-Path -LiteralPath $bundled){return $bundled}
+    return 'pi'
+}
 
 <# MCP client applications.
 
@@ -254,9 +259,9 @@ function Get-SCProviderPresets {
         [ordered]@{ id = 'openhands'; name = 'OpenHands'; command = 'openhands'
             args = @(); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. OpenHands CLI flags vary by version; check openhands --help.' },
-        [ordered]@{ id = 'pi'; name = 'Pi'; command = 'pi'
-            args = @('-p'); mode = 'stdin'; verified = $false
-            note = 'UNVERIFIED. Confirm the non-interactive flag with pi --help.' },
+        [ordered]@{ id = 'pi'; name = 'Pi (bundled)'; command = (Get-SCBundledPiCommand)
+            args = @('-p'); mode = 'stdin'; verified = $true
+            note = 'Bundled @mariozechner/pi-coding-agent. Print mode consumes stdin. Its machine-local models.json is regenerated from StatefulClanker connections/endpoints before launch; API secrets stay in StatefulClanker DPAPI storage.' },
         [ordered]@{ id = 'codex'; name = 'Codex CLI'; command = 'codex'
             args = @('exec'); mode = 'stdin'; verified = $false
             note = 'UNVERIFIED. Check codex exec --help.' },

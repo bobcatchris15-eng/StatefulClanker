@@ -83,11 +83,11 @@ Prefer plan_apply with SCPLAN 1 for substantial new plans. Normally delegate imp
 
 Workers must never weaken current human directives or the reconciled Intent Contract. INTENT_QUESTION and INTENT_CONFLICT are successful detection of specification uncertainty: surface them to the human rather than penalizing the worker or guessing.
 
-TARGET-POOL MAINTENANCE IS OPERATIONAL, NOT SEMANTIC AUTHORITY
+ENDPOINT CATALOG MAINTENANCE IS MACHINE-OPERATIONAL, NOT PROJECT AUTHORITY
 
-Automatic inference routing draws worker, critic, and validator calls from one project-local target pool using health-aware pseudo-round-robin. Do not assign models to permanent roles or rank them by presumed intelligence. The working hypothesis is that sufficiently capable workhorse models plus strong tooling/context/decomposition are interchangeable enough for these bounded tasks.
+StatefulClanker has one active project at a time. Automatic inference routing draws every worker/validator call from one machine endpoint catalog of provider+model pairs using health-aware round-robin. The dispatcher does not choose a model, and models are not assigned permanent semantic roles. One worker may occupy an endpoint at a time.
 
-Use connection_catalog to inspect the machine's live discovered catalogs and target_pool_list to inspect current project choices. When the pool is stale, sparse, or contains ambiguous free-tier entries, briefly research current provider/model availability and then use target_pool_upsert/target_pool_remove to maintain it. Prefer currently free or local chat/coding models with tool calling when available and enough context for the compiled packet. Record a compact rationale and researchedAt timestamp. Free-tier claims are time-sensitive operational facts, not durable Intent. Never copy credentials or secrets into project state.
+Use connection_catalog to inspect live discovered provider catalogs and target_pool_list to inspect the machine endpoint set. Use target_pool_upsert/target_pool_remove to maintain that operational set. Prefer currently usable free/local chat or coding models with tool calling and enough context for bounded work. Free-tier claims are time-sensitive operational facts, not durable Intent. Credentials remain machine-local and must never enter project state.
 '@
 }
 
@@ -185,24 +185,24 @@ function Get-McpConnectionCatalog([string]$Connection=$null) {
 }
 
 function Get-McpTargetPoolPath([string]$Project) {
-    $dir=Join-Path (Get-McpStateDir $Project) 'routing'
+    $dir=Join-Path $env:LOCALAPPDATA 'StatefulClanker'
     if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
-    return Join-Path $dir 'target-pool.json'
+    return Join-Path $dir 'endpoints.json'
 }
 
 function Get-McpTargetPool([string]$Project) {
     $path=Get-McpTargetPoolPath $Project
-    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return [pscustomobject]@{schemaVersion=1;updatedAt=$null;entries=[pscustomobject]@{}}}
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return [pscustomobject]@{schemaVersion=2;updatedAt=$null;entries=[pscustomobject]@{}}}
     try{
         $pool=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json
         if(-not$pool.PSObject.Properties['entries']){$pool|Add-Member -NotePropertyName entries -NotePropertyValue ([pscustomobject]@{}) -Force}
         return $pool
-    }catch{throw "Target pool is invalid JSON: $($_.Exception.Message)"}
+    }catch{throw "Machine endpoint catalog is invalid JSON: $($_.Exception.Message)"}
 }
 
 function Save-McpTargetPool([string]$Project,$Pool) {
     $path=Get-McpTargetPoolPath $Project
-    if(-not$Pool.PSObject.Properties['schemaVersion']){$Pool|Add-Member -NotePropertyName schemaVersion -NotePropertyValue 1 -Force}else{$Pool.schemaVersion=1}
+    if(-not$Pool.PSObject.Properties['schemaVersion']){$Pool|Add-Member -NotePropertyName schemaVersion -NotePropertyValue 2 -Force}else{$Pool.schemaVersion=2}
     if(-not$Pool.PSObject.Properties['updatedAt']){$Pool|Add-Member -NotePropertyName updatedAt -NotePropertyValue ([datetimeoffset]::UtcNow.ToString('o')) -Force}else{$Pool.updatedAt=[datetimeoffset]::UtcNow.ToString('o')}
     $tmp=$path+'.tmp'
     $json=$Pool|ConvertTo-Json -Depth 30
@@ -382,10 +382,10 @@ function New-SCExtendedTools {
         @{name='task_recovery_context';description='Read one stalled task recovery dossier: task state plus latest compilation, worker receipt, proposal, critic, validator, progress, and recent task events. Use this before asking the human about a mechanical/review stall.';inputSchema=@{type='object';properties=@{project=@{type='string'};taskId=@{type='string'}};required=@('taskId')}},
         @{name='task_repair';description='CONTROL-PLANE RECOVERY: repair a stalled non-human-gated task definition/graph metadata after investigation, reset exhausted failure counters, and return it to readiness. Requires a reason, concrete evidence, and an explicit patch. Does not change Human Directives or Intent.';inputSchema=@{type='object';properties=@{project=@{type='string'};taskId=@{type='string'};reason=@{type='string'};evidence=@{type='array';items=@{type='string'}};patch=@{type='object';description='Supported fields include title, instruction, size, outputKind, acceptance, dependsOn, relations, retrieval, evidence, provider, role, sources, intentRefs, capabilityProfile, toolPolicy, implications, proofObligations, parentTaskId, childTaskIds.'}};required=@('taskId','reason','evidence','patch')}},
         @{name='task_recover_complete';description='LAST-RESORT CONTROL-PLANE RECOVERY: mark a stalled non-human-gated task complete when concrete current evidence proves the work already satisfies current Human Directives and reconciled Intent despite a broken/repeated review loop. Audited as a review-gate bypass; never use for unresolved human intent.';inputSchema=@{type='object';properties=@{project=@{type='string'};taskId=@{type='string'};reason=@{type='string'};evidence=@{type='array';items=@{type='string'}}};required=@('taskId','reason','evidence')}},
-        @{name='connection_catalog';description='Read sanitized machine inference connections and their last discovered model catalogs. Secrets and custom headers are never returned. Use this before maintaining the project target pool.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string';description='Optional connection name to inspect.'}}}},
-        @{name='target_pool_list';description='Read the project-local workhorse model target pool used by automatic pseudo-round-robin routing.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
-        @{name='target_pool_upsert';description='Add or update one discovered connection/model in the automatic workhorse target pool. Record a short rationale and research date when Clanker has checked current suitability/free status.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'};displayName=@{type='string'};enabled=@{type='boolean'};workhorse=@{type='boolean'};free=@{type='boolean'};supportsTools=@{type='boolean'};contextLength=@{type='integer';minimum=1};toolMode=@{type='string';enum=@('native','text')};rationale=@{type='string'};researchedAt=@{type='string';description='ISO-8601 timestamp; defaults to now when rationale is supplied.'};source=@{type='string';description='Defaults to clanker.'}};required=@('connection','model')}},
-        @{name='target_pool_remove';description='Remove one connection/model from the project target pool without altering the machine connection or discovered catalog.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'}};required=@('connection','model')}}
+        @{name='connection_catalog';description='Read sanitized machine inference connections and their last discovered model catalogs. Secrets and custom headers are never returned. Use this before maintaining the machine endpoint catalog.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string';description='Optional connection name to inspect.'}}}},
+        @{name='target_pool_list';description='Read the machine endpoint catalog used by automatic health-aware round-robin routing.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
+        @{name='target_pool_upsert';description='Add or update one discovered connection/model in the machine endpoint catalog. Record a short rationale and research date when Clanker has checked current suitability/free status.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'};displayName=@{type='string'};enabled=@{type='boolean'};workhorse=@{type='boolean'};free=@{type='boolean'};supportsTools=@{type='boolean'};contextLength=@{type='integer';minimum=1};toolMode=@{type='string';enum=@('native','text')};rationale=@{type='string'};researchedAt=@{type='string';description='ISO-8601 timestamp; defaults to now when rationale is supplied.'};source=@{type='string';description='Defaults to clanker.'}};required=@('connection','model')}},
+        @{name='target_pool_remove';description='Remove one connection/model from the machine endpoint catalog without altering the machine connection or discovered catalog.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'}};required=@('connection','model')}}
     )
 }
 

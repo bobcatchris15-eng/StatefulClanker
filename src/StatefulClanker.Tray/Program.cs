@@ -316,6 +316,8 @@ sealed class ActiveAgentInfo
     public string AgentId = "";
     public string TaskId = "";
     public string Type = "Worker";
+    public string Endpoint = "";
+    public string Model = "";
 }
 
 sealed class TaskBoardEntry
@@ -382,6 +384,7 @@ sealed class UiSnapshot
     public McpDetails? Mcp;
     public ProjectMetrics Project = new();
     public AutofillSnapshot Autofill = new();
+    public EndpointQueuePreview NextEndpoint = new();
     public List<IntegrationStatus> Integrations = new();
     public List<ProviderStatus> Providers = new();
     public bool HasProject;
@@ -422,6 +425,8 @@ static class Inspector
                 var info = new ActiveAgentInfo { AgentId = System.IO.Path.GetFileNameWithoutExtension(file) };
                 info.TaskId = tidStr ?? "";
                 if (r.TryGetProperty("agentId", out var aid) && aid.ValueKind == JsonValueKind.String) info.AgentId = aid.GetString() ?? info.AgentId;
+                if (r.TryGetProperty("endpoint", out var ep) && ep.ValueKind == JsonValueKind.String) info.Endpoint = ep.GetString() ?? "";
+                if (r.TryGetProperty("model", out var md) && md.ValueKind == JsonValueKind.String) info.Model = md.GetString() ?? "";
                 info.Type = type;
                 m.ActiveAgentList.Add(info);
             } catch { }
@@ -1074,8 +1079,8 @@ sealed class QuietSplitContainer : SplitContainer
         Dock = DockStyle.Fill;
         Orientation = orientation;
         BorderStyle = BorderStyle.None;
-        SplitterWidth = 4;
-        BackColor = Theme.Separator;
+        SplitterWidth = 2;
+        BackColor = Theme.Back;
         Panel1.BackColor = Theme.Back;
         Panel2.BackColor = Theme.Back;
         TabStop = false;
@@ -1114,6 +1119,13 @@ sealed class QuietSplitContainer : SplitContainer
         }
     }
 
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        using var brush = new SolidBrush(Theme.Separator);
+        e.Graphics.FillRectangle(brush, SplitterRectangle);
+    }
+
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
@@ -1129,6 +1141,8 @@ sealed class AgentBlinkenBank : Control
     public readonly string? AgentId;
     public string TaskId { get; set; } = "";
     public string AgentType { get; set; } = "Standby";
+    public string Endpoint { get; set; } = "";
+    public string Model { get; set; } = "";
     public bool IsActive { get; set; }
 
     const int Rows = 4;
@@ -1158,8 +1172,8 @@ sealed class AgentBlinkenBank : Control
         AgentType = agentType;
         IsActive = !string.Equals(agentType, "standby", StringComparison.OrdinalIgnoreCase);
         DoubleBuffered = true;
-        Size = new Size(165, 62);
-        Margin = new Padding(3, 2, 3, 2);
+        Size = new Size(225, 84);
+        Margin = new Padding(4);
 
         for (var i = 0; i < TotalLamps; i++)
         {
@@ -1251,11 +1265,16 @@ sealed class AgentBlinkenBank : Control
 
         var labelText = string.IsNullOrEmpty(TaskId) ? AgentType.ToUpperInvariant() : $"{AgentType.ToUpperInvariant()}: {TaskId}";
         using var font = new Font("Cascadia Mono", 7.5f, FontStyle.Bold);
+        using var subFont = new Font("Cascadia Mono", 6.6f);
         using var textBrush = new SolidBrush(headerColor);
+        using var subBrush = new SolidBrush(Color.FromArgb(115, 132, 145));
         g.DrawString(labelText, font, textBrush, 8, 3);
+        var route = string.IsNullOrWhiteSpace(Endpoint) ? (string.IsNullOrWhiteSpace(Model) ? "UNASSIGNED ENDPOINT" : Model) :
+            (string.IsNullOrWhiteSpace(Model) ? Endpoint : $"{Endpoint} / {Model}");
+        g.DrawString(route, subFont, subBrush, 8, 14);
 
         var padX = 8;
-        var padY = 18;
+        var padY = 29;
         var drawW = r.Width - padX * 2;
         var drawH = r.Height - padY - 4;
         if (drawW <= 0 || drawH <= 0) return;
@@ -1309,7 +1328,7 @@ sealed class BlinkenRack : Panel
     {
         Dock = DockStyle.Fill,
         AutoScroll = true,
-        WrapContents = false,
+        WrapContents = true,
         BackColor = Color.FromArgb(10, 14, 18),
         Padding = new Padding(2)
     };
@@ -1356,11 +1375,13 @@ sealed class BlinkenRack : Panel
                 {
                     existing.TaskId = a.TaskId;
                     existing.AgentType = a.Type;
+                    existing.Endpoint = a.Endpoint;
+                    existing.Model = a.Model;
                     existing.IsActive = true;
                 }
                 else
                 {
-                    var newBank = new AgentBlinkenBank(a.AgentId, a.TaskId, a.Type);
+                    var newBank = new AgentBlinkenBank(a.AgentId, a.TaskId, a.Type) { Endpoint = a.Endpoint, Model = a.Model };
                     _banks.Add(newBank);
                     _flow.Controls.Add(newBank);
                 }
@@ -1871,7 +1892,7 @@ sealed class MainForm : Form
     readonly BlinkenRack _blinkenRack = new();
     readonly TaskBoardPanel _taskBoard = new();
     readonly RecentActivityPanel _recentActivity = new();
-    readonly OrchestratorStatusPanel _orchestratorStatus = new();
+    readonly OverviewReadoutPanel _overviewReadout = new();
     readonly EmbeddedTerminalPanel _terminal = new();
     readonly DataGridView _integrations = new(), _providers = new(), _mcpImport = new();
     readonly Button _btnMcpDiscover = Btn("Discover", 100);
@@ -2104,70 +2125,73 @@ sealed class MainForm : Form
     {
         var p = Page("Overview");
 
-        var overviewSplit = new QuietSplitContainer(Orientation.Horizontal)
+        var root = new TableLayoutPanel
         {
-            Panel1MinSize = 70,
-            Panel2MinSizePending = 120,
-            ResetDistance = 285
+            Dock = DockStyle.Fill,
+            RowCount = 3,
+            ColumnCount = 1,
+            Margin = new Padding(0),
+            Padding = new Padding(8),
+            BackColor = Theme.Back
         };
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 98));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var infoScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Back };
-        var rows = new TableLayoutPanel { Dock = DockStyle.Top, Height = 366, RowCount = 6, ColumnCount = 1, Margin = new Padding(0), BackColor = Theme.Back };
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+        _overviewReadout.Margin = new Padding(0,0,0,6);
+        root.Controls.Add(_overviewReadout,0,0);
 
-        var topDeck = new QuietSplitContainer(Orientation.Vertical)
+        var controls = new FlowLayoutPanel
         {
-            Panel1MinSize = 180,
-            Panel2MinSizePending = 180,
-            ResetDistance = 255
+            Dock = DockStyle.Fill,
+            WrapContents = false,
+            AutoScroll = false,
+            Margin = new Padding(0),
+            Padding = new Padding(0,2,0,2),
+            BackColor = Theme.Back
         };
-        topDeck.Panel1.Controls.Add(_orchestratorStatus);
-        _blinkenRack.Dock = DockStyle.Fill; _blinkenRack.Margin = new Padding(6, 0, 0, 0);
-        topDeck.Panel2.Controls.Add(_blinkenRack);
-
-        var autofillBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true, BackColor = Theme.Surface, Padding = new Padding(8, 5, 4, 4) };
         _btnAutofillToggle.Click += (_, _) => ToggleAutofill();
         _btnAutofillPause.Click += (_, _) => ToggleAutofillPause();
         _btnAutofillTrigger.Click += (_, _) => TriggerAutofill();
         _numMaxConcurrent.ValueChanged += (_, _) => OnMaxConcurrentChanged();
-        var maxLbl = new Label { Text = "Max:", AutoSize = true, Margin = new Padding(4, 8, 4, 0), ForeColor = Theme.Muted };
-        _autofillStatus.AutoSize = true; _autofillStatus.Margin = new Padding(12, 8, 4, 0); _autofillStatus.Font = new Font("Cascadia Mono", 8.5f, FontStyle.Bold); _autofillStatus.ForeColor = Theme.Muted;
-        autofillBar.Controls.AddRange(new Control[] { _btnAutofillToggle, _btnAutofillPause, _btnAutofillTrigger, maxLbl, _numMaxConcurrent, _autofillStatus });
+        _btnAutofillToggle.Width=102;_btnAutofillPause.Width=72;_btnAutofillTrigger.Width=88;
+        var maxLbl = new Label { Text = "WORKER CAP", AutoSize = true, Margin = new Padding(8,9,5,0), ForeColor = Theme.Muted, Font = new Font("Cascadia Mono",7.5f,FontStyle.Bold) };
+        _numMaxConcurrent.Margin = new Padding(0,4,0,0);
+        controls.Controls.AddRange(new Control[] { _btnAutofillToggle,_btnAutofillPause,_btnAutofillTrigger,maxLbl,_numMaxConcurrent });
+        root.Controls.Add(controls,0,1);
 
-        var usageCard = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(3, 0, 0, 0) };
-        _usage.Dock = DockStyle.Fill; _usage.Multiline = true; _usage.ReadOnly = true; _usage.ScrollBars = ScrollBars.Vertical; _usage.WordWrap = true; _usage.BorderStyle = BorderStyle.None; _usage.Font = new Font("Cascadia Mono", 8.25f);
-        usageCard.Controls.Add(_usage);
+        var stars = new QuietSplitContainer(Orientation.Horizontal)
+        {
+            Panel1MinSize = 145,
+            Panel2MinSizePending = 220,
+            ResetDistance = 205
+        };
 
-        var authority = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(12) };
-        _intent.Dock = DockStyle.Top; _intent.Height = 24; _intent.ForeColor = Theme.Accent; _intent.Font = new Font("Cascadia Mono", 9, FontStyle.Bold);
-        _goal.Dock = DockStyle.Fill; _goal.Font = new Font("Segoe UI", 9.25f);
-        authority.Controls.Add(_goal); authority.Controls.Add(_intent);
-
-        rows.Controls.Add(topDeck, 0, 0);
-        rows.Controls.Add(autofillBar, 0, 1);
-        rows.Controls.Add(Section("USAGE"), 0, 2);
-        rows.Controls.Add(usageCard, 0, 3);
-        rows.Controls.Add(Section("PROJECT AUTHORITY"), 0, 4);
-        rows.Controls.Add(authority, 0, 5);
-        infoScroll.Controls.Add(rows);
+        var blinkenFrame = new Panel { Dock=DockStyle.Fill, BackColor=Color.FromArgb(9,13,16), Padding=new Padding(5), Margin=new Padding(0) };
+        var blinkenLayout = new TableLayoutPanel { Dock=DockStyle.Fill, RowCount=2, ColumnCount=1, Margin=new Padding(0), BackColor=Color.FromArgb(9,13,16) };
+        blinkenLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,22));
+        blinkenLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        blinkenLayout.Controls.Add(new Label
+        {
+            Text="BLINKENLIGHTS // ACTIVE WORKER ENDPOINTS",
+            Dock=DockStyle.Fill,
+            ForeColor=Theme.Accent,
+            Font=new Font("Cascadia Mono",7.5f,FontStyle.Bold),
+            TextAlign=ContentAlignment.MiddleLeft,
+            Padding=new Padding(4,0,0,0)
+        },0,0);
+        _blinkenRack.Dock=DockStyle.Fill;
+        blinkenLayout.Controls.Add(_blinkenRack,0,1);
+        blinkenFrame.Controls.Add(blinkenLayout);
+        stars.Panel1.Controls.Add(blinkenFrame);
 
         _terminal.Dock = DockStyle.Fill;
-        overviewSplit.Panel1.Controls.Add(infoScroll);
-        overviewSplit.Panel2.Controls.Add(_terminal);
-        p.Controls.Add(overviewSplit);
+        stars.Panel2.Controls.Add(_terminal);
+        root.Controls.Add(stars,0,2);
+        p.Controls.Add(root);
 
-        TrackSplitter(overviewSplit, () => _settings.OverviewInfoHeight = overviewSplit.SplitterDistance);
-        TrackSplitter(topDeck, () => _settings.OverviewStatusWidth = topDeck.SplitterDistance);
-        RestoreSplitterWhenShown(() =>
-        {
-            overviewSplit.RestoreDistance(_settings.OverviewInfoHeight);
-            topDeck.RestoreDistance(_settings.OverviewStatusWidth);
-        });
+        TrackSplitter(stars, () => _settings.OverviewInfoHeight = stars.SplitterDistance);
+        RestoreSplitterWhenShown(() => stars.RestoreDistance(Math.Max(145,_settings.OverviewInfoHeight)));
         return p;
     }
 
@@ -2575,7 +2599,7 @@ sealed class MainForm : Form
     UiSnapshot BuildSnapshot(string? projectPath)
     {
         _mcp.EnsureStarted(); _autofill.EnsureStarted(projectPath);
-        var snapshot = new UiSnapshot { Mcp = _mcp.Details(), HasProject = !string.IsNullOrWhiteSpace(projectPath) && Directory.Exists(projectPath) };
+        var snapshot = new UiSnapshot { Mcp = _mcp.Details(), HasProject = !string.IsNullOrWhiteSpace(projectPath) && Directory.Exists(projectPath), NextEndpoint = RoutingQueueInspector.Snapshot() };
         if (snapshot.HasProject)
         {
             snapshot.Project = Inspector.Project(projectPath!);
@@ -2601,7 +2625,7 @@ sealed class MainForm : Form
             _allActivity.Text = snapshot.Project.Activity;
             _workerTelemetry.Text = snapshot.Project.Telemetry;
             _recentActivity.SetActivity(snapshot.Project.Activity);
-            _orchestratorStatus.SetState(snapshot.Project, snapshot.Autofill, d is not null, true);
+            _overviewReadout.SetState(snapshot.Project, snapshot.Autofill, d is not null, true, snapshot.NextEndpoint);
             PopulateOverviewTargets();
         }
         else
@@ -2611,7 +2635,7 @@ sealed class MainForm : Form
             _allActivity.Text = "Select a project at left. StatefulClanker does not silently substitute a default project.";
             _workerTelemetry.Text = "Select a project to inspect worker telemetry.";
             _recentActivity.SetActivity("");
-            _orchestratorStatus.SetState(new(), snapshot.Autofill, d is not null, false);
+            _overviewReadout.SetState(new(), snapshot.Autofill, d is not null, false, snapshot.NextEndpoint);
             PopulateOverviewTargets();
         }
         ApiConnectionsUiBootstrap.RefreshProjectMarkers();

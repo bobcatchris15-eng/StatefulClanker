@@ -35,8 +35,16 @@ function Get-SCWorktreeRoot([string]$StateRoot) {
 
 function Get-SCDispatchableTasks {
     Update-SCReadiness
+    $now=[datetimeoffset]::UtcNow
     return @(Get-SCTasks |
-        Where-Object { $_.status -eq 'ready' -and -not $_.humanGate } |
+        Where-Object {
+            if($_.status-ne'ready' -or [bool]$_.humanGate){return $false}
+            if($_.PSObject.Properties['routingNotBefore'] -and $_.routingNotBefore){
+                $at=[datetimeoffset]::MinValue
+                if([datetimeoffset]::TryParse([string]$_.routingNotBefore,[ref]$at) -and $at-gt$now){return $false}
+            }
+            return $true
+        } |
         Sort-Object createdAt)
 }
 

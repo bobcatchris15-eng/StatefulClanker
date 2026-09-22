@@ -75,12 +75,28 @@ sealed class EmbeddedTerminalPanel : UserControl
     // normal Tab-navigation between other tray controls is unaffected.
     sealed class TerminalElementHost : ElementHost
     {
+        static bool TerminalNavigationKey(Keys key)
+            => key is Keys.Left or Keys.Right or Keys.Up or Keys.Down or Keys.Tab
+                or Keys.Home or Keys.End or Keys.PageUp or Keys.PageDown
+                or Keys.Insert or Keys.Delete or Keys.Enter or Keys.Escape
+                or Keys.Back;
+
+        public TerminalElementHost()
+        {
+            TabStop = true;
+        }
+
         protected override bool IsInputKey(Keys keyData)
         {
             var key = keyData & Keys.KeyCode;
-            if (ContainsFocus && (key is Keys.Left or Keys.Right or Keys.Up or Keys.Down or Keys.Tab))
-                return true;
+            if (ContainsFocus && TerminalNavigationKey(key)) return true;
             return base.IsInputKey(keyData);
+        }
+
+        protected override void OnPreviewKeyDown(PreviewKeyDownEventArgs e)
+        {
+            if (ContainsFocus && TerminalNavigationKey(e.KeyCode)) e.IsInputKey = true;
+            base.OnPreviewKeyDown(e);
         }
     }
 
@@ -94,6 +110,7 @@ sealed class EmbeddedTerminalPanel : UserControl
         ("PowerShell", "pwsh.exe -NoLogo"),
         ("Antigravity (agy)", "agy"),
         ("Goose", "goose session"),
+        ("Pi (bundled)", "__STATEFULCLANKER_PI__"),
         ("OpenCode", "opencode"),
         ("OpenCode mini", "opencode mini"),
         ("Custom", "")
@@ -107,18 +124,19 @@ sealed class EmbeddedTerminalPanel : UserControl
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 1;
         _layout.RowCount = 4;
-        _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
-        _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
         _layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         _toolbar.Dock = DockStyle.Fill;
         _toolbar.WrapContents = false;
-        _toolbar.Padding = new Padding(0, 2, 0, 0);
+        _toolbar.Padding = new Padding(4, 0, 0, 0);
+        _toolbar.BackColor = Color.FromArgb(9, 13, 16);
 
         _preset.DropDownStyle = ComboBoxStyle.DropDownList;
         _preset.Width = 150;
-        _preset.Margin = new Padding(0, 4, 6, 0);
+        _preset.Margin = new Padding(0, 2, 6, 0);
         foreach (var p in Presets) _preset.Items.Add(p.name);
         _preset.SelectedIndex = 0;
         _preset.SelectedIndexChanged += (_, _) => UpdateCustomVisibility();
@@ -131,25 +149,25 @@ sealed class EmbeddedTerminalPanel : UserControl
 
         _start.Text = "Start";
         _start.Width = 72;
-        _start.Height = 30;
-        _start.Margin = new Padding(0, 3, 6, 0);
+        _start.Height = 28;
+        _start.Margin = new Padding(0, 2, 6, 0);
         _start.Click += async (_, _) => await StartSelectedAsync(false);
 
         _restart.Text = "Restart";
         _restart.Width = 78;
-        _restart.Height = 30;
-        _restart.Margin = new Padding(0, 3, 6, 0);
+        _restart.Height = 28;
+        _restart.Margin = new Padding(0, 2, 6, 0);
         _restart.Click += async (_, _) => await StartSelectedAsync(true);
 
         _stop.Text = "Stop";
         _stop.Width = 68;
-        _stop.Height = 30;
-        _stop.Margin = new Padding(0, 3, 6, 0);
+        _stop.Height = 28;
+        _stop.Margin = new Padding(0, 2, 6, 0);
         _stop.Click += (_, _) => StopSession();
 
         _toolbar.Controls.AddRange(new Control[]
         {
-            new Label { Text = "SESSION", AutoSize = true, ForeColor = Theme.Muted, Font = new Font("Segoe UI Semibold", 8f, FontStyle.Bold), Margin = new Padding(0, 10, 8, 0) },
+            new Label { Text = "TUI / CONSOLE", AutoSize = true, ForeColor = Theme.Accent, Font = new Font("Cascadia Mono", 7.5f, FontStyle.Bold), Margin = new Padding(0, 9, 9, 0) },
             _preset, _custom, _start, _restart, _stop
         });
 
@@ -161,7 +179,13 @@ sealed class EmbeddedTerminalPanel : UserControl
 
         _hostPanel.Dock = DockStyle.Fill;
         _hostPanel.BackColor = Color.FromArgb(8, 11, 15);
-        _hostPanel.Padding = new Padding(1);
+        _hostPanel.Padding = new Padding(0);
+        _hostPanel.TabStop = true;
+        _hostPanel.MouseDown += (_, _) => FocusTerminal();
+        _hostPanel.Resize += (_, _) =>
+        {
+            try { _elementHost?.PerformLayout(); } catch { }
+        };
 
         _toastPanel.Dock = DockStyle.Fill;
         _toastPanel.BackColor = Theme.Surface2;
@@ -230,12 +254,21 @@ sealed class EmbeddedTerminalPanel : UserControl
 
     static string QuoteIfNeeded(string s) => s.Contains(' ') && !s.StartsWith('"') ? $"\"{s}\"" : s;
 
+    static string BundledPiInvocation()
+    {
+        var path = System.IO.Path.Combine(Runtime.FindRoot(), "pi", "pi.cmd");
+        if (!File.Exists(path)) return "pi";
+        return "& '" + path.Replace("'", "''") + "'";
+    }
+
+
     string SelectedCommand()
     {
         if (_preset.SelectedIndex < 0 || _preset.SelectedIndex >= Presets.Length) return ShellCommand();
         var selected = Presets[_preset.SelectedIndex];
         if (selected.name == "PowerShell") return ShellCommand();
         if (selected.name == "Custom") return ToolViaShell(_custom.Text.Trim());
+        if (selected.command == "__STATEFULCLANKER_PI__") return ToolViaShell(BundledPiInvocation());
         return ToolViaShell(selected.command);
     }
 
@@ -302,7 +335,11 @@ sealed class EmbeddedTerminalPanel : UserControl
             // while Win32 focus is still owned by the WinForms host. Reassert focus when
             // the user clicks into either side of the bridge.
             _elementHost.MouseDown += (_, _) => FocusTerminal();
+            _elementHost.Enter += (_, _) => BeginInvoke(new Action(FocusTerminal));
+            _elementHost.GotFocus += (_, _) => BeginInvoke(new Action(FocusTerminal));
             _terminal.PreviewMouseDown += (_, _) => FocusTerminal();
+            _terminal.PreviewMouseWheel += (_, _) => FocusTerminal();
+            _terminal.GotKeyboardFocus += (_, _) => { _lastKeyUtc = DateTime.UtcNow; _status.Text = "KEYBOARD READY  |  " + _currentCommand; _status.ForeColor = Theme.Good; };
 
             _currentCommand = command;
             _status.Text = $"RUNNING  {command}   @   {_projectPath}";
@@ -362,9 +399,24 @@ sealed class EmbeddedTerminalPanel : UserControl
         _ = StartCommandAsync(ToolViaShell("opencode"), true);
     }
 
+    public bool ConsoleHasKeyboardFocus =>
+        (_elementHost?.ContainsFocus ?? false) ||
+        (_terminal?.IsKeyboardFocusWithin ?? false) ||
+        (_terminal?.Terminal?.IsKeyboardFocusWithin ?? false);
+
+    public void FocusConsole() => FocusTerminal();
+
+    protected override void OnEnter(EventArgs e)
+    {
+        base.OnEnter(e);
+        if (_terminal is not null) BeginInvoke(new Action(FocusTerminal));
+    }
+
     void FocusTerminal()
     {
-        try { _elementHost?.Focus(); } catch { }
+        if (_terminal is null || _elementHost is null) return;
+        try { _elementHost.Select(); } catch { }
+        try { _elementHost.Focus(); } catch { }
         try { _terminal?.Focus(); } catch { }
         try
         {

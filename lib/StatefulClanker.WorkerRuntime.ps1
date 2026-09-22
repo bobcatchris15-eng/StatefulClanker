@@ -55,12 +55,22 @@ function Get-SCConnectionProtocol($Connection) {
     if($Connection.PSObject.Properties['protocol']-and$Connection.protocol){return [string]$Connection.protocol}
     return 'openai-chat'
 }
+function Get-SCConnectionAuthKind($Connection) {
+    if($Connection.PSObject.Properties['authKind']-and$Connection.authKind){return ([string]$Connection.authKind).ToLowerInvariant()}
+    if((Get-SCConnectionProtocol $Connection)-eq'anthropic-messages'){return 'x-api-key'}
+    return 'bearer'
+}
 function Get-SCApiUri($Connection) {
     $base=[string]$Connection.baseUrl;if([string]::IsNullOrWhiteSpace($base)){throw 'API connection baseUrl is required.'}
     if($Connection.PSObject.Properties['chatPath']-and$Connection.chatPath){return $base.TrimEnd('/')+'/'+([string]$Connection.chatPath).TrimStart('/')}
-    if((Get-SCConnectionProtocol $Connection)-eq'anthropic-messages'){
+    $protocol=Get-SCConnectionProtocol $Connection
+    if($protocol-eq'anthropic-messages'){
         if($base.TrimEnd('/') -match '/v1/messages$'){return $base.TrimEnd('/')}
         return $base.TrimEnd('/')+'/v1/messages'
+    }
+    if($protocol-eq'gemini-native'){
+        $model=([string]$Connection.model)-replace'^models/',''
+        return $base.TrimEnd('/')+'/models/'+[uri]::EscapeDataString($model)+':generateContent'
     }
     if($base.TrimEnd('/') -match '/chat/completions$'){return $base.TrimEnd('/')}
     return $base.TrimEnd('/')+'/chat/completions'
@@ -83,19 +93,19 @@ function New-SCApiHeaders($Connection) {
     $headers=@{'Accept'='application/json'}
     $key=Get-SCApiKey $Connection
     if($key){
-        # Anthropic's native Messages API authenticates with x-api-key, not a Bearer
-        # token -- everything else this project talks to (OpenAI-compatible gateways)
-        # uses Authorization: Bearer.
-        if((Get-SCConnectionProtocol $Connection)-eq'anthropic-messages'){$headers['x-api-key']=$key}
-        else{$headers['Authorization']='Bearer '+$key}
+        switch(Get-SCConnectionAuthKind $Connection){
+            'x-api-key' {$headers['x-api-key']=$key}
+            'x-goog-api-key' {$headers['x-goog-api-key']=$key}
+            'none' {}
+            default {$headers['Authorization']='Bearer '+$key}
+        }
     }
-    if($Connection.PSObject.Properties['headers']-and$Connection.headers){foreach($k in (ConvertTo-SCHashtable $Connection.headers).Keys){$headers[$k]=(ConvertTo-SCHashtable $Connection.headers)[$k]}}
-    # OpenCode Zen/Go require x-opencode-session. It is not an auth token: it is a
-    # per-project session id used server-side for prompt-cache routing. The stored
-    # value in the machine connection is only a marker that this header is required.
-    # The actual id is a stable UUID derived from the project root, so each project
-    # gets its own session (good cache reuse within a project) and different projects
-    # never share one (no cross-project cache bleed).
+    if($Connection.PSObject.Properties['headers']-and$Connection.headers){
+        $extra=ConvertTo-SCHashtable $Connection.headers
+        foreach($k in $extra.Keys){$headers[$k]=$extra[$k]}
+    }
+    # OpenCode uses a stable project session id for cache routing. The preset merely
+    # declares the header; the user never has to manufacture or maintain its value.
     if($headers.ContainsKey('x-opencode-session')){$headers['x-opencode-session']=Get-SCProjectSessionId}
     return $headers
 }
@@ -365,6 +375,43 @@ function ConvertTo-SCAnthropicMessages($Messages) {
     if($pendingResults){$out+=,[ordered]@{role='user';content=@($pendingResults)}}
     return [ordered]@{system=($system-join"`n`n");messages=@($out)}
 }
+function ConvertTo-SCGeminiTools($Tools) {
+    $decl=@()
+    foreach($t in @($Tools)){
+        $fn=Get-SCField $t 'function';if($null-eq$fn){continue}
+        $decl+=,[ordered]@{name=[string](Get-SCField $fn 'name');description=[string](Get-SCField $fn 'description');parameters=(Get-SCField $fn 'parameters')}
+    }
+    if($decl.Count-eq0){return @()}
+    return @([ordered]@{functionDeclarations=@($decl)})
+}
+function ConvertTo-SCGeminiMessages($Messages) {
+    $system=@();$contents=@();$callNames=@{}
+    foreach($m in @($Messages)){
+        $role=[string](Get-SCField $m 'role')
+        if($role-eq'system'){$system+=,[string](Get-SCField $m 'content');continue}
+        if($role-eq'assistant'){
+            $parts=@();$text=Get-SCField $m 'content'
+            if(-not[string]::IsNullOrWhiteSpace([string]$text)){$parts+=,[ordered]@{text=[string]$text}}
+            foreach($call in @(Get-SCField $m 'tool_calls')){
+                $fn=Get-SCField $call 'function';if($null-eq$fn){continue}
+                $name=[string](Get-SCField $fn 'name');$id=[string](Get-SCField $call 'id')
+                if($id){$callNames[$id]=$name}
+                $raw=Get-SCField $fn 'arguments'
+                $args=try{if([string]::IsNullOrWhiteSpace([string]$raw)){[pscustomobject]@{}}else{[string]$raw|ConvertFrom-Json}}catch{[pscustomobject]@{}}
+                $parts+=,[ordered]@{functionCall=[ordered]@{name=$name;args=$args}}
+            }
+            if($parts.Count-gt0){$contents+=,[ordered]@{role='model';parts=@($parts)}}
+            continue
+        }
+        if($role-eq'tool'){
+            $id=[string](Get-SCField $m 'tool_call_id');$name=if($callNames.ContainsKey($id)){$callNames[$id]}else{'tool'}
+            $contents+=,[ordered]@{role='user';parts=@([ordered]@{functionResponse=[ordered]@{name=$name;response=[ordered]@{result=[string](Get-SCField $m 'content')}}})}
+            continue
+        }
+        $contents+=,[ordered]@{role='user';parts=@([ordered]@{text=[string](Get-SCField $m 'content')})}
+    }
+    return [ordered]@{system=($system-join[Environment]::NewLine+[Environment]::NewLine);contents=@($contents)}
+}
 function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
     $protocol=Get-SCConnectionProtocol $Connection
     if($protocol-eq'anthropic-messages'){
@@ -372,10 +419,21 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
         $body=[ordered]@{model=[string]$Connection.model;messages=$translated.messages}
         if($translated.system){$body.system=$translated.system}
         if($ToolMode-ne'text'){$body.tools=ConvertTo-SCAnthropicTools $Tools}
-        # Anthropic requires max_tokens on every request; the other providers here
-        # default it server-side, so only Anthropic needs a client-side fallback.
         $body.max_tokens=if($Connection.PSObject.Properties['maxTokens']-and[int]$Connection.maxTokens-gt0){[int]$Connection.maxTokens}else{4096}
         if($Connection.PSObject.Properties['temperature']-and$null-ne$Connection.temperature){$body.temperature=[double]$Connection.temperature}
+        if($Connection.PSObject.Properties['body']-and$Connection.body){foreach($p in $Connection.body.PSObject.Properties){$body[$p.Name]=$p.Value}}
+    } elseif($protocol-eq'gemini-native'){
+        $translated=ConvertTo-SCGeminiMessages $Messages
+        $body=[ordered]@{contents=@($translated.contents)}
+        if($translated.system){$body.systemInstruction=[ordered]@{parts=@([ordered]@{text=$translated.system})}}
+        if($ToolMode-ne'text'){
+            $geminiTools=@(ConvertTo-SCGeminiTools $Tools)
+            if($geminiTools.Count-gt0){$body.tools=$geminiTools;$body.toolConfig=[ordered]@{functionCallingConfig=[ordered]@{mode='AUTO'}}}
+        }
+        $generation=[ordered]@{}
+        if($Connection.PSObject.Properties['temperature']-and$null-ne$Connection.temperature){$generation.temperature=[double]$Connection.temperature}
+        if($Connection.PSObject.Properties['maxTokens']-and[int]$Connection.maxTokens-gt0){$generation.maxOutputTokens=[int]$Connection.maxTokens}
+        if($generation.Count-gt0){$body.generationConfig=$generation}
         if($Connection.PSObject.Properties['body']-and$Connection.body){foreach($p in $Connection.body.PSObject.Properties){$body[$p.Name]=$p.Value}}
     } else {
         $body=[ordered]@{model=[string]$Connection.model;messages=@($Messages)}
@@ -389,33 +447,56 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
     $uri=Get-SCApiUri $Connection
     $headers=New-SCApiHeaders $Connection
-    $maxAttempts=2
-    for($attempt=1;$attempt-le$maxAttempts;$attempt++){
-        try{
-            return Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 300
-        }catch{
-            $ex=$_;$status=0
-            if($ex.Exception -and $ex.Exception.PSObject.Properties['Response'] -and $ex.Exception.Response){try{$status=[int]$ex.Exception.Response.StatusCode}catch{}}
-            $network=$ex.Exception.Message -match '(?i)timeout|timed out|forcibly closed|connection refused|reset by peer|network is unreachable'
-            $sameEndpointRetry=($status -in @(408,500,502,503,504)) -or $network
-            if($attempt-lt$maxAttempts -and $sameEndpointRetry){Start-Sleep -Milliseconds (Get-Random -Minimum 900 -Maximum 1500);continue}
-            $retryAfter=''
-            try{
-                if($ex.Exception.Response -and $ex.Exception.Response.Headers){
-                    $ra=$ex.Exception.Response.Headers.RetryAfter
-                    if($ra){
-                        if($ra.Delta){$retryAfter=" Retry-After: $([Math]::Max(1,[int][Math]::Ceiling($ra.Delta.TotalSeconds)))"}
-                        elseif($ra.Date){$retryAfter=" Retry-After: $($ra.Date.ToUniversalTime().ToString('R'))"}
-                        else{$retryAfter=" Retry-After: $ra"}
-                    }
-                }
-            }catch{}
-            $statusText=if($status-gt0){" HTTP $status"}else{''}
-            throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$retryAfter"
+    $timeout=300
+    if($Connection.PSObject.Properties['requestTimeoutSeconds'] -and [int]$Connection.requestTimeoutSeconds-gt0){
+        $timeout=[Math]::Min(1800,[Math]::Max(15,[int]$Connection.requestTimeoutSeconds))
+    }
+    try{
+        # Do not automatically replay an ambiguous failed POST against the same
+        # endpoint. The router owns failover; a timeout may have reached the model
+        # and duplicating it can waste quota or mutate a persistent session twice.
+        return Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec $timeout
+    }catch{
+        $ex=$_;$status=0;$response=$null
+        if($ex.Exception -and $ex.Exception.PSObject.Properties['Response'] -and $ex.Exception.Response){
+            $response=$ex.Exception.Response
+            try{$status=[int]$response.StatusCode}catch{}
         }
+        $headerParts=@()
+        if($response-and$response.PSObject.Properties['Headers']-and$response.Headers){
+            foreach($name in @('Retry-After','RateLimit-Reset','X-RateLimit-Reset','X-RateLimit-Reset-Requests','X-RateLimit-Reset-Tokens','X-RateLimit-Remaining','X-RateLimit-Limit')){
+                try{
+                    $value=$null
+                    if($response.Headers.PSObject.Methods['TryGetValues']){
+                        $values=$null
+                        if($response.Headers.TryGetValues($name,[ref]$values)){$value=(@($values)-join',')}
+                    }elseif($response.Headers[$name]){$value=[string]$response.Headers[$name]}
+                    if($value){$headerParts+=("${name}: $value")}
+                }catch{}
+            }
+        }
+        $detail=''
+        try{if($ex.ErrorDetails-and$ex.ErrorDetails.Message){$detail=[string]$ex.ErrorDetails.Message}}catch{}
+        if($detail.Length-gt2000){$detail=$detail.Substring(0,2000)}
+        $statusText=if($status-gt0){" HTTP $status"}else{''}
+        $metadata=if($headerParts.Count){' '+($headerParts-join'; ')}else{''}
+        $bodyDetail=if($detail){" Body: $detail"}else{''}
+        throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$metadata$bodyDetail"
     }
 }
 function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
+    if($Protocol-eq'gemini-native'){
+        if($null-eq$Response-or-not$Response.PSObject.Properties['candidates']-or@($Response.candidates).Count-eq0){throw 'Gemini endpoint returned no candidates.'}
+        $parts=@($Response.candidates[0].content.parts);$texts=@();$calls=@();$n=0
+        foreach($part in $parts){
+            if($part.PSObject.Properties['text'] -and -not[string]::IsNullOrWhiteSpace([string]$part.text)){$texts+=,[string]$part.text}
+            if($part.PSObject.Properties['functionCall'] -and $part.functionCall){
+                $n++;$fc=$part.functionCall;$args=if($fc.PSObject.Properties['args']){$fc.args}else{[pscustomobject]@{}}
+                $calls+=,[pscustomobject]@{id=('gemini-{0}-{1}'-f$n,[string]$fc.name);type='function';function=[pscustomobject]@{name=[string]$fc.name;arguments=($args|ConvertTo-Json -Depth 30 -Compress)}}
+            }
+        }
+        return [pscustomobject]@{content=($texts-join[Environment]::NewLine);tool_calls=@($calls)}
+    }
     if($Protocol-eq'anthropic-messages'){
         # Normalize Anthropic's content-block array into the same {content;tool_calls}
         # shape OpenAI's choices[0].message already has, so the rest of the worker
@@ -445,6 +526,7 @@ function Add-SCApiUsage($Accumulator,$Response) {
     $model=if($Response.PSObject.Properties['model']-and-not[string]::IsNullOrWhiteSpace([string]$Response.model)){[string]$Response.model}elseif($Accumulator.ContainsKey('fallbackModel')){[string]$Accumulator.fallbackModel}else{''}
     $prompt=0L;$completion=0L;$total=0L;$reported=$false
     if($Response.PSObject.Properties['usage']-and$Response.usage){$reported=$true;$prompt=Get-SCApiUsageValue $Response.usage @('prompt_tokens','input_tokens');$completion=Get-SCApiUsageValue $Response.usage @('completion_tokens','output_tokens');$total=Get-SCApiUsageValue $Response.usage @('total_tokens');if($total-le0-and($prompt-gt0-or$completion-gt0)){$total=$prompt+$completion}}
+    elseif($Response.PSObject.Properties['usageMetadata']-and$Response.usageMetadata){$reported=$true;$prompt=Get-SCApiUsageValue $Response.usageMetadata @('promptTokenCount');$completion=Get-SCApiUsageValue $Response.usageMetadata @('candidatesTokenCount');$total=Get-SCApiUsageValue $Response.usageMetadata @('totalTokenCount');if($total-le0-and($prompt-gt0-or$completion-gt0)){$total=$prompt+$completion}}
     $Accumulator.apiRequests=[long]$Accumulator.apiRequests+1;if($reported){$Accumulator.usageReports=[long]$Accumulator.usageReports+1};$Accumulator.promptTokens=[long]$Accumulator.promptTokens+$prompt;$Accumulator.completionTokens=[long]$Accumulator.completionTokens+$completion;$Accumulator.totalTokens=[long]$Accumulator.totalTokens+$total
     if(-not[string]::IsNullOrWhiteSpace($model)){$map=$Accumulator.modelUsage;if(-not$map.ContainsKey($model)){$map[$model]=[ordered]@{model=$model;requests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L}};$row=$map[$model];$row.requests=[long]$row.requests+1;if($reported){$row.usageReports=[long]$row.usageReports+1};$row.promptTokens=[long]$row.promptTokens+$prompt;$row.completionTokens=[long]$row.completionTokens+$completion;$row.totalTokens=[long]$row.totalTokens+$total}
 }
@@ -838,37 +920,56 @@ function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$Provide
     }
     $last=$null
     foreach($record in $candidates){
-        $type=if($record.config.PSObject.Properties['type']){[string]$record.config.type}else{'cli'}
+        $lease=Enter-SCEndpointLease ([string]$record.name)
+        if(-not$lease.acquired){
+            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($record.config.PSObject.Properties['connection']){[string]$record.config.connection}else{$null};model=if($record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='busy';failureClass=$null;healthScope=$null}
+            continue
+        }
         try{
-            if($type-eq'api'){$receipt=Invoke-SCDirectApiProvider $Task $Prompt $Stage $record $ParentAgentId $Compilation $WorkerSessionId $ContinuationMessage}
-            else{$receipt=& $script:SCInvokeProviderCliBase $Task $Prompt $Stage ([string]$record.name) $ParentAgentId $Compilation}
-        }catch{
-            $now=(Get-Date).ToUniversalTime().ToString('o')
-            $receipt=[pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=[string]$record.name;endpoint=[string]$record.name;compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-1;stdout='';stderr=($_|Out-String)}
-        }
-        if(-not$receipt.PSObject.Properties['workerSessionId']){Set-SCProperty $receipt 'workerSessionId' $WorkerSessionId;Set-SCProperty $receipt 'workerSessionResumable' $false}
-        $last=$receipt
-        $text=(([string]$receipt.stderr)+[Environment]::NewLine+([string]$receipt.stdout)).Trim()
-        if([int]$receipt.exitCode-eq0){
-            Register-SCRouteSuccess ([string]$record.name)|Out-Null
-            if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection){
-                $connectionName=[string]$record.config.connection
-                Register-SCRouteSuccess ("connection:"+$connectionName) 'connection'|Out-Null
-                $service=Get-SCConnectionServiceName $connectionName
-                if($service){Register-SCRouteSuccess ("service:"+$service) 'service'|Out-Null}
+            $type=if($record.config.PSObject.Properties['type']){[string]$record.config.type}else{'cli'}
+            try{
+                if($type-eq'api'){$receipt=Invoke-SCDirectApiProvider $Task $Prompt $Stage $record $ParentAgentId $Compilation $WorkerSessionId $ContinuationMessage}
+                else{$receipt=& $script:SCInvokeProviderCliBase $Task $Prompt $Stage ([string]$record.name) $ParentAgentId $Compilation}
+            }catch{
+                $now=(Get-Date).ToUniversalTime().ToString('o')
+                $receipt=[pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=[string]$record.name;endpoint=[string]$record.name;compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-1;stdout='';stderr=($_|Out-String)}
             }
-            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='success';failureClass=$null;healthScope=$null}
+            if(-not$receipt.PSObject.Properties['workerSessionId']){Set-SCProperty $receipt 'workerSessionId' $WorkerSessionId;Set-SCProperty $receipt 'workerSessionResumable' $false}
+            $last=$receipt
+            $text=(([string]$receipt.stderr)+[Environment]::NewLine+([string]$receipt.stdout)).Trim()
+            if([int]$receipt.exitCode-eq0){
+                Register-SCRouteSuccess ([string]$record.name)|Out-Null
+                if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection){
+                    $connectionName=[string]$record.config.connection
+                    Register-SCRouteSuccess ("connection:"+$connectionName) 'connection'|Out-Null
+                    $service=Get-SCConnectionServiceName $connectionName
+                    if($service){Register-SCRouteSuccess ("service:"+$service) 'service'|Out-Null}
+                }
+                $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='success';failureClass=$null;healthScope=$null}
+                Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
+                if($history.Count-gt1){Add-SCEvent 'routing.failover_succeeded' "Endpoint failover succeeded on $($record.name)." @{taskId=$Task.id;stage=$Stage;attempts=$history.Count;history=@($history)}}
+                return $receipt
+            }
+            $class=Get-SCRouteFailureClass ([int]$receipt.exitCode) $text
+            $domain=Register-SCRouteFailureForRecord $record $class $text
+            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='failed';failureClass=$class;healthScope=[string]$domain.scope;healthKey=$domain.key}
             Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
-            if($history.Count-gt1){Add-SCEvent 'routing.failover_succeeded' "Endpoint failover succeeded on $($record.name)." @{taskId=$Task.id;stage=$Stage;attempts=$history.Count;history=@($history)}}
-            return $receipt
+            if(-not(Test-SCRouteFailureTransient $class) -and $class-ne'auth'){
+                Add-SCEvent 'routing.failover_stopped' "Endpoint failure is not safe to replay: $class" @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class}
+                return $receipt
+            }
+            Add-SCEvent 'routing.failover' "Endpoint $($record.name) failed ($class); trying another endpoint." @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class;attempt=$history.Count}
+        }finally{
+            Exit-SCEndpointLease $lease
         }
-        $class=Get-SCRouteFailureClass ([int]$receipt.exitCode) $text
-        $domain=Register-SCRouteFailureForRecord $record $class $text
-        $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='failed';failureClass=$class;healthScope=[string]$domain.scope;healthKey=$domain.key}
-        Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
-        if(-not(Test-SCRouteFailureTransient $class) -and $class-ne'auth'){Add-SCEvent 'routing.failover_stopped' "Endpoint failure is not safe to replay: $class" @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class};return $receipt}
-        Add-SCEvent 'routing.failover' "Endpoint $($record.name) failed ($class); trying another endpoint." @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class;attempt=$history.Count}
     }
-    if($last){Set-SCProperty $last 'routeAttempts' $history.Count;Set-SCProperty $last 'routeHistory' @($history);Set-SCProperty $last 'routeExhausted' $true;return $last}
+    if($last){
+        Set-SCProperty $last 'routeAttempts' $history.Count;Set-SCProperty $last 'routeHistory' @($history);Set-SCProperty $last 'routeExhausted' $true
+        return $last
+    }
+    if(@($history|Where-Object{$_.outcome-eq'busy'}).Count-gt0){
+        $now=(Get-Date).ToUniversalTime().ToString('o');$retry=[datetimeoffset]::UtcNow.AddSeconds(2).ToString('o')
+        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$pinnedEndpoint;endpoint=$pinnedEndpoint;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId);compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr='All healthy endpoints are currently occupied by another worker.';routeDeferred=$true;retryAfter=$retry;routeAttempts=$history.Count;routeHistory=@($history)}
+    }
     throw 'Routing produced no endpoint receipt.'
 }

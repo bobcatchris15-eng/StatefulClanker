@@ -1,4 +1,4 @@
-<# Build the StatefulClanker Windows installer.
+﻿<# Build the StatefulClanker Windows installer.
 
    Generates the application icon, publishes the native WinForms tray host as a
    self-contained win-x64 executable, then compiles the Inno Setup installer.
@@ -13,6 +13,7 @@
 [CmdletBinding()]
 param(
     [string]$Version = '0.8.14',
+    [string]$PiVersion = '0.73.1',
     [switch]$IconOnly
 )
 
@@ -27,6 +28,7 @@ $issPath = Join-Path $installDir 'StatefulClanker.iss'
 $outDir = Join-Path $installDir 'output'
 $publishDir = Join-Path $installDir 'publish'
 $trayProject = Join-Path $repoRoot 'src\StatefulClanker.Tray\StatefulClanker.Tray.csproj'
+$piRuntimeDir = Join-Path $installDir 'pi-runtime'
 
 function New-GlyphBitmap([int]$Size) {
     $bmp = New-Object Drawing.Bitmap $Size, $Size
@@ -82,6 +84,23 @@ $appExe=Join-Path $publishDir 'StatefulClanker.exe'
 if(-not(Test-Path -LiteralPath $appExe)){throw "Publish succeeded but $appExe was not produced."}
 Write-Host "  Native host: $([math]::Round((Get-Item $appExe).Length/1MB,1)) MB"
 
+function Find-NodeTool([string]$Name) {
+    $cmd=Get-Command $Name -ErrorAction SilentlyContinue
+    if($cmd){return $cmd.Source}
+    throw "Bundling Pi requires $Name on the build machine. Install current Node.js (20+)."
+}
+$nodePath=Find-NodeTool 'node'
+$npmPath=Find-NodeTool 'npm'
+if(Test-Path -LiteralPath $piRuntimeDir){Remove-Item -LiteralPath $piRuntimeDir -Recurse -Force}
+New-Item -ItemType Directory -Force -Path $piRuntimeDir|Out-Null
+Write-Host "Bundling Pi coding agent $PiVersion..."
+& $npmPath install --prefix $piRuntimeDir --omit=dev --no-audit --no-fund "@mariozechner/pi-coding-agent@$PiVersion"
+if($LASTEXITCODE-ne0){throw "npm install for Pi failed with exit code $LASTEXITCODE"}
+Copy-Item -LiteralPath $nodePath -Destination (Join-Path $piRuntimeDir 'node.exe') -Force
+$piCli=Join-Path $piRuntimeDir 'node_modules\@mariozechner\pi-coding-agent\dist\cli.js'
+if(-not(Test-Path -LiteralPath $piCli)){throw "Pi package installed but CLI was not found at $piCli"}
+Write-Host "  Pi runtime: $piRuntimeDir"
+
 function Find-Iscc {
     $candidates=@()
     if($env:LOCALAPPDATA){$candidates+=,(Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')}
@@ -99,3 +118,4 @@ $isccArgs=@("/DMyAppVersion=$Version","/DRepoRoot=$repoRoot","/DPublishDir=$publ
 if($LASTEXITCODE-ne0){throw "ISCC failed with exit code $LASTEXITCODE"}
 $setup=Get-ChildItem -LiteralPath $outDir -Filter '*.exe'|Sort-Object LastWriteTime -Descending|Select-Object -First 1
 Write-Host '';Write-Host "Built: $($setup.FullName)" -ForegroundColor Green;Write-Host "       $([math]::Round($setup.Length/1MB,1)) MB"
+

@@ -11,22 +11,37 @@ function Test-SCProviderEnabled($ProviderEntry) {
     return $true
 }
 
+function Get-SCMachineRoutingRoot {
+    $base=if($env:LOCALAPPDATA){Join-Path $env:LOCALAPPDATA 'StatefulClanker'}else{Join-Path ([IO.Path]::GetTempPath()) 'StatefulClanker'}
+    if(-not(Test-Path -LiteralPath $base)){New-Item -ItemType Directory -Force -Path $base|Out-Null}
+    return $base
+}
+
 function Get-SCTargetPoolPath {
-    $dir=Get-SCPath 'routing'
-    if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
-    return Join-Path $dir 'target-pool.json'
+    return Join-Path (Get-SCMachineRoutingRoot) 'endpoints.json'
 }
 
 function Get-SCTargetPool {
     $path=Get-SCTargetPoolPath
-    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return [pscustomobject]@{schemaVersion=1;entries=[pscustomobject]@{}}}
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
+        # One-time compatibility migration. Endpoint selection is machine state now;
+        # the old per-project pool is only consulted when no machine catalog exists.
+        try{
+            $legacy=Get-SCPath 'routing/endpoint-catalog.json'
+            if(Test-Path -LiteralPath $legacy -PathType Leaf){
+                Copy-Item -LiteralPath $legacy -Destination $path -Force
+                Add-SCEvent 'routing.endpoint_catalog_migrated' 'Migrated the legacy machine endpoint catalog into the machine endpoint catalog.' @{from=$legacy;to=$path}
+            }
+        }catch{}
+    }
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return [pscustomobject]@{schemaVersion=2;entries=[pscustomobject]@{}}}
     try{
         $pool=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json
         if(-not$pool.PSObject.Properties['entries']){$pool|Add-Member -NotePropertyName entries -NotePropertyValue ([pscustomobject]@{}) -Force}
         return $pool
     }catch{
-        Add-SCEvent 'routing.target_pool_invalid' 'Target pool JSON could not be parsed; falling back to legacy configured providers.' @{path=$path;error=$_.Exception.Message}
-        return [pscustomobject]@{schemaVersion=1;entries=[pscustomobject]@{}}
+        Add-SCEvent 'routing.endpoint_catalog_invalid' 'Machine endpoint catalog JSON could not be parsed; falling back to legacy configured providers.' @{path=$path;error=$_.Exception.Message}
+        return [pscustomobject]@{schemaVersion=2;entries=[pscustomobject]@{}}
     }
 }
 
@@ -59,15 +74,31 @@ function Get-SCTargetPoolRecords {
 }
 
 function Get-SCRoundRobinStatePath {
-    $dir=Get-SCPath 'routing'
+    $dir=Join-Path (Get-SCMachineRoutingRoot) 'routing'
     if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
     return Join-Path $dir 'round-robin.json'
+}
+
+function Get-SCEndpointLeaseName([string]$EndpointName) {
+    $key=(Get-SCMachineRoutingRoot)+'|'+$EndpointName
+    return 'Local\StatefulClankerEndpoint-'+(Get-SCHashString $key).Substring(0,24)
+}
+function Enter-SCEndpointLease([string]$EndpointName) {
+    $mutex=New-Object System.Threading.Mutex($false,(Get-SCEndpointLeaseName $EndpointName))
+    $acquired=$false
+    try{$acquired=$mutex.WaitOne(0)}catch [System.Threading.AbandonedMutexException]{$acquired=$true}catch{$acquired=$false}
+    return [pscustomobject]@{endpoint=$EndpointName;acquired=$acquired;mutex=$mutex}
+}
+function Exit-SCEndpointLease($Lease) {
+    if($null-eq$Lease){return}
+    try{if($Lease.acquired){$Lease.mutex.ReleaseMutex()}}catch{}
+    try{$Lease.mutex.Dispose()}catch{}
 }
 
 function Get-SCRoundRobinOrdered($Records) {
     $items=@($Records|Sort-Object name)
     if($items.Count-le 1){return $items}
-    $mutexName='Local\StatefulClankerRoute-'+(Get-SCHashString (Get-SCRoot)).Substring(0,16)
+    $mutexName='Local\StatefulClankerRoute-'+(Get-SCHashString (Get-SCMachineRoutingRoot)).Substring(0,16)
     $mutex=New-Object System.Threading.Mutex($false,$mutexName)
     $locked=$false
     try{
@@ -113,7 +144,7 @@ function Get-SCPrioritizedProviders($Config) {
 
 
 function Get-SCRoutingHealthPath {
-    $dir = Get-SCPath 'routing'
+    $dir = Join-Path (Get-SCMachineRoutingRoot) 'routing'
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     return Join-Path $dir 'health.json'
 }
@@ -191,7 +222,18 @@ function Get-SCConnectionConfigFingerprint([string]$ConnectionName) {
 
 function Get-SCExplicitRetryAfterSeconds([string]$Text) {
     if([string]::IsNullOrWhiteSpace($Text)){return $null}
+    $now=[datetimeoffset]::UtcNow
     if($Text-match'(?i)retry[- ]after\s*[:=]?\s*(\d+)'){return [Math]::Max(1,[int]$Matches[1])}
+    if($Text-match'(?i)(?:x-)?ratelimit-reset(?:-requests|-tokens)?\s*[:=]\s*(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)?'){
+        $n=[double]$Matches[1];$u=([string]$Matches[2]).ToLowerInvariant()
+        if([string]::IsNullOrWhiteSpace($u) -and $n-gt1000000000){
+            try{return [Math]::Max(1,[int][Math]::Ceiling(([datetimeoffset]::FromUnixTimeSeconds([long]$n)-$now).TotalSeconds))}catch{}
+        }
+        if($u-eq'ms'){return [Math]::Max(1,[int][Math]::Ceiling($n/1000))}
+        if($u.StartsWith('h')){return [Math]::Max(1,[int][Math]::Ceiling($n*3600))}
+        if($u.StartsWith('m')){return [Math]::Max(1,[int][Math]::Ceiling($n*60))}
+        return [Math]::Max(1,[int][Math]::Ceiling($n))
+    }
     if($Text-match'(?i)(?:try again|reset(?:s)?|available again)\s*(?:in|after)?\s*(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)'){
         $n=[int]$Matches[1];$u=$Matches[2].ToLowerInvariant()
         if($u.StartsWith('hour') -or $u.StartsWith('hr')){return $n*3600}
@@ -200,7 +242,7 @@ function Get-SCExplicitRetryAfterSeconds([string]$Text) {
     }
     if($Text-match'(?i)retry[- ]after\s*[:=]\s*([A-Za-z]{3},\s*\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)'){
         $dto=[datetimeoffset]::MinValue
-        if([datetimeoffset]::TryParse($Matches[1],[ref]$dto)){return [Math]::Max(1,[int][Math]::Ceiling(($dto-[datetimeoffset]::UtcNow).TotalSeconds))}
+        if([datetimeoffset]::TryParse($Matches[1],[ref]$dto)){return [Math]::Max(1,[int][Math]::Ceiling(($dto-$now).TotalSeconds))}
     }
     return $null
 }
@@ -211,7 +253,10 @@ function Get-SCProbeDelaySeconds([string]$Class,[string]$Text,[int]$ProbeNumber=
     $n=[Math]::Max(1,$ProbeNumber)
     $series=switch($Class){
         'rate_limited' { @(1800,3600,7200,14400,21600) }
-        'auth' { @(21600,43200,43200) }
+        'auth' { @(86400) }
+        'permission' { @(86400) }
+        'configuration' { @(86400) }
+        'billing_exhausted' { @(3600,7200,14400,21600) }
         'model_unavailable' { @(1800,3600,7200,14400) }
         'capacity' { @(300,900,1800,3600,7200) }
         'timeout' { @(300,900,1800,3600,7200) }
@@ -246,7 +291,10 @@ function Reset-SCConnectionHealthIfConfigChanged([string]$ConnectionName) {
 function Get-SCRouteFailureClass([int]$ExitCode,[string]$Text) {
     $t=if($Text){$Text}else{''}
     if($t-match'(?i)\b429\b|too many requests|rate.?limit|quota exceeded|resource exhausted'){return 'rate_limited'}
-    if($t-match'(?i)\b401\b|\b403\b|unauthori[sz]ed|invalid api key|authentication|permission denied'){return 'auth'}
+    if($t-match'(?i)\b402\b|payment required|insufficient (credit|balance|fund)|credit balance|spend(?:ing)? limit|budget exhausted'){return 'billing_exhausted'}
+    if($t-match'(?i)missing (account|organization|project|gateway).{0,20}(id|header)|required header|account id required'){return 'configuration'}
+    if($t-match'(?i)\b401\b|unauthori[sz]ed|invalid api key|invalid token|authentication failed'){return 'auth'}
+    if($t-match'(?i)\b403\b|forbidden|permission denied|insufficient permission|not allowed'){return 'permission'}
     if($t-match'(?i)context.{0,20}(too (large|long)|length|window)|maximum context|prompt too long'){return 'context_too_large'}
     if($t-match'(?i)model.{0,25}(not found|unavailable|disabled|unsupported)|unknown model'){return 'model_unavailable'}
     if($t-match'(?i)invalid json|malformed json|text-tool model returned invalid json|could not parse.*json'){return 'malformed_response'}
@@ -262,7 +310,7 @@ function Get-SCRouteFailureClass([int]$ExitCode,[string]$Text) {
 }
 
 function Test-SCRouteFailureTransient([string]$Class) {
-    return @('rate_limited','capacity','timeout','server_error','model_unavailable','malformed_response','empty_response','protocol_error','session_incompatible','context_too_large','bad_request')-contains$Class
+    return @('rate_limited','capacity','timeout','server_error','model_unavailable','malformed_response','empty_response','protocol_error','session_incompatible','context_too_large','bad_request','billing_exhausted')-contains$Class
 }
 
 function Register-SCRouteSuccess([string]$Name,[string]$Scope=$null) {
@@ -281,8 +329,10 @@ function Register-SCRouteFailure([string]$Name,[string]$Class,[string]$Text,[str
     if(-not$Scope){$Scope=if($Name.StartsWith('connection:')){'connection'}elseif($Name.StartsWith('service:')){'service'}else{'endpoint'}}
     $failures=1;$probeFailures=0
     if($old){if($old.Value.PSObject.Properties['failures']){try{$failures=[int]$old.Value.failures+1}catch{}};if($old.Value.PSObject.Properties['probeFailures']){try{$probeFailures=[int]$old.Value.probeFailures}catch{}}}
-    $seconds=Get-SCProbeDelaySeconds $Class $Text ($probeFailures+1);$now=[datetimeoffset]::UtcNow;$retry=$now.AddSeconds($seconds).ToString('o')
-    $state=if($Class-eq'auth'){'quarantined'}else{'cooldown'};$fingerprint=$null
+    $explicit=Get-SCExplicitRetryAfterSeconds $Text;$seconds=Get-SCProbeDelaySeconds $Class $Text ($probeFailures+1);$now=[datetimeoffset]::UtcNow
+    $hardQuarantine=@('auth','permission','configuration')-contains$Class
+    $retry=if($hardQuarantine-and$null-eq$explicit){$null}else{$now.AddSeconds($seconds).ToString('o')}
+    $state=if($hardQuarantine-and$null-eq$explicit){'quarantined'}else{'cooldown'};$fingerprint=$null
     if($Scope-eq'connection' -and $Name.StartsWith('connection:')){$fingerprint=Get-SCConnectionConfigFingerprint $Name.Substring('connection:'.Length)}
     $value=[ordered]@{state=$state;scope=$Scope;reason=$Class;failures=$failures;probeFailures=$probeFailures;retryAfter=$retry;nextProbeAt=$retry;lastFailure=$now.ToString('o');lastProbe=if($old-and$old.Value.PSObject.Properties['lastProbe']){$old.Value.lastProbe}else{$null};lastSuccess=if($old-and$old.Value.PSObject.Properties['lastSuccess']){$old.Value.lastSuccess}else{$null};configFingerprint=$fingerprint}
     if($null-eq$old){$h.endpoints|Add-Member -NotePropertyName $Name -NotePropertyValue ([pscustomobject]$value) -Force}else{$old.Value=[pscustomobject]$value}
@@ -296,8 +346,10 @@ function Register-SCRouteProbeFailure([string]$Name,[string]$Class,[string]$Text
     if($null-eq$old){return Register-SCRouteFailure $Name $Class $Text}
     $scope=if($old.Value.PSObject.Properties['scope']){[string]$old.Value.scope}elseif($Name.StartsWith('connection:')){'connection'}elseif($Name.StartsWith('service:')){'service'}else{'endpoint'}
     $probeFailures=1;if($old.Value.PSObject.Properties['probeFailures']){try{$probeFailures=[int]$old.Value.probeFailures+1}catch{}}
-    $seconds=Get-SCProbeDelaySeconds $Class $Text ($probeFailures+1);$now=[datetimeoffset]::UtcNow;$next=$now.AddSeconds($seconds).ToString('o')
-    $old.Value.state=if($Class-eq'auth'){'quarantined'}else{'cooldown'}
+    $explicit=Get-SCExplicitRetryAfterSeconds $Text;$seconds=Get-SCProbeDelaySeconds $Class $Text ($probeFailures+1);$now=[datetimeoffset]::UtcNow
+    $hardQuarantine=@('auth','permission','configuration')-contains$Class
+    $next=if($hardQuarantine-and$null-eq$explicit){$null}else{$now.AddSeconds($seconds).ToString('o')}
+    $old.Value.state=if($hardQuarantine-and$null-eq$explicit){'quarantined'}else{'cooldown'}
     Set-SCProperty $old.Value 'scope' $scope;Set-SCProperty $old.Value 'reason' $Class;Set-SCProperty $old.Value 'probeFailures' $probeFailures;Set-SCProperty $old.Value 'lastProbe' $now.ToString('o');Set-SCProperty $old.Value 'lastFailure' $now.ToString('o');Set-SCProperty $old.Value 'nextProbeAt' $next;Set-SCProperty $old.Value 'retryAfter' $next
     if($scope-eq'connection' -and $Name.StartsWith('connection:')){Set-SCProperty $old.Value 'configFingerprint' (Get-SCConnectionConfigFingerprint $Name.Substring('connection:'.Length))}
     Save-SCRoutingHealth $h
@@ -316,7 +368,7 @@ function Get-SCFailureHealthScope($Record,[string]$Class) {
     $cfg=$Record.config;$type=if($cfg.PSObject.Properties['type']){[string]$cfg.type}else{'cli'}
     if($type-ne'api'){return [ordered]@{scope='endpoint';key=[string]$Record.name;connection=$null;service=$null}}
     $connection=if($cfg.PSObject.Properties['connection']){[string]$cfg.connection}else{$null};$service=if($connection){Get-SCConnectionServiceName $connection}else{$null}
-    if(@('rate_limited','auth','timeout','server_error')-contains$Class -and $connection){return [ordered]@{scope='connection';key="connection:$connection";connection=$connection;service=$service}}
+    if(@('rate_limited','auth','permission','configuration','billing_exhausted','timeout','server_error')-contains$Class -and $connection){return [ordered]@{scope='connection';key="connection:$connection";connection=$connection;service=$service}}
     if(@('capacity','model_unavailable','malformed_response','empty_response','protocol_error')-contains$Class){return [ordered]@{scope='endpoint';key=[string]$Record.name;connection=$connection;service=$service}}
     if($Class-eq'session_incompatible'){return [ordered]@{scope='request';key=$null;connection=$connection;service=$service}}
     return [ordered]@{scope='request';key=$null;connection=$connection;service=$service}
@@ -356,6 +408,7 @@ function Get-SCRouteDoctorDue([int]$Limit=2) {
         }else{
             foreach($field in @('nextProbeAt','retryAfter')){if($v.PSObject.Properties[$field] -and $v.$field){$dto=[datetimeoffset]::MinValue;if([datetimeoffset]::TryParse([string]$v.$field,[ref]$dto)){$at=$dto;break}}}
         }
+        if($state-eq'quarantined' -and $null-eq$at){continue}
         if($null-eq$at -or $at-le$now){$rows+=,[pscustomobject]@{name=[string]$p.Name;scope=if($v.PSObject.Properties['scope']){[string]$v.scope}else{'endpoint'};reason=if($v.PSObject.Properties['reason']){[string]$v.reason}else{'unknown'};dueAt=$at;entry=$v}}
     }
     return @($rows|Sort-Object @{Expression={if($_.dueAt){$_.dueAt}else{[datetimeoffset]::MinValue}}},name|Select-Object -First ([Math]::Max(1,$Limit)))
@@ -462,13 +515,13 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
     $cfg=Get-SCConfig
     $poolRecords=@(Get-SCTargetPoolRecords)
 
-    # Explicit operator/debug override remains strict. It may name a target-pool id,
+    # Explicit operator/debug override remains strict. It may name a endpoint-catalog id,
     # its pool:<id> route name, or a legacy configured provider. Normal task/provider
     # role pins are deliberately ignored.
     if($Override){
         $poolMatch=$poolRecords|Where-Object{[string]$_.name-eq$Override -or [string]$_.poolId-eq$Override}|Select-Object -First 1
         if($poolMatch){
-            if(-not(Test-SCRouteRecordAvailable $poolMatch)){throw "Target-pool route '$Override' is currently unavailable."}
+            if(-not(Test-SCRouteRecordAvailable $poolMatch)){throw "Endpoint-catalog route '$Override' is currently unavailable."}
             return @($poolMatch)
         }
         $property=if($cfg.providers){$cfg.providers.PSObject.Properties[$Override]}else{$null}
@@ -479,7 +532,7 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
         return @($record)
     }
 
-    # Once a target pool exists it is the automatic routing authority. Worker,
+    # Once a endpoint catalog exists it is the automatic routing authority. Worker,
     # critic and validator all draw from the same healthy workhorse pool; model
     # identity is telemetry, not a role assignment.
     $records=@()
@@ -487,7 +540,7 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
         $records=@($poolRecords)
     }else{
         # Backward-compatible migration path for projects that have not created a
-        # target pool yet. Legacy providers still run, but role/default/size pins
+        # endpoint catalog yet. Legacy providers still run, but role/default/size pins
         # and priority ordering no longer affect automatic selection.
         foreach($p in @(Get-SCPrioritizedProviders $cfg)){
             $records += [pscustomobject]@{name=$p.Name;config=$p.Config;priority=100;preferred=$false;targetPool=$false}
@@ -521,6 +574,6 @@ function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
         return [ordered]@{ name=$candidates[0].name; config=$candidates[0].config }
     }
     $next = Get-SCNextRouteAvailability
-    if ($next) { throw "All eligible target-pool routes are cooling down. Next retry window: $($next.ToLocalTime().ToString('o'))" }
-    throw "No eligible inference route is available. Add/enable models in the project target pool or configure a fallback connection."
+    if ($next) { throw "All eligible endpoint-catalog routes are cooling down. Next retry window: $($next.ToLocalTime().ToString('o'))" }
+    throw "No eligible inference route is available. Add/enable models in the machine endpoint catalog or configure a fallback connection."
 }
