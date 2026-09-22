@@ -18,7 +18,7 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
 
     $last=$null
     for($attempt=1;$attempt-le$max;$attempt++){
-        $acquireArgs=@('acquire')
+        $acquireArgs=@('acquire','--owner-pid',[string]$PID)
         if($WorkerSessionId){$acquireArgs+=@('--session',$WorkerSessionId)}
         if($preferred){$acquireArgs+=@('--preferred',$preferred)}
         $acquire=Invoke-SCCompiledRouterCommand $acquireArgs
