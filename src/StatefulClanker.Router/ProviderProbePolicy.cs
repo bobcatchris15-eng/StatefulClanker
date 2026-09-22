@@ -51,7 +51,7 @@ public static class ProviderProbePolicy
                     confidence="unknown",
                     windowSource="policy:cloudflare-free-allocation",
                     windowConfidence="documented",
-                    evidence="Workers AI free allocation resets daily at 00:00 UTC."
+                    windowEvidence="Workers AI free allocation resets daily at 00:00 UTC."
                 };
 
             case "gemini":
@@ -67,7 +67,7 @@ public static class ProviderProbePolicy
                     confidence="unknown",
                     windowSource="policy:gemini-rpd",
                     windowConfidence="documented",
-                    evidence="Gemini requests-per-day quota resets at midnight Pacific."
+                    windowEvidence="Gemini requests-per-day quota resets at midnight Pacific."
                 };
 
             default:
