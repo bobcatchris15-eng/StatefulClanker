@@ -317,7 +317,7 @@ public sealed class RouterEngine
             e.message=Bound(message,500);
             var hard=(klass=="auth"||klass=="permission"||klass=="configuration");
             var quota=QuotaIntelligence.ObserveFailure(connection?.presetId,klass,message);
-            if(HasQuotaSignal(quota)) e.quota=quota;
+            if(HasQuotaSignal(quota)) e.quota=MergeQuota(e.quota,quota);
             var exactAt=FutureTime(quota.nextAvailableAt);
             var explicitDelay=FailurePolicy.ParseExplicitDelay(message);
             if(hard && explicitDelay is null && exactAt is null)
@@ -343,7 +343,7 @@ public sealed class RouterEngine
         {
             if(!doc.endpoints.TryGetValue(key,out var e)) e=new HealthEntry();
             e.scope=scope;
-            e.quota=observation;
+            e.quota=MergeQuota(e.quota,observation);
             e.lastProbe=observation.observedAt;
             if(scope=="connection" && connection is not null)
                 e.configFingerprint=_store.ConnectionFingerprint(connection);
@@ -403,7 +403,43 @@ public sealed class RouterEngine
 
     static bool HasQuotaSignal(QuotaObservation? q) =>
         q is not null && (q.nextAvailableAt is not null || q.resetAt is not null ||
-                          q.remaining is not null || q.limit is not null || q.source!="none");
+                          q.windowResetAt is not null || q.remaining is not null ||
+                          q.limit is not null || q.source!="none" || q.windowSource is not null);
+
+    static QuotaObservation MergeQuota(QuotaObservation? current,QuotaObservation incoming)
+    {
+        if(current is null) return incoming;
+
+        // Counter/probe observations and deterministic window policies describe
+        // different things. Merge them instead of letting a harmless /models
+        // probe erase a known inference reset boundary (or vice versa).
+        if(incoming.source!="none" || incoming.remaining is not null ||
+           incoming.limit is not null || incoming.nextAvailableAt is not null ||
+           incoming.resetAt is not null)
+        {
+            current.status=incoming.status;
+            current.observedAt=incoming.observedAt;
+            current.nextAvailableAt=incoming.nextAvailableAt;
+            current.resetAt=incoming.resetAt;
+            current.limiter=incoming.limiter ?? current.limiter;
+            current.limit=incoming.limit;
+            current.remaining=incoming.remaining;
+            current.source=incoming.source;
+            current.confidence=incoming.confidence;
+            current.evidence=incoming.evidence;
+            current.appliesTo=incoming.appliesTo;
+        }
+
+        if(incoming.windowResetAt is not null)
+        {
+            current.windowResetAt=incoming.windowResetAt;
+            current.windowCadence=incoming.windowCadence;
+            current.windowSource=incoming.windowSource;
+            current.windowConfidence=incoming.windowConfidence;
+            current.windowEvidence=incoming.windowEvidence;
+        }
+        return current;
+    }
 
     static DateTimeOffset? FutureTime(string? value)
     {
