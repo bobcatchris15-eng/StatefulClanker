@@ -122,6 +122,16 @@ try {
     Assert-True ([double]$mock.health.quota.remaining-eq7) 'Healthy probe did not capture remaining request quota.'
     Assert-True ([double]$mock.health.quota.limit-eq30) 'Healthy probe did not capture request limit.'
     Assert-True ($null-ne$mock.health.quota.resetAt) 'Healthy probe did not capture reset window.'
+    Assert-True ([string]$mock.health.quota.source -like 'probe:*') 'Background quota metadata was not labeled as probe-derived.'
+
+    Write-Host '  QUOTA 6: Retry-After outranks a longer generic reset timer'
+    $lease=Call-Router @('acquire','--preferred','pool:mock::m','--owner-pid',[string]$PID)
+    $msg='HTTP 429'+[Environment]::NewLine+'Retry-After: 3'+[Environment]::NewLine+'X-RateLimit-Remaining-Requests: 0'+[Environment]::NewLine+'X-RateLimit-Reset-Requests: 2m'
+    [void](Call-Router @('failure','--lease',[string]$lease.data.lease,'--class','rate_limited','--message',$msg))
+    $r=Route (Call-Router @('snapshot')).data 'pool:mock::m'
+    $secs=SecondsUntil ([string]$r.health.quota.nextAvailableAt)
+    Assert-True ($secs-gt1-and$secs-lt6) "Retry-After did not control the next retry ($secs sec)."
+    Assert-True ([string]$r.health.quota.source-eq'retry-after') 'Retry-After was not preserved as the strongest provider evidence.'
 
     Write-Host 'PASS: provider-reported quota timing drives cooldowns and the monitor learns quota metadata proactively.'
 }
