@@ -68,6 +68,8 @@ Source: "{#RepoRoot}\skills\*";                    DestDir: "{app}\skills";   Fl
 Source: "{#RepoRoot}\examples\*";                  DestDir: "{app}\examples"; Flags: ignoreversion recursesubdirs
 Source: "{#RepoRoot}\tests\*";                     DestDir: "{app}\tests";    Flags: ignoreversion recursesubdirs
 Source: "{#RepoRoot}\install\StatefulClanker.ico"; DestDir: "{app}\install";  Flags: ignoreversion
+Source: "{#RepoRoot}\pi\*";                       DestDir: "{app}\pi";       Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#RepoRoot}\install\pi-runtime\*";      DestDir: "{app}\pi\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}";                  Filename: "{app}\{#MyAppExeName}"; Comment: "Open the StatefulClanker Windows host"
