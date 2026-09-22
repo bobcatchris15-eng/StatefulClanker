@@ -1,6 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { Type } from "typebox";
+import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 type McpDetails = { url: string; token?: string; project?: string };
@@ -65,8 +64,8 @@ function projectRoot(cwd: string): string | null {
   for (;;) {
     if (existsSync(join(current, ".statefulclanker", "state.json"))) return current;
     const parent = join(current, "..");
-    const resolvedParent = require("node:path").resolve(parent);
-    const resolvedCurrent = require("node:path").resolve(current);
+    const resolvedParent = resolve(parent);
+    const resolvedCurrent = resolve(current);
     if (resolvedParent === resolvedCurrent) return null;
     current = resolvedParent;
   }
@@ -131,7 +130,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
         name: tool.name,
         label: `Clanker: ${tool.name}`,
         description: tool.description ?? `Call StatefulClanker MCP tool ${tool.name}.`,
-        parameters: Type.Unsafe(schema as any),
+        parameters: schema as any,
         promptSnippet: `StatefulClanker control-plane tool: ${tool.name}`,
         async execute(_toolCallId, params) {
           try {
