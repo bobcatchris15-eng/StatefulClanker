@@ -73,6 +73,7 @@ internal static class Program
             preferred=Get(map,"preferred"),
             sessionId=Get(map,"session"),
             requireTools=bool.TryParse(Get(map,"require-tools"),out var rt)&&rt,
+            ownerPid=int.TryParse(Get(map,"owner-pid"),out var pid)?pid:0,
             lease=Get(map,"lease"),
             endpoint=Get(map,"endpoint"),
             failureClass=Get(map,"class"),
