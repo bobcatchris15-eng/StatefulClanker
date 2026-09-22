@@ -50,9 +50,13 @@ public sealed class RouterStore
     public RoundRobinDocument LoadCursor() => WithLock(() => Load<RoundRobinDocument>(CursorPath) ?? new());
     public LeaseDocument LoadLeases() => WithLock(() => Load<LeaseDocument>(LeasePath) ?? new());
 
+    public void SaveEndpoints(EndpointCatalog doc) => WithLock(() => { doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(EndpointPath,doc); return 0; });
     public void SaveHealth(RoutingHealthDocument doc) => WithLock(() => { Save(HealthPath, doc); return 0; });
     public void SaveCursor(RoundRobinDocument doc) => WithLock(() => { Save(CursorPath, doc); return 0; });
     public void SaveLeases(LeaseDocument doc) => WithLock(() => { doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(LeasePath,doc); return 0; });
+
+    public TResult UpdateEndpoints<TResult>(Func<EndpointCatalog,TResult> update) =>
+        WithLock(() => { var doc=Load<EndpointCatalog>(EndpointPath) ?? new(); var r=update(doc); doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(EndpointPath,doc); return r; });
 
     public TResult UpdateHealth<TResult>(Func<RoutingHealthDocument,TResult> update) =>
         WithLock(() => { var doc=Load<RoutingHealthDocument>(HealthPath) ?? new(); var r=update(doc); Save(HealthPath,doc); return r; });
