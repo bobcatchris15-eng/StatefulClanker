@@ -7,16 +7,19 @@ namespace StatefulClanker.Router;
 
 public sealed class FreeCapacityManager
 {
+    readonly RouterEngine _engine;
     readonly RouterStore _store;
     readonly HttpClient _http=new(){Timeout=TimeSpan.FromSeconds(20)};
     readonly Dictionary<string,DateTimeOffset> _nextSync=new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string,bool> _quotaUseful=new(StringComparer.OrdinalIgnoreCase);
 
     static readonly TimeSpan SuccessInterval=TimeSpan.FromMinutes(20);
     static readonly TimeSpan FailureInterval=TimeSpan.FromMinutes(5);
 
-    public FreeCapacityManager(RouterStore store)
+    public FreeCapacityManager(RouterEngine engine)
     {
-        _store=store;
+        _engine=engine;
+        _store=engine.Store;
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("StatefulClanker-FreeCapacity/0.1");
     }
 
@@ -25,7 +28,7 @@ public sealed class FreeCapacityManager
         while(!token.IsCancellationRequested)
         {
             try { await TickAsync(token); } catch { }
-            try { await Task.Delay(TimeSpan.FromSeconds(10),token); }
+            try { await Task.Delay(TimeSpan.FromSeconds(2),token); }
             catch(OperationCanceledException){break;}
         }
     }
@@ -38,7 +41,18 @@ public sealed class FreeCapacityManager
         {
             if(_nextSync.TryGetValue(kv.Key,out var due) && due>now) continue;
             var ok=await SyncConnectionAsync(kv.Key,kv.Value,token);
-            _nextSync[kv.Key]=now.Add(ok?SuccessInterval:FailureInterval);
+            var plan=ProviderProbeCatalog.Resolve(kv.Value);
+            var interval=FailureInterval;
+            if(ok)
+            {
+                if(plan.Kind==ProviderProbeKind.Models)
+                    interval=_quotaUseful.TryGetValue(kv.Key,out var useful) && useful
+                        ? plan.UsefulInterval
+                        : plan.SilentInterval;
+                else
+                    interval=SuccessInterval;
+            }
+            _nextSync[kv.Key]=now.Add(interval);
             break; // one connection per tick; never turn discovery into probe spam
         }
     }
@@ -59,6 +73,14 @@ public sealed class FreeCapacityManager
             ApplyHeaders(request,profile);
             using var response=await _http.SendAsync(request,HttpCompletionOption.ResponseContentRead,token);
             var body=await response.Content.ReadAsStringAsync(token);
+            var quota=QuotaIntelligence.Observe(
+                profile.presetId,
+                (int)response.StatusCode,
+                Headers(response),
+                body,
+                response.IsSuccessStatusCode);
+            RecordQuota(connectionName,profile,quota);
+            _quotaUseful[connectionName]=HasQuotaSignal(quota);
             if(!response.IsSuccessStatusCode)
             {
                 RecordFailure(connectionName,$"HTTP {(int)response.StatusCode} {response.ReasonPhrase}");
@@ -383,6 +405,28 @@ public sealed class FreeCapacityManager
         if(m.OutputPrice is double output) values.Add(output);
         m.AnyPositivePrice=values.Any(v=>v>0);
         m.AllKnownPricesZero=values.Count>=2 && values.All(v=>Math.Abs(v)<1e-15);
+    }
+
+    void RecordQuota(string connectionName,ConnectionProfile profile,QuotaObservation quota)
+    {
+        if(quota.source!="none"&&!quota.source.StartsWith("catalog:",StringComparison.OrdinalIgnoreCase))
+            quota.source="catalog:"+quota.source;
+        if(!string.IsNullOrWhiteSpace(quota.evidence)&&!quota.evidence.StartsWith("catalog refresh:",StringComparison.OrdinalIgnoreCase))
+            quota.evidence="catalog refresh: "+quota.evidence;
+        _engine.RecordQuotaObservation("connection:"+connectionName,"connection",quota,profile);
+    }
+
+    static bool HasQuotaSignal(QuotaObservation q) =>
+        q.nextAvailableAt is not null || q.resetAt is not null ||
+        q.remaining is not null || q.limit is not null ||
+        q.windows.Count>0 || !string.Equals(q.source,"none",StringComparison.OrdinalIgnoreCase);
+
+    static Dictionary<string,string> Headers(HttpResponseMessage response)
+    {
+        var result=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        foreach(var h in response.Headers) result[h.Key]=string.Join(",",h.Value);
+        foreach(var h in response.Content.Headers) result[h.Key]=string.Join(",",h.Value);
+        return result;
     }
 
     static void ApplyHeaders(HttpRequestMessage request,ConnectionProfile p)
