@@ -941,17 +941,36 @@ function Invoke-SCRouteProbeRecord($Due) {
     if($records.Count-eq0){throw "No target-pool model is available to probe $($Due.name)."}
     $record=$records[0]
     $connection=Get-SCEffectiveApiConnection $record
-    $copy=[ordered]@{}
-    foreach($p in $connection.PSObject.Properties){$copy[$p.Name]=$p.Value}
-    # Keep the probe deliberately tiny. Anthropic requires max_tokens; most
-    # OpenAI-compatible services are happier if we simply omit an artificial cap.
-    if((Get-SCConnectionProtocol $connection)-eq'anthropic-messages'){$copy['maxTokens']=16}
-    $probeConnection=[pscustomobject]$copy
-    $messages=@([ordered]@{role='user';content='Reply exactly OK.'})
-    $response=Invoke-SCApiChat $probeConnection $messages @() 'text'
-    $message=Get-SCAssistantMessage $response (Get-SCConnectionProtocol $probeConnection)
-    if($null-eq$message -or [string]::IsNullOrWhiteSpace([string]$message.content)){throw 'Route Doctor probe returned no content.'}
-    return [pscustomobject]@{name=[string]$Due.name;endpoint=[string]$record.name;connection=[string]$record.config.connection;model=[string]$record.config.model;reply=[string]$message.content}
+
+    # Route Doctor is deliberately non-inference. Connection health can be
+    # established with provider metadata/account endpoints; never burn model
+    # quota merely to discover whether model quota is available.
+    $presetId=if($connection.PSObject.Properties['presetId']){[string]$connection.presetId}else{''}
+    if($presetId-eq'openrouter'){
+        $uri='https://openrouter.ai/api/v1/key'
+    }else{
+        $base=[string]$connection.baseUrl
+        $modelsPath=if($connection.PSObject.Properties['modelsPath']-and$connection.modelsPath){[string]$connection.modelsPath}else{'/models'}
+        if([Uri]::IsWellFormedUriString($modelsPath,[UriKind]::Absolute)){$uri=$modelsPath}
+        else{$uri=$base.TrimEnd('/')+'/'+$modelsPath.TrimStart('/')}
+    }
+    $headers=New-SCApiHeaders $connection
+    try{
+        $response=Invoke-WebRequest -Method Get -Uri $uri -Headers $headers -TimeoutSec 15 -UseBasicParsing
+    }catch{
+        throw "Non-inference route probe failed: $($_.Exception.Message)"
+    }
+    if([int]$response.StatusCode-lt200-or[int]$response.StatusCode-ge300){
+        throw "Non-inference route probe returned HTTP $([int]$response.StatusCode)."
+    }
+    return [pscustomobject]@{
+        name=[string]$Due.name
+        endpoint=[string]$record.name
+        connection=[string]$record.config.connection
+        model=[string]$record.config.model
+        probeUri=$uri
+        probeKind=if($presetId-eq'openrouter'){'account-metadata'}else{'model-catalog'}
+    }
 }
 
 function Invoke-SCRouteDoctor([int]$MaxProbes=1) {
