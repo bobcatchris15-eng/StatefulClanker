@@ -89,13 +89,19 @@ try {
     $leasedEndpoint=[string]$c.data.endpoint
     Stop-Process -Id $daemon.Id -Force
     $daemon.WaitForExit()
+    # Simulate a nominal lease TTL expiring while the worker process is still
+    # alive. Process identity must remain authoritative across router restart.
+    $leasePath=Join-Path $temp 'routing\leases.json'
+    $leaseDoc=Get-Content -Raw -LiteralPath $leasePath|ConvertFrom-Json
+    foreach($lp in $leaseDoc.leases.PSObject.Properties){$lp.Value.expiresAt=[datetimeoffset]::UtcNow.AddMinutes(-5).ToString('o')}
+    $leaseDoc|ConvertTo-Json -Depth 20|Set-Content -LiteralPath $leasePath -Encoding UTF8
     $daemon=Start-Process -FilePath $router -ArgumentList 'daemon' -PassThru -WindowStyle Hidden
     $ready=$false
     foreach($i in 1..30){Start-Sleep -Milliseconds 100;try{[void](Call-Router @('ping'));$ready=$true;break}catch{}}
     Assert-True $ready 'Restarted router daemon did not become ready.'
     $snap=(Call-Router @('snapshot')).data
     $persisted=@($snap.routes|Where-Object { [string]$_.endpoint -eq $leasedEndpoint })[0]
-    Assert-True ([bool]$persisted.leased) 'Live worker lease disappeared across router restart.'
+    Assert-True ([bool]$persisted.leased) 'Live worker lease disappeared across router restart / nominal TTL expiry.'
     Assert-True ([int]$snap.activeLeases -ge 1) 'Restarted router did not restore durable leases.'
     [void](Call-Router @('release','--lease',[string]$c.data.lease))
 
