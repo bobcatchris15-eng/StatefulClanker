@@ -11,22 +11,37 @@ function Test-SCProviderEnabled($ProviderEntry) {
     return $true
 }
 
+function Get-SCMachineRoutingRoot {
+    $base=if($env:LOCALAPPDATA){Join-Path $env:LOCALAPPDATA 'StatefulClanker'}else{Join-Path ([IO.Path]::GetTempPath()) 'StatefulClanker'}
+    if(-not(Test-Path -LiteralPath $base)){New-Item -ItemType Directory -Force -Path $base|Out-Null}
+    return $base
+}
+
 function Get-SCTargetPoolPath {
-    $dir=Get-SCPath 'routing'
-    if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
-    return Join-Path $dir 'target-pool.json'
+    return Join-Path (Get-SCMachineRoutingRoot) 'endpoints.json'
 }
 
 function Get-SCTargetPool {
     $path=Get-SCTargetPoolPath
-    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return [pscustomobject]@{schemaVersion=1;entries=[pscustomobject]@{}}}
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
+        # One-time compatibility migration. Endpoint selection is machine state now;
+        # the old per-project pool is only consulted when no machine catalog exists.
+        try{
+            $legacy=Get-SCPath 'routing/endpoint-catalog.json'
+            if(Test-Path -LiteralPath $legacy -PathType Leaf){
+                Copy-Item -LiteralPath $legacy -Destination $path -Force
+                Add-SCEvent 'routing.endpoint_catalog_migrated' 'Migrated the legacy machine endpoint catalog into the machine endpoint catalog.' @{from=$legacy;to=$path}
+            }
+        }catch{}
+    }
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return [pscustomobject]@{schemaVersion=2;entries=[pscustomobject]@{}}}
     try{
         $pool=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json
         if(-not$pool.PSObject.Properties['entries']){$pool|Add-Member -NotePropertyName entries -NotePropertyValue ([pscustomobject]@{}) -Force}
         return $pool
     }catch{
-        Add-SCEvent 'routing.target_pool_invalid' 'Target pool JSON could not be parsed; falling back to legacy configured providers.' @{path=$path;error=$_.Exception.Message}
-        return [pscustomobject]@{schemaVersion=1;entries=[pscustomobject]@{}}
+        Add-SCEvent 'routing.endpoint_catalog_invalid' 'Machine endpoint catalog JSON could not be parsed; falling back to legacy configured providers.' @{path=$path;error=$_.Exception.Message}
+        return [pscustomobject]@{schemaVersion=2;entries=[pscustomobject]@{}}
     }
 }
 
@@ -59,15 +74,31 @@ function Get-SCTargetPoolRecords {
 }
 
 function Get-SCRoundRobinStatePath {
-    $dir=Get-SCPath 'routing'
+    $dir=Join-Path (Get-SCMachineRoutingRoot) 'routing'
     if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
     return Join-Path $dir 'round-robin.json'
+}
+
+function Get-SCEndpointLeaseName([string]$EndpointName) {
+    $key=(Get-SCMachineRoutingRoot)+'|'+$EndpointName
+    return 'Local\StatefulClankerEndpoint-'+(Get-SCHashString $key).Substring(0,24)
+}
+function Enter-SCEndpointLease([string]$EndpointName) {
+    $mutex=New-Object System.Threading.Mutex($false,(Get-SCEndpointLeaseName $EndpointName))
+    $acquired=$false
+    try{$acquired=$mutex.WaitOne(0)}catch [System.Threading.AbandonedMutexException]{$acquired=$true}catch{$acquired=$false}
+    return [pscustomobject]@{endpoint=$EndpointName;acquired=$acquired;mutex=$mutex}
+}
+function Exit-SCEndpointLease($Lease) {
+    if($null-eq$Lease){return}
+    try{if($Lease.acquired){$Lease.mutex.ReleaseMutex()}}catch{}
+    try{$Lease.mutex.Dispose()}catch{}
 }
 
 function Get-SCRoundRobinOrdered($Records) {
     $items=@($Records|Sort-Object name)
     if($items.Count-le 1){return $items}
-    $mutexName='Local\StatefulClankerRoute-'+(Get-SCHashString (Get-SCRoot)).Substring(0,16)
+    $mutexName='Local\StatefulClankerRoute-'+(Get-SCHashString (Get-SCMachineRoutingRoot)).Substring(0,16)
     $mutex=New-Object System.Threading.Mutex($false,$mutexName)
     $locked=$false
     try{
@@ -113,7 +144,7 @@ function Get-SCPrioritizedProviders($Config) {
 
 
 function Get-SCRoutingHealthPath {
-    $dir = Get-SCPath 'routing'
+    $dir = Join-Path (Get-SCMachineRoutingRoot) 'routing'
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     return Join-Path $dir 'health.json'
 }
@@ -462,13 +493,13 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
     $cfg=Get-SCConfig
     $poolRecords=@(Get-SCTargetPoolRecords)
 
-    # Explicit operator/debug override remains strict. It may name a target-pool id,
+    # Explicit operator/debug override remains strict. It may name a endpoint-catalog id,
     # its pool:<id> route name, or a legacy configured provider. Normal task/provider
     # role pins are deliberately ignored.
     if($Override){
         $poolMatch=$poolRecords|Where-Object{[string]$_.name-eq$Override -or [string]$_.poolId-eq$Override}|Select-Object -First 1
         if($poolMatch){
-            if(-not(Test-SCRouteRecordAvailable $poolMatch)){throw "Target-pool route '$Override' is currently unavailable."}
+            if(-not(Test-SCRouteRecordAvailable $poolMatch)){throw "Endpoint-catalog route '$Override' is currently unavailable."}
             return @($poolMatch)
         }
         $property=if($cfg.providers){$cfg.providers.PSObject.Properties[$Override]}else{$null}
@@ -479,7 +510,7 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
         return @($record)
     }
 
-    # Once a target pool exists it is the automatic routing authority. Worker,
+    # Once a endpoint catalog exists it is the automatic routing authority. Worker,
     # critic and validator all draw from the same healthy workhorse pool; model
     # identity is telemetry, not a role assignment.
     $records=@()
@@ -487,7 +518,7 @@ function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage='worker
         $records=@($poolRecords)
     }else{
         # Backward-compatible migration path for projects that have not created a
-        # target pool yet. Legacy providers still run, but role/default/size pins
+        # endpoint catalog yet. Legacy providers still run, but role/default/size pins
         # and priority ordering no longer affect automatic selection.
         foreach($p in @(Get-SCPrioritizedProviders $cfg)){
             $records += [pscustomobject]@{name=$p.Name;config=$p.Config;priority=100;preferred=$false;targetPool=$false}
@@ -521,6 +552,6 @@ function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
         return [ordered]@{ name=$candidates[0].name; config=$candidates[0].config }
     }
     $next = Get-SCNextRouteAvailability
-    if ($next) { throw "All eligible target-pool routes are cooling down. Next retry window: $($next.ToLocalTime().ToString('o'))" }
-    throw "No eligible inference route is available. Add/enable models in the project target pool or configure a fallback connection."
+    if ($next) { throw "All eligible endpoint-catalog routes are cooling down. Next retry window: $($next.ToLocalTime().ToString('o'))" }
+    throw "No eligible inference route is available. Add/enable models in the machine endpoint catalog or configure a fallback connection."
 }
