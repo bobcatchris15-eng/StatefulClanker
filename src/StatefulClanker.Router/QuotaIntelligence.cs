@@ -339,7 +339,7 @@ public static partial class QuotaIntelligence
             q.nextAvailableAt=at.ToUniversalTime().ToString("O");
         // Prefer stronger evidence over inferred/derived observations.
         var rank=ConfidenceRank(confidence);
-        if(rank>=ConfidenceRank(q.confidence))
+        if(rank>ConfidenceRank(q.confidence))
         {
             q.source=source;q.confidence=confidence;q.evidence=Bound(evidence,240);
         }
