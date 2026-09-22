@@ -183,6 +183,7 @@ public sealed class RouterEngine
     {
         ReapExpiredLeases();
         var health=_store.LoadHealth();
+        var capacity=_store.LoadCapacityDiscovery();
         var routes=Routes();
         Dictionary<string,LeaseRecord> leases;
         lock(_leaseLock) leases=_leasesByToken.ToDictionary(x=>x.Key,x=>x.Value,StringComparer.OrdinalIgnoreCase);
@@ -207,10 +208,20 @@ public sealed class RouterEngine
             healthyRoutes=eligible.Count,
             activeLeases=leases.Count,
             nextRetryAt=NextRetryAt(health),
+            freeCapacity=new
+            {
+                updatedAt=capacity.updatedAt,
+                connections=capacity.connections.Count,
+                confirmedFree=capacity.connections.Values.Sum(x=>x.confirmedFree),
+                workhorseFree=capacity.connections.Values.Sum(x=>x.workhorseFree),
+                paid=capacity.connections.Values.Sum(x=>x.paid),
+                unknown=capacity.connections.Values.Sum(x=>x.unknown)
+            },
             routes=routes.Select(r=>new
             {
                 endpoint=r.RouteName,r.CatalogId,r.Endpoint.connection,r.Endpoint.model,
                 r.Endpoint.toolMode,r.Endpoint.supportsTools,r.Endpoint.free,
+                r.Endpoint.managedBy,r.Endpoint.freeClass,r.Endpoint.retiredReason,r.Endpoint.userOverride,
                 available=Available(r,health),
                 leased=leaseRoutes.ContainsKey(r.RouteName),
                 health=HealthStateFor(r,health)
