@@ -38,11 +38,11 @@ The resident cockpit is organized around three persistent regions:
 - center: Overview, Activity & Telemetry, Integrations, Endpoints & Routing, and Connections tabs;
 - right rail: durable task state and task-level diagnostics/actions.
 
-Overview keeps the live orchestration state visible: Clanker status, worker/reviewer blinkenlights, autofill controls, routing/usage, project authority, and an embedded project terminal. The full durable event stream, active/recent worker telemetry, and context faults live on the Activity & Telemetry tab. Clicking the recent-activity rail jumps to that tab.
+Overview is intentionally a control surface rather than a dashboard collage. Its two dominant panes are the live worker/reviewer blinkenlights and the embedded project TUI/console. Everything else is compressed into motherboard/server-style readouts: project/MCP/autofill state, worker/queue counts, Intent revision, and the exact next healthy/unoccupied endpoint predicted by the machine-wide round-robin router. Large usage, authority, event, and telemetry views stay off the Overview page; the durable event stream, active/recent worker telemetry, and context faults live on Activity & Telemetry.
 
 ### Embedded project terminal
 
-The Overview terminal is a real ConPTY-backed terminal using the Windows Terminal renderer, not a simulated textbox console. Every session starts with the active project as its working directory.
+The Overview terminal is a real ConPTY-backed terminal using the Windows Terminal renderer, not a simulated textbox console. Every session starts with the active project as its working directory. The WinForms/WPF bridge explicitly returns keyboard focus to the renderer on click/entry, enables Win32 input records, captures Tab and direction keys for TUIs, treats navigation/editing keys as terminal input rather than dialog navigation, and re-lays out the host on resize. PowerShell, agy, Goose, bundled Pi, OpenCode, and custom commands can all run in the same interactive pane.
 
 Presets include:
 
