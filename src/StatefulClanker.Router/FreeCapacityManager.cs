@@ -380,7 +380,12 @@ public sealed class FreeCapacityManager
         if(model.SupportsTools==false) return false;
         if(model.ContextLength.HasValue && model.ContextLength.Value<16000) return false;
         var id=(model.Id+" "+model.DisplayName).ToLowerInvariant();
-        string[] reject={"embedding","embed-","rerank","whisper","speech","audio","tts","image","flux","stable-diffusion","video","moderation"};
+        string[] reject={
+            "embedding","embed-","nv-embed","rerank","reranker","retrieval",
+            "whisper","speech","audio","tts","parakeet",
+            "image","flux","stable-diffusion","video","clip","fuyu",
+            "moderation","guard","safety","translate","translation"
+        };
         return !reject.Any(id.Contains);
     }
 
