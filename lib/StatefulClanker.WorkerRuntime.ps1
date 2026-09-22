@@ -481,6 +481,18 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
     }
 }
 function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
+    if($Protocol-eq'gemini-native'){
+        if($null-eq$Response-or-not$Response.PSObject.Properties['candidates']-or@($Response.candidates).Count-eq0){throw 'Gemini endpoint returned no candidates.'}
+        $parts=@($Response.candidates[0].content.parts);$texts=@();$calls=@();$n=0
+        foreach($part in $parts){
+            if($part.PSObject.Properties['text'] -and -not[string]::IsNullOrWhiteSpace([string]$part.text)){$texts+=,[string]$part.text}
+            if($part.PSObject.Properties['functionCall'] -and $part.functionCall){
+                $n++;$fc=$part.functionCall;$args=if($fc.PSObject.Properties['args']){$fc.args}else{[pscustomobject]@{}}
+                $calls+=,[pscustomobject]@{id=('gemini-{0}-{1}'-f$n,[string]$fc.name);type='function';function=[pscustomobject]@{name=[string]$fc.name;arguments=($args|ConvertTo-Json -Depth 30 -Compress)}}
+            }
+        }
+        return [pscustomobject]@{content=($texts-join[Environment]::NewLine);tool_calls=@($calls)}
+    }
     if($Protocol-eq'anthropic-messages'){
         # Normalize Anthropic's content-block array into the same {content;tool_calls}
         # shape OpenAI's choices[0].message already has, so the rest of the worker
@@ -510,6 +522,7 @@ function Add-SCApiUsage($Accumulator,$Response) {
     $model=if($Response.PSObject.Properties['model']-and-not[string]::IsNullOrWhiteSpace([string]$Response.model)){[string]$Response.model}elseif($Accumulator.ContainsKey('fallbackModel')){[string]$Accumulator.fallbackModel}else{''}
     $prompt=0L;$completion=0L;$total=0L;$reported=$false
     if($Response.PSObject.Properties['usage']-and$Response.usage){$reported=$true;$prompt=Get-SCApiUsageValue $Response.usage @('prompt_tokens','input_tokens');$completion=Get-SCApiUsageValue $Response.usage @('completion_tokens','output_tokens');$total=Get-SCApiUsageValue $Response.usage @('total_tokens');if($total-le0-and($prompt-gt0-or$completion-gt0)){$total=$prompt+$completion}}
+    elseif($Response.PSObject.Properties['usageMetadata']-and$Response.usageMetadata){$reported=$true;$prompt=Get-SCApiUsageValue $Response.usageMetadata @('promptTokenCount');$completion=Get-SCApiUsageValue $Response.usageMetadata @('candidatesTokenCount');$total=Get-SCApiUsageValue $Response.usageMetadata @('totalTokenCount');if($total-le0-and($prompt-gt0-or$completion-gt0)){$total=$prompt+$completion}}
     $Accumulator.apiRequests=[long]$Accumulator.apiRequests+1;if($reported){$Accumulator.usageReports=[long]$Accumulator.usageReports+1};$Accumulator.promptTokens=[long]$Accumulator.promptTokens+$prompt;$Accumulator.completionTokens=[long]$Accumulator.completionTokens+$completion;$Accumulator.totalTokens=[long]$Accumulator.totalTokens+$total
     if(-not[string]::IsNullOrWhiteSpace($model)){$map=$Accumulator.modelUsage;if(-not$map.ContainsKey($model)){$map[$model]=[ordered]@{model=$model;requests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L}};$row=$map[$model];$row.requests=[long]$row.requests+1;if($reported){$row.usageReports=[long]$row.usageReports+1};$row.promptTokens=[long]$row.promptTokens+$prompt;$row.completionTokens=[long]$row.completionTokens+$completion;$row.totalTokens=[long]$row.totalTokens+$total}
 }
