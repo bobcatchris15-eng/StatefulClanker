@@ -21,15 +21,15 @@ public sealed class QuotaObservation
 public static partial class QuotaIntelligence
 {
     [GeneratedRegex(@"(?i)(?:retry[-_ ]?after|try again(?: in)?|retry in)\D{0,20}(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)")]
-    static partial Regex RetryTextRx();
+    private static partial Regex RetryTextRx();
     [GeneratedRegex(@"(?i)(?:retryDelay|retry_delay|retry_after_seconds|retry_after)[""']?\s*[:=]\s*[""']?(\d+(?:\.\d+)?)\s*([a-z]+)?")]
-    static partial Regex RetryJsonRx();
+    private static partial Regex RetryJsonRx();
     [GeneratedRegex(@"(?i)(?:regain access|available again|resumes?|reset(?:s)?)(?:\s+on|\s+at|\s*[:=])\s*[""']?([0-9]{4}-[0-9]{2}-[0-9]{2}[^""'\r\n,}]*)")]
-    static partial Regex AbsoluteTextRx();
+    private static partial Regex AbsoluteTextRx();
     [GeneratedRegex(@"(?i)(?:x-)?ratelimit(?:-reset|-reset-after)?\s*[:=]\s*(\d{10,})")]
-    static partial Regex EpochRx();
+    private static partial Regex EpochRx();
     [GeneratedRegex(@"(?i)(\d+(?:\.\d+)?)(d|h|m|s|ms)")]
-    static partial Regex DurationPartRx();
+    private static partial Regex DurationPartRx();
 
     public static QuotaObservation Observe(
         string? providerId,
