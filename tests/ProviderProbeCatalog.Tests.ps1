@@ -50,6 +50,13 @@ $retired=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve($gh)
 Assert-True (-not$retired.Enabled) 'Retired GitHub Models provider was still probe-enabled.'
 Assert-True ([StatefulClanker.Router.ProviderProbeCatalog]::IsRetired($gh)) 'GitHub Models was not classified retired.'
 
+Write-Host '  PROBE 4B: account-id templates expand before control-plane probing'
+$cf=New-Profile 'cloudflare' 'https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/v1' 'https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/models/search?format=openrouter&per_page=1000'
+$cf.accountId='abc123'
+$plan=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve($cf)
+Assert-True (-not $plan.Uri.AbsoluteUri.Contains('{accountId}')) 'Cloudflare probe URI retained accountId placeholder.'
+Assert-True ($plan.Uri.AbsoluteUri.Contains('/accounts/abc123/ai/models/search')) "Cloudflare account ID was not expanded: $($plan.Uri)"
+
 Write-Host '  PROBE 5: Cerebras request/day and token/minute headers become distinct windows'
 $h=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
 $h['x-ratelimit-limit-requests-day']='1000'
