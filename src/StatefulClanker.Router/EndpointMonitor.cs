@@ -154,6 +154,13 @@ public sealed class EndpointMonitor
         {
             var plan=ProviderProbeCatalog.Resolve(kv.Value);
             if(!plan.Enabled) continue;
+
+            // /models/catalog polling is owned by FreeCapacityManager. That same
+            // response feeds quota telemetry, avoiding duplicate control-plane
+            // requests. Keep this loop only for genuinely separate quota/health
+            // endpoints such as OpenRouter key metadata or Cohere key checks.
+            if(plan.Kind==ProviderProbeKind.Models) continue;
+
             if(_nextQuotaProbe.TryGetValue(kv.Key,out var due) && due>now) continue;
 
             var result=await ProbeAsync(kv.Value,plan,token);
