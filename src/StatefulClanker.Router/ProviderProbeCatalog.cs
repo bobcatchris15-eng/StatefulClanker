@@ -26,7 +26,9 @@ public sealed record ProviderProbePlan(
 public static class ProviderProbeCatalog
 {
     static readonly TimeSpan Useful = TimeSpan.FromMinutes(5);
-    static readonly TimeSpan Silent = TimeSpan.FromMinutes(30);
+    // A control-plane catalog is the route doctor's availability inventory.
+    // Keep it fresh even when a provider exposes no quota headers.
+    static readonly TimeSpan Silent = TimeSpan.FromMinutes(15);
 
     public static ProviderProbePlan Resolve(ConnectionProfile profile)
     {
@@ -98,7 +100,7 @@ public static class ProviderProbeCatalog
                 "AI Gateway model catalog health. Budget/spend inspection is exposed through Vercel account tooling rather than the gateway key endpoint."),
             _ => new ProviderProbePlan(
                 id,ProviderProbeKind.Models,HttpMethod.Get,models,false,true,
-                TimeSpan.FromMinutes(10),TimeSpan.FromMinutes(45),
+                TimeSpan.FromMinutes(10),TimeSpan.FromMinutes(15),
                 "models",
                 "Generic authenticated model/catalog health probe; back off when quota-silent.")
         };

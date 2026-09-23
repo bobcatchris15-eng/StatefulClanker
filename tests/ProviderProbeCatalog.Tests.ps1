@@ -40,7 +40,8 @@ $groq=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve((New-Profile 'groq'
 $generic=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve((New-Profile 'custom' 'https://example.invalid/v1'))
 Assert-True ([string]$groq.Strategy-eq'groq-models-headers') 'Groq strategy was not provider-specific.'
 Assert-True ($groq.UsefulInterval.TotalMinutes-lt$generic.UsefulInterval.TotalMinutes) 'Useful Groq telemetry should be sampled more often than generic metadata.'
-Assert-True ($generic.SilentInterval.TotalMinutes-ge45) 'Quota-silent generic provider did not back off.'
+Assert-True ($generic.SilentInterval.TotalMinutes-le15) 'Quota-silent generic provider did not meet the catalog freshness target.'
+Assert-True ($generic.SilentInterval.TotalMinutes-le15) 'Catalog-only providers must refresh within the 15-minute catalog freshness target.'
 
 Write-Host '  PROBE 4: local and retired services do not receive periodic network probes'
 $local=[StatefulClanker.Router.ProviderProbeCatalog]::Resolve((New-Profile 'ollama' 'http://127.0.0.1:11434/v1'))

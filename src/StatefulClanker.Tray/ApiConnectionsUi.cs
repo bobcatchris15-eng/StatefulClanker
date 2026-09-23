@@ -135,6 +135,17 @@ static class TargetPoolStore
         File.Move(tmp,path,true);
     }
 
+    public static void ApplySelection(TargetPoolDocument doc,TargetPoolEntry entry,bool selected)
+    {
+        if(selected)
+        {
+            entry.enabled=true;
+            doc.entries[entry.id]=entry;
+            return;
+        }
+        doc.entries.Remove(entry.id);
+    }
+
     public static string Id(string connection,string model) => connection.Trim() + "::" + model.Trim();
 }
 
@@ -386,7 +397,6 @@ sealed class ApiConnectionsPage : TabPage
         ConfigureModelGrid(); rows.Controls.Add(_models,0,3);
 
         var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
-        bottom.Controls.Add(Make("Save endpoints",SaveTargetSelection,170));
         bottom.Controls.Add(Make("Auto-enable free endpoints",AutoTargetFreeWorkhorses,205));
         var note=new Label{Text="Connections and enabled endpoints are machine-local. The currently active project simply consumes that shared round-robin worker pool.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
         bottom.Controls.Add(note);rows.Controls.Add(bottom,0,4);
@@ -411,7 +421,7 @@ sealed class ApiConnectionsPage : TabPage
         _models.Columns.Add("name","Model");_models.Columns.Add("id","Model ID");_models.Columns.Add("state","Endpoint state");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");_models.Columns.Add("free","Free");
         foreach(DataGridViewColumn c in _models.Columns) if(c.Name!="use") c.ReadOnly=true;
         _models.CurrentCellDirtyStateChanged+=(_,_)=>{if(_models.IsCurrentCellDirty&&_models.CurrentCell?.ColumnIndex==0)_models.CommitEdit(DataGridViewDataErrorContexts.Commit);};
-        _models.CellValueChanged+=(_,e)=>{if(!_loadingModels&&e.RowIndex>=0&&e.ColumnIndex==0){_modelSelectionDirty=true;_summary.Text="Unsaved endpoint selection changes";_summary.ForeColor=Theme.Warn;}};
+        _models.CellValueChanged+=(_,e)=>{if(!_loadingModels&&e.RowIndex>=0&&e.ColumnIndex==0)PersistTargetSelection(_models.Rows[e.RowIndex]);};
     }
 
     string? SelectedId=>_connections.SelectedRows.Count>0?_connections.SelectedRows[0].Cells["id"].Value?.ToString():null;
@@ -529,6 +539,34 @@ sealed class ApiConnectionsPage : TabPage
             TargetPoolStore.SaveActive(pool);Reload(connection);
         }
         catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not save endpoint catalog",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+    }
+
+    void PersistTargetSelection(DataGridViewRow row)
+    {
+        var connection=SelectedId;if(connection is null||!_profiles.TryGetValue(connection,out var p))return;
+        try
+        {
+            var modelId=row.Cells["id"].Value?.ToString();if(string.IsNullOrWhiteSpace(modelId))return;
+            var selected=Convert.ToBoolean(row.Cells["use"].Value??false);
+            var key=TargetPoolStore.Id(connection,modelId);
+            var pool=TargetPoolStore.LoadActive();
+            var model=p.models.FirstOrDefault(x=>string.Equals(x.id,modelId,StringComparison.OrdinalIgnoreCase));
+            var entry=pool.entries.TryGetValue(key,out var existing)
+                ? existing
+                : new TargetPoolEntry{id=key,connection=connection,model=modelId,source="user"};
+            if(model is not null)
+            {
+                entry.displayName=model.displayName;entry.workhorse=true;entry.free=model.isFree;entry.supportsTools=model.supportsTools;
+                entry.contextLength=model.contextLength;entry.toolMode=model.supportsTools==false?"text":"native";entry.updatedAt=DateTimeOffset.UtcNow.ToString("O");
+                if(string.IsNullOrWhiteSpace(entry.rationale))entry.rationale="Selected by the operator from the discovered connection catalog.";
+            }
+            TargetPoolStore.ApplySelection(pool,entry,selected);
+            TargetPoolStore.SaveActive(pool);
+            row.Cells["state"].Value=selected?"enabled":"—";
+            row.Cells["state"].Style.ForeColor=selected?Theme.Good:Theme.Muted;
+            _modelSelectionDirty=false;_summary.Text=$"Endpoint {(selected?"enabled":"removed")}: {modelId}";_summary.ForeColor=Theme.Muted;
+        }
+        catch(Exception ex){_modelSelectionDirty=true;_summary.Text="Endpoint selection was not saved";_summary.ForeColor=Theme.Error;MessageBox.Show(FindForm(),ex.Message,"Could not save endpoint catalog",MessageBoxButtons.OK,MessageBoxIcon.Error);}
     }
 
     void AutoTargetFreeWorkhorses(object? s,EventArgs e)
