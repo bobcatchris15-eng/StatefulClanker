@@ -8,6 +8,8 @@ $env:LOCALAPPDATA=$temp
 try {
     $root=Join-Path $temp 'StatefulClanker'
     New-Item -ItemType Directory -Force -Path $root|Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $root 'pi')|Out-Null
+    '{"theme":"dark","compaction":{"reserveTokens":7777}}'|Set-Content -LiteralPath (Join-Path $root 'pi\settings.json') -Encoding UTF8
 
     Add-Type -AssemblyName System.Security
     $testSecret='pi-dpapi-regression-secret'
@@ -39,6 +41,11 @@ try {
     $path=Join-Path $root 'pi\models.json'
     Assert-True (Test-Path -LiteralPath $path) 'models.json was not generated.'
     $models=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json
+    $piSettings=Get-Content -Raw -LiteralPath (Join-Path $root 'pi\settings.json')|ConvertFrom-Json
+    Assert-True ([bool]$piSettings.compaction.enabled) 'Bundled Pi auto-compaction was not enabled.'
+    Assert-True ([int]$piSettings.compaction.keepRecentTokens-eq12000) 'Bundled Pi recent raw tail was not tuned to 12k tokens.'
+    Assert-True ([int]$piSettings.compaction.reserveTokens-eq7777) 'Catalog sync overwrote an unrelated existing compaction setting.'
+    Assert-True ([string]$piSettings.theme-eq'dark') 'Catalog sync overwrote an unrelated Pi setting.'
 
     $g=$models.providers.'sc-gemini'
     Assert-True ($g.api-eq'google-generative-ai') 'Gemini did not map to Pi google-generative-ai.'
