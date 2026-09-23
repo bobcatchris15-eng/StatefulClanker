@@ -1157,21 +1157,18 @@ sealed class PrecisionTabControl : TabControl
 
 sealed class QuietSplitContainer : SplitContainer
 {
-    const int HitPadding = 6;
     public int ResetDistance { get; set; } = 240;
     public int? ResetPanel2Width { get; set; }
     public event EventHandler? SplitterReset;
 
     private int? _pendingPanel2MinSize;
-    bool _dragging;
-    int _dragOffset;
 
     public QuietSplitContainer(Orientation orientation)
     {
         Dock = DockStyle.Fill;
         Orientation = orientation;
         BorderStyle = BorderStyle.None;
-        SplitterWidth = 1;
+        SplitterWidth = 13;
         BackColor = Theme.Back;
         Panel1.BackColor = Theme.Back;
         Panel2.BackColor = Theme.Back;
@@ -1195,36 +1192,6 @@ sealed class QuietSplitContainer : SplitContainer
     public void RestorePanel2Width(int desired)
         => RestoreDistance(Extent - Math.Max(Panel2MinSize, desired) - SplitterWidth);
 
-    bool IsSplitter(Point point)
-    {
-        var axis = this.Orientation == System.Windows.Forms.Orientation.Vertical ? point.X : point.Y;
-        return axis >= SplitterDistance - HitPadding && axis <= SplitterDistance + SplitterWidth + HitPadding;
-    }
-
-    int Axis(Point point) => Orientation == System.Windows.Forms.Orientation.Vertical ? point.X : point.Y;
-
-    protected override void OnMouseDown(MouseEventArgs e)
-    {
-        if(e.Button==MouseButtons.Left&&IsSplitter(e.Location))
-        {
-            _dragging=true;_dragOffset=Axis(e.Location)-SplitterDistance;Capture=true;
-            return;
-        }
-        base.OnMouseDown(e);
-    }
-
-    protected override void OnMouseMove(MouseEventArgs e)
-    {
-        if(_dragging){RestoreDistance(Axis(e.Location)-_dragOffset);return;}
-        Cursor=IsSplitter(e.Location)?(Orientation==System.Windows.Forms.Orientation.Vertical?Cursors.VSplit:Cursors.HSplit):Cursors.Default;
-        base.OnMouseMove(e);
-    }
-
-    protected override void OnMouseUp(MouseEventArgs e)
-    {
-        if(_dragging&&e.Button==MouseButtons.Left){_dragging=false;Capture=false;return;}
-        base.OnMouseUp(e);
-    }
 
     protected override void OnLayout(LayoutEventArgs levent)
     {
@@ -1244,13 +1211,16 @@ sealed class QuietSplitContainer : SplitContainer
     {
         base.OnPaint(e);
         using var brush = new SolidBrush(Theme.Separator);
-        e.Graphics.FillRectangle(brush, SplitterRectangle);
+        Rectangle seam = Orientation == System.Windows.Forms.Orientation.Vertical
+            ? new Rectangle(SplitterRectangle.Left + SplitterRectangle.Width / 2, SplitterRectangle.Top, 1, SplitterRectangle.Height)
+            : new Rectangle(SplitterRectangle.Left, SplitterRectangle.Top + SplitterRectangle.Height / 2, SplitterRectangle.Width, 1);
+        e.Graphics.FillRectangle(brush, seam);
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
-        if (!IsSplitter(e.Location)) return;
+        if (!SplitterRectangle.Contains(e.Location)) return;
         if (ResetPanel2Width.HasValue) RestorePanel2Width(ResetPanel2Width.Value);
         else RestoreDistance(ResetDistance);
         SplitterReset?.Invoke(this, EventArgs.Empty);
