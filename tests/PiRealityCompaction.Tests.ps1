@@ -31,4 +31,14 @@ Write-Host '  PI COMPACTION 5: Pi file-operation continuity survives custom comp
 Assert-True ($source.Contains('readFiles: stringList(fileOps.read)')) 'Read-file history is not carried through compaction details.'
 Assert-True ($source.Contains('modifiedFiles: stringList(fileOps.edited ?? fileOps.modified)')) 'Modified-file history is not carried through compaction details.'
 
-Write-Host 'PASS: bundled Pi compaction is reality-first, request-free, bounded, and retains the recent raw tail.'
+Write-Host '  PI COMPACTION 6: routine turn-end refresh is aggressive but not pathological'
+Assert-True ($source.Contains('pi.on("turn_end"')) 'No proactive turn-end compaction trigger is registered.'
+Assert-True ($source.Contains('REALITY_COMPACTION_TRIGGER_FRACTION = 0.45')) 'Proactive compaction no longer targets roughly 45% context usage.'
+Assert-True ($source.Contains('REALITY_COMPACTION_MAX_TRIGGER_TOKENS = 64_000')) 'Large-context models can drift too far before reality refresh.'
+Assert-True ($source.Contains('REALITY_COMPACTION_MIN_TURNS = 2')) 'Compaction churn guard is missing.'
+Assert-True ($source.Contains('ctx.compact({')) 'Turn-end policy does not actually trigger Pi compaction.'
+
+Write-Host '  PI COMPACTION 7: packet budget scales down for small-context models'
+Assert-True ($source.Contains('Math.floor(contextWindow * 1.5)')) 'Reality packet budget is not scaled to model context size.'
+
+Write-Host 'PASS: bundled Pi compaction is reality-first, proactive, request-free, bounded, and retains the recent raw tail.'
