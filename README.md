@@ -75,6 +75,8 @@ The bundled Pi replaces ordinary conversation-summary compaction with a **realit
 
 This deliberately makes current project reality the majority of the reconstructed working context. Old plans and prior summaries survive only as bounded, explicitly low-authority evidence. The custom compaction path does not make a separate summarization-model request, so compaction itself does not consume an inference request from a rate-limited endpoint.
 
+Reality refresh is intentionally aggressive. After each completed turn the bundled extension checks live context usage and proactively compacts once the working set reaches roughly 45% of the active model window, with a 24k-token floor, a 64k-token ceiling, and a two-turn minimum interval. The bundled Pi keeps only about 12k recent raw tokens across compaction. This means very large-context endpoints still refresh around 64k instead of accumulating hundreds of thousands of conversational tokens, while smaller models scale the checkpoint packet down to fit their context window.
+
 
 ## Worker backends
 
