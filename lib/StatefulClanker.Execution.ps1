@@ -244,7 +244,8 @@ function Invoke-SCJevAcceptance($Task,$Run,$Compilation,$Mechanical) {
         repository=Get-SCValidationRepositoryEvidence
         rule='Deterministic mechanical evidence outranks semantic suspicion. Decide only the listed semantic criteria.'
     }
-    $body=[ordered]@{state=$state;model=$model;questions=$questions}|ConvertTo-Json -Depth 30 -Compress
+    $stateProjection=ConvertTo-SCModelText $state 20
+    $body=[ordered]@{state=$stateProjection;model=$model;questions=$questions}|ConvertTo-Json -Depth 30 -Compress
     try{
         $response=Invoke-RestMethod -Method Post -Uri ($base.TrimEnd('/')+'/v1/systemone') -Headers @{Authorization="Bearer $key"} -ContentType 'application/json' -Body $body -TimeoutSec ([int](Get-SCValidationSetting 'jevTimeoutSeconds' 20))
     }catch{
