@@ -8,10 +8,10 @@
     <AssemblyName>StatefulClanker</AssemblyName>
     <RootNamespace>StatefulClanker.Tray</RootNamespace>
     <ApplicationIcon Condition="Exists('..\..\install\StatefulClanker.ico')">..\..\install\StatefulClanker.ico</ApplicationIcon>
-<Version>0.8.19</Version>
-<AssemblyVersion>0.8.19.0</AssemblyVersion>
-<FileVersion>0.8.19.0</FileVersion>
-<InformationalVersion>0.8.19</InformationalVersion>
+<Version>0.8.21</Version>
+<AssemblyVersion>0.8.21.0</AssemblyVersion>
+<FileVersion>0.8.21.0</FileVersion>
+<InformationalVersion>0.8.21</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
