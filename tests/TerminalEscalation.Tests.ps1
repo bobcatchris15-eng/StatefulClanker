@@ -66,6 +66,26 @@ try {
     Assert-True (@($script:events|Where-Object type -eq 'run.failed').Count-eq0) 'Transient provider failure was incorrectly escalated as a task crash.'
     Assert-True (@($script:events|Where-Object type -eq 'task.retried.transient').Count-eq1) 'Transient provider retry event is missing.'
 
+    Write-Host '  ESCALATION 2b: post-worker validation crash is not labeled a worker crash'
+    $script:task=[pscustomobject]@{
+        id='validation-crash';title='Validation crash';status='validating';blockReason=$null
+        activeWorkerSessionId='wsess-validation';attemptCount=1
+    }
+    $script:child=[ordered]@{stdout='worker already completed successfully';stderr="StatefulClanker.ps1: The property 'Count' cannot be found on this object."}
+    $script:events.Clear()
+    $run=[pscustomobject]@{
+        taskId='validation-crash'
+        process=[pscustomobject]@{ExitCode=1}
+        provider='test-provider'
+        logPath=(Join-Path $temp 'validation-crash.log')
+        worktree=[pscustomobject]@{path=$temp;branch='sc/task/validation-crash'}
+    }
+    $result=Complete-SCParallelChild $temp $run -NoMerge
+    Assert-True ($script:task.status-eq'needs_rework') 'Post-worker acceptance crash was not preserved as recoverable work.'
+    Assert-True ($script:task.blockReason-like'Post-worker acceptance infrastructure crashed*') 'Acceptance crash was still described as a worker crash.'
+    Assert-True (@($script:events|Where-Object type -eq 'run.failed').Count-eq0) 'Acceptance infrastructure crash emitted worker run.failed.'
+    Assert-True (@($script:events|Where-Object type -eq 'validator.infrastructure_failed').Count-eq1) 'Acceptance infrastructure crash event is missing.'
+
     Write-Host '  ESCALATION 3: bundled Pi owns control-plane delivery over direct stdio MCP'
     $terminalSource=[IO.File]::ReadAllText((Join-Path $repo 'src\StatefulClanker.Tray\EmbeddedTerminalPanel.cs'))
     Assert-True ($terminalSource.Contains('Pi (bundled)')) 'Bundled Pi preset is missing.'
