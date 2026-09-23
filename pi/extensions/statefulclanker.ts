@@ -173,6 +173,42 @@ When awakened by a control event, investigate first. A useful control-plane turn
 Use StatefulClanker MCP tools as the authoritative interface for task/Intent/control state. Use shell/file tools for project inspection and implementation repair when necessary, but do not hand-edit .statefulclanker bookkeeping files when a StatefulClanker tool exists for that transition.
 `;
 const OPERATOR_MANUAL = join(INSTALL_ROOT, "skills", "statefulclanker", "SKILL.md");
+const PLANNER_SKILL = join(INSTALL_ROOT, "skills", "statefulclanker-planner", "SKILL.md");
+
+function planningIntent(prompt: string): boolean {
+  const text = prompt.trim().toLowerCase();
+  if (!text) return false;
+
+  const explicit = [
+    /\bplan(?:ning|ned|s)?\b/,
+    /\bdecompos(?:e|ing|ition)\b/,
+    /\bbreak\s+(?:this|it|work|the\s+work)\s+(?:down|up)\b/,
+    /\btask\s+(?:list|graph|breakdown|decomposition)\b/,
+    /\bscplan\b/,
+    /\bimplementation\s+plan\b/,
+    /\bproject\s+plan\b/,
+    /\bwork\s+plan\b/,
+    /\bmilestones?\b.*\btasks?\b/,
+    /\bturn\s+.+\s+into\s+(?:a\s+)?(?:plan|tasks?|task\s+graph)\b/,
+    /\bmap\s+out\b.*\b(?:work|tasks?|implementation)\b/,
+  ];
+  return explicit.some((pattern) => pattern.test(text));
+}
+
+function readPlannerSkill(): string {
+  try {
+    return readFileSync(PLANNER_SKILL, "utf8");
+  } catch (error) {
+    return [
+      "# StatefulClanker planner skill unavailable",
+      "",
+      `The planner skill could not be read from ${PLANNER_SKILL}.`,
+      `Error: ${error instanceof Error ? error.message : String(error)}`,
+      "",
+      "Do not silently fall back to ad-hoc decomposition. Use the canonical control-plane planning rules and surface the missing planner skill as an installation defect.",
+    ].join("\n");
+  }
+}
 
 function projectRoot(cwd: string): string | null {
   let current = resolve(cwd);
@@ -1107,6 +1143,19 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
       "Pi compaction is reality-first: old conversational bulk is replaced with a mechanically rebuilt checkpoint from current git/project/task state while Pi retains its normal recent raw tail. Treat archival carryover as low-authority evidence.",
       "Reality compaction is intentionally proactive and frequent: the bundled Pi refreshes its working context well before the provider context window is close to full.",
     ].join("\n");
+
+    if (planningIntent(event.prompt)) {
+      event.systemPromptOptions.sections.statefulclankerPlanner = [
+        "## MANDATORY STATEFULCLANKER PLANNING MODE",
+        "The current human turn requests planning, plan construction/revision, decomposition, a task list/task graph, or SCPLAN.",
+        "Apply the following planner skill in full before creating or materially revising the plan.",
+        "Do not substitute ad-hoc decomposition for this methodology.",
+        "",
+        readPlannerSkill(),
+      ].join("\n");
+    } else {
+      delete event.systemPromptOptions.sections.statefulclankerPlanner;
+    }
   });
 
   pi.on("session_start", async (_event, ctx) => {
