@@ -118,6 +118,17 @@ try {
     $history = (& $harness telemetry history | Out-String)
     if ($history -notmatch 'smoke-task') { throw 'Telemetry CLI did not show smoke task.' }
 
+    Write-Host 'STEP 7b: mechanical-only task completes without validator inference'
+    & $harness task add -TaskId mechanical-smoke -Title 'Mechanical smoke task' -Instruction 'Return a bounded result; acceptance is owned by the harness check.' -Accept 'mechanical check passes' -Check 'cmd /d /c exit 0'|Out-Null
+    & $harness run -TaskId mechanical-smoke -Provider mock
+    $mechanicalTask=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\mechanical-smoke.json')|ConvertFrom-Json
+    if($mechanicalTask.status-ne'complete'){throw "Mechanical-only task did not complete: $($mechanicalTask.status)"}
+    $mechanicalValidation=Get-Content -Raw -LiteralPath (Join-Path $temp (".statefulclanker\validations\{0}.json"-f$mechanicalTask.latestValidationId))|ConvertFrom-Json
+    if([string]$mechanicalValidation.validationKind-ne'mechanical'){throw 'Mechanical-only task did not produce a mechanical validation receipt.'}
+    $telemetryAfterMechanical=@(Get-ChildItem -LiteralPath (Join-Path $temp '.statefulclanker\telemetry\runs') -Filter '*.json' -File | ForEach-Object { Get-Content -Raw $_.FullName | ConvertFrom-Json })
+    if($telemetryAfterMechanical.Count-ne3){throw "Mechanical-only task should add only one worker inference telemetry record; found $($telemetryAfterMechanical.Count) total."}
+    if(@($telemetryAfterMechanical|Where-Object{$_.taskId-eq'mechanical-smoke'-and$_.stage-eq'validator'}).Count-ne0){throw 'Mechanical-only task unexpectedly emitted validator inference telemetry.'}
+
     Write-Host 'PASS: worker -> validator -> complete + durable telemetry'
 }
 finally {
