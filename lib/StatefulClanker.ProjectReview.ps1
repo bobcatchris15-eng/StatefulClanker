@@ -235,7 +235,7 @@ Use FAIL when you found a concrete semantic/integration problem worth investigat
 A semantic FAIL is advisory unless deterministic evidence independently fails.
 
 PROJECT REVIEW PACKET:
-$(ConvertTo-SCJson $Packet 20)
+$(ConvertTo-SCModelText $Packet 20)
 "@
 }
 
