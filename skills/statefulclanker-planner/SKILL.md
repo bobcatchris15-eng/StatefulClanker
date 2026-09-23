@@ -766,6 +766,51 @@ A validator should not need to infer:
 
 Provide executable or inspectable proof.
 
+## 20.5 Mechanical-first acceptance
+
+Treat acceptance as an executable contract whenever the requested behavior is mechanically observable.
+
+SCPLAN supports two acceptance execution fields:
+
+```text
+check <command>
+judge <semantic criterion>
+```
+
+`check` is the default. Each command runs from the task worktree/project root after the worker submits a candidate. Exit code 0 is PASS; nonzero exit or timeout is FAIL. All configured checks must pass. A task with at least one `check` and no `judge` criteria is accepted or rejected without any validator inference call.
+
+Examples:
+
+```text
+accept endpoint selection survives connection navigation
+check pwsh -NoProfile -File tests/ApiConnectionsSelection.Tests.ps1
+```
+
+```text
+accept router still compiles
+check dotnet build src/StatefulClanker.Router/StatefulClanker.Router.csproj --no-restore
+```
+
+Use `judge` only for a criterion that cannot reasonably be established through code, state inspection, build/test output, API response, filesystem assertions, or another deterministic probe:
+
+```text
+judge the revised operator-facing error message is clear enough to identify the failed routing layer without misleading the user
+```
+
+When `judge` is present, StatefulClanker prefers the configured Jev decision model. If Jev is unavailable or returns an uncertain result, ordinary routed validator inference is the fallback.
+
+Rules:
+
+- Prefer a focused permanent regression test when the behavior is important enough to protect.
+- Use a bounded ephemeral command when a permanent test would add noise.
+- Do not use `judge` merely because writing the mechanical check takes effort.
+- Do not write a tautological source grep when runtime behavior can be tested directly.
+- A passing mechanical check outranks semantic suspicion. A semantic reviewer may request an additional test, but must not overturn demonstrated deterministic evidence by vibes.
+- Keep checks repo-local and non-destructive. External/deployment side effects require explicit human authority.
+- If a criterion cannot be mechanically proved and materially affects correctness, mark it with `judge`; do not silently pretend a nearby test covers it.
+
+The target distribution is that most implementation tasks are mechanical-only, a smaller fraction are hybrid, and purely semantic acceptance is exceptional.
+
 ## 21.1 Design the worker receipt as evidence
 
 For implementation tasks, the instruction should make the expected verification behavior obvious enough that a competent worker naturally reports useful evidence.
