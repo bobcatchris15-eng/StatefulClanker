@@ -69,6 +69,13 @@ The normal product surface is a self-contained `.NET 8` WinForms tray applicatio
 
 Machine-local state lives under `%LOCALAPPDATA%\StatefulClanker`. Project authority lives under `<project>\.statefulclanker`.
 
+### Reality-first embedded Pi compaction
+
+The bundled Pi replaces ordinary conversation-summary compaction with a **reality checkpoint** assembled mechanically from the current project. At compaction time the extension samples git/worktree state, current task objects, Autofill, control/Human-Authority state, relevant current files, and recent deterministic evidence. Pi still retains its normal recent raw conversation tail.
+
+This deliberately makes current project reality the majority of the reconstructed working context. Old plans and prior summaries survive only as bounded, explicitly low-authority evidence. The custom compaction path does not make a separate summarization-model request, so compaction itself does not consume an inference request from a rate-limited endpoint.
+
+
 ## Worker backends
 
 StatefulClanker has two interchangeable execution paths above the same task/Intent/freshness/review machinery.
