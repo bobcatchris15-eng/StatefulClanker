@@ -18,6 +18,8 @@ tool-allow builtin.read_file
 tool-allow intent.*
 tool-deny builtin.run_command
 accept task policy is persisted
+check pwsh -NoProfile -Command "exit 0"
+judge documentation wording preserves the intended operator meaning
 end
 '@
     $planPath=Join-Path $temp 'cap.scplan';$plan|Set-Content -LiteralPath $planPath -Encoding UTF8;& $harness plan import -Path $planPath|Out-Null
@@ -26,17 +28,23 @@ end
     Assert-True (@($task.toolPolicy.allow)-contains'builtin.read_file') 'SCPLAN tool-allow was not persisted.'
     Assert-True (@($task.toolPolicy.deny)-contains'builtin.run_command') 'SCPLAN tool-deny was not persisted.'
     Assert-True ([string]$task.outputKind-eq'research') 'SCPLAN output-kind was not persisted.'
+    Assert-True (@($task.checks).Count-eq1 -and [string]$task.checks[0]-match'pwsh') 'SCPLAN mechanical check was not persisted.'
+    Assert-True (@($task.semanticAcceptance).Count-eq1 -and [string]$task.semanticAcceptance[0]-match'documentation wording') 'SCPLAN semantic judge criterion was not persisted.'
 
-    & $harness task add -TaskId t-cli -Title 'CLI capability task' -Instruction 'Exercise CLI task authoring.' -OutputKind diagnosis -CapabilityProfile coding -ToolAllow 'builtin.read_file' -ToolDeny 'mcp.*'|Out-Null
+    & $harness task add -TaskId t-cli -Title 'CLI capability task' -Instruction 'Exercise CLI task authoring.' -OutputKind diagnosis -CapabilityProfile coding -ToolAllow 'builtin.read_file' -ToolDeny 'mcp.*' -Check 'cmd /d /c exit 0' -Judge 'semantic criterion'|Out-Null
     $cliTask=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\t-cli.json')|ConvertFrom-Json
     Assert-True ([string]$cliTask.capabilityProfile-eq'coding') 'CLI capability profile was not persisted.'
     Assert-True (@($cliTask.toolPolicy.deny)-contains'mcp.*') 'CLI task-local deny was not persisted.'
     Assert-True ([string]$cliTask.outputKind-eq'diagnosis') 'CLI OutputKind was not persisted.'
+    Assert-True (@($cliTask.checks).Count-eq1) 'CLI mechanical check was not persisted.'
+    Assert-True (@($cliTask.semanticAcceptance).Count-eq1) 'CLI semantic judge criterion was not persisted.'
 
     . (Join-Path $repo 'lib\StatefulClanker.Core.ps1');. (Join-Path $repo 'lib\StatefulClanker.Context.ps1');. (Join-Path $repo 'lib\StatefulClanker.Plan.ps1');. (Join-Path $repo 'lib\StatefulClanker.CapabilityTasks.ps1');Set-SCRoots $temp $temp
     $before=Get-SCTaskDefinitionHash $task;$task.toolPolicy.deny=@('builtin.run_command','mcp.*');$after=Get-SCTaskDefinitionHash $task
     Assert-True ($before-ne$after) 'Changing task-local capability policy must change the task definition hash.'
     $beforeKind=$after;$task.outputKind='change';$afterKind=Get-SCTaskDefinitionHash $task
     Assert-True ($beforeKind-ne$afterKind) 'Changing output-kind must change the task definition hash.'
+    $beforeAcceptance=$afterKind;$task.checks=@('cmd /c exit 0','cmd /c exit 1');$afterAcceptance=Get-SCTaskDefinitionHash $task
+    Assert-True ($beforeAcceptance-ne$afterAcceptance) 'Changing mechanical acceptance checks must change the task definition hash.'
     Write-Host 'PASS: SCPLAN/CLI capability profiles and task-local narrowing are first-class task semantics.'
 } finally {if((Get-Location).Path-eq$temp){Pop-Location};Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue}
