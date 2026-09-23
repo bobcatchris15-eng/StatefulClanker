@@ -468,7 +468,7 @@ function compactScalar(value: unknown): string {
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "string") {
     if (value.length === 0) return '""';
-    return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r/g, "").replace(/\n/g, "\\n");
+    return value.replace(/\|/g, "\\|").replace(/\r/g, "").replace(/\n/g, "\\n");
   }
   return String(value);
 }
