@@ -61,4 +61,15 @@ foreach($tool in @('task_recovery_context','control_snapshot','task_list','task_
 }
 Assert-True ($pi.Contains('STATEFULCLANKER COMPACT PROJECTION')) 'Pi projected tool results are not explicitly labeled.'
 
+Write-Host '  COMPACT CONTEXT 6: direct-worker read/command results avoid JSON reinjection'
+$runtime=Get-Content -Raw -LiteralPath (Join-Path $repo 'lib\StatefulClanker.WorkerRuntime.ps1')
+foreach($needle in @(
+    "return ConvertTo-SCModelText (Invoke-SCBoundedCommand",
+    "return ConvertTo-SCModelText ([ordered]@{status=",
+    "return ConvertTo-SCModelText (Resolve-SCHumanIntentArtifact",
+    "return ConvertTo-SCModelText (Get-SCNormalizedIntentView"
+)){
+    Assert-True ($runtime.Contains($needle)) "Direct worker still reinjects verbose structured output: $needle"
+}
+
 Write-Host 'PASS: JSON remains canonical while repeated model context uses deterministic compact projections.'
