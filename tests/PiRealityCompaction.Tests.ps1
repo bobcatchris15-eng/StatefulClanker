@@ -23,20 +23,27 @@ Assert-True ($source.Contains('tokensBefore: event.preparation.tokensBefore')) '
 Write-Host '  PI COMPACTION 4: historical material is subordinate and bounded'
 Assert-True ($source.Contains('ARCHIVAL CARRYOVER — LOW AUTHORITY')) 'Prior summary is not explicitly marked low-authority.'
 Assert-True ($source.Contains('USER EVIDENCE FROM THE DISCARDED HISTORY')) 'Discarded human messages are not retained as evidence.'
-$budget=[regex]::Match($source,'REALITY_PACKET_MAX_CHARS\s*=\s*(\d+)')
+$budget=[regex]::Match($source,'REALITY_PACKET_MAX_CHARS\s*=\s*([\d_]+)')
 Assert-True $budget.Success 'Reality packet budget constant is missing.'
-Assert-True ([int]$budget.Groups[1].Value -ge 90000) 'Reality packet is too small to dominate the retained working context.'
+Assert-True ([int]($budget.Groups[1].Value -replace '_','') -ge 90000) 'Reality packet is too small to dominate the retained working context.'
 
 Write-Host '  PI COMPACTION 5: Pi file-operation continuity survives custom compaction'
 Assert-True ($source.Contains('readFiles: stringList(fileOps.read)')) 'Read-file history is not carried through compaction details.'
 Assert-True ($source.Contains('modifiedFiles: stringList(fileOps.edited ?? fileOps.modified)')) 'Modified-file history is not carried through compaction details.'
 
-Write-Host '  PI COMPACTION 6: routine turn-end refresh is aggressive but not pathological'
-Assert-True ($source.Contains('pi.on("turn_end"')) 'No proactive turn-end compaction trigger is registered.'
+Write-Host '  PI COMPACTION 6: proactive refresh only starts after the agent run settles'
+Assert-True ($source.Contains('pi.on("turn_end"')) 'Completed turns are not counted for the proactive compaction threshold.'
+Assert-True ($source.Contains('pi.on("agent_settled"')) 'No fully-settled proactive compaction boundary is registered.'
+$turnEndHandler=[regex]::Match($source,'pi\.on\("turn_end",[\s\S]*?\n  \}\);')
+Assert-True $turnEndHandler.Success 'Turn-end handler could not be inspected.'
+Assert-True (-not $turnEndHandler.Value.Contains('ctx.compact(')) 'Compaction is still launched before queued agent work has settled.'
+$settledHandler=[regex]::Match($source,'pi\.on\("agent_settled",[\s\S]*?\n  \}\);')
+Assert-True $settledHandler.Success 'Settled handler could not be inspected.'
+Assert-True ($settledHandler.Value.Contains('ctx.compact({')) 'Compaction is not launched at the fully-settled boundary.'
 Assert-True ($source.Contains('REALITY_COMPACTION_TRIGGER_FRACTION = 0.45')) 'Proactive compaction no longer targets roughly 45% context usage.'
 Assert-True ($source.Contains('REALITY_COMPACTION_MAX_TRIGGER_TOKENS = 64_000')) 'Large-context models can drift too far before reality refresh.'
 Assert-True ($source.Contains('REALITY_COMPACTION_MIN_TURNS = 2')) 'Compaction churn guard is missing.'
-Assert-True ($source.Contains('ctx.compact({')) 'Turn-end policy does not actually trigger Pi compaction.'
+Assert-True ($source.Contains('ctx.compact({')) 'Settled-run policy does not actually trigger Pi compaction.'
 
 Write-Host '  PI COMPACTION 7: packet budget scales down for small-context models'
 Assert-True ($source.Contains('Math.floor(contextWindow * 1.5)')) 'Reality packet budget is not scaled to model context size.'

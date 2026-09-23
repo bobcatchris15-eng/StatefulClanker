@@ -32,12 +32,13 @@ function New-TestProject([string]$Path, [string]$TargetFile, [int]$TaskCount, [i
         & git config user.name 'StatefulClanker Test'
         'seed' | Set-Content -LiteralPath 'seed.txt' -Encoding UTF8
         'line' | Set-Content -LiteralPath 'shared.txt' -Encoding UTF8
-        '.statefulclanker/' | Set-Content -LiteralPath '.gitignore' -Encoding UTF8
+        @('.statefulclanker/','.clanker/') | Set-Content -LiteralPath '.gitignore' -Encoding UTF8
 
         & $pwshPath -NoProfile -File $harness init | Out-Null
         $cfgPath = Join-Path $Path '.statefulclanker\config.json'
         $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
         $cfg | Add-Member -NotePropertyName maxConcurrent -NotePropertyValue $MaxConcurrent -Force
+        $cfg | Add-Member -NotePropertyName projectReviewAfterMultiMerge -NotePropertyValue $false -Force
         $cfg.providers | Add-Member -NotePropertyName w -NotePropertyValue ([pscustomobject]@{
                 command = 'cmd.exe'; args = @('/d', '/c', $writer, '{taskId}', $TargetFile); mode = 'inline'
             }) -Force

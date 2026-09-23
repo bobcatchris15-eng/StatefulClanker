@@ -1206,8 +1206,11 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
     compactionInFlight = false;
   });
 
-  pi.on("turn_end", (_event, ctx) => {
+  pi.on("turn_end", (_event, _ctx) => {
     turnsSinceCompaction += 1;
+  });
+
+  pi.on("agent_settled", (_event, ctx) => {
     if (compactionInFlight || turnsSinceCompaction < REALITY_COMPACTION_MIN_TURNS) return;
 
     const usage = ctx.getContextUsage();

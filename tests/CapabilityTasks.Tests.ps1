@@ -28,7 +28,7 @@ end
     Assert-True (@($task.toolPolicy.allow)-contains'builtin.read_file') 'SCPLAN tool-allow was not persisted.'
     Assert-True (@($task.toolPolicy.deny)-contains'builtin.run_command') 'SCPLAN tool-deny was not persisted.'
     Assert-True ([string]$task.outputKind-eq'research') 'SCPLAN output-kind was not persisted.'
-    Assert-True (@($task.checks).Count-eq1 -and [string]$task.checks[0]-match'pwsh') 'SCPLAN mechanical check was not persisted.'
+    Assert-True (@($task.checks).Count-eq1 -and [string]$task.checks[0]-match'pwsh') "SCPLAN mechanical check was not persisted: $($task.checks|ConvertTo-Json -Compress)."
     Assert-True (@($task.semanticAcceptance).Count-eq1 -and [string]$task.semanticAcceptance[0]-match'documentation wording') 'SCPLAN semantic judge criterion was not persisted.'
 
     Write-Host '  CAPABILITY TASK: empty acceptance execution lists persist as arrays, not null'

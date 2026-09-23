@@ -45,6 +45,21 @@ $task=[pscustomobject]@{id='t';title='task';instruction='do thing';acceptance=@(
 $run=[pscustomobject]@{id='r';exitCode=0;stdout='worker report';stderr=''}
 $comp=[pscustomobject]@{id='c';ir=[pscustomobject]@{project=[pscustomobject]@{intent=[pscustomobject]@{contract=[pscustomobject]@{objective='x'}}}}}
 
+Write-Host '  ACCEPTANCE 0: tasks without mechanical checks do not fail under strict mode'
+function Add-SCEvent { param($Type,$Message,$Data) }
+function Get-SCPath { param([string]$Child); return (Join-Path ([IO.Path]::GetTempPath()) $Child.Replace('/','\')) }
+function Write-SCJson { param([string]$Path,$Value) }
+function Set-SCProperty { param($Object,[string]$Name,$Value); if($Object.PSObject.Properties[$Name]){$Object.$Name=$Value}else{$Object|Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force} }
+$script:emptyCheckFallbackCalls=0
+function Invoke-SCReview { $script:emptyCheckFallbackCalls++; [pscustomobject]@{id='empty-checks';verdict='PASS';validationKind='routed';stdout='VERDICT: PASS';stderr='';exitCode=0} }
+function Invoke-StrictEmptyChecks([object]$Task,[object]$Run,[object]$Compilation) {
+    Set-StrictMode -Version 2.0
+    return Invoke-SCAcceptanceValidation $Task $Run $Compilation
+}
+$noChecks=[pscustomobject]@{id='empty-checks';title='empty checks';instruction='test';checks=@($null);semanticAcceptance=@($null)}
+$noChecksResult=Invoke-StrictEmptyChecks $noChecks $run $comp
+Assert-True ($noChecksResult.verdict -eq 'PASS' -and $script:emptyCheckFallbackCalls -eq 1) 'Empty mechanical/semantic criteria should fall through to the ordinary validator.'
+
 Write-Host '  ACCEPTANCE 1: mechanical-only PASS performs zero inference'
 $script:fallbackCalls=0
 function Invoke-SCMechanicalAcceptance { param($Task); [pscustomobject]@{configured=$true;passed=$true;count=2;failed=0;checks=@()} }
