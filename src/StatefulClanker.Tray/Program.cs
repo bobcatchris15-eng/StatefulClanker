@@ -2001,7 +2001,7 @@ sealed class MainForm : Form
         _mcp = new McpHost(_root, _settings.HttpPort, _settings.McpToken); _mcp.EnsureStarted(); _autofill = new AutofillHost(_root);
         var menu = new ContextMenuStrip(); menu.Items.Add("Open StatefulClanker", null, (_, _) => ShowFromTray()); menu.Items.Add("Exit", null, (_, _) => { _reallyExit = true; Close(); });
         _notify = new NotifyIcon { Text = "StatefulClanker", Icon = Icon ?? SystemIcons.Application, Visible = true, ContextMenuStrip = menu }; _notify.DoubleClick += (_, _) => ShowFromTray();
-        BuildUi(); RestoreProjects(); Theme.Apply(this); _ = RefreshAllAsync(true);
+        BuildUi(); RestoreProjects(); Theme.Apply(this); TargetPoolStore.Changed += HandleTargetPoolChanged; FormClosed += (_, _) => TargetPoolStore.Changed -= HandleTargetPoolChanged; _ = RefreshAllAsync(true);
         _layoutSaveTimer.Tick += (_, _) => { _layoutSaveTimer.Stop(); AppStore.Save(_settings); };
         _timer.Tick += async (_, _) => { await RefreshAllAsync(false); }; _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
     }
@@ -2564,6 +2564,18 @@ sealed class MainForm : Form
             _overviewTargetSummary.Text = targets.Count == 0 ? "ACTIVE PROJECT TARGETS — none selected" : $"ACTIVE PROJECT TARGETS — {targets.Count(x => x.enabled)} enabled of {targets.Count}";
         }
         finally { _overviewTargets.ResumeLayout(); }
+    }
+
+    void HandleTargetPoolChanged(object? sender,EventArgs e)
+    {
+        if(IsDisposed||Disposing)return;
+        if(InvokeRequired)
+        {
+            try { BeginInvoke(new EventHandler(HandleTargetPoolChanged),sender,e); } catch { }
+            return;
+        }
+        PopulateOverviewTargets();
+        ApiConnectionsUiBootstrap.RefreshProjectMarkers();
     }
 
     void ToggleOverviewTarget(TargetPoolEntry target, bool enabled)

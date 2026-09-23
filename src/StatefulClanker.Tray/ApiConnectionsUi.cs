@@ -83,9 +83,17 @@ sealed class TargetPoolDocument
     public Dictionary<string,TargetPoolEntry> entries { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
+sealed class TargetPoolChangeDispatcher
+{
+    public event EventHandler? Changed;
+    public void Publish() => Changed?.Invoke(this,EventArgs.Empty);
+}
+
 static class TargetPoolStore
 {
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
+    static readonly TargetPoolChangeDispatcher Changes = new();
+    public static event EventHandler? Changed { add => Changes.Changed += value; remove => Changes.Changed -= value; }
 
     // Endpoint selection is machine-operational state, not project truth. StatefulClanker
     // has one active project at a time; the same connection/model catalog simply services
@@ -133,6 +141,7 @@ static class TargetPoolStore
         var tmp = path + ".tmp";
         File.WriteAllText(tmp,JsonSerializer.Serialize(doc,Json),new UTF8Encoding(false));
         File.Move(tmp,path,true);
+        Changes.Publish();
     }
 
     public static void ApplySelection(TargetPoolDocument doc,TargetPoolEntry entry,bool selected)
