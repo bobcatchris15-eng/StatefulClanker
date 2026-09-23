@@ -69,6 +69,14 @@ The normal product surface is a self-contained `.NET 8` WinForms tray applicatio
 
 Machine-local state lives under `%LOCALAPPDATA%\StatefulClanker`. Project authority lives under `<project>\.statefulclanker`.
 
+### Mechanical-first task acceptance
+
+Task acceptance prefers executable evidence over model judgment. New SCPLAN tasks can declare `check <command>` lines; they run from the worker project/worktree after a candidate is submitted, and every command must exit 0. If a task has one or more checks and no semantic `judge` criteria, passing checks complete validation with **no inference call**.
+
+Use `judge <criterion>` only for acceptance that cannot reasonably be established by tests, builds, static assertions, state inspection, filesystem/API probes, or another deterministic mechanism. Semantic criteria prefer TypeSafe Jev through its System One API when `TYPESAFE_API_KEY` is available. Decisive Jev results become the semantic validation receipt; unavailable or uncertain Jev results fall back to the ordinary routed validator. Mechanical evidence always remains attached to that fallback review and outranks semantic speculation.
+
+The default Jev alias is `jev-latest`. Thresholds, timeout, model, API URL, and API-key environment variable are under the project `validation` config block.
+
 ### Reality-first embedded Pi compaction
 
 The bundled Pi replaces ordinary conversation-summary compaction with a **reality checkpoint** assembled mechanically from the current project. At compaction time the extension samples git/worktree state, current task objects, Autofill, control/Human-Authority state, relevant current files, and recent deterministic evidence. Pi still retains its normal recent raw conversation tail.
