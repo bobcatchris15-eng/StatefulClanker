@@ -170,7 +170,10 @@ function Invoke-SCMechanicalAcceptanceCommand([string]$Command,[int]$Index,$Task
     }
 }
 function Invoke-SCMechanicalAcceptance($Task) {
-    $checks=if($Task.PSObject.Properties['checks']){@($Task.checks|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})}else{@()}
+    $checks=@()
+    if($Task.PSObject.Properties['checks']){
+        $checks=@($Task.checks|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})
+    }
     $results=@()
     for($i=0;$i-lt$checks.Count;$i++){$results+=,(Invoke-SCMechanicalAcceptanceCommand ([string]$checks[$i]) ($i+1) $Task)}
     return [pscustomobject][ordered]@{
@@ -211,7 +214,10 @@ function Get-SCJevApiKey {
 
 function Invoke-SCJevAcceptance($Task,$Run,$Compilation,$Mechanical) {
     if(-not[bool](Get-SCValidationSetting 'preferJev' $true)){return [pscustomobject]@{available=$false;reason='disabled'}}
-    $criteria=if($Task.PSObject.Properties['semanticAcceptance']){@($Task.semanticAcceptance|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})}else{@()}
+    $criteria=@()
+    if($Task.PSObject.Properties['semanticAcceptance']){
+        $criteria=@($Task.semanticAcceptance|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})
+    }
     if($criteria.Count-eq0){return [pscustomobject]@{available=$false;reason='no-semantic-criteria'}}
 
     $key=Get-SCJevApiKey
@@ -280,7 +286,10 @@ function Invoke-SCAcceptanceValidation($Task,$Run,$Compilation,[string]$Endpoint
         return New-SCSyntheticValidationReceipt $Task $Run $Compilation 'FAIL' 'mechanical' $summary $mechanical
     }
 
-    $semantic=if($Task.PSObject.Properties['semanticAcceptance']){@($Task.semanticAcceptance|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})}else{@()}
+    $semantic=@()
+    if($Task.PSObject.Properties['semanticAcceptance']){
+        $semantic=@($Task.semanticAcceptance|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})
+    }
     if($mechanical.configured -and $semantic.Count-eq0){
         $summary="VERDICT: PASS"+[Environment]::NewLine+"All $($mechanical.count) configured mechanical acceptance checks passed; no semantic judgment was requested."
         return New-SCSyntheticValidationReceipt $Task $Run $Compilation 'PASS' 'mechanical' $summary $mechanical
