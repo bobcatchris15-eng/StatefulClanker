@@ -29,6 +29,9 @@ Assert-True ($compact.Contains('goal=Build a deterministic orchestration harness
 Assert-True ($compact.Contains('t-24')) 'Late table row was lost.'
 Assert-True ($compact.Contains('note:')) 'Multiline field label was lost.'
 Assert-True ($compact.Contains('  second line')) 'Multiline field body was lost.'
+$pathProjection=ConvertTo-SCModelText ([ordered]@{path='C:\work\project\src\file.cs'}) 4
+Assert-True ($pathProjection.Contains('C:\work\project\src\file.cs')) 'Compact projection unnecessarily escaped ordinary Windows path separators.'
+Assert-True (-not$pathProjection.Contains('C:\\work')) 'Compact projection regressed to JSON-style doubled backslashes.'
 
 Write-Host '  COMPACT CONTEXT 2: projection is materially smaller than pretty JSON for repetitive state'
 Assert-True ($compact.Length-lt[int]($json.Length*.72)) "Expected at least 28% character reduction; JSON=$($json.Length), compact=$($compact.Length)."
