@@ -157,7 +157,7 @@ function Add-SCProgressRecord($Task,$Compilation,[bool]$Advanced,[string]$Outcom
     Write-SCJson (Get-SCPath ("progress/{0}.json"-f$record.id)) $record
     if(-not$Advanced-and$Compilation){
         $cfg=Get-SCConfig;$threshold=if($cfg.PSObject.Properties['stagnationWarningThreshold']){[int]$cfg.stagnationWarningThreshold}else{2};$same=@(Get-ChildItem -LiteralPath (Get-SCPath 'progress') -Filter '*.json' -File|ForEach-Object{Read-SCJson $_.FullName}|Where-Object{$_.taskId-eq$Task.id-and-not[bool]$_.advanced-and$_.inputFingerprint-eq$Compilation.inputFingerprint})
-        if($same.Count-ge$threshold){Add-SCEvent 'task.stagnation.warning' "Task $($Task.id) has $($same.Count) non-advancing attempts against the same compiled input." @{taskId=$Task.id;inputFingerprint=$Compilation.inputFingerprint;count=$same.Count}}
+        if($same.Count-eq$threshold){Add-SCEvent 'task.stagnation.warning' "Task $($Task.id) reached $($same.Count) non-advancing attempts against the same compiled input." @{taskId=$Task.id;inputFingerprint=$Compilation.inputFingerprint;count=$same.Count;thresholdCrossed=$true}}
     }
     return $record
 }

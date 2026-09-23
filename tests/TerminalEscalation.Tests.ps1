@@ -94,7 +94,35 @@ try {
     Assert-True ($extensionSource.Contains('triggerTurn: true')) 'Pi control events do not wake an idle conversational agent.'
     Assert-True ($extensionSource.Contains('event.level === "attention" || event.level === "human_required"')) 'Pi extension is not filtering for actionable control levels.'
 
-    Write-Host 'PASS: real worker failures escalate, transient routing requeues, and Pi receives native control-plane tools/events.'
+    Write-Host '  ESCALATION 4: bundled Pi receives the full operator manual before its first real turn'
+    $manualPath=Join-Path $repo 'skills\statefulclanker\SKILL.md'
+    Assert-True (Test-Path -LiteralPath $manualPath) 'Canonical StatefulClanker operator manual is missing.'
+    $manualSource=[IO.File]::ReadAllText($manualPath)
+    Assert-True ($manualSource.Contains('This is the canonical field manual')) 'StatefulClanker skill no longer identifies itself as the canonical control-plane field manual.'
+    Assert-True ($extensionSource.Contains('OPERATOR_MANUAL')) 'Pi extension does not load the canonical StatefulClanker field manual.'
+    Assert-True ($extensionSource.Contains('PI_OPERATOR_ADDENDUM')) 'Pi extension is missing its bundled control-plane recovery addendum.'
+    Assert-True ($extensionSource.Contains('deliverAs: "nextTurn"')) 'Pi operator manual is not queued for the first real model turn.'
+    Assert-True ($extensionSource.Contains('triggerTurn: false')) 'Pi operator manual incorrectly triggers an agent turn by itself.'
+    Assert-True ($extensionSource.Contains('manualQueuedForRoot')) 'Pi extension does not guard the large operator manual against repeated injection in one project session.'
+    Assert-True ($extensionSource.Contains('If a task is already complete')) 'Pi manual does not explicitly protect completed tasks from stale stagnation/recovery warnings.'
+    Assert-True ($extensionSource.Contains('re-read autofill_status')) 'Pi manual does not require current-state verification before acting on Autofill warnings.'
+    Assert-True ($extensionSource.Contains('readCurrentTask')) 'Injected task errors are not enriched from the current durable task object.'
+    Assert-True ($extensionSource.Contains('readCurrentAutofill')) 'Injected Autofill errors are not enriched with current supervisor state.'
+    Assert-True ($extensionSource.Contains('CURRENT TASK OBJECTS')) 'Injected errors do not distinguish event-time evidence from current task state.'
+    Assert-True ($extensionSource.Contains('CURRENT TASK_LIST SNAPSHOT')) 'Injected errors do not include a current task-graph summary.'
+    Assert-True ($extensionSource.Contains('retainedEvents === 0') -and $extensionSource.Contains('return null')) 'Pi does not suppress stale problem events after current-state reconciliation.'
+    Assert-True ($extensionSource.Contains('String(task.status).toLowerCase() === "complete"')) 'Pi does not explicitly retire task-scoped problem events whose current task is complete.'
+    Assert-True ($extensionSource.Contains('START HERE:')) 'Injected control-plane errors do not provide an immediate investigation starting point.'
+    Assert-True ($extensionSource.Contains('inspect-first paths:')) 'Injected task errors do not surface the task retrieval paths as an immediate inspection target.'
+    Assert-True ($extensionSource.Contains('acceptance to verify:')) 'Injected task errors do not surface acceptance criteria for immediate verification.'
+    Assert-True ($extensionSource.Contains('latest evidence:')) 'Injected task errors do not surface latest run/review evidence pointers.'
+    Assert-True ($extensionSource.Contains('keep task_list and each task object synchronized with the actual project')) 'Pi is not instructed that task bookkeeping must be reconciled to project reality.'
+
+    $canonicalManual=[IO.File]::ReadAllText($manualPath)
+    Assert-True ($canonicalManual.Contains('Reconcile the durable graph with current reality')) 'Canonical operator manual lacks task-graph/repository reality reconciliation.'
+    Assert-True ($canonicalManual.Contains('truthful graph over a cosmetically green graph')) 'Canonical operator manual does not prioritize truthful bookkeeping over green status.'
+
+    Write-Host 'PASS: real worker failures escalate, transient routing requeues, and Pi receives current-state-enriched events plus a one-shot operator boot manual.'
 }
 finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue

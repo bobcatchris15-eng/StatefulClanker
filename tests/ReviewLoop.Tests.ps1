@@ -36,4 +36,8 @@ Write-Host '  REVIEW 5: cold workers have a high turn ceiling'
 Assert-True ($runtime.Contains('$hardCap=1024')) 'Direct worker hard ceiling is not 1024.'
 Assert-True ($runtime.Contains("'small'{512}")) 'Small cold worker floor is not 512.'
 
-Write-Host 'PASS: task review is validator-only; direct sessions resume; compiled routing owns migration and operator pins.'
+Write-Host '  REVIEW 6: stagnation warning fires once when crossing the threshold'
+Assert-True ($execution.Contains('if($same.Count-eq$threshold)')) 'Stagnation warning does not use threshold-crossing semantics.'
+Assert-True (-not$execution.Contains('if($same.Count-ge$threshold)')) 'Stagnation warning still repeats on every non-advancing attempt after the threshold.'
+
+Write-Host 'PASS: task review is validator-only; direct sessions resume; compiled routing owns migration/operator pins; stagnation warnings are edge-triggered.'

@@ -152,7 +152,34 @@ When tooling matters, also inspect:
 
 When diagnosing a specific run, inspect its compilation, run receipt/proposal, telemetry, context faults, review results, and progress events rather than inferring from task status alone.
 
-## 4.3 Resume the durable event cursor
+## 4.3 Reconcile the durable graph with current reality
+
+A major control-plane responsibility is keeping the task listing and durable task objects truthful about the project that actually exists now.
+
+The task graph is an operational model of reality, not an independent reality. Repository contents, deterministic tests/builds, accepted commits, durable receipts, current Human Directives, and reconciled Intent can reveal that task bookkeeping is stale, incomplete, or wrong.
+
+Before acting on an error or recovery event:
+
+1. identify the durable object named by the event;
+2. read that object's **current** state rather than trusting event-time status;
+3. inspect the concrete files/artifacts/tests relevant to the claimed condition;
+4. compare the current project against the task's instruction, acceptance criteria, dependencies, and authority;
+5. decide which layer is wrong: implementation, task definition, dependency/readiness metadata, review bookkeeping, or the event itself;
+6. repair the least-authoritative incorrect layer;
+7. re-read task/autofill/downstream state and verify the graph now describes reality.
+
+Important consequences:
+
+- A task that is currently `complete` stays complete merely because an older stagnation, rejection, retry, or failure event arrives.
+- A task that says `failed` or `needs_rework` while the required artifact is already correctly present is a reconciliation problem, not automatically an implementation problem.
+- A task that says `complete` while current repository evidence no longer satisfies its acceptance boundary may indicate invalidation/stale dependency state and must be investigated.
+- An `autofill.stalled` event is historical evidence about a scheduler observation. Re-read `autofill_status` and the named tasks before deciding the project is still stalled.
+- Repeated warnings for a condition that current state proves resolved are not new blockers and should not repeatedly reach the human.
+- Never hand-edit bookkeeping just to make the graph look healthy. Use the audited StatefulClanker transition/recovery tools when they apply.
+
+The orchestrator should continuously prefer a truthful graph over a cosmetically green graph.
+
+## 4.4 Resume the durable event cursor
 
 Live subscription notifications are wake-up signals only.
 
@@ -174,7 +201,7 @@ Surface:
 
 A lost subscription does not imply no project changes occurred.
 
-## 4.4 Determine execution ownership
+## 4.5 Determine execution ownership
 
 Inspect `autofill_status`.
 
@@ -846,9 +873,13 @@ Add exactly the missing context or restructure the task. Do not automatically ex
 
 ## Stagnation / no accepted progress
 
-Compare repeated attempts and input fingerprints.
+A stagnation warning is a diagnosis trigger, not proof that work remains. Before acting, re-read the CURRENT task object and reconcile it against the repository, deterministic evidence, and downstream readiness.
 
-If the same input repeatedly produces non-advancing cycles, change decomposition, context, backend, capability, or authority instead of repeating the same run.
+If the task is already complete and current artifacts still satisfy its accepted scope, the old stagnation warning is resolved history. Do not reopen or repeat the task.
+
+If the task object and repository disagree, treat that divergence as a control-plane defect to diagnose. One of the control plane's primary responsibilities is keeping `task_list` and each task object synchronized with actual project reality: what exists, what is accepted, what is currently blocked, and what remains to do.
+
+Compare repeated attempts and input fingerprints. If the same input repeatedly produces non-advancing cycles, change decomposition, context, backend, capability, task metadata, or authority instead of repeating the same run.
 
 ## Dirty/external repository changes
 
