@@ -4,7 +4,7 @@ param(
     [Parameter(Position=0)][string]$Command='status',
     [Parameter(Position=1)][string]$Subcommand,
     [string]$Title,[string]$Instruction,[string[]]$Accept,[string[]]$DependsOn,
-    [string[]]$Retrieval,[string[]]$Evidence,[string[]]$Relation,[string]$Provider,[string]$Endpoint,[string]$Connection,[string]$Role='worker',
+    [string[]]$Retrieval,[string[]]$Evidence,[string[]]$Relation,[string[]]$Check,[string[]]$Judge,[string]$Provider,[string]$Endpoint,[string]$Connection,[string]$Role='worker',
     [string]$Size='small',[string]$OutputKind='change',[string[]]$Source,[string[]]$IntentRef,[string]$SourceRef,
     [string]$CapabilityProfile,[string[]]$ToolAllow,[string[]]$ToolDeny,
     [string]$DirectiveId,[string]$Scope,[long]$Since=0,[int]$Limit=100,[string]$MinimumLevel,
