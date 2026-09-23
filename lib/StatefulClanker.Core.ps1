@@ -68,7 +68,7 @@ function ConvertTo-SCModelScalar($Value) {
     if($Value-is[string]-or$Value-is[char]){
         $text=[string]$Value
         if($text.Length-eq0){return '""'}
-        return $text.Replace('\','\\').Replace('|','\|').Replace([string][char]13,'').Replace([string][char]10,'\n')
+        return $text.Replace('|','\|').Replace([string][char]13,'').Replace([string][char]10,'\n')
     }
     if($Value-is[System.IFormattable]){return $Value.ToString($null,[Globalization.CultureInfo]::InvariantCulture)}
     return [string]$Value
