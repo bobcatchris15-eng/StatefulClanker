@@ -60,5 +60,17 @@
   "projectValidateTimeoutSeconds": 600,
   "mcp": {
     "allowHumanAuthorityTools": false
+  },
+  "validation": {
+    "mechanicalTimeoutSeconds": 300,
+    "mechanicalOutputChars": 12000,
+    "preferJev": true,
+    "jevBaseUrl": "https://api.typesafe.ai",
+    "jevModel": "jev-latest",
+    "jevApiKeyEnv": "TYPESAFE_API_KEY",
+    "jevTimeoutSeconds": 20,
+    "jevPassThreshold": 0.9,
+    "jevFailThreshold": 0.1,
+    "_comment": "Tasks with check commands use deterministic acceptance first. Passing mechanical-only tasks need no inference. judge criteria prefer TypeSafe Jev when TYPESAFE_API_KEY is available; unavailable or uncertain Jev decisions fall back to the ordinary routed validator."
   }
 }
