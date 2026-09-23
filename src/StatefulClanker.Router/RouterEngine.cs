@@ -31,7 +31,6 @@ public sealed class RouterEngine
                 var service=ServiceName(c);
                 return new EndpointRoute("pool:"+id,id,e,c,service);
             })
-            .Where(r=>!string.Equals(r.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase) || r.Endpoint.supportsTools==true)
             .OrderBy(r=>r.RouteName,StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
@@ -39,19 +38,39 @@ public sealed class RouterEngine
     public RouterResponse Acquire(string? preferred,string? preferredConnection,bool strictPreferred,string? sessionId,bool requireTools,int ownerPid=0)
     {
         ReapExpiredLeases();
+        NormalizeExpiredCooldowns();
         var health=_store.LoadHealth();
-        var routes=Routes()
+
+        var configured=Routes().ToList();
+        var eligible=configured
             .Where(r=>!requireTools || (r.Endpoint.supportsTools==true && string.Equals(r.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase)))
             .Where(r=>string.IsNullOrWhiteSpace(preferredConnection) || string.Equals(r.Endpoint.connection,preferredConnection,StringComparison.OrdinalIgnoreCase))
-            .Where(r=>Available(r,health))
             .ToList();
+        var routes=eligible.Where(r=>Available(r,health)).ToList();
 
         if(routes.Count==0)
+        {
+            var reason=eligible.Count==0 ? "no_eligible_endpoint" : "all_candidates_unhealthy";
+            var error=eligible.Count==0
+                ? (string.IsNullOrWhiteSpace(preferredConnection)
+                    ? "No enabled endpoint matches the routing requirements."
+                    : $"No enabled endpoint matches the routing requirements on connection '{preferredConnection}'.")
+                : (string.IsNullOrWhiteSpace(preferredConnection)
+                    ? "All eligible endpoints are temporarily unavailable."
+                    : $"All eligible endpoints on connection '{preferredConnection}' are temporarily unavailable.");
             return RouterResponse.Fail(
-                string.IsNullOrWhiteSpace(preferredConnection)
-                    ? "No healthy eligible endpoint is available."
-                    : $"No healthy eligible endpoint is available on connection '{preferredConnection}'.",
-                new { nextRetryAt=NextRetryAt(health), connection=preferredConnection });
+                error,
+                new
+                {
+                    reason,
+                    nextRetryAt=NextRetryAt(eligible,health),
+                    connection=preferredConnection,
+                    requireTools,
+                    configuredEndpoints=configured.Count,
+                    eligibleEndpoints=eligible.Count,
+                    candidates=eligible.Select(r=>RouteDiagnostic(r,health)).ToArray()
+                });
+        }
 
         EndpointRoute? selected=null;
         if(!string.IsNullOrWhiteSpace(preferred))
@@ -61,7 +80,19 @@ public sealed class RouterEngine
                 string.Equals(r.CatalogId,preferred,StringComparison.OrdinalIgnoreCase));
             if(selected is not null && IsAtCapacity(selected)) selected=null;
             if(strictPreferred && selected is null)
-                return RouterResponse.Fail($"Preferred endpoint '{preferred}' is not currently healthy and available.",new { nextRetryAt=NextRetryAt(health) });
+            {
+                var preferredRoute=eligible.FirstOrDefault(r=>
+                    string.Equals(r.RouteName,preferred,StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(r.CatalogId,preferred,StringComparison.OrdinalIgnoreCase));
+                return RouterResponse.Fail(
+                    $"Preferred endpoint '{preferred}' is not currently available.",
+                    new
+                    {
+                        reason=preferredRoute is null ? "preferred_not_eligible" : IsAtCapacity(preferredRoute) ? "preferred_at_capacity" : "preferred_unhealthy",
+                        nextRetryAt=preferredRoute is null ? null : NextRetryAt(new[]{preferredRoute},health),
+                        candidate=preferredRoute is null ? null : RouteDiagnostic(preferredRoute,health)
+                    });
+            }
         }
 
         if(selected is null)
@@ -82,7 +113,14 @@ public sealed class RouterEngine
         }
 
         if(selected is null)
-            return RouterResponse.Fail("All healthy eligible endpoints are at lease capacity.",new { retryAfterSeconds=2 });
+            return RouterResponse.Fail(
+                "All healthy eligible endpoints are at lease capacity.",
+                new
+                {
+                    reason="all_candidates_at_capacity",
+                    retryAfterSeconds=2,
+                    candidates=routes.Select(r=>RouteDiagnostic(r,health)).ToArray()
+                });
 
         var lease=new LeaseRecord
         {
@@ -191,6 +229,7 @@ public sealed class RouterEngine
     public object Snapshot()
     {
         ReapExpiredLeases();
+        NormalizeExpiredCooldowns();
         var health=_store.LoadHealth();
         var capacity=_store.LoadCapacityDiscovery();
         var routes=Routes();
@@ -216,7 +255,7 @@ public sealed class RouterEngine
             enabledRoutes=routes.Count,
             healthyRoutes=eligible.Count,
             activeLeases=leases.Count,
-            nextRetryAt=NextRetryAt(health),
+            nextRetryAt=NextRetryAt(routes,health),
             freeCapacity=new
             {
                 updatedAt=capacity.updatedAt,
@@ -235,6 +274,7 @@ public sealed class RouterEngine
                 activeLeases=leaseCounts.GetValueOrDefault(r.RouteName),
                 leaseCapacity=LeaseCapacity(r),
                 leased=leaseCounts.GetValueOrDefault(r.RouteName)>0,
+                eligibility=RouteDiagnostic(r,health),
                 health=HealthStateFor(r,health)
             }).ToArray(),
             leases=leases.Values.OrderBy(x=>x.route).ToArray()
@@ -409,6 +449,52 @@ public sealed class RouterEngine
         return s.Length<=max?s:s[..max];
     }
 
+    void NormalizeExpiredCooldowns()
+    {
+        var now=DateTimeOffset.UtcNow;
+        _store.UpdateHealth(doc =>
+        {
+            foreach(var kv in doc.endpoints.ToArray())
+            {
+                var e=kv.Value;
+                if(!string.Equals(e.state,"cooldown",StringComparison.OrdinalIgnoreCase)) continue;
+                var raw=e.retryAfter ?? e.nextProbeAt;
+                if(!DateTimeOffset.TryParse(raw,out var due) || due>now) continue;
+
+                e.state="healthy";
+                e.reason=null;
+                e.failures=0;
+                e.probeFailures=0;
+                e.retryAfter=null;
+                e.nextProbeAt=null;
+                e.message=null;
+                e.lastSuccess=now.ToString("O");
+                doc.endpoints[kv.Key]=e;
+            }
+            return 0;
+        });
+    }
+
+    object RouteDiagnostic(EndpointRoute route,RoutingHealthDocument health)
+    {
+        var healthState=HealthStateFor(route,health);
+        var atCapacity=IsAtCapacity(route);
+        return new
+        {
+            endpoint=route.RouteName,
+            route.CatalogId,
+            connection=route.Endpoint.connection,
+            model=route.Endpoint.model,
+            enabled=route.Endpoint.enabled,
+            workhorse=route.Endpoint.workhorse,
+            toolMode=route.Endpoint.toolMode,
+            supportsTools=route.Endpoint.supportsTools,
+            available=Available(route,health),
+            atCapacity,
+            health=healthState
+        };
+    }
+
     bool Available(EndpointRoute route,RoutingHealthDocument health)
     {
         if(route.Connection is not null && ProviderProbeCatalog.IsRetired(route.Connection)) return false;
@@ -452,10 +538,19 @@ public sealed class RouterEngine
         return null;
     }
 
-    static string? NextRetryAt(RoutingHealthDocument health)
+    static string? NextRetryAt(IEnumerable<EndpointRoute> routes,RoutingHealthDocument health)
     {
         var now=DateTimeOffset.UtcNow;
-        return health.endpoints.Values
+        var keys=routes
+            .SelectMany(r=>new[]{r.RouteName,"connection:"+r.Endpoint.connection,string.IsNullOrWhiteSpace(r.Service)?null:"service:"+r.Service})
+            .Where(k=>!string.IsNullOrWhiteSpace(k))
+            .Select(k=>k!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return keys
+            .Where(k=>health.endpoints.ContainsKey(k))
+            .Select(k=>health.endpoints[k])
             .SelectMany(e=>new[]{e.nextProbeAt,e.retryAfter})
             .Where(x=>!string.IsNullOrWhiteSpace(x))
             .Select(x=>DateTimeOffset.TryParse(x,out var t)?t:(DateTimeOffset?)null)
