@@ -11,6 +11,9 @@ Assert-True ($source.Contains('CurrentCellDirtyStateChanged')) 'Checkbox edits a
 Assert-True ($source.Contains('CellValueChanged')) 'Committed checkbox edits are not persisted immediately.'
 Assert-True (-not $source.Contains('_modelSelectionDirty')) 'Legacy unsaved-selection state still exists.'
 Assert-True (-not $source.Contains('SaveTargetSelection(')) 'Legacy bulk SaveTargetSelection path still exists.'
+Assert-True ($source.Contains('var active=targeted&&entry!.enabled;')) 'Model checkbox still treats a disabled catalog row as selected.'
+Assert-True ($source.Contains('row.Cells["use"].Value=targeted&&entry!.enabled;')) 'Passive refresh still rechecks disabled catalog rows.'
+Assert-True ($source.Contains('MarkManual(doc,entry.connection);')) 'Checkbox changes do not lock the connection to manual selection.'
 
 Write-Host '  CONNECTION SELECTION 2: row identity survives connection focus changes'
 Assert-True ($source.Contains('sealed record ApiModelRowBinding')) 'Model rows are not bound to their originating connection.'

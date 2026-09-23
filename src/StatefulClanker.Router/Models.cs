@@ -4,9 +4,10 @@ namespace StatefulClanker.Router;
 
 public sealed class EndpointCatalog
 {
-    public int schemaVersion { get; set; } = 2;
+    public int schemaVersion { get; set; } = 3;
     public string? updatedAt { get; set; }
     public Dictionary<string, EndpointEntry> entries { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<string> manualConnections { get; set; } = new();
 }
 
 public sealed class EndpointEntry

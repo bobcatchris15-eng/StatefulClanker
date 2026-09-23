@@ -172,6 +172,7 @@ sealed class EndpointsRoutingPanel : UserControl
         var changed=TargetPoolStore.UpdateActive(pool =>
         {
             if(!pool.entries.TryGetValue(status.Id,out var entry))return false;
+            TargetPoolStore.MarkManual(pool,entry.connection);
             entry.enabled=enabled;
             if(string.Equals(entry.managedBy,"free-capacity",StringComparison.OrdinalIgnoreCase))
                 entry.userOverride=enabled?"enabled":"disabled";
@@ -195,6 +196,7 @@ sealed class EndpointsRoutingPanel : UserControl
         {
             if(pool.entries.TryGetValue(ep.Id,out var entry) && string.Equals(entry.managedBy,"free-capacity",StringComparison.OrdinalIgnoreCase))
             {
+                TargetPoolStore.MarkManual(pool,entry.connection);
                 // Removing an auto-managed endpoint must persist as an operator
                 // suppression; otherwise the next catalog sync would recreate it.
                 entry.enabled=false;

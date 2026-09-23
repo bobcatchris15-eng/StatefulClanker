@@ -19,7 +19,9 @@ try {
         '{"data":[{"id":"free-a","display_name":"Free A","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-d","display_name":"Free D","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-p","display_name":"Free P","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}}]}',
         '{"data":[{"id":"free-a","display_name":"Free A","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-p","display_name":"Free P","supports_tools":true,"context_length":32768,"pricing":{"input":"0.02","output":"0.02"}}]}',
         '{"data":[{"id":"free-a","display_name":"Free A","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-p","display_name":"Free P","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}}]}',
-        '{"data":[{"id":"free-a","display_name":"Free A","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-d","display_name":"Free D","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-p","display_name":"Free P","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}}]}'
+        '{"data":[{"id":"free-a","display_name":"Free A","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-d","display_name":"Free D","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-p","display_name":"Free P","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}}]}',
+        '{"data":[{"id":"free-a","display_name":"Free A","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-d","display_name":"Free D","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-p","display_name":"Free P","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}},{"id":"free-new","display_name":"Free New","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}}]}',
+        '{"data":[{"id":"free-new","display_name":"Free New","supports_tools":true,"context_length":32768,"pricing":{"input":"0","output":"0"}}]}'
     )
 
     $serverJob=Start-Job -ScriptBlock {
@@ -54,6 +56,7 @@ try {
     $profile.modelsPath='/models'
     $profile.discoveryKind='openai'
     $profile.authKind='none'
+    [IO.File]::WriteAllText($store.ConnectionPath,'{"schemaVersion":2,"connections":{"configured":{}}}')
 
     Write-Host '  CAPACITY 1: only positively confirmed zero-cost workhorses enter the pool'
     Assert-True ($manager.SyncConnectionAsync('configured',$profile).GetAwaiter().GetResult()) 'Initial catalog sync failed.'
@@ -73,6 +76,8 @@ try {
     $pool=$store.LoadEndpoints()
     Assert-True (-not[bool]$pool.entries['configured::free-a'].enabled) 'Human-disabled auto endpoint was resurrected.'
     Assert-True ([string]$pool.entries['configured::free-a'].userOverride-eq'disabled') 'Human suppression marker was lost.'
+    $pool.manualConnections.Add('configured')
+    $store.SaveEndpoints($pool)
 
     Write-Host '  CAPACITY 3: first catalog miss gets grace while positive price retires immediately'
     Assert-True ($manager.SyncConnectionAsync('configured',$profile).GetAwaiter().GetResult()) 'Third catalog sync failed.'
@@ -103,6 +108,21 @@ try {
     Assert-True ([int]$state.confirmedFree-eq3) 'Final confirmed-free inventory count was wrong.'
     Assert-True ([int]$state.workhorseFree-eq3) 'Final free workhorse count was wrong.'
     Assert-True ($null-eq$state.lastError) 'Successful discovery retained an error.'
+
+    Write-Host '  CAPACITY 7: newly discovered models stay disabled under manual selection'
+    Assert-True ($manager.SyncConnectionAsync('configured',$profile).GetAwaiter().GetResult()) 'Sixth catalog sync failed.'
+    $pool=$store.LoadEndpoints()
+    Assert-True ($pool.entries.ContainsKey('configured::free-new')) 'Newly discovered free model was not cataloged.'
+    Assert-True (-not[bool]$pool.entries['configured::free-new'].enabled) 'Newly discovered model bypassed manual selection.'
+    Assert-True ([string]$pool.entries['configured::free-new'].userOverride -eq 'disabled') 'Newly discovered model lacks manual suppression marker.'
+
+    Write-Host '  CAPACITY 8: in-flight refresh cannot recreate a removed connection endpoint'
+    $pool.entries.Remove('configured::free-new')|Out-Null
+    $store.SaveEndpoints($pool)
+    [IO.File]::WriteAllText($store.ConnectionPath,'{"schemaVersion":2,"connections":{}}')
+    Assert-True ($manager.SyncConnectionAsync('configured',$profile).GetAwaiter().GetResult()) 'Final catalog request failed.'
+    $pool=$store.LoadEndpoints()
+    Assert-True (-not$pool.entries.ContainsKey('configured::free-new')) 'Removed connection endpoint was recreated by an in-flight refresh.'
 
     Write-Host 'PASS: configured connections autonomously maintain a safe zero-cost workhorse pool without overriding operator suppression.'
 }

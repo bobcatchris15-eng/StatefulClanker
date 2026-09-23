@@ -115,6 +115,10 @@ public sealed class FreeCapacityManager
 
         _store.UpdateEndpoints(doc =>
         {
+            // A request may have started before the operator removed this connection.
+            // Recheck under the catalog lock so its response cannot recreate endpoints.
+            if(!_store.LoadConnections().connections.ContainsKey(connectionName)) return 0;
+            var manualSelection=doc.manualConnections?.Any(x=>string.Equals(x,connectionName,StringComparison.OrdinalIgnoreCase))==true;
             foreach(var model in eligible)
             {
                 var key=Id(connectionName,model.model);
@@ -149,7 +153,7 @@ public sealed class FreeCapacityManager
                     connection=connectionName,
                     model=model.model,
                     displayName=model.displayName,
-                    enabled=true,
+                    enabled=!manualSelection,
                     workhorse=true,
                     free=true,
                     supportsTools=model.supportsTools,
@@ -158,6 +162,7 @@ public sealed class FreeCapacityManager
                     source="auto-free-discovery",
                     rationale="Automatically maintained from the configured connection's live zero-cost catalog.",
                     managedBy="free-capacity",
+                    userOverride=manualSelection?"disabled":null,
                     freeClass=model.classification,
                     freeEvidence=model.evidence,
                     lastSeenAt=now.ToString("O"),

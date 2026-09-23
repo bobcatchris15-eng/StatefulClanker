@@ -2588,6 +2588,7 @@ sealed class MainForm : Form
             var changed=TargetPoolStore.UpdateActive(pool =>
             {
                 if(!pool.entries.TryGetValue(id,out var current))return false;
+                TargetPoolStore.MarkManual(pool,current.connection);
                 current.enabled=enabled;
                 if(string.Equals(current.managedBy,"free-capacity",StringComparison.OrdinalIgnoreCase))
                     current.userOverride=enabled?"enabled":"disabled";

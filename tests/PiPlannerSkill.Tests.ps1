@@ -26,8 +26,8 @@ Write-Host '  PI PLANNER 4: ordinary turns do not retain planner bulk'
 Assert-True ($extension.Contains('delete event.systemPromptOptions.sections.statefulclankerPlanner')) 'Planner system-prompt section is not removed for non-planning turns.'
 
 Write-Host '  PI PLANNER 5: expected planning phrases are covered'
-foreach($needle in @('planning','decompos','task\\s+(?:list|graph','scplan','map\\s+out')){
-    Assert-True ($extension -match $needle) "Planner trigger family missing: $needle"
+foreach($needle in @('planning','decompos','task\s+(?:list|graph','scplan','map\s+out')){
+    Assert-True ($extension.Contains($needle)) "Planner trigger family missing: $needle"
 }
 
 Write-Host 'PASS: bundled Pi advertises the planner skill and automatically invokes it only for planning/decomposition turns.'

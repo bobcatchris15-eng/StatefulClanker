@@ -21,16 +21,29 @@ Write-Host '  SELECTION 1: selecting a discovered model adds it to the active po
 Assert-True ($pool.entries.ContainsKey('demo::model-a')) 'Selected endpoint was not added to the active pool.'
 Assert-True ([bool]$pool.entries['demo::model-a'].enabled) 'Selected endpoint was not enabled.'
 
-Write-Host '  SELECTION 2: deselecting a discovered model removes it from the active pool'
+Write-Host '  SELECTION 2: deselecting a discovered model records manual selection'
 [void]$apply.Invoke($null,@($pool,$entry,$false))
 Assert-True (-not$pool.entries.ContainsKey('demo::model-a')) 'Deselected endpoint remained in the active pool.'
+Assert-True ($pool.manualConnections.Contains('demo')) 'Connection was not switched to manual selection.'
 
-Write-Host '  SELECTION 3: removing a connection prunes every endpoint it contributed'
+Write-Host '  SELECTION 3: deselecting an auto-managed model keeps a suppression marker'
+$managed=[Activator]::CreateInstance($entryType)
+$managed.id='demo::auto-free';$managed.connection='demo';$managed.model='auto-free';$managed.managedBy='free-capacity'
+[void]$apply.Invoke($null,@($pool,$managed,$true))
+[void]$apply.Invoke($null,@($pool,$managed,$false))
+Assert-True ($pool.entries.ContainsKey('demo::auto-free')) 'Auto-managed endpoint lost its suppression marker.'
+Assert-True (-not[bool]$pool.entries['demo::auto-free'].enabled) 'Deselected auto-managed endpoint remained enabled.'
+Assert-True ([string]$pool.entries['demo::auto-free'].userOverride -eq 'disabled') 'Deselected auto-managed endpoint lacks a user override.'
+[void]$apply.Invoke($null,@($pool,$managed,$true))
+Assert-True ([bool]$pool.entries['demo::auto-free'].enabled) 'Re-selected auto-managed endpoint remained disabled.'
+
+Write-Host '  SELECTION 4: removing a connection prunes every endpoint it contributed and its manual mode'
 $entry.id='demo::model-b';$entry.model='model-b';[void]$apply.Invoke($null,@($pool,$entry,$true))
 $other=[Activator]::CreateInstance($entryType);$other.id='other::model-c';$other.connection='other';$other.model='model-c';$other.enabled=$true
 [void]$apply.Invoke($null,@($pool,$other,$true))
 [int]$removed=$removeConnection.Invoke($null,@($pool,'demo'))
-Assert-True ($removed -eq 1) 'Connection removal did not report the selected endpoint it pruned.'
+Assert-True ($removed -eq 2) 'Connection removal did not report the selected endpoints it pruned.'
 Assert-True (-not$pool.entries.ContainsKey('demo::model-b')) 'Removed connection endpoint remained active.'
 Assert-True ($pool.entries.ContainsKey('other::model-c')) 'Connection removal removed an unrelated endpoint.'
+Assert-True (-not$pool.manualConnections.Contains('demo')) 'Removed connection retained manual selection mode.'
 Write-Host 'PASS: endpoint selection mutates the active machine catalog immediately.'

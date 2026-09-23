@@ -81,6 +81,7 @@ sealed class TargetPoolDocument
     public int schemaVersion { get; set; } = 1;
     public string updatedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public Dictionary<string,TargetPoolEntry> entries { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<string> manualConnections { get; set; } = new();
 }
 
 sealed class TargetPoolChangeDispatcher
@@ -147,6 +148,7 @@ static class TargetPoolStore
         {
             var doc = JsonSerializer.Deserialize<TargetPoolDocument>(File.ReadAllText(path),Json) ?? new();
             doc.entries = new Dictionary<string,TargetPoolEntry>(doc.entries ?? new(),StringComparer.OrdinalIgnoreCase);
+            doc.manualConnections ??= new();
             return doc;
         }
         catch { return new(); }
@@ -156,7 +158,7 @@ static class TargetPoolStore
     {
         var path = ActivePoolPath();
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
-        doc.schemaVersion = 2;
+        doc.schemaVersion = 3;
         doc.updatedAt = DateTimeOffset.UtcNow.ToString("O");
         var tmp = path + ".tmp-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(tmp,JsonSerializer.Serialize(doc,Json),new UTF8Encoding(false));
@@ -186,19 +188,37 @@ static class TargetPoolStore
 
     public static void ApplySelection(TargetPoolDocument doc,TargetPoolEntry entry,bool selected)
     {
+        MarkManual(doc,entry.connection);
         if(selected)
         {
             entry.enabled=true;
+            if(string.Equals(entry.managedBy,"free-capacity",StringComparison.OrdinalIgnoreCase))
+                entry.userOverride="enabled";
+            doc.entries[entry.id]=entry;
+            return;
+        }
+        if(string.Equals(entry.managedBy,"free-capacity",StringComparison.OrdinalIgnoreCase))
+        {
+            entry.enabled=false;
+            entry.userOverride="disabled";
             doc.entries[entry.id]=entry;
             return;
         }
         doc.entries.Remove(entry.id);
     }
 
+    public static void MarkManual(TargetPoolDocument doc,string connection)
+    {
+        doc.manualConnections ??= new();
+        if(!doc.manualConnections.Any(x=>string.Equals(x,connection,StringComparison.OrdinalIgnoreCase)))
+            doc.manualConnections.Add(connection);
+    }
+
     public static int RemoveConnection(TargetPoolDocument doc,string connection)
     {
         var keys=doc.entries.Where(x=>string.Equals(x.Value.connection,connection,StringComparison.OrdinalIgnoreCase)).Select(x=>x.Key).ToArray();
         foreach(var key in keys) doc.entries.Remove(key);
+        doc.manualConnections?.RemoveAll(x=>string.Equals(x,connection,StringComparison.OrdinalIgnoreCase));
         return keys.Length;
     }
 
@@ -528,8 +548,9 @@ sealed class ApiConnectionsPage : TabPage
                 var context=m.contextLength.HasValue?m.contextLength.Value.ToString("N0"):"—";
                 var free=m.isFree==true?"yes":m.isFree==false?"no":"?";
                 var targeted=pool.entries.TryGetValue(TargetPoolStore.Id(id,m.id),out var entry);
-                var state=!targeted?"—":entry!.enabled?"enabled":"disabled";
-                var rowIndex=_models.Rows.Add(targeted,m.displayName,m.id,state,m.supportsTools==false?"text":"native",context,free);
+                var active=targeted&&entry!.enabled;
+                var state=!targeted?"—":active?"enabled":"disabled";
+                var rowIndex=_models.Rows.Add(active,m.displayName,m.id,state,m.supportsTools==false?"text":"native",context,free);
                 var row=_models.Rows[rowIndex];
                 row.Tag=new ApiModelRowBinding(id,m.id);
                 if(targeted)row.Cells["state"].Style.ForeColor=entry!.enabled?Theme.Good:Theme.Muted;
@@ -550,7 +571,7 @@ sealed class ApiConnectionsPage : TabPage
             {
                 if(row.Tag is not ApiModelRowBinding binding)continue;
                 var targeted=pool.entries.TryGetValue(TargetPoolStore.Id(binding.ConnectionId,binding.ModelId),out var entry);
-                row.Cells["use"].Value=targeted;
+                row.Cells["use"].Value=targeted&&entry!.enabled;
                 row.Cells["state"].Value=!targeted?"—":entry!.enabled?"enabled":"disabled";
                 row.Cells["state"].Style.ForeColor=targeted&&entry!.enabled?Theme.Good:Theme.Muted;
             }
@@ -592,8 +613,9 @@ sealed class ApiConnectionsPage : TabPage
     {
         var id=SelectedId;if(id is null)return;
         if(MessageBox.Show(FindForm(),$"Remove machine connection '{id}' and every endpoint selected from it?", "Remove connection",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
+        _profiles.Remove(id);ApiConnectionStore.Save(_profiles);
         TargetPoolStore.UpdateActive(pool=>TargetPoolStore.RemoveConnection(pool,id));
-        _profiles.Remove(id);ApiConnectionStore.Save(_profiles);Reload();
+        Reload();
     }
 
     void SetupHelp(object? s,EventArgs e)
@@ -631,7 +653,7 @@ sealed class ApiConnectionsPage : TabPage
                 return 0;
             });
 
-            row.Cells["state"].Value=selected?"enabled":"—";
+            row.Cells["state"].Value=selected?"enabled":entry.managedBy=="free-capacity"?"disabled":"—";
             row.Cells["state"].Style.ForeColor=selected?Theme.Good:Theme.Muted;
             var current=TargetPoolStore.LoadActive();
             _summary.Text=$"{_profiles.Count} connection(s) • {current.entries.Count(x=>x.Value.enabled)} enabled endpoint(s) · {(selected?"enabled":"removed")} {binding.ModelId}";
