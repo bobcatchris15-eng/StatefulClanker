@@ -4,6 +4,17 @@ $connectionsPath=Join-Path $machineRoot 'connections.json'
 $endpointsPath=Join-Path $machineRoot 'endpoints.json'
 $piDir=Join-Path $machineRoot 'pi'
 New-Item -ItemType Directory -Force -Path $piDir|Out-Null
+$settingsPath=Join-Path $piDir 'settings.json'
+$settings=if(Test-Path -LiteralPath $settingsPath){
+    try{Get-Content -Raw -LiteralPath $settingsPath|ConvertFrom-Json}catch{[pscustomobject]@{}}
+}else{[pscustomobject]@{}}
+if(-not$settings.PSObject.Properties['compaction']){
+    $settings|Add-Member -NotePropertyName compaction -NotePropertyValue ([pscustomobject]@{}) -Force
+}
+$settings.compaction|Add-Member -NotePropertyName enabled -NotePropertyValue $true -Force
+$settings.compaction|Add-Member -NotePropertyName keepRecentTokens -NotePropertyValue 12000 -Force
+$settingsJson=$settings|ConvertTo-Json -Depth 30
+[IO.File]::WriteAllText($settingsPath,$settingsJson,(New-Object Text.UTF8Encoding($false)))
 if(-not(Test-Path -LiteralPath $connectionsPath)-or-not(Test-Path -LiteralPath $endpointsPath)){exit 0}
 $connections=(Get-Content -Raw -LiteralPath $connectionsPath|ConvertFrom-Json).connections
 $endpointDoc=Get-Content -Raw -LiteralPath $endpointsPath|ConvertFrom-Json
