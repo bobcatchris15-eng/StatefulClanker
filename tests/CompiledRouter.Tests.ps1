@@ -23,6 +23,7 @@ try {
             'free-a::m1'=[ordered]@{id='free-a::m1';connection='free-a';model='m1';displayName='A1';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native'}
             'free-a::m2'=[ordered]@{id='free-a::m2';connection='free-a';model='m2';displayName='A2';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native'}
             'free-b::m3'=[ordered]@{id='free-b::m3';connection='free-b';model='m3';displayName='B3';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native'}
+            'free-b::m4'=[ordered]@{id='free-b::m4';connection='free-b';model='m4';displayName='B4 unknown tool metadata';enabled=$true;workhorse=$true;free=$true;toolMode='native'}
             'auto::openrouter/free'=[ordered]@{id='auto::openrouter/free';connection='auto';model='openrouter/free';displayName='OpenRouter Free Auto';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native'}
         }
     }
@@ -55,6 +56,17 @@ try {
     Assert-True ([string]$endpointPin.data.catalogId -eq 'free-b::m3') 'Exact endpoint pin selected a different endpoint.'
     Assert-True ([bool]$endpointPin.data.preferredHonored) 'Exact endpoint pin was not reported as honored.'
     [void](Call-Router @('release','--lease',[string]$endpointPin.data.lease))
+
+    Write-Host '  ROUTER 0B: unknown tool metadata does not silently remove an enabled endpoint'
+    $unknownTools=Call-Router @('acquire','--preferred','free-b::m4','--strict-preferred','true','--session','unknown-tools','--owner-pid',[string]$PID)
+    Assert-True ([string]$unknownTools.data.catalogId -eq 'free-b::m4') 'Enabled endpoint with unknown tool metadata was silently excluded from ordinary routing.'
+    [void](Call-Router @('release','--lease',[string]$unknownTools.data.lease))
+
+    Write-Host '  ROUTER 0C: no-route failures explain the eligibility decision'
+    $noneRaw=& $router acquire --connection definitely-missing --session no-route --owner-pid $PID | ConvertFrom-Json
+    Assert-True (-not [bool]$noneRaw.ok) 'Missing connection unexpectedly acquired a route.'
+    Assert-True ([string]$noneRaw.data.reason -eq 'no_eligible_endpoint') 'No-route result did not identify an eligibility failure.'
+    Assert-True ([int]$noneRaw.data.configuredEndpoints -ge 4) 'No-route diagnostic did not report the configured endpoint population.'
 
     Write-Host '  ROUTER 1: one active lease per exact endpoint and round-robin spreads work'
     $a=Call-Router @('acquire','--connection','free-a','--session','s1','--owner-pid',[string]$PID)
