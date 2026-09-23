@@ -56,6 +56,11 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
         if(-not[bool]$acquire.ok){
             $now=[datetimeoffset]::UtcNow
             $retry=$now.AddSeconds(2)
+            $diagnostic=$null
+            if($acquire.data){
+                try{$diagnostic=$acquire.data|ConvertTo-Json -Depth 12 -Compress}catch{$diagnostic=[string]$acquire.data}
+                Set-SCProperty $routeSnapshot 'acquireDiagnostic' $acquire.data
+            }
             if($acquire.data -and $acquire.data.PSObject.Properties['nextRetryAt'] -and $acquire.data.nextRetryAt){
                 $parsed=[datetimeoffset]::MinValue
                 if([datetimeoffset]::TryParse([string]$acquire.data.nextRetryAt,[ref]$parsed)){$retry=$parsed}
@@ -67,7 +72,7 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
                 provider=if($preferred){$preferred}else{$ConnectionOverride};endpoint=$preferred;connection=$ConnectionOverride;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId)
                 compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null}
                 command='compiled-router';args=@();promptPath=$null;startedAt=$now.ToString('o');endedAt=$now.ToString('o');durationSeconds=0
-                exitCode=-3;stdout='';stderr=[string]$acquire.error;routeDeferred=$true;retryAfter=$retry.ToString('o')
+                exitCode=-3;stdout='';stderr=(([string]$acquire.error)+$(if($diagnostic){[Environment]::NewLine+'Router diagnostic: '+$diagnostic}else{''}));routeDeferred=$true;retryAfter=$retry.ToString('o')
                 routeAttempts=$history.Count;routeHistory=@($history);routeSnapshot=$routeSnapshot;compiledRouter=$true
             }
         }
