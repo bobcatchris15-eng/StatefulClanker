@@ -1,3 +1,8 @@
+---
+name: statefulclanker-planner
+description: Use whenever planning, building or revising a plan, decomposing work into a task list or task graph, repairing decomposition, or producing SCPLAN for StatefulClanker. Applies semantic cold-worker decomposition, implications, dependencies, and mechanical-first acceptance.
+---
+
 # StatefulClanker planner skill
 
 Use this skill to turn **Current Human Directives**, the reconciled Intent Contract, and durable project evidence into a task graph that disposable cold-start workers can complete **and reviewers can reasonably validate**.
