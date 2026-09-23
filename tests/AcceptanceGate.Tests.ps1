@@ -24,11 +24,13 @@ foreach($case in @(
 }
 Assert-True ($script:mechanicalCommands.Count-eq3) 'One/many mechanical checks were not executed exactly once each.'
 
-Write-Host '  ACCEPTANCE 0b: zero/one semantic criteria do not collapse before routing'
-function Get-SCValidationSetting { param([string]$Name,$Default); if($Name-eq'preferJev'){return $false};return $Default }
+Write-Host '  ACCEPTANCE 0b: zero/one semantic criteria do not collapse under StrictMode'
+function Get-SCValidationSetting { param([string]$Name,$Default); return $Default }
+function Get-SCJevApiKey { return $null }
 $noSemantic=Invoke-SCJevAcceptance ([pscustomobject]@{id='none';semanticAcceptance=@()}) $null $null $null
-Assert-True (-not[bool]$noSemantic.available -and [string]$noSemantic.reason-eq'disabled') 'Disabled Jev path changed unexpectedly.'
-# Source-level guard for the two remaining semantic-array normalization sites.
+Assert-True (-not[bool]$noSemantic.available -and [string]$noSemantic.reason-eq'no-semantic-criteria') 'Empty semantic acceptance did not remain a zero-item array.'
+$oneSemantic=Invoke-SCJevAcceptance ([pscustomobject]@{id='one';semanticAcceptance=@('criterion one')}) $null $null $null
+Assert-True (-not[bool]$oneSemantic.available -and [string]$oneSemantic.reason-eq'TypeSafe API key unavailable') 'One semantic criterion collapsed before Jev availability handling.'
 $executionSource=Get-Content -Raw -LiteralPath (Join-Path $repo 'lib\StatefulClanker.Execution.ps1')
 Assert-True ($executionSource.Contains('$criteria=@()')) 'Jev criteria are not initialized as an explicit array.'
 Assert-True ($executionSource.Contains('$semantic=@()')) 'Acceptance semantic criteria are not initialized as an explicit array.'
