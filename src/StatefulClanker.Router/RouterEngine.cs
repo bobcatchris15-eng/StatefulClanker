@@ -59,7 +59,7 @@ public sealed class RouterEngine
             selected=routes.FirstOrDefault(r=>
                 string.Equals(r.RouteName,preferred,StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(r.CatalogId,preferred,StringComparison.OrdinalIgnoreCase));
-            if(selected is not null && IsLeased(selected.RouteName)) selected=null;
+            if(selected is not null && IsAtCapacity(selected)) selected=null;
             if(strictPreferred && selected is null)
                 return RouterResponse.Fail($"Preferred endpoint '{preferred}' is not currently healthy and available.",new { nextRetryAt=NextRetryAt(health) });
         }
@@ -71,7 +71,7 @@ public sealed class RouterEngine
             for(var offset=0;offset<routes.Count;offset++)
             {
                 var candidate=routes[(cursor+offset)%routes.Count];
-                if(!IsLeased(candidate.RouteName))
+                if(!IsAtCapacity(candidate))
                 {
                     selected=candidate;
                     var selectedIndex=(cursor+offset)%routes.Count;
@@ -82,7 +82,7 @@ public sealed class RouterEngine
         }
 
         if(selected is null)
-            return RouterResponse.Fail("All healthy eligible endpoints are currently leased.",new { retryAfterSeconds=2 });
+            return RouterResponse.Fail("All healthy eligible endpoints are at lease capacity.",new { retryAfterSeconds=2 });
 
         var lease=new LeaseRecord
         {
@@ -196,14 +196,14 @@ public sealed class RouterEngine
         var routes=Routes();
         Dictionary<string,LeaseRecord> leases;
         lock(_leaseLock) leases=_leasesByToken.ToDictionary(x=>x.Key,x=>x.Value,StringComparer.OrdinalIgnoreCase);
-        var leaseRoutes=leases.Values.ToDictionary(x=>x.route,x=>x,StringComparer.OrdinalIgnoreCase);
+        var leaseCounts=leases.Values.GroupBy(x=>x.route,StringComparer.OrdinalIgnoreCase).ToDictionary(x=>x.Key,x=>x.Count(),StringComparer.OrdinalIgnoreCase);
         var eligible=routes.Where(r=>Available(r,health)).ToList();
         var cursor=eligible.Count==0?0:Math.Abs(_store.LoadCursor().cursor%eligible.Count);
         EndpointRoute? next=null;
         for(var i=0;i<eligible.Count;i++)
         {
             var candidate=eligible[(cursor+i)%eligible.Count];
-            if(!leaseRoutes.ContainsKey(candidate.RouteName)){next=candidate;break;}
+            if(leaseCounts.GetValueOrDefault(candidate.RouteName)<LeaseCapacity(candidate)){next=candidate;break;}
         }
 
         return new
@@ -232,7 +232,9 @@ public sealed class RouterEngine
                 r.Endpoint.toolMode,r.Endpoint.supportsTools,r.Endpoint.free,
                 r.Endpoint.managedBy,r.Endpoint.freeClass,r.Endpoint.retiredReason,r.Endpoint.userOverride,
                 available=Available(r,health),
-                leased=leaseRoutes.ContainsKey(r.RouteName),
+                activeLeases=leaseCounts.GetValueOrDefault(r.RouteName),
+                leaseCapacity=LeaseCapacity(r),
+                leased=leaseCounts.GetValueOrDefault(r.RouteName)>0,
                 health=HealthStateFor(r,health)
             }).ToArray(),
             leases=leases.Values.OrderBy(x=>x.route).ToArray()
@@ -381,8 +383,24 @@ public sealed class RouterEngine
 
     public bool IsLeased(string route)
     {
-        lock(_leaseLock) return _tokenByRoute.ContainsKey(route);
+        lock(_leaseLock) return _leasesByToken.Values.Any(x=>string.Equals(x.route,route,StringComparison.OrdinalIgnoreCase));
     }
+
+    bool IsAtCapacity(EndpointRoute route)
+    {
+        lock(_leaseLock) return _leasesByToken.Values.Count(x=>string.Equals(x.route,route.RouteName,StringComparison.OrdinalIgnoreCase))>=LeaseCapacity(route);
+    }
+
+    static int LeaseCapacity(EndpointRoute route)
+    {
+        if(route.Endpoint.leaseCapacity is int configured) return Math.Clamp(configured,1,5);
+        return IsAutoRoutingModel(route.Endpoint.model)?5:1;
+    }
+
+    static bool IsAutoRoutingModel(string? model) =>
+        string.Equals(model,"kilo-auto/free",StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(model,"openrouter/free",StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(model,"openrouter/auto",StringComparison.OrdinalIgnoreCase);
 
     static string? Bound(string? text,int max)
     {

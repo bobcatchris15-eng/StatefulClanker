@@ -1989,6 +1989,7 @@ sealed class MainForm : Form
     readonly System.Windows.Forms.Timer _layoutSaveTimer = new() { Interval = 450 };
     readonly ProjectRefreshQueue _refreshQueue=new();
     int _mcpDiscoveryRunning;
+    int _targetPoolRefreshQueued;
     readonly McpHost _mcp;
     readonly AutofillHost _autofill;
     readonly NotifyIcon _notify;
@@ -2569,11 +2570,15 @@ sealed class MainForm : Form
     void HandleTargetPoolChanged(object? sender,EventArgs e)
     {
         if(IsDisposed||Disposing)return;
-        if(InvokeRequired)
-        {
-            try { BeginInvoke(new EventHandler(HandleTargetPoolChanged),sender,e); } catch { }
-            return;
-        }
+        if(Interlocked.Exchange(ref _targetPoolRefreshQueued,1)!=0)return;
+        try { BeginInvoke(new Action(RefreshTargetPoolViews)); }
+        catch { Interlocked.Exchange(ref _targetPoolRefreshQueued,0); }
+    }
+
+    void RefreshTargetPoolViews()
+    {
+        Interlocked.Exchange(ref _targetPoolRefreshQueued,0);
+        if(IsDisposed||Disposing)return;
         PopulateOverviewTargets();
         ApiConnectionsUiBootstrap.RefreshProjectMarkers();
     }

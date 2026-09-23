@@ -21,6 +21,7 @@ public sealed class EndpointEntry
     public bool? supportsTools { get; set; }
     public long? contextLength { get; set; }
     public string toolMode { get; set; } = "native";
+    public int? leaseCapacity { get; set; }
 
     // Lifecycle metadata. Existing/user-managed entries remain untouched unless
     // explicitly adopted by the free-capacity manager.

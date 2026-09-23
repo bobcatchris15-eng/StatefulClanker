@@ -28,8 +28,11 @@ function Get-SCControlEventLevel([string]$Type,$Data=$null) {
         if($verdict-eq'FAIL'){return 'attention'}
         if($null-ne$passed-and-not[bool]$passed){return 'attention'}
     }
-    if($Type -match '(failed|failure|blocked|invalidated|stale|conflict|fault|hold|retry|rejected|warning)'){return 'attention'}
-    if($Type -match '^(intent\.revised|directive\.(revised|retired)|plan\.imported|task\.(completed|complete)|state\.committed|project\.review)'){return 'attention'}
+    # Completion, ordinary rejection, and retry are durable task history. The
+    # scheduler and task status own their handling; waking an orchestrator for
+    # each one creates noise and duplicate recovery work.
+    if($Type -match '^(task\.(completed|complete|retried)|state\.(committed|proposal_rejected)|run\.(finished|failed)|validator\.(finished|error)|worker\.session_repair|routing\.deferred)'){return 'fyi'}
+    if($Type -match '^(context\.fault|context\.stale|task\.(blocked|stagnation\.warning)|project\.review)'){return 'attention'}
     return 'fyi'
 }
 

@@ -23,6 +23,7 @@ try {
             'free-a::m1'=[ordered]@{id='free-a::m1';connection='free-a';model='m1';displayName='A1';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native'}
             'free-a::m2'=[ordered]@{id='free-a::m2';connection='free-a';model='m2';displayName='A2';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native'}
             'free-b::m3'=[ordered]@{id='free-b::m3';connection='free-b';model='m3';displayName='B3';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native'}
+            'auto::openrouter/free'=[ordered]@{id='auto::openrouter/free';connection='auto';model='openrouter/free';displayName='OpenRouter Free Auto';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native'}
         }
     }
     $endpointDoc|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $temp 'endpoints.json') -Encoding UTF8
@@ -32,6 +33,7 @@ try {
         connections=[ordered]@{
             'free-a'=[ordered]@{name='free-a';presetId='custom';protocol='openai-chat';baseUrl='http://127.0.0.1:65531/v1';modelsPath='/models';authKind='none';headers=[ordered]@{}}
             'free-b'=[ordered]@{name='free-b';presetId='custom';protocol='openai-chat';baseUrl='http://127.0.0.1:65532/v1';modelsPath='/models';authKind='none';headers=[ordered]@{}}
+            'auto'=[ordered]@{name='auto';presetId='custom';protocol='openai-chat';baseUrl='http://127.0.0.1:65533/v1';modelsPath='/models';authKind='none';headers=[ordered]@{}}
         }
     }
     $connectionDoc|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $temp 'connections.json') -Encoding UTF8
@@ -61,6 +63,17 @@ try {
     $c=Call-Router @('acquire','--session','s3','--preferred',[string]$a.data.endpoint,'--owner-pid',[string]$PID)
     Assert-True ([string]$c.data.endpoint -ne [string]$a.data.endpoint) 'Preferred endpoint bypassed an active lease.'
     Assert-True (-not [bool]$c.data.preferredHonored) 'Busy preferred route was reported as honored.'
+
+    Write-Host '  ROUTER 1B: an auto-routing endpoint accepts five leases while a fixed model remains exclusive'
+    $autoBefore=(Call-Router @('snapshot')).data
+    $existingAuto=[int](@($autoBefore.leases|Where-Object{[string]$_.route -eq 'pool:auto::openrouter/free'}).Count)
+    $autoLeases=@()
+    foreach($n in 1..(5-$existingAuto)){$autoLeases+=,(Call-Router @('acquire','--preferred','auto::openrouter/free','--strict-preferred','true','--session',("auto-"+$n),'--owner-pid',[string]$PID))}
+    $autoAtCapacity=(Call-Router @('snapshot')).data
+    Assert-True (@($autoAtCapacity.leases|Where-Object{[string]$_.route -eq 'pool:auto::openrouter/free'}).Count -eq 5) 'Auto-routing endpoint did not reach five concurrent leases.'
+    $sixthRaw=& $router acquire --preferred 'auto::openrouter/free' --strict-preferred true --session auto-6 --owner-pid $PID | ConvertFrom-Json
+    Assert-True (-not [bool]$sixthRaw.ok) 'Auto-routing endpoint accepted a sixth concurrent lease.'
+    foreach($lease in $autoLeases){[void](Call-Router @('release','--lease',[string]$lease.data.lease))}
 
     Write-Host '  ROUTER 2: a model 429 cools only that endpoint'
     [void](Call-Router @('failure','--lease',[string]$a.data.lease,'--class','rate_limited','--message','HTTP 429 Retry-After: 30'))
