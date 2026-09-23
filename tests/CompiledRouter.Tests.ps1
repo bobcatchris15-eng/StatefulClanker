@@ -62,19 +62,20 @@ try {
     Assert-True ([string]$c.data.endpoint -ne [string]$a.data.endpoint) 'Preferred endpoint bypassed an active lease.'
     Assert-True (-not [bool]$c.data.preferredHonored) 'Busy preferred route was reported as honored.'
 
-    Write-Host '  ROUTER 2: unqualified 429 cools the connection/account, not just one model'
+    Write-Host '  ROUTER 2: a model 429 cools only that endpoint'
     [void](Call-Router @('failure','--lease',[string]$a.data.lease,'--class','rate_limited','--message','HTTP 429 Retry-After: 30'))
     $snap=(Call-Router @('snapshot')).data
     $sameConnection=@($snap.routes|Where-Object { [string]$_.connection -eq 'free-a' })
-    Assert-True (@($sameConnection|Where-Object { [bool]$_.available }).Count -eq 0) 'Account-scoped 429 left a sibling model eligible on the same connection.'
+    Assert-True (@($sameConnection|Where-Object { [string]$_.endpoint -eq [string]$a.data.endpoint -and -not [bool]$_.available }).Count -eq 1) 'Rate-limited endpoint remained eligible.'
+    Assert-True (@($sameConnection|Where-Object { [string]$_.endpoint -ne [string]$a.data.endpoint -and [bool]$_.available }).Count -gt 0) 'Model-scoped 429 incorrectly poisoned a sibling endpoint.'
     $otherConnection=@($snap.routes|Where-Object { [string]$_.connection -eq 'free-b' })
-    Assert-True (@($otherConnection|Where-Object { [bool]$_.available }).Count -gt 0) 'Account-scoped 429 incorrectly poisoned a different connection.'
+    Assert-True (@($otherConnection|Where-Object { [bool]$_.available }).Count -gt 0) 'Model-scoped 429 incorrectly poisoned a different connection.'
 
-    Write-Host '  ROUTER 3: active connection cooldown remains excluded from production routing'
+    Write-Host '  ROUTER 3: active endpoint cooldown remains excluded from production routing'
     Start-Sleep -Milliseconds 500
     $snap=(Call-Router @('snapshot')).data
-    $stillCooling=@($snap.routes|Where-Object { [string]$_.connection -eq 'free-a' })
-    Assert-True (@($stillCooling|Where-Object { [bool]$_.available }).Count -eq 0) 'Connection cooldown was ignored before its Retry-After window elapsed.'
+    $stillCooling=@($snap.routes|Where-Object { [string]$_.endpoint -eq [string]$a.data.endpoint })
+    Assert-True (@($stillCooling|Where-Object { [bool]$_.available }).Count -eq 0) 'Endpoint cooldown was ignored before its Retry-After window elapsed.'
 
     Write-Host '  ROUTER 4: connection auth quarantine removes every model sharing that credential'
     [void](Call-Router @('failure','--lease',[string]$b.data.lease,'--class','auth','--message','HTTP 401 invalid API key'))
