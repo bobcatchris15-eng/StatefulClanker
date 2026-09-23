@@ -54,6 +54,121 @@ function ConvertTo-SCJson {
         if ($null -ne $Value) { $Value | ConvertTo-Json -Depth $Depth }
     }
 }
+
+function Test-SCModelScalar($Value) {
+    if($null-eq$Value){return $true}
+    if($Value-is[string]-or$Value-is[char]-or$Value-is[bool]-or$Value-is[datetime]-or$Value-is[datetimeoffset]){return $true}
+    return ($Value-is[System.ValueType])
+}
+function ConvertTo-SCModelScalar($Value) {
+    if($null-eq$Value){return '~'}
+    if($Value-is[bool]){return $(if($Value){'true'}else{'false'})}
+    if($Value-is[datetime]){return $Value.ToString('o')}
+    if($Value-is[datetimeoffset]){return $Value.ToString('o')}
+    if($Value-is[string]-or$Value-is[char]){
+        $text=[string]$Value
+        if($text.Length-eq0){return '""'}
+        return $text.Replace('\','\\').Replace('|','\|').Replace([string][char]13,'').Replace([string][char]10,'\n')
+    }
+    if($Value-is[System.IFormattable]){return $Value.ToString($null,[Globalization.CultureInfo]::InvariantCulture)}
+    return [string]$Value
+}
+function Get-SCModelPairs($Value) {
+    $pairs=@()
+    if($null-eq$Value){return @()}
+    if($Value-is[System.Collections.IDictionary]){
+        foreach($key in $Value.Keys){$pairs+=,[pscustomobject]@{Name=[string]$key;Value=$Value[$key]}}
+        return @($pairs)
+    }
+    foreach($property in $Value.PSObject.Properties){
+        if($property.MemberType-in@('Property','NoteProperty','AliasProperty','ScriptProperty')){
+            $pairs+=,[pscustomobject]@{Name=[string]$property.Name;Value=$property.Value}
+        }
+    }
+    return @($pairs)
+}
+function Test-SCModelTable($Items) {
+    $rows=@($Items)
+    if($rows.Count-lt2){return $false}
+    $first=@(Get-SCModelPairs $rows[0])
+    if($first.Count-eq0-or$first.Count-gt16){return $false}
+    if(@($first|Where-Object{-not(Test-SCModelScalar $_.Value)}).Count-gt0){return $false}
+    $names=@($first|ForEach-Object{$_.Name})
+    foreach($row in $rows|Select-Object -Skip 1){
+        $pairs=@(Get-SCModelPairs $row)
+        if($pairs.Count-ne$names.Count){return $false}
+        for($i=0;$i-lt$names.Count;$i++){
+            if([string]$pairs[$i].Name-ne[string]$names[$i]){return $false}
+            if(-not(Test-SCModelScalar $pairs[$i].Value)){return $false}
+        }
+    }
+    return $true
+}
+function ConvertTo-SCModelLines($Value,[int]$Depth=12,[int]$Indent=0) {
+    $pad=' ' * [Math]::Max(0,$Indent)
+    if($Depth-le0){return @($pad+'...')}
+    if(Test-SCModelScalar $Value){return @($pad+(ConvertTo-SCModelScalar $Value))}
+
+    if($Value-is[System.Collections.IEnumerable]-and-not($Value-is[string])-and-not($Value-is[System.Collections.IDictionary])){
+        $items=@($Value)
+        if($items.Count-eq0){return @($pad+'[]')}
+        if(@($items|Where-Object{-not(Test-SCModelScalar $_)}).Count-eq0){
+            return @($pad+'['+(($items|ForEach-Object{ConvertTo-SCModelScalar $_})-join' | ')+']')
+        }
+        if(Test-SCModelTable $items){
+            $pairs=@(Get-SCModelPairs $items[0]);$names=@($pairs|ForEach-Object{$_.Name})
+            $lines=@($pad+'['+($names-join'|')+']')
+            foreach($row in $items){
+                $values=@(Get-SCModelPairs $row|ForEach-Object{ConvertTo-SCModelScalar $_.Value})
+                $lines+=,$pad+($values-join'|')
+            }
+            return @($lines)
+        }
+        $lines=@()
+        foreach($item in $items){
+            if(Test-SCModelScalar $item){$lines+=,$pad+'- '+(ConvertTo-SCModelScalar $item);continue}
+            $lines+=,$pad+'-'
+            $lines+=@(ConvertTo-SCModelLines $item ($Depth-1) ($Indent+2))
+        }
+        return @($lines)
+    }
+
+    $pairs=@(Get-SCModelPairs $Value)
+    if($pairs.Count-eq0){return @($pad+(ConvertTo-SCModelScalar ([string]$Value)))}
+    $lines=@()
+    foreach($pair in $pairs){
+        $name=[string]$pair.Name;$item=$pair.Value
+        if(Test-SCModelScalar $item){
+            if($item-is[string]-and([string]$item).IndexOf([char]10)-ge0){
+                $lines+=,$pad+$name+':'
+                foreach($line in @([regex]::Split([string]$item,'\r?\n'))){$lines+=,(' ' * ($Indent+2))+$line}
+            }else{
+                $lines+=,$pad+$name+'='+(ConvertTo-SCModelScalar $item)
+            }
+            continue
+        }
+        $lines+=,$pad+$name+':'
+        $lines+=@(ConvertTo-SCModelLines $item ($Depth-1) ($Indent+2))
+    }
+    return @($lines)
+}
+function ConvertTo-SCModelText {
+    param(
+        [Parameter(ValueFromPipeline=$true,Position=0)]$Value,
+        [Parameter(Position=1)][int]$Depth=12,
+        [int]$MaxChars=0
+    )
+    process {
+        if($null-eq$Value){return '~'}
+        $text=(@(ConvertTo-SCModelLines $Value $Depth 0)-join[Environment]::NewLine)
+        if($MaxChars-gt0-and$text.Length-gt$MaxChars){
+            $head=[Math]::Max(0,[int]($MaxChars*.65));$tail=[Math]::Max(0,$MaxChars-$head-80)
+            $text=$text.Substring(0,$head)+[Environment]::NewLine+'... [compact projection truncated] ...'+[Environment]::NewLine+$text.Substring($text.Length-$tail)
+        }
+        return $text
+    }
+}
+
 function Set-SCProperty($Object,[string]$Name,$Value) {
     if($Object -is [System.Collections.IDictionary]){$Object[$Name]=$Value;return}
     if($Object.PSObject.Properties[$Name]){$Object.$Name=$Value}else{$Object|Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force}
