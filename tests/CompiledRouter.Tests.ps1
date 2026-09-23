@@ -68,6 +68,16 @@ try {
     Assert-True ([string]$noneRaw.data.reason -eq 'no_eligible_endpoint') 'No-route result did not identify an eligibility failure.'
     Assert-True ([int]$noneRaw.data.configuredEndpoints -ge 4) 'No-route diagnostic did not report the configured endpoint population.'
 
+    Write-Host '  ROUTER 0D: one timeout cools only the failed endpoint, not sibling models'
+    $transient=Call-Router @('acquire','--preferred','free-a::m1','--strict-preferred','true','--session','transient-scope','--owner-pid',[string]$PID)
+    [void](Call-Router @('failure','--lease',[string]$transient.data.lease,'--class','timeout','--message','request timed out'))
+    $transientSnap=(Call-Router @('snapshot')).data
+    $failedTransient=@($transientSnap.routes|Where-Object{[string]$_.endpoint -eq 'pool:free-a::m1'})[0]
+    $siblingTransient=@($transientSnap.routes|Where-Object{[string]$_.endpoint -eq 'pool:free-a::m2'})[0]
+    Assert-True (-not [bool]$failedTransient.available) 'Timed-out endpoint did not cool down.'
+    Assert-True ([bool]$siblingTransient.available) 'One timeout incorrectly removed sibling models on the same connection.'
+    [void](Call-Router @('success','--endpoint','pool:free-a::m1'))
+
     Write-Host '  ROUTER 1: one active lease per exact endpoint and round-robin spreads work'
     $a=Call-Router @('acquire','--connection','free-a','--session','s1','--owner-pid',[string]$PID)
     $b=Call-Router @('acquire','--session','s2','--owner-pid',[string]$PID)
