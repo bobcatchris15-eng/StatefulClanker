@@ -150,6 +150,8 @@ public sealed class RouterRequest
 {
     public string op { get; set; } = "";
     public string? preferred { get; set; }
+    public string? preferredConnection { get; set; }
+    public bool strictPreferred { get; set; }
     public string? sessionId { get; set; }
     public bool requireTools { get; set; }
     public int ownerPid { get; set; }

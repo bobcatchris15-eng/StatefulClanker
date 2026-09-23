@@ -223,7 +223,7 @@ StatefulClanker serves both MCP behavior families from the same endpoint:
 - `Mcp-Session-Id` is rejected on modern requests;
 - `subscriptions/listen` carries level-triggered control-resource updates.
 
-The stdio bridge preserves the request's protocol era when forwarding into the resident HTTP host.
+The stdio server is the primary local transport and dispatches JSON-RPC directly in-process. It does not forward local requests through the resident HTTP host. The optional HTTP transport implements the same dispatcher for interoperability.
 
 ## Windows application authority
 

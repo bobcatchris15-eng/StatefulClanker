@@ -30,7 +30,6 @@ try {
     }|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $machine 'connections.json') -Encoding UTF8
 
     . (Join-Path $repo 'lib\StatefulClanker.Core.ps1')
-    . (Join-Path $repo 'lib\StatefulClanker.Routing.ps1')
     . (Join-Path $repo 'lib\StatefulClanker.RouterClient.ps1')
     . (Join-Path $repo 'lib\StatefulClanker.CompiledRouting.ps1')
 

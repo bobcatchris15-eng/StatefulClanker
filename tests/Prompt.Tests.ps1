@@ -60,8 +60,7 @@ try {
     & $harness init | Out-Null
     $cfgPath = Join-Path $temp '.statefulclanker\config.json'
     $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
-    $cfg.criticEnabled = $false; $cfg.validatorEnabled = $false
-    $cfg.defaultProvider = 'viastdin'
+    $cfg.validatorEnabled = $false
     # more.com simply echoes whatever it is fed, so stdout length proves delivery.
     $cfg.providers | Add-Member -NotePropertyName viastdin -NotePropertyValue ([pscustomobject]@{
             command = 'more.com'; args = @(); mode = 'stdin' }) -Force
@@ -70,7 +69,7 @@ try {
     $cfg | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
 
     & $harness task add -TaskId big -Title 'Big' -Instruction 'Work on it.' -Accept 'ok' -Retrieval @('big.txt') | Out-Null
-    & $harness run -TaskId big 2>&1 | Out-Null
+    & $harness run -TaskId big -Provider viastdin 2>&1 | Out-Null
 
     $promptFile = Get-ChildItem -LiteralPath (Join-Path $temp '.statefulclanker\prompts') -Filter 'run-*.txt' |
         Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1

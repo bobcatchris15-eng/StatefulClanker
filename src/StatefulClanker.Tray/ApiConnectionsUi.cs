@@ -359,6 +359,8 @@ sealed class ApiConnectionsPage : TabPage
     readonly DataGridView _models = new();
     readonly Label _summary = new();
     Dictionary<string,ApiConnectionProfile> _profiles = new(StringComparer.OrdinalIgnoreCase);
+    bool _loadingModels;
+    bool _modelSelectionDirty;
 
     public ApiConnectionsPage() : base("Connections")
     {
@@ -399,7 +401,7 @@ sealed class ApiConnectionsPage : TabPage
     {
         _connections.Dock=DockStyle.Fill;_connections.ReadOnly=true;_connections.AllowUserToAddRows=false;_connections.RowHeadersVisible=false;_connections.SelectionMode=DataGridViewSelectionMode.FullRowSelect;_connections.MultiSelect=false;_connections.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
         _connections.Columns.Add("id","Connection");_connections.Columns.Add("preset","Service");_connections.Columns.Add("url","Base URL");_connections.Columns.Add("models","Models");_connections.Columns.Add("health","Health");_connections.Columns.Add("tested","Last tested");
-        _connections.SelectionChanged+=(_,_)=>LoadModels();
+        _connections.SelectionChanged+=(_,_)=>LoadModels(true);
     }
 
     void ConfigureModelGrid()
@@ -408,6 +410,8 @@ sealed class ApiConnectionsPage : TabPage
         _models.Columns.Add(new DataGridViewCheckBoxColumn{Name="use",HeaderText="Use",Width=58,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});
         _models.Columns.Add("name","Model");_models.Columns.Add("id","Model ID");_models.Columns.Add("state","Endpoint state");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");_models.Columns.Add("free","Free");
         foreach(DataGridViewColumn c in _models.Columns) if(c.Name!="use") c.ReadOnly=true;
+        _models.CurrentCellDirtyStateChanged+=(_,_)=>{if(_models.IsCurrentCellDirty&&_models.CurrentCell?.ColumnIndex==0)_models.CommitEdit(DataGridViewDataErrorContexts.Commit);};
+        _models.CellValueChanged+=(_,e)=>{if(!_loadingModels&&e.RowIndex>=0&&e.ColumnIndex==0){_modelSelectionDirty=true;_summary.Text="Unsaved endpoint selection changes";_summary.ForeColor=Theme.Warn;}};
     }
 
     string? SelectedId=>_connections.SelectedRows.Count>0?_connections.SelectedRows[0].Cells["id"].Value?.ToString():null;
@@ -430,27 +434,35 @@ sealed class ApiConnectionsPage : TabPage
             var row=_connections.Rows.Cast<DataGridViewRow>().FirstOrDefault(x=>string.Equals(x.Cells["id"].Value?.ToString(),select,StringComparison.OrdinalIgnoreCase))??_connections.Rows[0];
             row.Selected=true;
         }
-        LoadModels();
+        LoadModels(true);
     }
 
     static string FormatTime(string text)=>DateTimeOffset.TryParse(text,out var dto)?dto.ToLocalTime().ToString("MM-dd HH:mm"):"—";
 
-    void LoadModels()
+    void LoadModels(bool discardUnsaved=false)
     {
-        _models.Rows.Clear();var id=SelectedId;if(id is null||!_profiles.TryGetValue(id,out var p))return;
-        var pool=TargetPoolStore.LoadActive();
-        foreach(var m in p.models)
+        if(_modelSelectionDirty&&!discardUnsaved)return;
+        _loadingModels=true;
+        try
         {
-            var context=m.contextLength.HasValue?m.contextLength.Value.ToString("N0"):"—";
-            var free=m.isFree==true?"yes":m.isFree==false?"no":"?";
-            var targeted=pool.entries.TryGetValue(TargetPoolStore.Id(id,m.id),out var entry);
-            var state=!targeted?"—":entry!.enabled?"enabled":"disabled";
-            var row=_models.Rows.Add(targeted,m.displayName,m.id,state,m.supportsTools==false?"text":"native",context,free);
-            if(targeted)_models.Rows[row].Cells["state"].Style.ForeColor=entry!.enabled?Theme.Good:Theme.Muted;
+            _models.Rows.Clear();var id=SelectedId;if(id is null||!_profiles.TryGetValue(id,out var p)){_modelSelectionDirty=false;return;}
+            var pool=TargetPoolStore.LoadActive();
+            foreach(var m in p.models)
+            {
+                var context=m.contextLength.HasValue?m.contextLength.Value.ToString("N0"):"—";
+                var free=m.isFree==true?"yes":m.isFree==false?"no":"?";
+                var targeted=pool.entries.TryGetValue(TargetPoolStore.Id(id,m.id),out var entry);
+                var state=!targeted?"—":entry!.enabled?"enabled":"disabled";
+                var row=_models.Rows.Add(targeted,m.displayName,m.id,state,m.supportsTools==false?"text":"native",context,free);
+                if(targeted)_models.Rows[row].Cells["state"].Style.ForeColor=entry!.enabled?Theme.Good:Theme.Muted;
+            }
+            _modelSelectionDirty=false;
+            _summary.ForeColor=Theme.Muted;
         }
+        finally{_loadingModels=false;}
     }
 
-    public void RefreshProjectMarkers() => LoadModels();
+    public void RefreshProjectMarkers() => LoadModels(false);
 
     void Add(object? s,EventArgs e)
     {

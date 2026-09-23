@@ -5,6 +5,7 @@ function Assert-True([bool]$Condition,[string]$Message){if(-not$Condition){throw
 $program=Get-Content -Raw -LiteralPath (Join-Path $repo 'src\StatefulClanker.Tray\Program.cs')
 $terminal=Get-Content -Raw -LiteralPath (Join-Path $repo 'src\StatefulClanker.Tray\EmbeddedTerminalPanel.cs')
 $widgets=Get-Content -Raw -LiteralPath (Join-Path $repo 'src\StatefulClanker.Tray\CockpitWidgets.cs')
+$connections=Get-Content -Raw -LiteralPath (Join-Path $repo 'src\StatefulClanker.Tray\ApiConnectionsUi.cs')
 
 $start=$program.IndexOf('    TabPage BuildOverview()')
 $end=$program.IndexOf('    Control BuildTargetPoolPanel()',$start)
@@ -41,5 +42,12 @@ Assert-True ($terminal.Contains('PreviewMouseDown += (_, _) => FocusTerminal()')
 Assert-True ($terminal.Contains('ConsoleHasKeyboardFocus')) 'Terminal keyboard-focus diagnostic is missing.'
 Assert-True ($terminal.Contains('Keys.PageUp') -and $terminal.Contains('Keys.Home') -and $terminal.Contains('Keys.Escape')) 'Special navigation keys are not claimed by the ElementHost bridge.'
 Assert-True ($terminal.Contains('Pi (bundled)')) 'Bundled Pi is missing from the embedded TUI presets.'
+Assert-True ($terminal.Contains('StartBundledPi()') -and $terminal.Contains('StartGoose()') -and $terminal.Contains('StartAgy()') -and $terminal.Contains('StartOpenCode()')) 'Direct harness launch methods are missing from the embedded terminal.'
 
-Write-Host 'PASS: Overview uses precision seams, square blinkenlights, hard-edged machine readouts, and an interactive TUI.'
+Write-Host '  UI REFRESH: live telemetry must not rebuild editable configuration surfaces'
+Assert-True ($program.Contains('await RefreshAllAsync(false)')) 'The 3-second timer is still doing a full configuration refresh.'
+Assert-True ($program.Contains('if (!refreshConfiguration) return;')) 'Live refresh has no guard before editable configuration grids are rebuilt.'
+Assert-True ($connections.Contains('_modelSelectionDirty')) 'Connections page does not protect unsaved endpoint selection.'
+Assert-True ($connections.Contains('RefreshProjectMarkers() => LoadModels(false)')) 'Background endpoint-marker refresh can still discard unsaved model selections.'
+
+Write-Host 'PASS: Overview uses precision seams, square blinkenlights, interactive harness TUI, and non-destructive live refresh.'

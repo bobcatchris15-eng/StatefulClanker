@@ -374,9 +374,8 @@ sealed class McpServerStatus
 
 sealed class ProviderStatus
 {
-    public string Name = "", Backend = "", Target = "", Roles = "";
+    public string Name = "", Backend = "", Target = "";
     public bool Disabled;
-    public int Priority = 100;
 }
 
 sealed class UiSnapshot
@@ -1968,7 +1967,6 @@ sealed class MainForm : Form
     bool _updatingAutofillUi;
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
     readonly System.Windows.Forms.Timer _layoutSaveTimer = new() { Interval = 450 };
-    long _controlEventCursor;
     int _refreshing;
     int _mcpDiscoveryRunning;
     readonly McpHost _mcp;
@@ -1983,66 +1981,9 @@ sealed class MainForm : Form
         _mcp = new McpHost(_root, _settings.HttpPort, _settings.McpToken); _mcp.EnsureStarted(); _autofill = new AutofillHost(_root);
         var menu = new ContextMenuStrip(); menu.Items.Add("Open StatefulClanker", null, (_, _) => ShowFromTray()); menu.Items.Add("Exit", null, (_, _) => { _reallyExit = true; Close(); });
         _notify = new NotifyIcon { Text = "StatefulClanker", Icon = Icon ?? SystemIcons.Application, Visible = true, ContextMenuStrip = menu }; _notify.DoubleClick += (_, _) => ShowFromTray();
-        BuildUi(); RestoreProjects(); Theme.Apply(this); _ = RefreshAllAsync();
+        BuildUi(); RestoreProjects(); Theme.Apply(this); _ = RefreshAllAsync(true);
         _layoutSaveTimer.Tick += (_, _) => { _layoutSaveTimer.Stop(); AppStore.Save(_settings); };
-        _timer.Tick += async (_, _) => { await RefreshAllAsync(); EscalateNewEvents(); }; _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
-    }
-
-    // Surface classified control-plane events in generic terminal sessions.
-    // Bundled Pi consumes the same durable inbox through its native extension,
-    // so PTY text injection is deliberately disabled for that session.
-    void EscalateNewEvents()
-    {
-        if (!_terminal.HasActiveSession || _terminal.HandlesControlPlaneNatively) return;
-        var project = _settings.ActiveProjectPath;
-        if (string.IsNullOrWhiteSpace(project) || !Directory.Exists(project)) return;
-        var eventsPath = System.IO.Path.Combine(project, ".statefulclanker", "control", "events.jsonl");
-        foreach (var (sequence, level, type, message) in ReadNewControlEvents(eventsPath, ref _controlEventCursor))
-        {
-            var text = string.IsNullOrWhiteSpace(message) ? type : $"{type}: {message}";
-            _terminal.QueueNotice($"# [StatefulClanker/{level}] {text}");
-        }
-    }
-
-    static List<(long sequence, string level, string type, string message)> ReadNewControlEvents(string path, ref long cursor)
-    {
-        var results = new List<(long sequence, string level, string type, string message)>();
-        if (!File.Exists(path)) return results;
-        var newCursor = cursor;
-        foreach (var line in File.ReadLines(path))
-        {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            try
-            {
-                using var d = JsonDocument.Parse(line);
-                var r = d.RootElement;
-                var sequence = r.TryGetProperty("sequence", out var sq) && sq.TryGetInt64(out var n) ? n : 0;
-                if (sequence <= cursor) continue;
-                if (sequence > newCursor) newCursor = sequence;
-                var level = r.TryGetProperty("level", out var lv) ? lv.GetString() ?? "fyi" : "fyi";
-                if (!string.Equals(level, "attention", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(level, "human_required", StringComparison.OrdinalIgnoreCase)) continue;
-                var type = r.TryGetProperty("type", out var ty) ? ty.GetString() ?? "event" : "event";
-                var message = r.TryGetProperty("message", out var mm) ? mm.GetString() ?? "" : "";
-                results.Add((sequence, level, type, message));
-            }
-            catch { }
-        }
-        cursor = newCursor;
-        return results;
-    }
-
-    static long ReadControlCursor(string? project)
-    {
-        if (string.IsNullOrWhiteSpace(project) || !Directory.Exists(project)) return 0;
-        var statePath = System.IO.Path.Combine(project, ".statefulclanker", "control", "state.json");
-        if (!File.Exists(statePath)) return 0;
-        try
-        {
-            using var d = JsonDocument.Parse(File.ReadAllText(statePath));
-            return d.RootElement.TryGetProperty("lastSequence", out var seq) && seq.TryGetInt64(out var n) ? n : 0;
-        }
-        catch { return 0; }
+        _timer.Tick += async (_, _) => { await RefreshAllAsync(false); }; _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
     }
 
     static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 30, Margin = new Padding(0, 2, 5, 0) };
@@ -2343,94 +2284,56 @@ sealed class MainForm : Form
 
     TabPage BuildProviders()
     {
-        var p = Page("Providers"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1 };
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        var p = Page("CLI Backends");
+        var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
+        rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 74));
         rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var bar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        var test = Btn("Test Provider", 105); test.Click += (_, _) => TestSelectedProvider();
+        var test = Btn("Test Backend", 110); test.Click += (_, _) => TestSelectedProvider();
         var open = Btn("Open config", 100); open.Click += (_, _) => OpenConfig();
-        var refresh = Btn("Refresh", 85); refresh.Click += async (_, _) => await RefreshAllAsync();
-        bar.Controls.AddRange(new Control[] { test, open, refresh });
-
-        var roleBar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        var roleLbl = new Label { Text = "Routing role:", AutoSize = true, Margin = new Padding(4, 10, 4, 0), ForeColor = Theme.Muted };
-        var setDefault = Btn("Set Default", 95); setDefault.Click += (_, _) => SetProviderRole("defaultProvider");
-        var setCritic = Btn("Set Critic", 90); setCritic.Click += (_, _) => SetProviderRole("criticProvider");
-        var setValidator = Btn("Set Validator", 105); setValidator.Click += (_, _) => SetProviderRole("validatorProvider");
-        var sizeLbl = new Label { Text = "Task size:", AutoSize = true, Margin = new Padding(12, 10, 4, 0), ForeColor = Theme.Muted };
-        var setTiny = Btn("Set Tiny", 80); setTiny.Click += (_, _) => SetProviderRole("tiny");
-        var setSmall = Btn("Set Small", 85); setSmall.Click += (_, _) => SetProviderRole("small");
-        var setMed = Btn("Set Medium", 95); setMed.Click += (_, _) => SetProviderRole("medium");
-        var setLrg = Btn("Set Large", 85); setLrg.Click += (_, _) => SetProviderRole("large");
-        var clearRoles = Btn("Clear Roles", 95); clearRoles.Click += (_, _) => ClearProviderRoles();
-        roleBar.Controls.AddRange(new Control[] { roleLbl, setDefault, setCritic, setValidator, sizeLbl, setTiny, setSmall, setMed, setLrg, clearRoles });
-
+        var refresh = Btn("Refresh", 85); refresh.Click += async (_, _) => await RefreshAllAsync(true);
+        var pi = Btn("Pi", 55); pi.Click += (_, _) => _terminal.StartBundledPi();
+        var agy = Btn("agy", 55); agy.Click += (_, _) => _terminal.StartAgy();
+        var opencode = Btn("OpenCode", 85); opencode.Click += (_, _) => _terminal.StartOpenCode();
+        var goose = Btn("Goose", 65); goose.Click += (_, _) => _terminal.StartGoose();
+        var note = new Label
+        {
+            Text = "Explicit CLI backends + direct harness launchers. Automatic inference routing is owned by the machine endpoint router.",
+            AutoSize = true,
+            Margin = new Padding(12, 10, 0, 0),
+            ForeColor = Theme.Muted
+        };
+        bar.Controls.AddRange(new Control[] { test, open, refresh, pi, agy, opencode, goose, note });
         rows.Controls.Add(bar, 0, 0);
-        rows.Controls.Add(roleBar, 0, 1);
-        rows.Controls.Add(Section("WORKER BACKEND STATUS, PRIORITY, AND ROUTING"), 0, 2);
 
-        _providers.Dock = DockStyle.Fill; _providers.ReadOnly = false; _providers.AllowUserToAddRows = false; _providers.RowHeadersVisible = false; _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _providers.Dock = DockStyle.Fill;
+        _providers.ReadOnly = false;
+        _providers.AllowUserToAddRows = false;
+        _providers.RowHeadersVisible = false;
+        _providers.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        _providers.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         _providers.Columns.Add(new DataGridViewCheckBoxColumn { Name = "enabled", HeaderText = "Enabled", Width = 60, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
-        _providers.Columns.Add("name", "Provider");
-        _providers.Columns.Add("backend", "Backend");
-        _providers.Columns.Add("target", "Target");
-        _providers.Columns.Add("roles", "Routing / roles");
-        foreach(DataGridViewColumn c in _providers.Columns) if (c.Name != "enabled") c.ReadOnly = true;
-        _providers.AllowDrop = true;
-        Rectangle dragBox = Rectangle.Empty; int dragIndex = -1;
-        _providers.MouseDown += (s, e) => {
-            var hit = _providers.HitTest(e.X, e.Y);
-            dragIndex = hit.RowIndex;
-            if (dragIndex >= 0 && hit.ColumnIndex != 0) {
-                var dragSize = SystemInformation.DragSize;
-                dragBox = new Rectangle(new Point(e.X - (dragSize.Width / 2), e.Y - (dragSize.Height / 2)), dragSize);
-            } else dragBox = Rectangle.Empty;
+        _providers.Columns.Add("name", "Backend");
+        _providers.Columns.Add("backend", "Status");
+        _providers.Columns.Add("target", "Command / target");
+        foreach (DataGridViewColumn c in _providers.Columns) if (c.Name != "enabled") c.ReadOnly = true;
+
+        _providers.CellValueChanged += (_, e) =>
+        {
+            if (e.RowIndex >= 0 && e.ColumnIndex == 0)
+                ToggleProviderConfig(e.RowIndex, Convert.ToBoolean(_providers.Rows[e.RowIndex].Cells[0].Value));
         };
-        _providers.MouseMove += (s, e) => {
-            if ((e.Button & MouseButtons.Left) == MouseButtons.Left) {
-                if (dragBox != Rectangle.Empty && !dragBox.Contains(e.X, e.Y)) {
-                    _providers.DoDragDrop(_providers.Rows[dragIndex], DragDropEffects.Move);
-                }
-            }
-        };
-        _providers.DragEnter += (s, e) => e.Effect = DragDropEffects.Move;
-        _providers.DragDrop += (s, e) => {
-            var cp = _providers.PointToClient(new Point(e.X, e.Y));
-            var hit = _providers.HitTest(cp.X, cp.Y);
-            if (hit.RowIndex >= 0 && dragIndex >= 0 && hit.RowIndex != dragIndex) {
-                ReorderProviderConfig(dragIndex, hit.RowIndex);
-            }
-        };
-        _providers.CellValueChanged += (s, e) => {
-            if (e.RowIndex >= 0 && e.ColumnIndex == 0) {
-                ToggleProviderConfig(e.RowIndex, (bool)_providers.Rows[e.RowIndex].Cells[0].Value);
-            }
-        };
-        _providers.CurrentCellDirtyStateChanged += (s, e) => {
-            if (_providers.IsCurrentCellDirty && _providers.CurrentCell.ColumnIndex == 0) {
+        _providers.CurrentCellDirtyStateChanged += (_, _) =>
+        {
+            if (_providers.IsCurrentCellDirty && _providers.CurrentCell?.ColumnIndex == 0)
                 _providers.CommitEdit(DataGridViewDataErrorContexts.Commit);
-            }
         };
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Set as Default Provider", null, (_, _) => SetProviderRole("defaultProvider"));
-        menu.Items.Add("Set as Critic Provider", null, (_, _) => SetProviderRole("criticProvider"));
-        menu.Items.Add("Set as Validator Provider", null, (_, _) => SetProviderRole("validatorProvider"));
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Set for Tiny Tasks", null, (_, _) => SetProviderRole("tiny"));
-        menu.Items.Add("Set for Small Tasks", null, (_, _) => SetProviderRole("small"));
-        menu.Items.Add("Set for Medium Tasks", null, (_, _) => SetProviderRole("medium"));
-        menu.Items.Add("Set for Large Tasks", null, (_, _) => SetProviderRole("large"));
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Clear Roles & Sizes for Provider", null, (_, _) => ClearProviderRoles());
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Test Provider", null, (_, _) => TestSelectedProvider());
-
+        menu.Items.Add("Test Backend", null, (_, _) => TestSelectedProvider());
         _providers.ContextMenuStrip = menu;
-        _providers.CellMouseDown += (s, e) =>
+        _providers.CellMouseDown += (_, e) =>
         {
             if (e.Button == MouseButtons.Right && e.RowIndex >= 0)
             {
@@ -2439,7 +2342,7 @@ sealed class MainForm : Form
             }
         };
 
-        rows.Controls.Add(_providers, 0, 3);
+        rows.Controls.Add(_providers, 0, 1);
         p.Controls.Add(rows);
         return p;
     }
@@ -2462,100 +2365,6 @@ sealed class MainForm : Form
                 _ = RefreshAllAsync();
             }
         } catch { }
-    }
-
-    void ReorderProviderConfig(int fromIndex, int toIndex)
-    {
-        var path = _settings.ActiveProjectPath;
-        if (string.IsNullOrWhiteSpace(path)) return;
-        var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
-        if (!File.Exists(cfg)) return;
-        try {
-            var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(cfg)) as System.Text.Json.Nodes.JsonObject;
-            if (node == null || !node.TryGetPropertyValue("providers", out var providersNode) || providersNode is not System.Text.Json.Nodes.JsonObject providers) return;
-            var list = new System.Collections.Generic.List<string>();
-            foreach (DataGridViewRow row in _providers.Rows) list.Add(row.Cells["name"].Value.ToString()!);
-            var item = list[fromIndex];
-            list.RemoveAt(fromIndex);
-            list.Insert(toIndex, item);
-            for (int i = 0; i < list.Count; i++) {
-                if (providers.TryGetPropertyValue(list[i], out var providerNode) && providerNode is System.Text.Json.Nodes.JsonObject pObj) {
-                    pObj["priority"] = (i + 1) * 10;
-                }
-            }
-            File.WriteAllText(cfg, node.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-            _ = RefreshAllAsync();
-        } catch { }
-    }
-    void SetProviderRole(string roleOrSize)
-    {
-        var p = SelectedProvider;
-        var path = _settings.ActiveProjectPath;
-        if (p is null || string.IsNullOrWhiteSpace(path)) return;
-        var cfgPath = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
-        if (!File.Exists(cfgPath)) return;
-        try
-        {
-            var node = JsonNode.Parse(File.ReadAllText(cfgPath));
-            if (node is null) return;
-
-            if (roleOrSize is "tiny" or "small" or "medium" or "large")
-            {
-                if (node["providerBySize"] is not JsonObject bySize)
-                {
-                    bySize = new JsonObject();
-                    node["providerBySize"] = bySize;
-                }
-                bySize[roleOrSize] = p.Name;
-            }
-            else
-            {
-                node[roleOrSize] = p.Name;
-            }
-
-            File.WriteAllText(cfgPath, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
-            _ = RefreshAllAsync();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, "Failed to update config: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-    }
-
-    void ClearProviderRoles()
-    {
-        var p = SelectedProvider;
-        var path = _settings.ActiveProjectPath;
-        if (p is null || string.IsNullOrWhiteSpace(path)) return;
-        var cfgPath = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
-        if (!File.Exists(cfgPath)) return;
-        try
-        {
-            var node = JsonNode.Parse(File.ReadAllText(cfgPath));
-            if (node is null) return;
-
-            if (node["defaultProvider"]?.ToString() == p.Name) node.AsObject().Remove("defaultProvider");
-            if (node["criticProvider"]?.ToString() == p.Name) node.AsObject().Remove("criticProvider");
-            if (node["validatorProvider"]?.ToString() == p.Name) node.AsObject().Remove("validatorProvider");
-
-            if (node["providerBySize"] is JsonObject bySize)
-            {
-                foreach (var size in new[] { "tiny", "small", "medium", "large" })
-                {
-                    if (bySize[size]?.ToString() == p.Name)
-                    {
-                        bySize.Remove(size);
-                    }
-                }
-            }
-
-            File.WriteAllText(cfgPath, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
-            _ = RefreshAllAsync();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, "Failed to clear provider roles: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
     }
 
     void TestSelectedProvider()
@@ -2609,7 +2418,6 @@ sealed class MainForm : Form
         AppStore.SetActiveProject(path);
         _header.Text = path is null ? "No active project" : (SelectedProject?.Name ?? new DirectoryInfo(path).Name);
         Text = path is null ? "StatefulClanker" : $"StatefulClanker — {_header.Text}";
-        _controlEventCursor = ReadControlCursor(path);
         _terminal.SetProject(path);
         _ = RefreshAllAsync();
     }
@@ -2634,21 +2442,21 @@ sealed class MainForm : Form
 
     void OpenExplorer() { var path = _settings.ActiveProjectPath; if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return; try { Process.Start(new ProcessStartInfo("explorer.exe") { UseShellExecute = true, ArgumentList = { path } }); } catch { } }
 
-    async Task RefreshAllAsync()
+    async Task RefreshAllAsync(bool refreshConfiguration = true)
     {
         if (Interlocked.Exchange(ref _refreshing, 1) != 0) return;
         var projectPath = _settings.ActiveProjectPath;
         try
         {
-            var snapshot = await Task.Run(() => BuildSnapshot(projectPath));
+            var snapshot = await Task.Run(() => BuildSnapshot(projectPath, refreshConfiguration));
             if (IsDisposed || Disposing) return;
-            ApplySnapshot(snapshot);
+            ApplySnapshot(snapshot, refreshConfiguration);
         }
         catch { }
         finally { Interlocked.Exchange(ref _refreshing, 0); }
     }
 
-    UiSnapshot BuildSnapshot(string? projectPath)
+    UiSnapshot BuildSnapshot(string? projectPath, bool refreshConfiguration)
     {
         _mcp.EnsureStarted(); _autofill.EnsureStarted(projectPath);
         var snapshot = new UiSnapshot { Mcp = _mcp.Details(), HasProject = !string.IsNullOrWhiteSpace(projectPath) && Directory.Exists(projectPath), NextEndpoint = RoutingQueueInspector.Snapshot() };
@@ -2656,13 +2464,13 @@ sealed class MainForm : Form
         {
             snapshot.Project = Inspector.Project(projectPath!);
             snapshot.Autofill = Inspector.Autofill(projectPath!);
-            snapshot.Providers = ReadProviderStatus(projectPath!);
+            if (refreshConfiguration) snapshot.Providers = ReadProviderStatus(projectPath!);
         }
-        snapshot.Integrations = ReadIntegrationStatus();
+        if (refreshConfiguration) snapshot.Integrations = ReadIntegrationStatus();
         return snapshot;
     }
 
-    void ApplySnapshot(UiSnapshot snapshot)
+    void ApplySnapshot(UiSnapshot snapshot, bool refreshConfiguration)
     {
         var d = snapshot.Mcp;
         _mcpState.Text = d is null ? "MCP  STOPPED" : "MCP  RUNNING";
@@ -2678,7 +2486,6 @@ sealed class MainForm : Form
             _workerTelemetry.Text = snapshot.Project.Telemetry;
             _quotaRemaining.RefreshQuota();
             _overviewReadout.SetState(snapshot.Project, snapshot.Autofill, d is not null, true, snapshot.NextEndpoint);
-            PopulateOverviewTargets();
         }
         else
         {
@@ -2688,8 +2495,14 @@ sealed class MainForm : Form
             _workerTelemetry.Text = "Select a project to inspect worker telemetry.";
             _quotaRemaining.RefreshQuota();
             _overviewReadout.SetState(new(), snapshot.Autofill, d is not null, false, snapshot.NextEndpoint);
-            PopulateOverviewTargets();
         }
+
+        // The 3-second live refresh must never rebuild editable configuration
+        // surfaces. Doing so used to clear in-progress endpoint checkboxes and
+        // provider selections while the operator was working.
+        if (!refreshConfiguration) return;
+
+        PopulateOverviewTargets();
         ApiConnectionsUiBootstrap.RefreshProjectMarkers();
         _integrations.SuspendLayout();
         try
@@ -2703,7 +2516,7 @@ sealed class MainForm : Form
         {
             _providers.Rows.Clear();
             foreach (var item in snapshot.Providers) {
-                var i = _providers.Rows.Add(!item.Disabled, item.Name, item.Backend, item.Target, item.Roles);
+                var i = _providers.Rows.Add(!item.Disabled, item.Name, item.Backend, item.Target);
                 _providers.Rows[i].Tag = item;
                 if (item.Disabled)
                 {
@@ -3006,13 +2819,13 @@ sealed class MainForm : Form
 
     List<ProviderStatus> ReadProviderStatus(string path)
     {
-        var result = new List<ProviderStatus>(); var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json"); if (!File.Exists(cfg)) return result;
+        var result = new List<ProviderStatus>();
+        var cfg = System.IO.Path.Combine(path, ".statefulclanker", "config.json");
+        if (!File.Exists(cfg)) return result;
         try
         {
-            using var d = JsonDocument.Parse(File.ReadAllText(cfg)); var root = d.RootElement; var def = root.TryGetProperty("defaultProvider", out var dv) ? dv.GetString() : null; var critic = root.TryGetProperty("criticProvider", out var cv) ? cv.GetString() : null; var validator = root.TryGetProperty("validatorProvider", out var vv) ? vv.GetString() : null; var routes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (root.TryGetProperty("providerBySize", out var map) && map.ValueKind == JsonValueKind.Object) foreach (var x in map.EnumerateObject()) if (x.Value.ValueKind == JsonValueKind.String) routes[x.Name] = x.Value.GetString() ?? "";
-            if (!root.TryGetProperty("providers", out var providers) || providers.ValueKind != JsonValueKind.Object) return result;
-            int defaultPri = 1;
+            using var d = JsonDocument.Parse(File.ReadAllText(cfg));
+            if (!d.RootElement.TryGetProperty("providers", out var providers) || providers.ValueKind != JsonValueKind.Object) return result;
             foreach (var p in providers.EnumerateObject())
             {
                 var type = p.Value.TryGetProperty("type", out var tv) && tv.ValueKind == JsonValueKind.String ? tv.GetString() ?? "cli" : "cli";
@@ -3020,17 +2833,12 @@ sealed class MainForm : Form
                 var connection = p.Value.TryGetProperty("connection", out var cn) ? cn.GetString() ?? "" : "";
                 var target = type.Equals("api", StringComparison.OrdinalIgnoreCase) ? connection : cmd;
                 var disabled = p.Value.TryGetProperty("disabled", out var disV) && disV.ValueKind == JsonValueKind.True;
-                var pri = p.Value.TryGetProperty("priority", out var pv) && pv.TryGetInt32(out var parsedPri) ? parsedPri : (p.Name == def ? 0 : defaultPri * 10);
-                defaultPri++;
-                var status = disabled ? "disabled" : (type.Equals("api", StringComparison.OrdinalIgnoreCase) ? (string.IsNullOrWhiteSpace(connection) ? "missing" : "api") : (Runtime.CommandExists(cmd) ? "cli" : "missing"));
-                var tags = new List<string>();
-                if (p.Name == def) tags.Add("default");
-                if (p.Name == critic) tags.Add("critic");
-                if (p.Name == validator) tags.Add("validator");
-                foreach (var route in routes.Where(x => x.Value == p.Name)) tags.Add(route.Key);
-                result.Add(new ProviderStatus { Name = p.Name, Backend = status, Target = target, Roles = string.Join(", ", tags), Disabled = disabled, Priority = pri });
+                var status = disabled ? "disabled" : (type.Equals("api", StringComparison.OrdinalIgnoreCase)
+                    ? (string.IsNullOrWhiteSpace(connection) ? "missing" : "api")
+                    : (Runtime.CommandExists(cmd) ? "cli" : "missing"));
+                result.Add(new ProviderStatus { Name = p.Name, Backend = status, Target = target, Disabled = disabled });
             }
-            result = result.OrderBy(x => x.Priority).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            result = result.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
         }
         catch { }
         return result;

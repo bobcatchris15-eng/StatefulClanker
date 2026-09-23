@@ -21,6 +21,18 @@ public static partial class FailurePolicy
     private static partial Regex ModelRx();
     [GeneratedRegex(@"(?i)capacity|overloaded|no capacity")]
     private static partial Regex CapacityRx();
+    [GeneratedRegex(@"(?i)context.{0,20}(?:too (?:large|long)|length|window)|maximum context|prompt too long")]
+    private static partial Regex ContextRx();
+    [GeneratedRegex(@"(?i)invalid json|malformed json|could not parse.*json")]
+    private static partial Regex MalformedRx();
+    [GeneratedRegex(@"(?i)returned no choices|returned no content|no content or tool call|empty response")]
+    private static partial Regex EmptyRx();
+    [GeneratedRegex(@"(?i)worker session .+ cannot resume on .+ without transcript conversion")]
+    private static partial Regex SessionRx();
+    [GeneratedRegex(@"(?i)protocol|unsupported response shape|unexpected response shape")]
+    private static partial Regex ProtocolRx();
+    [GeneratedRegex(@"(?i)\b400\b|bad request|invalid request|unsupported parameter")]
+    private static partial Regex BadRequestRx();
 
     public static string Classify(string? text,int? status=null)
     {
@@ -33,13 +45,24 @@ public static partial class FailurePolicy
         if(status is >=500 and <=599 || ServerRx().IsMatch(t)) return "server_error";
         if(TimeoutRx().IsMatch(t)) return "timeout";
         if(CapacityRx().IsMatch(t)) return "capacity";
+        if(ContextRx().IsMatch(t)) return "context_too_large";
+        if(MalformedRx().IsMatch(t)) return "malformed_response";
+        if(EmptyRx().IsMatch(t)) return "empty_response";
+        if(SessionRx().IsMatch(t)) return "session_incompatible";
+        if(ProtocolRx().IsMatch(t)) return "protocol_error";
+        if(status==400 || BadRequestRx().IsMatch(t)) return "bad_request";
         return "request_error";
     }
 
+    public static bool CanFailover(string failureClass) => failureClass is
+        "rate_limited" or "capacity" or "timeout" or "server_error" or "model_unavailable" or
+        "malformed_response" or "empty_response" or "protocol_error" or "session_incompatible" or
+        "context_too_large" or "bad_request" or "billing_exhausted" or "auth" or "permission" or "configuration";
+
     public static string ScopeFor(string failureClass) => failureClass switch
     {
-        "auth" or "permission" or "configuration" or "billing_exhausted" or "timeout" or "server_error" => "connection",
-        "rate_limited" or "capacity" or "model_unavailable" or "malformed_response" or "empty_response" or "protocol_error" => "endpoint",
+        "auth" or "permission" or "configuration" or "billing_exhausted" or "timeout" or "server_error" or "rate_limited" => "connection",
+        "capacity" or "model_unavailable" or "malformed_response" or "empty_response" or "protocol_error" => "endpoint",
         _ => "request"
     };
 

@@ -1,7 +1,7 @@
 {
   "routing": {
     "maxRouteAttempts": 6,
-    "_comment": "Automatic worker/validator routing plus project-review routing uses .statefulclanker/routing/target-pool.json with persistent pseudo-round-robin over healthy rows. Configured providers are a migration/CLI fallback only when the target pool is empty. Explicit -Provider remains a strict operator/debug override."
+    "_comment": "Automatic inference routing is owned by the compiled machine endpoint router. Project-local providers are explicit compatibility CLI backends only; they are never an automatic fallback."
   },
   "providers": {
     "codex": {
@@ -52,20 +52,13 @@
   "recentEventBudgetChars": 4000,
   "stagnationWarningThreshold": 2,
   "requireHumanApprovalForPlan": true,
-  "criticEnabled": false,
   "validatorEnabled": true,
   "projectReviewEveryTasks": 5,
   "projectReviewAfterMultiMerge": true,
-  "projectCriticEnabled": true,
-  "projectValidatorEnabled": true,
+  "projectReviewerEnabled": true,
   "projectValidateCommand": null,
   "projectValidateTimeoutSeconds": 600,
-  "projectReviewRemediationTask": true,
   "mcp": {
     "allowHumanAuthorityTools": false
-  },
-  "perTaskReviewPolicy": "validator-only; criticEnabled is retained for legacy config compatibility and is not an ordinary task gate",
-  "defaultProvider": null,
-  "criticProvider": null,
-  "validatorProvider": null
+  }
 }

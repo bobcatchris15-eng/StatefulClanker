@@ -334,7 +334,7 @@ function Initialize-SC {
     ''|Set-Content -LiteralPath (Join-Path $dir 'telemetry/context-faults.jsonl') -Encoding UTF8
     $example=Join-Path $script:StatefulClankerHome 'statefulclanker.example.json'
     if(Test-Path $example){Copy-Item -LiteralPath $example -Destination (Join-Path $dir 'config.json')}
-    else{Write-SCJson (Join-Path $dir 'config.json') ([ordered]@{routing=[ordered]@{maxRouteAttempts=6};providers=[ordered]@{};maxConcurrent=3;autofillEnabled=$true;autofillIntervalSeconds=300;workingSetBudgetChars=24000;maxFileChars=8000;dependencyResultBudgetChars=8000;recentEventCount=12;recentEventBudgetChars=4000;stagnationWarningThreshold=2;requireHumanApprovalForPlan=$true;criticEnabled=$false;validatorEnabled=$true})}
+    else{Write-SCJson (Join-Path $dir 'config.json') ([ordered]@{routing=[ordered]@{maxRouteAttempts=6};providers=[ordered]@{};maxConcurrent=3;autofillEnabled=$true;autofillIntervalSeconds=300;workingSetBudgetChars=24000;maxFileChars=8000;dependencyResultBudgetChars=8000;recentEventCount=12;recentEventBudgetChars=4000;stagnationWarningThreshold=2;requireHumanApprovalForPlan=$true;validatorEnabled=$true})}
     $root=Get-SCRoot;$giPath=Join-Path $root '.gitignore'
     try{
         if(Test-Path -LiteralPath $giPath -PathType Leaf){

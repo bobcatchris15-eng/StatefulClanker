@@ -1,4 +1,4 @@
-# StatefulClanker-owned minimal worker harness for direct inference backends.
+﻿# StatefulClanker-owned minimal worker harness for direct inference backends.
 # CLI providers continue through the existing provider harness path. API providers
 # use machine-local connection profiles and this bounded coding/tool loop.
 
@@ -516,7 +516,7 @@ function Get-SCResponseDiagnostic($Response,[int]$MaximumLength=240) {
         try{$detail=$Response|ConvertTo-Json -Depth 6 -Compress -ErrorAction Stop}catch{$detail=$Response.GetType().FullName}
     }
     $detail=($detail -replace '[\r\n\t]+',' ').Trim()
-    if($detail.Length-gt$MaximumLength){$detail=$detail.Substring(0,$MaximumLength)+'…'}
+    if($detail.Length-gt$MaximumLength){$detail=$detail.Substring(0,$MaximumLength)+'â€¦'}
     return $detail
 }
 function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
@@ -601,8 +601,8 @@ function Get-SCRouteSnapshotReceipt {
     $configFingerprint=$null
     $configLastWriteUtc=$null
     try{
-        if(Get-Command Get-SCTargetPoolPath -ErrorAction SilentlyContinue){
-            $catalogPath=[string](Get-SCTargetPoolPath)
+        if(Get-Command Get-SCMachineEndpointCatalogPath -ErrorAction SilentlyContinue){
+            $catalogPath=[string](Get-SCMachineEndpointCatalogPath)
             if(Test-Path -LiteralPath $catalogPath -PathType Leaf){
                 $catalogFingerprint=Get-SCFileHashValue $catalogPath
                 $catalogLastWriteUtc=(Get-Item -LiteralPath $catalogPath).LastWriteTimeUtc.ToString('o')
@@ -936,140 +936,25 @@ function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$Provid
     return [pscustomobject][ordered]@{schemaVersion=4;id=$receiptId;agentId=$agentId;taskId=$Task.id;stage=$Stage;provider=$ProviderRecord.name;endpoint=$ProviderRecord.name;backendType='api';workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]($Stage-eq'run' -and $WorkerSessionId));connection=$connectionName;model=[string]$connection.model;actualModels=@($telemetry.actualModels);modelUsage=@($telemetry.modelUsage);apiRequests=$telemetry.apiRequests;usageReports=$telemetry.usageReports;promptTokens=$telemetry.promptTokens;completionTokens=$telemetry.completionTokens;totalTokens=$telemetry.totalTokens;capabilities=$capabilities;compilationId=$compilationId;inputFingerprint=$fingerprint;command='direct-api';args=@();promptPath=$promptPath;startedAt=$started.ToString('o');endedAt=$ended.ToString('o');durationSeconds=$telemetry.durationSeconds;exitCode=$exitCode;stdout=$stdout;stderr=$stderr;verdict=$null}
 }
 
-function Invoke-SCRouteProbeRecord($Due) {
-    $records=@(Resolve-SCRouteProbeRecord ([string]$Due.name))
-    if($records.Count-eq0){throw "No target-pool model is available to probe $($Due.name)."}
-    $record=$records[0]
-    $connection=Get-SCEffectiveApiConnection $record
-    $copy=[ordered]@{}
-    foreach($p in $connection.PSObject.Properties){$copy[$p.Name]=$p.Value}
-    # Keep the probe deliberately tiny. Anthropic requires max_tokens; most
-    # OpenAI-compatible services are happier if we simply omit an artificial cap.
-    if((Get-SCConnectionProtocol $connection)-eq'anthropic-messages'){$copy['maxTokens']=16}
-    $probeConnection=[pscustomobject]$copy
-    $messages=@([ordered]@{role='user';content='Reply exactly OK.'})
-    $response=Invoke-SCApiChat $probeConnection $messages @() 'text'
-    $message=Get-SCAssistantMessage $response (Get-SCConnectionProtocol $probeConnection)
-    if($null-eq$message -or [string]::IsNullOrWhiteSpace([string]$message.content)){throw 'Route Doctor probe returned no content.'}
-    return [pscustomobject]@{name=[string]$Due.name;endpoint=[string]$record.name;connection=[string]$record.config.connection;model=[string]$record.config.model;reply=[string]$message.content}
-}
+function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
+    # -Provider is reserved for an explicitly configured compatibility CLI backend.
+    # API routing uses the compiled router and may be narrowed with -Connection or
+    # pinned exactly with -Endpoint.
+    if($ProviderOverride){
+        $cfg=Get-SCConfig
+        if($cfg.PSObject.Properties['providers'] -and $cfg.providers -and $cfg.providers.PSObject.Properties[$ProviderOverride]){
+            $entry=$cfg.providers.PSObject.Properties[$ProviderOverride].Value
+            if(-not($entry.PSObject.Properties['disabled'] -and [bool]$entry.disabled)){
+                Add-SCEvent 'routing.explicit_cli_override' "Using explicitly requested compatibility CLI backend $ProviderOverride." @{taskId=$Task.id;stage=$Stage;provider=$ProviderOverride}
+                return & $script:SCInvokeProviderCliBase $Task $Prompt $Stage $ProviderOverride $ParentAgentId $Compilation
+            }
+        }
+    }
 
-function Invoke-SCRouteDoctor([int]$MaxProbes=1) {
-    $due=@(Get-SCRouteDoctorDue ([Math]::Max(1,$MaxProbes)))
-    $results=@()
-    foreach($item in $due){
-        if(-not(Set-SCRouteProbing ([string]$item.name))){continue}
-        try{
-            $probe=Invoke-SCRouteProbeRecord $item
-            Register-SCRouteProbeSuccess ([string]$item.name)
-            $results+=,[ordered]@{name=[string]$item.name;recovered=$true;endpoint=$probe.endpoint;connection=$probe.connection;model=$probe.model}
-        }catch{
-            $text=$_|Out-String;$class=Get-SCRouteFailureClass -1 $text
-            if($class-eq'unknown'){$class=if([string]$item.reason){[string]$item.reason}else{'unknown'}}
-            Register-SCRouteProbeFailure ([string]$item.name) $class $text|Out-Null
-            $results+=,[ordered]@{name=[string]$item.name;recovered=$false;failureClass=$class}
-        }
-    }
-    return @($results)
-}
+    if($ProviderOverride){throw "Unknown or disabled compatibility CLI backend '$ProviderOverride'. Use -Connection for a provider/account pool or -Endpoint for an exact API endpoint."}
 
-function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null) {
-    if(-not$ProviderOverride -and (Get-Command Test-SCCompiledRouterAvailable -ErrorAction SilentlyContinue) -and (Test-SCCompiledRouterAvailable)){
-        try{return Invoke-SCProviderViaCompiledRouter $Task $Prompt $Stage $ParentAgentId $Compilation $WorkerSessionId $ContinuationMessage}catch{
-            Add-SCEvent 'routing.compiled_router_fallback' 'Compiled router was unavailable during dispatch; falling back to the PowerShell router for this call.' @{taskId=$Task.id;stage=$Stage;error=$_.Exception.Message}
-        }
+    if(-not(Get-Command Test-SCCompiledRouterAvailable -ErrorAction SilentlyContinue) -or -not(Test-SCCompiledRouterAvailable)){
+        throw 'The compiled StatefulClanker router is required for automatic dispatch but is not available. Repair the router installation instead of falling back to legacy PowerShell routing.'
     }
-    try{Invoke-SCRouteDoctor 1|Out-Null}catch{}
-    $history=@()
-    $routeSnapshot=Get-SCRouteSnapshotReceipt
-    $routeOverride=$ProviderOverride;$pinnedEndpoint=$null
-    if($Stage-eq'run' -and $WorkerSessionId){
-        $pin=Get-SCWorkerSessionRoutePin $WorkerSessionId
-        if($pin){
-            $pinnedEndpoint=[string]$pin.endpoint
-            # A session pin preserves continuity while it remains eligible. It is
-            # deliberately not a hard constraint: catalog edits and health changes
-            # must be able to move a resumable session onto another eligible route.
-            if(-not$ProviderOverride){$routeOverride=$pinnedEndpoint}
-        }
-    }
-    $candidates=@()
-    try{$candidates=@(Get-SCProviderCandidates $Task $routeOverride $Stage)}catch{
-        if(-not$pinnedEndpoint){throw}
-        $history+=,[ordered]@{endpoint=$pinnedEndpoint;exitCode=-3;failureClass='session_route_unavailable';scope='endpoint';error=$_.Exception.Message}
-    }
-    if($candidates.Count-eq0-and$pinnedEndpoint-and-not$ProviderOverride){
-        # The preferred pin is disabled, cooling down, or otherwise unavailable.
-        # Re-read the automatic candidate set so a compatible route can resume the
-        # persisted transcript; the successful route becomes the new preference.
-        try{$candidates=@(Get-SCProviderCandidates $Task $null $Stage)}catch{throw}
-        if($candidates.Count-gt0){
-            Add-SCEvent 'worker.session_route_fallback' "Pinned route $pinnedEndpoint is unavailable; selecting an eligible replacement for worker session $WorkerSessionId." @{taskId=$Task.id;sessionId=$WorkerSessionId;pinnedEndpoint=$pinnedEndpoint;routeSnapshot=$routeSnapshot}
-        }
-    }
-    if($candidates.Count-eq0){
-        $next=Get-SCNextRouteAvailability
-        $message=if($pinnedEndpoint){"Worker session $WorkerSessionId preferred '$pinnedEndpoint', but no compatible eligible replacement is currently available."}elseif($next){"All eligible inference endpoints are cooling down until at least $($next.ToLocalTime().ToString('o'))."}else{'No eligible inference endpoint is available.'}
-        $now=(Get-Date).ToUniversalTime().ToString('o')
-        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$pinnedEndpoint;endpoint=$pinnedEndpoint;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId);compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr=$message;routeDeferred=$true;retryAfter=if($next){$next.ToString('o')}else{$null};routeAttempts=0;routeHistory=@($history);routeSnapshot=$routeSnapshot}
-    }
-    $last=$null
-    foreach($record in $candidates){
-        $lease=Enter-SCEndpointLease ([string]$record.name)
-        if(-not$lease.acquired){
-            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($record.config.PSObject.Properties['connection']){[string]$record.config.connection}else{$null};model=if($record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='busy';failureClass=$null;healthScope=$null}
-            continue
-        }
-        try{
-            $type=if($record.config.PSObject.Properties['type']){[string]$record.config.type}else{'cli'}
-            try{
-                if($type-eq'api'){$receipt=Invoke-SCDirectApiProvider $Task $Prompt $Stage $record $ParentAgentId $Compilation $WorkerSessionId $ContinuationMessage}
-                else{$receipt=& $script:SCInvokeProviderCliBase $Task $Prompt $Stage ([string]$record.name) $ParentAgentId $Compilation}
-            }catch{
-                $now=(Get-Date).ToUniversalTime().ToString('o')
-                $receipt=[pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=[string]$record.name;endpoint=[string]$record.name;compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-1;stdout='';stderr=($_|Out-String)}
-            }
-            if(-not$receipt.PSObject.Properties['workerSessionId']){Set-SCProperty $receipt 'workerSessionId' $WorkerSessionId;Set-SCProperty $receipt 'workerSessionResumable' $false}
-            $last=$receipt
-            $text=(([string]$receipt.stderr)+[Environment]::NewLine+([string]$receipt.stdout)).Trim()
-            if([int]$receipt.exitCode-eq0){
-                if($WorkerSessionId){
-                    $routeConnection=if($record.config.PSObject.Properties['connection']){[string]$record.config.connection}else{$null}
-                    $routeModel=if($record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null}
-                    Set-SCWorkerSessionRoutePin $WorkerSessionId ([string]$record.name) $routeConnection $routeModel
-                }
-                Register-SCRouteSuccess ([string]$record.name)|Out-Null
-                if($type-eq'api' -and $record.config.PSObject.Properties['connection'] -and $record.config.connection){
-                    $connectionName=[string]$record.config.connection
-                    Register-SCRouteSuccess ("connection:"+$connectionName) 'connection'|Out-Null
-                    $service=Get-SCConnectionServiceName $connectionName
-                    if($service){Register-SCRouteSuccess ("service:"+$service) 'service'|Out-Null}
-                }
-                $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='success';failureClass=$null;healthScope=$null}
-                Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history);Set-SCProperty $receipt 'routeSnapshot' $routeSnapshot
-                if($history.Count-gt1){Add-SCEvent 'routing.failover_succeeded' "Endpoint failover succeeded on $($record.name)." @{taskId=$Task.id;stage=$Stage;attempts=$history.Count;history=@($history)}}
-                return $receipt
-            }
-            $class=Get-SCRouteFailureClass ([int]$receipt.exitCode) $text
-            $domain=Register-SCRouteFailureForRecord $record $class $text
-            $history+=,[ordered]@{endpoint=[string]$record.name;connection=if($type-eq'api'){[string]$record.config.connection}else{$null};model=if($type-eq'api' -and $record.config.PSObject.Properties['model']){[string]$record.config.model}else{$null};outcome='failed';failureClass=$class;healthScope=[string]$domain.scope;healthKey=$domain.key}
-            Set-SCProperty $receipt 'routeAttempts' $history.Count;Set-SCProperty $receipt 'routeHistory' @($history)
-            if(-not(Test-SCRouteFailureTransient $class) -and $class-ne'auth'){
-                Add-SCEvent 'routing.failover_stopped' "Endpoint failure is not safe to replay: $class" @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class}
-                return $receipt
-            }
-            Add-SCEvent 'routing.failover' "Endpoint $($record.name) failed ($class); trying another endpoint." @{taskId=$Task.id;stage=$Stage;endpoint=$record.name;failureClass=$class;attempt=$history.Count}
-        }finally{
-            Exit-SCEndpointLease $lease
-        }
-    }
-    if($last){
-        Set-SCProperty $last 'routeAttempts' $history.Count;Set-SCProperty $last 'routeHistory' @($history);Set-SCProperty $last 'routeExhausted' $true;Set-SCProperty $last 'routeSnapshot' $routeSnapshot
-        return $last
-    }
-    if(@($history|Where-Object{$_.outcome-eq'busy'}).Count-gt0){
-        $now=(Get-Date).ToUniversalTime().ToString('o');$retry=[datetimeoffset]::UtcNow.AddSeconds(2).ToString('o')
-        return [pscustomobject][ordered]@{schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage;provider=$pinnedEndpoint;endpoint=$pinnedEndpoint;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId);compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};command='route';args=@();promptPath=$null;startedAt=$now;endedAt=$now;durationSeconds=0;exitCode=-3;stdout='';stderr='All healthy endpoints are currently occupied by another worker.';routeDeferred=$true;retryAfter=$retry;routeAttempts=$history.Count;routeHistory=@($history);routeSnapshot=$routeSnapshot}
-    }
-    throw 'Routing produced no endpoint receipt.'
+    return Invoke-SCProviderViaCompiledRouter $Task $Prompt $Stage $ParentAgentId $Compilation $WorkerSessionId $ContinuationMessage $EndpointOverride $ConnectionOverride
 }

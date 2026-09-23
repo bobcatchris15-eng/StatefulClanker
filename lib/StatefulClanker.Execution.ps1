@@ -1,47 +1,14 @@
 function Resolve-SCProvider($Task,[string]$Override,[string]$Stage='worker') {
-    $cfg=Get-SCConfig;$def=if($cfg.PSObject.Properties['defaultProvider']){[string]$cfg.defaultProvider}else{''}
-    $prioritized=@();if($cfg.PSObject.Properties['providers']-and$cfg.providers){
-        foreach($p in $cfg.providers.PSObject.Properties){
-            $entry=$p.Value;$dis=($entry.PSObject.Properties['disabled']-and[bool]$entry.disabled)
-            if(-not$dis){
-                $pri=if($entry.PSObject.Properties['priority']-and$null-ne$entry.priority){[int]$entry.priority}elseif($p.Name-eq$def){0}else{100}
-                $prioritized+=[pscustomobject]@{Name=$p.Name;Priority=$pri;IsDefault=($p.Name-eq$def);Config=$entry}
-            }
-        }
+    if([string]::IsNullOrWhiteSpace($Override)){
+        throw 'CLI provider resolution requires an explicit provider override. Automatic inference routing is owned by the compiled router.'
     }
-    $prioritized=@($prioritized|Sort-Object Priority,{if($_.IsDefault){0}else{1}},Name)
-    if($Override){
-        $property=if($cfg.providers){$cfg.providers.PSObject.Properties[$Override]}else{$null}
-        if($null-eq$property){throw "Provider '$Override' not configured."}
-        if($property.Value.PSObject.Properties['disabled']-and[bool]$property.Value.disabled){throw "Provider '$Override' is currently disabled in .statefulclanker/config.json."}
-        return [ordered]@{name=$Override;config=$property.Value}
+    $cfg=Get-SCConfig
+    $property=if($cfg.PSObject.Properties['providers'] -and $cfg.providers){$cfg.providers.PSObject.Properties[$Override]}else{$null}
+    if($null-eq$property){throw "Compatibility CLI provider '$Override' is not configured."}
+    if($property.Value.PSObject.Properties['disabled'] -and [bool]$property.Value.disabled){
+        throw "Compatibility CLI provider '$Override' is disabled in .statefulclanker/config.json."
     }
-    $candidate=$null
-    $taskProvider=$null
-    $taskSize='small'
-    if($Task){
-        if($Task -is [System.Collections.IDictionary]){
-            if($Task.Contains('provider')-and$Task['provider']){$taskProvider=[string]$Task['provider']}
-            if($Task.Contains('size')-and$Task['size']){$taskSize=[string]$Task['size']}
-        }else{
-            if($Task.PSObject.Properties['provider']-and$Task.provider){$taskProvider=[string]$Task.provider}
-            if($Task.PSObject.Properties['size']-and$Task.size){$taskSize=[string]$Task.size}
-        }
-    }
-    if($Stage-eq'critic'-and$cfg.PSObject.Properties['criticProvider']-and$cfg.criticProvider){$candidate=[string]$cfg.criticProvider}
-    elseif($Stage-eq'validator'-and$cfg.PSObject.Properties['validatorProvider']-and$cfg.validatorProvider){$candidate=[string]$cfg.validatorProvider}
-    elseif($taskProvider){$candidate=$taskProvider}
-    elseif($Stage-eq'worker'-and$cfg.PSObject.Properties['providerBySize']-and$cfg.providerBySize){
-        $route=$cfg.providerBySize.PSObject.Properties[$taskSize]
-        if($route-and-not[string]::IsNullOrWhiteSpace([string]$route.Value)){$candidate=[string]$route.Value}
-    }
-    if($candidate){
-        $prop=if($cfg.providers){$cfg.providers.PSObject.Properties[$candidate]}else{$null}
-        if($prop-and-not($prop.Value.PSObject.Properties['disabled']-and[bool]$prop.Value.disabled)){return [ordered]@{name=$candidate;config=$prop.Value}}
-    }
-    if($prioritized.Count-gt 0){$top=$prioritized[0];return [ordered]@{name=$top.Name;config=$top.Config}}
-    if($candidate){throw "Provider '$candidate' is configured but disabled, and no other enabled providers are available."}
-    throw "No enabled provider available. Configure or enable at least one provider in .statefulclanker/config.json."
+    return [ordered]@{name=$Override;config=$property.Value}
 }
 function Expand-SCArg([string]$Arg,[string]$Prompt,[string]$PromptFile,$Task) { $Arg.Replace('{prompt}',$Prompt).Replace('{promptFile}',$PromptFile).Replace('{projectRoot}',(Get-SCRoot)).Replace('{taskId}',[string]$Task.id) }
 
@@ -162,9 +129,22 @@ function Get-SCReasonExcerpt([string]$Text,[int]$MaxLen=240) {
     if($excerpt.Length-gt$MaxLen){$excerpt=$excerpt.Substring(0,$MaxLen).TrimEnd()+'...'}
     return $excerpt
 }
-function Invoke-SCReview($Task,$Run,$Compilation,[string]$Stage) {
+function Invoke-SCReview($Task,$Run,$Compilation,[string]$Stage,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
     Add-SCEvent "$Stage.started" "$Stage review started for $($Task.id)" @{taskId=$Task.id;stage=$Stage;compilationId=$Compilation.id}
-    $receipt=Invoke-SCProvider $Task (New-SCReviewPrompt $Task $Run $Compilation $Stage) $Stage $null $Run.agentId $Compilation;$receipt.verdict=Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode);Set-SCTelemetryVerdict $receipt.agentId $receipt.verdict;$dir=if($Stage-eq'critic'){'critiques'}else{'validations'};Write-SCJson (Get-SCPath ("{0}/{1}.json"-f$dir,$receipt.id)) $receipt;Add-SCEvent "$Stage.finished" "$Stage review finished for $($Task.id): $($receipt.verdict)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$receipt.verdict;compilationId=$Compilation.id};return $receipt
+    $reviewOverride=$null
+    if($Run -and $Run.PSObject.Properties['provider'] -and $Run.provider){
+        $cfg=Get-SCConfig
+        if($cfg.PSObject.Properties['providers'] -and $cfg.providers -and $cfg.providers.PSObject.Properties[[string]$Run.provider]){
+            $reviewOverride=[string]$Run.provider
+        }
+    }
+    $receipt=Invoke-SCProvider $Task (New-SCReviewPrompt $Task $Run $Compilation $Stage) $Stage $reviewOverride $Run.agentId $Compilation $null $null $EndpointOverride $ConnectionOverride
+    $receipt.verdict=Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode)
+    Set-SCTelemetryVerdict $receipt.agentId $receipt.verdict
+    $dir=if($Stage-eq'critic'){'critiques'}else{'validations'}
+    Write-SCJson (Get-SCPath ("{0}/{1}.json"-f$dir,$receipt.id)) $receipt
+    Add-SCEvent "$Stage.finished" "$Stage review finished for $($Task.id): $($receipt.verdict)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$receipt.verdict;compilationId=$Compilation.id}
+    return $receipt
 }
 function New-SCCompletionProposal($Task,$Run,$Compilation) {
     $proposal=[ordered]@{schemaVersion=1;id=New-SCId 'proposal';taskId=$Task.id;kind='task_completion';status='pending';createdAt=(Get-Date).ToUniversalTime().ToString('o');committedAt=$null;rejectedAt=$null;base=[ordered]@{compilationId=$Compilation.id;inputFingerprint=$Compilation.inputFingerprint;taskDefinitionHash=$Compilation.readSet.taskDefinitionHash;taskControlRevision=$Compilation.readSet.taskControlRevision};evidence=[ordered]@{runId=$Run.id;criticId=$null;criticVerdict=$null;validationId=$null;validationVerdict=$null};rejectionReasons=@()}
@@ -197,7 +177,7 @@ function Commit-SCProposal($Task,$Proposal,$Compilation) {
     if(Stop-SCForStaleCompilation $Task $Compilation 'stale-before-commit' 'Compiled state became stale before commit.' $Proposal){return $false}
     $Task=Get-SCTask ([string]$Task.id);$Proposal.status='committed';$Proposal.committedAt=(Get-Date).ToUniversalTime().ToString('o');Save-SCProposal $Proposal;$Task.status='complete';$Task.blockReason=$null;Save-SCTask $Task;Add-SCEvent 'state.committed' "Committed completion proposal $($Proposal.id)." @{taskId=$Task.id;proposalId=$Proposal.id;compilationId=$Compilation.id};Add-SCEvent 'task.completed' "Completed $($Task.id) after validated commit." @{taskId=$Task.id;runId=$Proposal.evidence.runId;proposalId=$Proposal.id};Add-SCProgressRecord $Task $Compilation $true 'committed' 'Validated proposal committed.'|Out-Null;Add-SCCompletedTaskCount|Out-Null;Update-SCReadiness;return $true
 }
-function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
+function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
     Assert-SCInitialized;Assert-SCNotHeld;Update-SCReadiness
     $state=Get-SCState;$cfg=Get-SCConfig
     if($state.activePlanId-and[bool]$cfg.requireHumanApprovalForPlan-and-not[bool]$state.planApproved){throw 'Active plan requires approval.'}
@@ -235,7 +215,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
         $task=Get-SCTask $task.id
         $task.status='running';$task.blockReason=$null;Save-SCTask $task
 
-        $run=Invoke-SCProvider $task $basePrompt 'run' $ProviderOverride $null $compilation $workerSessionId $continuation
+        $run=Invoke-SCProvider $task $basePrompt 'run' $ProviderOverride $null $compilation $workerSessionId $continuation $EndpointOverride $ConnectionOverride
         $continuation=$null
         $contextRequests=@(Capture-SCContextRequests $task $run $compilation)
         Write-SCJson (Get-SCPath ("runs/{0}.json"-f$run.id)) $run
@@ -332,7 +312,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
 
         if([bool]$cfg.validatorEnabled){
             $task.status='validating';Save-SCTask $task
-            $validation=Invoke-SCReview $task $run $compilation 'validator'
+            $validation=Invoke-SCReview $task $run $compilation 'validator' $EndpointOverride $ConnectionOverride
             $proposal.evidence.validationId=$validation.id;$proposal.evidence.validationVerdict=$validation.verdict;Save-SCProposal $proposal
             # Per-task validation is the normalization boundary for project muscle-memory.
             try{
@@ -415,7 +395,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
         Close-SCWorkerSession $workerSessionId 'not-committed'
         Write-Warning "Task not committed: $($task.id)"
     }
-    Invoke-SCProjectReviewIfDue 'interval'|Out-Null
+    Invoke-SCProjectReviewIfDue 'interval' $ProviderOverride $EndpointOverride $ConnectionOverride|Out-Null
 }
 function Retry-SCTask([string]$Id) {
     if(-not$Id){throw '-TaskId required.'}

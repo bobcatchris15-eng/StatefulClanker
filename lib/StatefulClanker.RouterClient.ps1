@@ -2,12 +2,12 @@
 function Get-SCCompiledRouterExecutable {
     if($env:STATEFULCLANKER_ROUTER_EXE -and (Test-Path -LiteralPath $env:STATEFULCLANKER_ROUTER_EXE -PathType Leaf)){return [string]$env:STATEFULCLANKER_ROUTER_EXE}
     if($env:STATEFULCLANKER_DISABLE_COMPILED_ROUTER -match '^(?i:1|true|yes)$'){return $null}
-    $home=if($script:StatefulClankerHome){[string]$script:StatefulClankerHome}else{Split-Path -Parent $PSScriptRoot}
+    $installRoot=if($script:StatefulClankerHome){[string]$script:StatefulClankerHome}else{Split-Path -Parent $PSScriptRoot}
     $candidates=@(
-        (Join-Path $home 'router\StatefulClanker.Router.exe'),
-        (Join-Path $home 'install\router-publish\StatefulClanker.Router.exe'),
-        (Join-Path $home 'src\StatefulClanker.Router\bin\Release\net8.0-windows\win-x64\publish\StatefulClanker.Router.exe'),
-        (Join-Path $home 'src\StatefulClanker.Router\bin\Debug\net8.0-windows\StatefulClanker.Router.exe')
+        (Join-Path $installRoot 'router\StatefulClanker.Router.exe'),
+        (Join-Path $installRoot 'install\router-publish\StatefulClanker.Router.exe'),
+        (Join-Path $installRoot 'src\StatefulClanker.Router\bin\Release\net8.0-windows\win-x64\publish\StatefulClanker.Router.exe'),
+        (Join-Path $installRoot 'src\StatefulClanker.Router\bin\Debug\net8.0-windows\StatefulClanker.Router.exe')
     )
     foreach($candidate in $candidates){if(Test-Path -LiteralPath $candidate -PathType Leaf){return $candidate}}
     return $null

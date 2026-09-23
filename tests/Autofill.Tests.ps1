@@ -13,14 +13,13 @@ try {
     'seed'|Set-Content seed.txt -Encoding UTF8;'.statefulclanker/'|Set-Content .gitignore -Encoding UTF8
     & $pwshPath -NoProfile -File $harness init|Out-Null
     $cfgPath=Join-Path $temp '.statefulclanker\config.json';$cfg=Get-Content -Raw $cfgPath|ConvertFrom-Json
-    $cfg.defaultProvider='slow';$cfg.criticProvider='ro';$cfg.validatorProvider='ro';$cfg.maxConcurrent=2;$cfg.autofillEnabled=$true;$cfg.autofillIntervalSeconds=1;$cfg.projectReviewEveryTasks=0
+    $cfg.maxConcurrent=2;$cfg.autofillEnabled=$true;$cfg.autofillIntervalSeconds=1;$cfg.projectReviewEveryTasks=0
     $cfg.providers|Add-Member -NotePropertyName slow -NotePropertyValue ([pscustomobject]@{command='cmd.exe';args=@('/d','/c',$slow,'{taskId}','out-{taskId}.txt');mode='inline'}) -Force
-    $cfg.providers|Add-Member -NotePropertyName ro -NotePropertyValue ([pscustomobject]@{command='cmd.exe';args=@('/d','/c',$mock,'{promptFile}');mode='prompt-file'}) -Force
     $cfg|ConvertTo-Json -Depth 12|Set-Content $cfgPath -Encoding UTF8
     1..4|ForEach-Object{& $pwshPath -NoProfile -File $harness task add -TaskId "a$_" -Title "Autofill $_" -Instruction 'Do bounded work.' -Accept 'passes' -Retrieval 'seed.txt'|Out-Null}
     & git add -A;& git commit -q -m seed
     Write-Host '  AUTOFILL 1: resident supervisor fills two slots and replenishes them without a conversational kick'
-    $log=Join-Path $temp '.statefulclanker\autofill-test.log';$argLine="-NoProfile -NonInteractive -File `"$harness`" autofill run -IntervalSeconds 1"
+    $log=Join-Path $temp '.statefulclanker\autofill-test.log';$argLine="-NoProfile -NonInteractive -File `"$harness`" autofill run -IntervalSeconds 1 -Provider slow"
     $proc=Start-Process -FilePath $pwshPath -ArgumentList $argLine -WorkingDirectory $temp -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WindowStyle Hidden -PassThru
     $deadline=(Get-Date).AddSeconds(35);$maxBusy=0;$complete=0
     do {

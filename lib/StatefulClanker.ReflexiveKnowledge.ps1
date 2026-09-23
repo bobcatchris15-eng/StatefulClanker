@@ -2,16 +2,24 @@
 # The native host owns SQLite. PowerShell remains the orchestration adapter.
 
 function Get-SCRpkHost {
-    $installed=Join-Path $script:StatefulClankerHome 'StatefulClanker.exe'
-    if(Test-Path -LiteralPath $installed -PathType Leaf){return [pscustomobject]@{file=$installed;prefix=@()}}
-    $project=Join-Path $script:StatefulClankerHome 'src\StatefulClanker.Tray\StatefulClanker.Tray.csproj'
-    $dotnet=Get-Command dotnet -ErrorAction SilentlyContinue
-    if($dotnet -and (Test-Path -LiteralPath $project -PathType Leaf)) {return [pscustomobject]@{file=$dotnet.Source;prefix=@('run','--project',$project,'--','--rpk')}}
+    # RPK is on the compilation hot path and may be invoked by several workers
+    # concurrently. Never use `dotnet run` here: that implicitly restores/builds
+    # the tray project and caused parallel workers to launch competing NuGet builds.
+    $candidates=@(
+        (Join-Path $script:StatefulClankerHome 'StatefulClanker.exe'),
+        (Join-Path $script:StatefulClankerHome 'src\StatefulClanker.Tray\bin\Release\net8.0-windows\StatefulClanker.exe'),
+        (Join-Path $script:StatefulClankerHome 'src\StatefulClanker.Tray\bin\Debug\net8.0-windows\StatefulClanker.exe')
+    )
+    foreach($candidate in $candidates){
+        if(Test-Path -LiteralPath $candidate -PathType Leaf){
+            return [pscustomobject]@{file=$candidate;prefix=@()}
+        }
+    }
     return $null
 }
 function Invoke-SCRpk([string]$Command,[hashtable]$Arguments=@{},[switch]$AllowUnavailable) {
     $rpkHost=Get-SCRpkHost
-    if($null-eq$rpkHost){if($AllowUnavailable){return $null};throw 'RPK native host unavailable. Use an installed build or install the .NET 8 SDK for a source checkout.'}
+    if($null-eq$rpkHost){if($AllowUnavailable){return $null};throw 'RPK native host unavailable. Install StatefulClanker or build the tray project once; RPK will not build the application from a worker hot path.'}
     $args=@($rpkHost.prefix)
     if($args.Count-eq0){$args+='--rpk'}
     $args+=$Command;$args+='--project';$args+=(Get-SCRoot)

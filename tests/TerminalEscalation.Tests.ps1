@@ -66,23 +66,30 @@ try {
     Assert-True (@($script:events|Where-Object type -eq 'run.failed').Count-eq0) 'Transient provider failure was incorrectly escalated as a task crash.'
     Assert-True (@($script:events|Where-Object type -eq 'task.retried.transient').Count-eq1) 'Transient provider retry event is missing.'
 
-    Write-Host '  ESCALATION 3: bundled Pi owns control-plane delivery through an extension'
+    Write-Host '  ESCALATION 3: bundled Pi owns control-plane delivery over direct stdio MCP'
     $terminalSource=[IO.File]::ReadAllText((Join-Path $repo 'src\StatefulClanker.Tray\EmbeddedTerminalPanel.cs'))
-    Assert-True ($terminalSource.Contains('HandlesControlPlaneNatively')) 'Terminal does not expose native Pi control-plane ownership.'
     Assert-True ($terminalSource.Contains('Pi (bundled)')) 'Bundled Pi preset is missing.'
+    Assert-True (-not $terminalSource.Contains('QueueNotice')) 'Terminal still contains PTY control-plane text injection.'
+    Assert-True (-not $terminalSource.Contains('HandlesControlPlaneNatively')) 'Terminal still contains obsolete native-vs-PTY control-plane switching.'
+    Assert-True (-not $terminalSource.Contains('WriteToTerm')) 'Terminal still writes control-plane messages into ConPTY input.'
 
     $programSource=[IO.File]::ReadAllText((Join-Path $repo 'src\StatefulClanker.Tray\Program.cs'))
-    Assert-True ($programSource.Contains('.statefulclanker", "control", "events.jsonl"')) 'Tray escalation is not reading the durable control-event stream.'
-    Assert-True ($programSource.Contains('_terminal.HandlesControlPlaneNatively')) 'Tray does not suppress duplicate PTY injection for bundled Pi.'
-    Assert-True (-not $programSource.Contains('EscalatedEventTypes')) 'Tray still depends on the obsolete hard-coded raw event whitelist.'
+    Assert-True (-not $programSource.Contains('EscalateNewEvents')) 'Tray still polls and injects control events into terminal input.'
+    Assert-True (-not $programSource.Contains('_terminal.QueueNotice')) 'Tray still has a PTY escalation path.'
 
     $piCmd=[IO.File]::ReadAllText((Join-Path $repo 'pi\pi.cmd'))
     Assert-True ($piCmd.Contains('--extension "%~dp0extensions\statefulclanker.ts"')) 'Bundled Pi launcher does not load the StatefulClanker extension.'
     $piExtension=Join-Path $repo 'pi\extensions\statefulclanker.ts'
     Assert-True (Test-Path -LiteralPath $piExtension) 'Bundled StatefulClanker Pi extension is missing.'
     $extensionSource=[IO.File]::ReadAllText($piExtension)
+    Assert-True ($extensionSource.Contains('spawn(')) 'Pi extension does not start a direct stdio MCP child.'
+    Assert-True ($extensionSource.Contains('StatefulClanker.Mcp.ps1')) 'Pi extension does not launch the StatefulClanker stdio server.'
     Assert-True ($extensionSource.Contains('rpc("tools/list"')) 'Pi extension does not discover StatefulClanker MCP tools.'
-    Assert-True ($extensionSource.Contains('rpc("tools/call"')) 'Pi extension does not bridge StatefulClanker MCP tool calls.'
+    Assert-True ($extensionSource.Contains('rpc("tools/call"')) 'Pi extension does not use StatefulClanker MCP tool calls.'
+    Assert-True ($extensionSource.Contains('control_events_since')) 'Pi extension does not consume durable control events through MCP.'
+    Assert-True (-not $extensionSource.Contains('fetch(')) 'Pi extension still tunnels local control through HTTP.'
+    Assert-True (-not $extensionSource.Contains('mcp-http.json')) 'Pi extension still depends on the resident HTTP rendezvous file.'
+    Assert-True (-not $extensionSource.Contains('events.jsonl')) 'Pi extension still knows the control-event file layout.'
     Assert-True ($extensionSource.Contains('display: false')) 'Pi control events are not hidden extension context.'
     Assert-True ($extensionSource.Contains('triggerTurn: true')) 'Pi control events do not wake an idle conversational agent.'
     Assert-True ($extensionSource.Contains('event.level === "attention" || event.level === "human_required"')) 'Pi extension is not filtering for actionable control levels.'

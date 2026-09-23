@@ -37,13 +37,9 @@ function New-TestProject([string]$Path, [string]$TargetFile, [int]$TaskCount, [i
         & $pwshPath -NoProfile -File $harness init | Out-Null
         $cfgPath = Join-Path $Path '.statefulclanker\config.json'
         $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
-        $cfg.defaultProvider = 'w'; $cfg.criticProvider = 'ro'; $cfg.validatorProvider = 'ro'
         $cfg | Add-Member -NotePropertyName maxConcurrent -NotePropertyValue $MaxConcurrent -Force
         $cfg.providers | Add-Member -NotePropertyName w -NotePropertyValue ([pscustomobject]@{
                 command = 'cmd.exe'; args = @('/d', '/c', $writer, '{taskId}', $TargetFile); mode = 'inline'
-            }) -Force
-        $cfg.providers | Add-Member -NotePropertyName ro -NotePropertyValue ([pscustomobject]@{
-                command = 'cmd.exe'; args = @('/d', '/c', (Join-Path $PSScriptRoot 'MockProvider.cmd'), '{promptFile}'); mode = 'prompt-file'
             }) -Force
         $cfg | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
 
@@ -64,7 +60,7 @@ try {
     New-TestProject $p1 'out-{taskId}.txt' 3
     Push-Location $p1
     try {
-        $out = & $pwshPath -NoProfile -File $harness run -Parallel 3 2>&1 | Out-String
+        $out = & $pwshPath -NoProfile -File $harness run -Parallel 3 -Provider w 2>&1 | Out-String
         Assert-True ($out -match 'Dispatching 3') "Expected 3 dispatched. Output:`n$out"
 
         $tasks = @(Get-ChildItem -LiteralPath (Join-Path $p1 '.statefulclanker\tasks') -Filter '*.json' |
@@ -99,7 +95,7 @@ try {
     New-TestProject $p2 'shared.txt' 2 2
     Push-Location $p2
     try {
-        $oldPref=$ErrorActionPreference; try{$ErrorActionPreference='Continue'; $out = & $pwshPath -NoProfile -File $harness run -Parallel 2 2>&1 | Out-String}finally{$ErrorActionPreference=$oldPref}
+        $oldPref=$ErrorActionPreference; try{$ErrorActionPreference='Continue'; $out = & $pwshPath -NoProfile -File $harness run -Parallel 2 -Provider w 2>&1 | Out-String}finally{$ErrorActionPreference=$oldPref}
         Assert-True ($out -match 'MERGED') "One task should have merged. Output:`n$out"
         Assert-True ($out -match 'merge conflict') "The second should report a merge conflict. Output:`n$out"
 

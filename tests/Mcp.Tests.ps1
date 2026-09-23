@@ -93,10 +93,11 @@ try {
     Get-ToolPayload $r[1] | Out-Null
     Assert-True (Test-Path -LiteralPath (Join-Path $temp '.statefulclanker\state.json')) 'project_init did not create state.'
 
-    # Point the freshly-created project at the mock provider.
+    # Keep the compatibility CLI path explicit. Automatic dispatch belongs to the
+    # compiled endpoint router; this test intentionally exercises the opt-in CLI escape hatch.
     $cfgPath = Join-Path $temp '.statefulclanker\config.json'
     $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
-    $cfg.defaultProvider = 'mock'; $cfg.criticProvider = 'mock'; $cfg.validatorProvider = 'mock'
+    $cfg.validatorEnabled = $false
     $cfg.providers | Add-Member -NotePropertyName mock -NotePropertyValue ([pscustomobject]@{
             command = 'cmd.exe'; args = @('/d', '/c', $mockCmd); mode = 'prompt-file'
         }) -Force
@@ -121,19 +122,18 @@ try {
     $stdinSet = Get-ToolPayload $r[3]
     Assert-True ($stdinSet.mode -eq 'stdin') "Args with no placeholder should default to stdin, got '$($stdinSet.mode)'."
 
-    Write-Host '  MCP 3c: provider_set writes a usable provider, provider_test probes it'
+    Write-Host '  MCP 3c: provider_set writes a usable compatibility backend, provider_test probes it'
     $r = Invoke-McpLines $temp @(
         (New-McpCall 1 'provider_set' @{
             name = 'mock'; command = 'cmd.exe'; args = @('/d', '/c', $mockCmd, '{promptFile}')
-            setDefault = $true; setCritic = $true; setValidator = $true
         }),
         (New-McpCall 2 'provider_list' @{})
     )
     $set = Get-ToolPayload $r[0]
     Assert-True ($set.mode -eq 'prompt-file') "mode should be inferred from {promptFile}, got '$($set.mode)'."
-    Assert-True (@($set.assignedTo) -contains 'defaultProvider') 'setDefault did not take effect.'
+    Assert-True ($set.routing -like '*compatibility backend*') 'provider_set should not recreate legacy default/critic/validator routing roles.'
     $providers = Get-ToolPayload $r[1]
-    Assert-True ($providers.defaultProvider -eq 'mock') 'defaultProvider not persisted.'
+    Assert-True (@($providers.providers | Where-Object name -eq 'mock').Count -eq 1) 'Configured compatibility provider was not persisted.'
 
     $probe = Get-ToolPayload (Invoke-McpLines $temp @('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"provider_test","arguments":{"name":"mock","timeoutSeconds":60}}}'))[0]
     Assert-True ($null -ne $probe.diagnosis -and $probe.diagnosis.Length -gt 0) 'provider_test returned no diagnosis.'
@@ -166,8 +166,8 @@ try {
     Write-Host '  MCP 6: run_start is async and single-flight'
     $started = Get-Date
     $r = Invoke-McpLines $temp @(
-        '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_start","arguments":{"taskId":"mcp-task"}}}',
-        '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_start","arguments":{"taskId":"mcp-task"}}}'
+        '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_start","arguments":{"taskId":"mcp-task","provider":"mock"}}}',
+        '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_start","arguments":{"taskId":"mcp-task","provider":"mock"}}}'
     )
     Get-ToolPayload $r[0] | Out-Null
     Assert-True ([bool]$r[1].result.isError) 'A second concurrent run_start must be refused: the harness has no locking.'
@@ -195,8 +195,8 @@ try {
     Write-Host 'PASS: MCP control plane (handshake, id echo, arg fidelity, gating, async run, polling)'
 } finally {
     Set-Location $repo
-    Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like "*$temp*" } |
-        ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { } }
+    # run_status waits for the detached cycle to finish and release its lock.
+    # Avoid a machine-wide CIM process scan here: it can hang independently of
+    # StatefulClanker and turn a passing MCP suite into a stuck smoke test.
     Remove-Item -Recurse -Force -LiteralPath $temp -ErrorAction SilentlyContinue
 }

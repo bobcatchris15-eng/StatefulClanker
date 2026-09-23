@@ -22,51 +22,6 @@ sealed class EmbeddedTerminalPanel : UserControl
     readonly Button _stop = new();
     readonly Label _status = new();
     readonly Panel _hostPanel = new();
-    readonly Panel _toastPanel = new();
-    readonly Label _toastLabel = new();
-    readonly Button _toastClose = new();
-    readonly System.Windows.Forms.Timer _toastTimer = new() { Interval = 8000 };
-    // Polls for a quiet gap in typing so a queued notice can be auto-sent without
-    // waiting on an Enter keypress that may never come (e.g. the human just reads a
-    // response and doesn't submit anything for a while).
-    readonly System.Windows.Forms.Timer _idleFlushTimer = new() { Interval = 400 };
-    static readonly TimeSpan IdleThreshold = TimeSpan.FromMilliseconds(900);
-    // Hard ceiling independent of typing detection. Observed in practice: idle
-    // detection here depends on this native ConPTY-hosted control reliably
-    // reporting focus/keystrokes to a plain WinForms message filter, which it does
-    // not always do -- notices were only ever delivered on an explicit Enter
-    // keypress, never automatically. Rather than debug that native-focus quirk
-    // further, cap how long a notice can sit queued: past this, it flushes no
-    // matter what the (possibly wrong) typing state says.
-    static readonly TimeSpan MaxQueueWait = TimeSpan.FromMilliseconds(2500);
-    readonly Queue<string> _pendingNotices = new();
-    DateTime _lastKeyUtc = DateTime.MinValue;
-    DateTime? _oldestPendingUtc;
-    NoticeMessageFilter? _noticeFilter;
-
-    sealed class NoticeMessageFilter : IMessageFilter
-    {
-        const int WM_KEYDOWN = 0x0100;
-        readonly EmbeddedTerminalPanel _owner;
-
-        public NoticeMessageFilter(EmbeddedTerminalPanel owner) => _owner = owner;
-
-        public bool PreFilterMessage(ref Message m)
-        {
-            if (m.Msg == WM_KEYDOWN && _owner._elementHost?.ContainsFocus == true)
-            {
-                _owner._lastKeyUtc = DateTime.UtcNow;
-                if ((Keys)m.WParam == Keys.Enter)
-                {
-                    // A submitted line is itself a safe, immediate boundary -- don't
-                    // wait for the idle timer to catch up to it.
-                    _ = _owner.FlushAfterEnterAsync();
-                }
-            }
-            return false;
-        }
-    }
-
     // ElementHost does not forward arrow/Tab WM_KEYDOWN messages into its hosted WPF
     // tree by default -- IsInputKey on the plain WinForms ElementHost returns false for
     // them, so they get eaten by WinForms dialog/focus navigation before the WPF
@@ -104,7 +59,6 @@ sealed class EmbeddedTerminalPanel : UserControl
     EasyTerminalControl? _terminal;
     string? _projectPath;
     string _currentCommand = "";
-    bool _nativeControlPlaneSession;
 
     static readonly (string name, string command)[] Presets =
     {
@@ -124,9 +78,8 @@ sealed class EmbeddedTerminalPanel : UserControl
 
         _layout.Dock = DockStyle.Fill;
         _layout.ColumnCount = 1;
-        _layout.RowCount = 4;
+        _layout.RowCount = 3;
         _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
         _layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
         _layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -188,34 +141,9 @@ sealed class EmbeddedTerminalPanel : UserControl
             try { _elementHost?.PerformLayout(); } catch { }
         };
 
-        _toastPanel.Dock = DockStyle.Fill;
-        _toastPanel.BackColor = Theme.Surface2;
-        _toastPanel.Visible = false;
-        _toastPanel.Padding = new Padding(8, 0, 4, 0);
-
-        _toastLabel.Dock = DockStyle.Fill;
-        _toastLabel.TextAlign = ContentAlignment.MiddleLeft;
-        _toastLabel.ForeColor = Theme.Accent;
-        _toastLabel.Font = new Font("Cascadia Mono", 8.25f);
-        _toastLabel.AutoEllipsis = true;
-
-        _toastClose.Text = "x";
-        _toastClose.Width = 24;
-        _toastClose.Dock = DockStyle.Right;
-        _toastClose.FlatStyle = FlatStyle.Flat;
-        _toastClose.Click += (_, _) => HideToast();
-
-        _toastPanel.Controls.Add(_toastLabel);
-        _toastPanel.Controls.Add(_toastClose);
-
-        _toastTimer.Tick += (_, _) => { _toastTimer.Stop(); HideToast(); };
-        _idleFlushTimer.Tick += (_, _) => TryFlushIfIdle();
-        _idleFlushTimer.Start();
-
         _layout.Controls.Add(_toolbar, 0, 0);
-        _layout.Controls.Add(_toastPanel, 0, 1);
-        _layout.Controls.Add(_status, 0, 2);
-        _layout.Controls.Add(_hostPanel, 0, 3);
+        _layout.Controls.Add(_status, 0, 1);
+        _layout.Controls.Add(_hostPanel, 0, 2);
         Controls.Add(_layout);
 
         Theme.Apply(this);
@@ -244,7 +172,6 @@ sealed class EmbeddedTerminalPanel : UserControl
 
         // A shell should be immediately useful without another click.  It has the
         // same cwd semantics as opening PowerShell inside the project directory.
-        _nativeControlPlaneSession = false;
         _ = StartCommandAsync(ShellCommand(), false);
     }
 
@@ -294,7 +221,6 @@ sealed class EmbeddedTerminalPanel : UserControl
     {
         var command = SelectedCommand();
         if (string.IsNullOrWhiteSpace(command)) return;
-        _nativeControlPlaneSession = string.Equals(_preset.SelectedItem?.ToString(), "Pi (bundled)", StringComparison.Ordinal);
         await StartCommandAsync(command, forceRestart);
     }
 
@@ -339,18 +265,12 @@ sealed class EmbeddedTerminalPanel : UserControl
             _elementHost.MouseDown += (_, _) => FocusTerminal();
             _terminal.PreviewMouseDown += (_, _) => FocusTerminal();
             _terminal.PreviewMouseWheel += (_, _) => FocusTerminal();
-            _terminal.GotKeyboardFocus += (_, _) => { _lastKeyUtc = DateTime.UtcNow; _status.Text = "KEYBOARD READY  |  " + _currentCommand; _status.ForeColor = Theme.Good; };
+            _terminal.GotKeyboardFocus += (_, _) => { _status.Text = "KEYBOARD READY  |  " + _currentCommand; _status.ForeColor = Theme.Good; };
 
             _currentCommand = command;
             _status.Text = $"RUNNING  {command}   @   {_projectPath}";
             _status.ForeColor = Theme.Good;
             _stop.Enabled = true;
-
-            if (_noticeFilter is null)
-            {
-                _noticeFilter = new NoticeMessageFilter(this);
-                Application.AddMessageFilter(_noticeFilter);
-            }
 
             // Let WPF create the terminal HWND and ConPTY before focusing it.
             await Task.Delay(150);
@@ -399,6 +319,18 @@ sealed class EmbeddedTerminalPanel : UserControl
         _ = StartCommandAsync(ToolViaShell("opencode"), true);
     }
 
+    public void StartGoose()
+    {
+        _preset.SelectedItem = "Goose";
+        _ = StartCommandAsync(ToolViaShell("goose session"), true);
+    }
+
+    public void StartBundledPi()
+    {
+        _preset.SelectedItem = "Pi (bundled)";
+        _ = StartCommandAsync(ToolViaShell(BundledPiInvocation()), true);
+    }
+
     public bool ConsoleHasKeyboardFocus =>
         (_elementHost?.ContainsFocus ?? false) ||
         (_terminal?.IsKeyboardFocusWithin ?? false) ||
@@ -429,114 +361,10 @@ sealed class EmbeddedTerminalPanel : UserControl
         catch { }
     }
 
-    /// <summary>
-    /// True while a terminal session is live and can accept injected notices.
-    /// </summary>
-    public bool HasActiveSession => _terminal is not null;
-
-    /// <summary>
-    /// True when the active TUI has its own StatefulClanker extension and should
-    /// receive control-plane events through that extension rather than PTY text.
-    /// </summary>
-    public bool HandlesControlPlaneNatively => HasActiveSession && _nativeControlPlaneSession;
-
-    /// <summary>
-    /// Writes a short notice into the live PTY's input stream so it appears as text in
-    /// front of the running session (agy/opencode/pwsh). No-op if no session is running.
-    /// Deliberate accepted tradeoff (ledger D7): this writes into the same input stream
-    /// the human or an AI composer may be mid-typing into, so it can interleave with
-    /// in-progress input -- moving to a fresh line for display requires sending what the
-    /// shell interprets as a newline/Enter, but no further automated action is taken.
-    /// </summary>
-    public void QueueNotice(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return;
-        _pendingNotices.Enqueue(text);
-        _oldestPendingUtc ??= DateTime.UtcNow;
-        ShowToast(text);
-        TryFlushIfIdle();
-    }
-
-    // Auto-sends whenever the human isn't actively typing (D9): if no keystroke has
-    // ever been observed, or the last one is older than IdleThreshold, flush right
-    // away instead of waiting for an Enter that may not come. _idleFlushTimer covers
-    // the case where a notice arrives mid-typing -- it keeps checking every tick and
-    // flushes the moment typing pauses. MaxQueueWait is a backstop: it flushes
-    // regardless of the idle check once a notice has waited long enough, so a
-    // missed/unreliable keystroke observation never turns into "only sends when the
-    // human happens to press Enter."
-    void TryFlushIfIdle()
-    {
-        if (_pendingNotices.Count == 0) return;
-        var idle = _lastKeyUtc == DateTime.MinValue || DateTime.UtcNow - _lastKeyUtc >= IdleThreshold;
-        var overdue = _oldestPendingUtc.HasValue && DateTime.UtcNow - _oldestPendingUtc.Value >= MaxQueueWait;
-        if (idle || overdue)
-            FlushPendingNotices();
-    }
-
-    void ShowToast(string latestText)
-    {
-        var extra = _pendingNotices.Count - 1;
-        _toastLabel.Text = extra > 0 ? $"{latestText}  (+{extra} more)" : latestText;
-        _toastPanel.Visible = true;
-        _layout.RowStyles[1] = new RowStyle(SizeType.Absolute, 24);
-        _toastTimer.Stop();
-        _toastTimer.Start();
-    }
-
-    void HideToast()
-    {
-        _toastPanel.Visible = false;
-        _layout.RowStyles[1] = new RowStyle(SizeType.Absolute, 0);
-    }
-
-    async Task FlushAfterEnterAsync()
-    {
-        await Task.Delay(200);
-        try
-        {
-            if (IsHandleCreated && !IsDisposed)
-                BeginInvoke(new Action(FlushPendingNotices));
-        }
-        catch { }
-    }
-
-    void FlushPendingNotices()
-    {
-        if (_pendingNotices.Count == 0) return;
-        if (!HasActiveSession)
-        {
-            _pendingNotices.Clear();
-            _oldestPendingUtc = null;
-            return;
-        }
-
-        // EasyTerminalControl creates the ConPTY asynchronously. A notice can arrive
-        // after _terminal exists but before ConPTYTerm is ready (especially while
-        // launching bundled Pi). Keep it queued so the 400ms retry timer can deliver it
-        // instead of silently clearing the notice during that startup window.
-        var conpty = _terminal?.ConPTYTerm;
-        if (conpty is null) return;
-
-        try
-        {
-            var joined = string.Join("\r\n", _pendingNotices);
-            conpty.WriteToTerm(("\r\n" + joined + "\r\n").AsSpan());
-            _pendingNotices.Clear();
-            _oldestPendingUtc = null;
-        }
-        catch
-        {
-            // Preserve the queue on a transient PTY write failure. The idle timer will
-            // retry; losing a control-plane escalation is worse than delivering it late.
-        }
-    }
-
     public void StopSession()
     {
         DisposeTerminal();
         _currentCommand = "";
-        _nativeControlPlaneSession = false;
         _stop.Enabled = false;
         if (!string.IsNullOrWhiteSpace(_projectPath) && Directory.Exists(_projectPath))
         {
@@ -547,12 +375,6 @@ sealed class EmbeddedTerminalPanel : UserControl
 
     void DisposeTerminal()
     {
-        if (_noticeFilter is not null)
-        {
-            try { Application.RemoveMessageFilter(_noticeFilter); } catch { }
-            _noticeFilter = null;
-        }
-
         try
         {
             if (_terminal is not null)
@@ -578,8 +400,6 @@ sealed class EmbeddedTerminalPanel : UserControl
         if (disposing)
         {
             DisposeTerminal();
-            _idleFlushTimer.Dispose();
-            _toastTimer.Dispose();
         }
         base.Dispose(disposing);
     }

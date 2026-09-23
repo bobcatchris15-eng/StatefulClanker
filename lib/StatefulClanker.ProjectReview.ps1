@@ -210,29 +210,20 @@ function New-SCProjectReviewPacket([string]$Trigger, $ValidateResult) {
     }
 }
 
-function New-SCProjectReviewPrompt($Packet, [string]$Stage) {
-    $rule = if ($Stage -eq 'critic') {
-        @'
-You are the PROJECT CRITIC. You did not perform any of the work.
-Look at the project as a whole, not at one task:
-- Do the completed tasks contradict each other, or duplicate each other?
-- Has the work drifted from the stated goal?
-- Is there accumulating risk, dead code, or an abandoned half-migration?
-- Do repeated needs_rework or non-advancing progress records suggest the plan is wrong?
-'@
-    } else {
-        @'
-You are the PROJECT VALIDATOR. You did not perform any of the work.
-Judge whether the project as a whole is still sound:
-- Does it still satisfy the stated goal?
-- Does the project actually still build and pass its own checks?
-Weigh the projectValidate result heavily: it is the only direct evidence that the
-project runs. If no command was configured, say plainly that you could not verify it
-and do not infer success from the absence of failure.
-'@
-    }
+function New-SCProjectReviewPrompt($Packet) {
     return @"
-$rule
+You are the PROJECT REVIEWER. You did not perform any of the work.
+
+Inspect the project as a whole rather than re-reviewing one task:
+- Does the current implementation still match the stated goal and authority?
+- Do completed tasks contradict or duplicate one another?
+- Is there accumulating dead code, abandoned migration machinery, or architectural drift?
+- Do repeated needs_rework/non-advancing records expose a plan or integration problem?
+- Does the deterministic projectValidate evidence support or contradict the current state?
+
+The projectValidate result is direct execution evidence. Do not override a failing
+deterministic check with optimism. Conversely, your semantic concerns are findings to
+investigate, not authority to freeze the entire project by themselves.
 
 Report concrete problems with specific task ids or files. Do not restate the packet.
 
@@ -240,8 +231,8 @@ The FIRST line of your reply must be exactly one of:
 VERDICT: PASS
 VERDICT: FAIL
 
-Then explain. FAIL if the project is broken, contradictory, or has drifted from its
-goal. PASS if it is coherent and, where you could verify it, working.
+Use FAIL when you found a concrete semantic/integration problem worth investigation.
+A semantic FAIL is advisory unless deterministic evidence independently fails.
 
 PROJECT REVIEW PACKET:
 $(ConvertTo-SCJson $Packet 20)
@@ -256,34 +247,16 @@ function New-SCProjectReviewPseudoTask([string]$ReviewId) {
     return [pscustomobject]@{ id = $ReviewId; title = 'Project review'; provider = $null }
 }
 
-function New-SCRemediationTask($Review, $Findings) {
-    $id = 'remediate-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
-    $instruction = @"
-A periodic PROJECT review failed. Fix what it found.
-
-This task was created by the harness, not by a human, so treat the findings as a
-report to verify rather than as ground truth. If they are wrong, say so and emit a
-CONTEXT_REQUEST rather than making speculative changes.
-
-REVIEW FINDINGS ($($Review.id)):
-$Findings
-"@
-    # Built directly rather than through Add-SCTask, which reads its arguments from
-    # the CLI script scope and is not callable as a function.
-    $task = New-SCTaskObject $id 'Fix what the project review found' $instruction `
-        @('The project review passes on the next run.') @() @() @() @() $null 'worker' $true
-    Save-SCTask $task
-    Add-SCEvent 'task.created' 'Remediation task created by a failed project review.' @{ taskId = $id; reviewId = $Review.id; humanGate = $true }
-    return $task
-}
-
-function Invoke-SCProjectReview([string]$Trigger = 'interval', [switch]$Force) {
+function Invoke-SCProjectReview(
+    [string]$Trigger = 'interval',
+    [switch]$Force,
+    [string]$ProviderOverride = $null,
+    [string]$EndpointOverride = $null,
+    [string]$ConnectionOverride = $null
+) {
     Assert-SCInitialized
     if (-not $Force -and (Get-SCProjectReviewInterval) -le 0) { return $null }
-
-    $criticEnabled = [bool](Get-SCProjectReviewSetting 'projectCriticEnabled' $true)
-    $validatorEnabled = [bool](Get-SCProjectReviewSetting 'projectValidatorEnabled' $true)
-    if (-not $criticEnabled -and -not $validatorEnabled) { return $null }
+    if (-not [bool](Get-SCProjectReviewSetting 'projectReviewerEnabled' $true)) { return $null }
 
     $reviewId = New-SCId 'review'
     Write-Host "Project review $reviewId (trigger: $Trigger)..."
@@ -293,61 +266,86 @@ function Invoke-SCProjectReview([string]$Trigger = 'interval', [switch]$Force) {
         $verdictText = if ($validate.timedOut) { 'TIMED OUT' } elseif ($validate.exitCode -eq 0) { 'exit 0' } else { "exit $($validate.exitCode)" }
         Write-Host "  projectValidateCommand: $verdictText"
     }
+
     $packet = New-SCProjectReviewPacket $Trigger $validate
     $pseudo = New-SCProjectReviewPseudoTask $reviewId
-
-    $stages = @()
-    if ($criticEnabled) { $stages += 'critic' }
-    if ($validatorEnabled) { $stages += 'validator' }
-
-    $outcomes = @()
-    foreach ($stage in $stages) {
-        $receipt = Invoke-SCProvider $pseudo (New-SCProjectReviewPrompt $packet $stage) $stage $null $null $null
-        $receipt.verdict = Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode)
-        Set-SCTelemetryVerdict $receipt.agentId $receipt.verdict
-        $outcomes += [ordered]@{ stage = $stage; verdict = $receipt.verdict; receiptId = $receipt.id; output = [string]$receipt.stdout }
-        Write-Host "  project $stage : $($receipt.verdict)"
+    $receipt=$null
+    $reviewerVerdict='ERROR'
+    $reviewerOutput=''
+    try {
+        $receipt = Invoke-SCProvider $pseudo (New-SCProjectReviewPrompt $packet) 'reviewer' $ProviderOverride $null $null $null $null $EndpointOverride $ConnectionOverride
+        $reviewerVerdict = Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode)
+        $reviewerOutput = [string]$receipt.stdout
+        Set-SCTelemetryVerdict $receipt.agentId $reviewerVerdict
+    } catch {
+        $reviewerOutput = $_ | Out-String
+        Write-Warning "  project reviewer unavailable: $($_.Exception.Message)"
     }
+    Write-Host "  project reviewer : $reviewerVerdict"
 
-    $failed = @($outcomes | Where-Object { $_.verdict -ne 'PASS' })
+    $semanticFindings = ($reviewerVerdict -ne 'PASS')
+    $hardFailure = [bool]$validate.configured -and ([bool]$validate.timedOut -or [int]$validate.exitCode -ne 0)
     $review = [ordered]@{
-        schemaVersion = 1; id = $reviewId; ts = (Get-Date).ToUniversalTime().ToString('o')
-        trigger = $Trigger; passed = ($failed.Count -eq 0)
-        projectValidate = [ordered]@{ configured = $validate.configured; command = $validate.command; exitCode = $validate.exitCode; timedOut = $validate.timedOut }
-        stages = @($outcomes | ForEach-Object { [ordered]@{ stage = $_.stage; verdict = $_.verdict; receiptId = $_.receiptId } })
+        schemaVersion = 2
+        id = $reviewId
+        ts = (Get-Date).ToUniversalTime().ToString('o')
+        trigger = $Trigger
+        passed = (-not $hardFailure -and -not $semanticFindings)
+        hardFailure = $hardFailure
+        advisoryFindings = $semanticFindings
+        projectValidate = [ordered]@{
+            configured = $validate.configured
+            command = $validate.command
+            exitCode = $validate.exitCode
+            timedOut = $validate.timedOut
+        }
+        stages = @([ordered]@{
+            stage = 'reviewer'
+            verdict = $reviewerVerdict
+            receiptId = if($receipt){$receipt.id}else{$null}
+        })
         packet = $packet
     }
     Write-SCJson (Get-SCPath ("reviews/{0}.json" -f $reviewId)) $review
     Reset-SCCompletedTaskCount
 
-    if ($failed.Count -eq 0) {
-        Add-SCEvent 'project.review.passed' "Project review $reviewId passed." @{ reviewId = $reviewId; trigger = $Trigger }
-        Write-Host "Project review $reviewId PASSED."
+    if ($semanticFindings) {
+        Add-SCEvent 'project.review.findings' "Project reviewer $reviewId reported findings; dispatch remains available unless deterministic validation also failed." @{
+            reviewId=$reviewId; trigger=$Trigger; verdict=$reviewerVerdict; hardFailure=$hardFailure; output=$reviewerOutput
+        }
+        Write-Warning "Project reviewer $reviewId reported findings. They are advisory; investigate them before treating them as project truth."
+    }
+
+    if ($hardFailure) {
+        $reason = if($validate.timedOut) {
+            'Deterministic project validation timed out.'
+        } else {
+            "Deterministic project validation failed with exit $($validate.exitCode)."
+        }
+        Add-SCEvent 'project.review.failed' $reason @{
+            reviewId=$reviewId; trigger=$Trigger; hardFailure=$true; validateExit=$validate.exitCode; timedOut=$validate.timedOut
+        }
+        Set-SCProjectHold $reason $reviewId
+        Write-Warning "Project review $reviewId HARD FAILED: $reason"
+        Write-Warning "Dispatch is HELD on deterministic evidence. Inspect: StatefulClanker.ps1 review show -RunId $reviewId   Release after repair: StatefulClanker.ps1 hold clear"
         return $review
     }
 
-    $findings = ($failed | ForEach-Object { "[$($_.stage)]`r`n$($_.output)" }) -join "`r`n`r`n"
-    $reason = "Project $((($failed | ForEach-Object { $_.stage }) -join ' and ')) failed."
-    Add-SCEvent 'project.review.failed' $reason @{ reviewId = $reviewId; trigger = $Trigger; stages = @($failed | ForEach-Object { $_.stage }) }
-    Write-Warning "Project review $reviewId FAILED: $reason"
-
-    if ([bool](Get-SCProjectReviewSetting 'projectReviewRemediationTask' $true)) {
-        try {
-            $task = New-SCRemediationTask $review $findings
-            Write-Host "  queued remediation task $($task.id) (human-gated: release it with 'task retry' after you have read the review)"
-        } catch { Write-Warning "  could not queue a remediation task: $($_.Exception.Message)" }
+    if (-not $semanticFindings) {
+        Add-SCEvent 'project.review.passed' "Project review $reviewId passed." @{ reviewId=$reviewId; trigger=$Trigger }
+        Write-Host "Project review $reviewId PASSED."
+    } else {
+        Write-Host "Project review $reviewId completed with advisory findings; dispatch continues."
     }
-    Set-SCProjectHold $reason $reviewId
-    Write-Warning "Dispatch is now HELD. Inspect: StatefulClanker.ps1 review show -RunId $reviewId   Release: StatefulClanker.ps1 hold clear"
     return $review
 }
 
 <# Called after a cycle finishes. Managed worktree children must not run this: the
    scheduler runs one review for the whole batch instead of N of them. #>
-function Invoke-SCProjectReviewIfDue([string]$Trigger = 'interval') {
+function Invoke-SCProjectReviewIfDue([string]$Trigger = 'interval',[string]$ProviderOverride=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
     if ($script:SCManagedChild) { return $null }
     if (-not (Test-SCProjectReviewDue)) { return $null }
-    return Invoke-SCProjectReview $Trigger
+    return Invoke-SCProjectReview $Trigger -ProviderOverride $ProviderOverride -EndpointOverride $EndpointOverride -ConnectionOverride $ConnectionOverride
 }
 
 function Show-SCProjectReviews([string]$Mode, [string]$Id) {

@@ -95,32 +95,18 @@ try {
     Write-Host '  WS 6: a route receipt records the exact route-catalog snapshot used for selection'
     $script:SCWorkerSessionCatalogPath=Join-Path $temp 'endpoints.json'
     '{"entries":{}}'|Set-Content -LiteralPath $script:SCWorkerSessionCatalogPath -Encoding UTF8
-    function Get-SCTargetPoolPath { return $script:SCWorkerSessionCatalogPath }
+    function Get-SCMachineEndpointCatalogPath { return $script:SCWorkerSessionCatalogPath }
     $before=Get-SCRouteSnapshotReceipt
     Start-Sleep -Milliseconds 20
     '{"entries":{"replacement":{"enabled":true}}}'|Set-Content -LiteralPath $script:SCWorkerSessionCatalogPath -Encoding UTF8
     $after=Get-SCRouteSnapshotReceipt
     Assert-True ($before.catalogFingerprint-ne$after.catalogFingerprint) 'Route catalog snapshot did not change after catalog content changed.'
 
-    Write-Host '  WS 7: dispatch falls back from an unavailable preferred route and records its snapshot'
+    Write-Host '  WS 7: durable route preference is stored without reimplementing router selection'
     Set-SCWorkerSessionRoutePin $sessionId 'endpoint-a' 'connection-a' 'model-a'
-    function Invoke-SCRouteDoctor { param([int]$MaxProbes) }
-    function Get-SCProviderCandidates($Task,[string]$Override,[string]$Stage) {
-        if($Override-eq'endpoint-a'){return @()}
-        return @([pscustomobject]@{name='endpoint-c';config=[pscustomobject]@{type='api';connection='connection-c';model='model-c'}})
-    }
-    function Enter-SCEndpointLease([string]$EndpointName) { return [pscustomobject]@{acquired=$true} }
-    function Exit-SCEndpointLease($Lease) {}
-    function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$ProviderRecord,[string]$ParentAgentId,$Compilation,[string]$WorkerSessionId,[string]$ContinuationMessage) {
-        return [pscustomobject]@{id='fallback-receipt';taskId=$Task.id;stage=$Stage;provider=$ProviderRecord.name;endpoint=$ProviderRecord.name;exitCode=0;stdout='ok';stderr=''}
-    }
-    function Register-SCRouteSuccess([string]$Name,[string]$Scope='endpoint') {}
-    function Get-SCConnectionServiceName([string]$ConnectionName) { return $null }
-    $fallback=Invoke-SCProvider $task 'resume work' 'run' $null $null $comp $sessionId $null
-    Assert-True ($fallback.endpoint-eq'endpoint-c') 'Unavailable preferred route did not fall back to an eligible route.'
-    Assert-True ([bool]$fallback.routeSnapshot.catalogFingerprint) 'Route receipt omitted the catalog snapshot used for selection.'
-    Assert-True ((Get-SCWorkerSessionRoutePin $sessionId).endpoint-eq'endpoint-c') 'Successful fallback did not update the session route preference.'
-
+    $pin=Get-SCWorkerSessionRoutePin $sessionId
+    Assert-True ($pin.endpoint-eq'endpoint-a') 'Worker session did not retain its endpoint preference.'
+    Assert-True ($pin.connection-eq'connection-a') 'Worker session did not retain its connection preference.'
     Write-Host '  WS 8: cold worker turn budget makes the legacy 24-turn connection default irrelevant'
     $budgetTask=[pscustomobject]@{id='budget-task';role='worker';size='small'}
     $legacyConnection=[pscustomobject]@{maxSteps=24}

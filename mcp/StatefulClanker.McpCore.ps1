@@ -524,7 +524,7 @@ function Exit-McpRunLock([string]$Project) {
     Remove-Item -LiteralPath (Get-McpLockPath $Project) -Force -ErrorAction SilentlyContinue
 }
 
-function Start-McpRun([string]$Project, [string]$TaskId, [string]$Provider) {
+function Start-McpRun([string]$Project, [string]$TaskId, [string]$Provider, [string]$Endpoint=$null, [string]$Connection=$null) {
     Assert-McpInitialized $Project
     $stateDir = Get-McpStateDir $Project
     $mcpDir = Join-Path $stateDir 'mcp'
@@ -548,6 +548,8 @@ function Start-McpRun([string]$Project, [string]$TaskId, [string]$Provider) {
     $cli = @('run')
     if ($TaskId) { $cli += @('-TaskId', $TaskId) }
     if ($Provider) { $cli += @('-Provider', $Provider) }
+    if ($Endpoint) { $cli += @('-Endpoint', $Endpoint) }
+    if ($Connection) { $cli += @('-Connection', $Connection) }
 
     $pwshPath = Get-McpPwshPath
     # Quote explicitly: Start-Process -ArgumentList joins an array WITHOUT quoting, so
@@ -575,7 +577,10 @@ function Start-McpRun([string]$Project, [string]$TaskId, [string]$Provider) {
     $record = [ordered]@{
         startedAt = (Get-Date).ToUniversalTime().ToString('o')
         taskId    = if ($TaskId) { $TaskId } else { '(next ready task)' }
-        provider  = if ($Provider) { $Provider } else { '(config default)' }
+        provider  = if ($Provider) { $Provider } else { $null }
+        endpoint  = if ($Endpoint) { $Endpoint } else { $null }
+        connection = if ($Connection) { $Connection } else { $null }
+        routing   = if ($Provider) { 'compatibility-cli' } elseif ($Endpoint) { 'exact-endpoint' } elseif ($Connection) { 'connection-pool' } else { 'automatic-pool' }
         processId = $proc.Id
         logPath   = $logPath
         note      = 'Cycle runs detached. Poll run_status until inFlight is false.'
@@ -614,7 +619,11 @@ function Start-McpParallelRun([string]$Project, $Arguments) {
         $cli = @('run', 'parallel')
     }
     $provider = Get-McpArgOptional $Arguments 'provider'
+    $endpoint = Get-McpArgOptional $Arguments 'endpoint'
+    $connection = Get-McpArgOptional $Arguments 'connection'
     if ($provider) { $cli += @('-Provider', $provider) }
+    if ($endpoint) { $cli += @('-Endpoint', $endpoint) }
+    if ($connection) { $cli += @('-Connection', $connection) }
     if ($Arguments -and $Arguments.PSObject.Properties['noMerge'] -and [bool]$Arguments.noMerge) { $cli += '-NoMerge' }
 
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
@@ -758,9 +767,9 @@ function Get-McpToolList {
         @{ name = 'plan_approve'; description = 'HUMAN AUTHORITY: approve the active plan so tasks may run. Disabled unless mcp.allowHumanAuthorityTools is true.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
 
         # ---- execution ----
-        @{ name = 'run_start'; description = 'Start one compile -> worker -> critic -> validator -> commit cycle DETACHED. Returns immediately; poll run_status. Refuses if a cycle is already in flight.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ taskId = @{ type = 'string'; description = 'Omit to run the next ready task.' }; provider = @{ type = 'string' } }) } },
-        @{ name = 'run_parallel'; description = 'Start SEVERAL ready tasks at once, each in its own git worktree, then merge the ones that pass. Detached; poll run_status. Requires the project to be a git repo with a clean working tree.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ maxConcurrent = @{ type = 'integer'; minimum = 1; maximum = 16; description = 'Defaults to maxConcurrent in config.json.' }; provider = @{ type = 'string' }; noMerge = @{ type = 'boolean'; description = 'Commit each task to its own branch but do not merge. Use to review before integrating.' } }) } },
-        @{ name = 'project_review'; description = 'Run a PROJECT-level critic and validator now, over the whole project rather than one task. Runs projectValidateCommand for evidence. On FAIL it halts dispatch and queues a human-gated remediation task.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
+        @{ name = 'run_start'; description = 'Start one detached task cycle. Automatic API routing uses the machine endpoint pool; optionally pin the worker to one connection or exact endpoint, or explicitly select a compatibility CLI backend.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ taskId = @{ type = 'string'; description = 'Omit to run the next ready task.' }; provider = @{ type = 'string'; description = 'Explicit compatibility CLI backend only (for example agy/opencode).' }; connection = @{ type = 'string'; description = 'Restrict API worker routing to this machine connection/provider account while still allowing failover among its enabled endpoints.' }; endpoint = @{ type = 'string'; description = 'Pin the API worker to one exact endpoint/catalog id, e.g. openrouter::openrouter/free.' } }) } },
+        @{ name = 'run_parallel'; description = 'Start several ready tasks in isolated worktrees. Optional routing selector applies to the workers in this batch.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ maxConcurrent = @{ type = 'integer'; minimum = 1; maximum = 16; description = 'Defaults to maxConcurrent in config.json.' }; provider = @{ type = 'string'; description = 'Explicit compatibility CLI backend only.' }; connection = @{ type = 'string'; description = 'Restrict API workers to one machine connection/provider account.' }; endpoint = @{ type = 'string'; description = 'Pin API workers to one exact endpoint.' }; noMerge = @{ type = 'boolean'; description = 'Commit each task to its own branch but do not merge. Use to review before integrating.' } }) } },
+        @{ name = 'project_review'; description = 'Run one PROJECT reviewer plus deterministic projectValidate evidence. Semantic findings are advisory; a failing deterministic projectValidate command is the hard gate that holds dispatch.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ provider = @{ type = 'string'; description = 'Explicit compatibility CLI reviewer backend only.' }; connection = @{ type = 'string'; description = 'Restrict API reviewer routing to one machine connection/provider account.' }; endpoint = @{ type = 'string'; description = 'Pin the API reviewer to one exact endpoint.' } }) } },
         @{ name = 'review_history'; description = 'List recent project reviews: trigger, pass/fail, and the exit code of the project validate command.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ limit = @{ type = 'integer'; minimum = 1; maximum = 500 } }) } },
         @{ name = 'review_get'; description = 'Read one project review in full, including the evidence packet the reviewers saw.'; inputSchema = @{ type = 'object'; properties = ($projectProp + @{ reviewId = @{ type = 'string' } }); required = @('reviewId') } },
         @{ name = 'hold_status'; description = 'Report whether dispatch is held after a failed project review, and why.'; inputSchema = @{ type = 'object'; properties = $projectProp } },
@@ -897,7 +906,7 @@ function Invoke-McpTool([string]$Name, $Arguments) {
             return New-McpTextResult ([ordered]@{ approved = $true; authority = 'human'; output = $r.stdout })
         }
         'run_start' {
-            $record = Start-McpRun $project (Get-McpArgOptional $Arguments 'taskId') (Get-McpArgOptional $Arguments 'provider')
+            $record = Start-McpRun $project (Get-McpArgOptional $Arguments 'taskId') (Get-McpArgOptional $Arguments 'provider') (Get-McpArgOptional $Arguments 'endpoint') (Get-McpArgOptional $Arguments 'connection')
             return New-McpTextResult $record
         }
         'run_parallel' {
@@ -905,9 +914,11 @@ function Invoke-McpTool([string]$Name, $Arguments) {
             return New-McpTextResult $record
         }
         'project_review' {
-            # Two provider dispatches plus the project's own test command: too slow to
-            # block a tool call, so it runs detached like run_start.
-            $record = Start-McpDetachedHarness $project @('review', 'run') 'review'
+            $args=@('review','run')
+            $provider=Get-McpArgOptional $Arguments 'provider'; if($provider){$args+=@('-Provider',$provider)}
+            $endpoint=Get-McpArgOptional $Arguments 'endpoint'; if($endpoint){$args+=@('-Endpoint',$endpoint)}
+            $connection=Get-McpArgOptional $Arguments 'connection'; if($connection){$args+=@('-Connection',$connection)}
+            $record = Start-McpDetachedHarness $project $args 'review'
             return New-McpTextResult $record
         }
         'review_history' {

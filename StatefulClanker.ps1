@@ -4,7 +4,7 @@ param(
     [Parameter(Position=0)][string]$Command='status',
     [Parameter(Position=1)][string]$Subcommand,
     [string]$Title,[string]$Instruction,[string[]]$Accept,[string[]]$DependsOn,
-    [string[]]$Retrieval,[string[]]$Evidence,[string[]]$Relation,[string]$Provider,[string]$Role='worker',
+    [string[]]$Retrieval,[string[]]$Evidence,[string[]]$Relation,[string]$Provider,[string]$Endpoint,[string]$Connection,[string]$Role='worker',
     [string]$Size='small',[string]$OutputKind='change',[string[]]$Source,[string[]]$IntentRef,[string]$SourceRef,
     [string]$CapabilityProfile,[string[]]$ToolAllow,[string[]]$ToolDeny,
     [string]$DirectiveId,[string]$Scope,[long]$Since=0,[int]$Limit=100,[string]$MinimumLevel,
@@ -16,7 +16,7 @@ $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
 $runtimeRef='29bf71c77bc9d51c2ee791cb1f99ada552841d4a'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.CapabilityTasks.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.ReflexiveKnowledge.ps1','StatefulClanker.Execution.ps1','StatefulClanker.Routing.ps1','StatefulClanker.RouterClient.ps1','StatefulClanker.CompiledRouting.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.Autofill.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerPolicy.ps1','StatefulClanker.McpDiscovery.ps1','StatefulClanker.WorkerRuntime.ps1','StatefulClanker.WorkerRuntime.Windows.ps1')
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.CapabilityTasks.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.ReflexiveKnowledge.ps1','StatefulClanker.Execution.ps1','StatefulClanker.RouterClient.ps1','StatefulClanker.CompiledRouting.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.Autofill.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerPolicy.ps1','StatefulClanker.McpDiscovery.ps1','StatefulClanker.WorkerRuntime.ps1','StatefulClanker.WorkerRuntime.Windows.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -41,8 +41,8 @@ switch($Command.ToLowerInvariant()){
 'directive'{Show-SCDirectives $Subcommand $DirectiveId $Message $Scope $IntentRef $SourceRef $Reason;break}
 'events'{Get-SCControlEventsSince $Since $Limit $MinimumLevel|ConvertTo-SCJson -Depth 16|Write-Host;break}
 'intent'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='show'};switch($Subcommand.ToLowerInvariant()){'show'{Show-SCIntent 'show';break};'history'{Show-SCIntent 'history';break};'escalations'{Show-SCIntent 'escalations';break};'replace'{Replace-SCIntentContract $Path $Reason;break};default{throw "Unknown intent subcommand: $Subcommand"}};break}
-'run'{if($Parallel -gt 0 -or $Subcommand -eq 'parallel'){Invoke-SCParallel $Parallel $Provider $PSCommandPath -NoMerge:$NoMerge}else{Invoke-SCTask $TaskId $Provider};break}
-'autofill'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){'run'{Invoke-SCAutofillSupervisor $IntervalSeconds $Provider $PSCommandPath -NoMerge:$NoMerge;break};'status'{Show-SCAutofillStatus;break};'stop'{Request-SCAutofillStop;break};'pause'{Request-SCAutofillPause;break};'resume'{Request-SCAutofillResume;break};'trigger'{Request-SCAutofillTrigger;break};default{throw "Unknown autofill subcommand: $Subcommand"}};break}
+'run'{if($Parallel -gt 0 -or $Subcommand -eq 'parallel'){Invoke-SCParallel $Parallel $Provider -Endpoint $Endpoint -Connection $Connection -NoMerge:$NoMerge}else{Invoke-SCTask $TaskId $Provider $Endpoint $Connection};break}
+'autofill'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){'run'{Invoke-SCAutofillSupervisor $IntervalSeconds $Provider $PSCommandPath -Endpoint $Endpoint -Connection $Connection -NoMerge:$NoMerge;break};'status'{Show-SCAutofillStatus;break};'stop'{Request-SCAutofillStop;break};'pause'{Request-SCAutofillPause;break};'resume'{Request-SCAutofillResume;break};'trigger'{Request-SCAutofillTrigger;break};default{throw "Unknown autofill subcommand: $Subcommand"}};break}
 'complete'{Complete-SCTask $TaskId;break}
 'block'{Block-SCTask $TaskId $Reason;break}
 'event'{Add-SCDirection $Message;break}
@@ -50,7 +50,7 @@ switch($Command.ToLowerInvariant()){
 'telemetry'{Show-SCTelemetry $Subcommand $RunId;break}
 'context'{Show-SCContext $Subcommand $CompilationId;break}
 'progress'{Show-SCProgress $Subcommand;break}
-'review'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='history'};if($Subcommand.ToLowerInvariant()-eq'run'){Invoke-SCProjectReview 'manual' -Force|Out-Null}else{Show-SCProjectReviews $Subcommand $RunId};break}
+'review'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='history'};if($Subcommand.ToLowerInvariant()-eq'run'){Invoke-SCProjectReview 'manual' -Force -ProviderOverride $Provider -EndpointOverride $Endpoint -ConnectionOverride $Connection|Out-Null}else{Show-SCProjectReviews $Subcommand $RunId};break}
 'mcp'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};switch($Subcommand.ToLowerInvariant()){
     'discover'{$records=Invoke-SCMcpDiscoveryScan;$records|ForEach-Object{[pscustomobject]@{name=$_.name;harness=$_.harness;verified=$(if($_.verified){'yes'}else{'no'});probe=$(if($_.probeOk){"ok($($_.toolCount) tools)"}else{"fail: $($_.probeError)"});imported=$(if($_.imported){'yes'}else{'no'})}}|Format-Table -AutoSize;break}
     'list'{$cache=Get-SCMcpDiscoveryCache;if($null-eq$cache-or-not$cache.PSObject.Properties['servers']-or@($cache.servers).Count-eq0){Write-Host "No cached MCP discovery results. Run: .\StatefulClanker.ps1 mcp discover";break};@($cache.servers)|ForEach-Object{[pscustomobject]@{name=$_.name;harness=$_.harness;verified=$(if($_.verified){'yes'}else{'no'});probe=$(if($_.probeOk){"ok($($_.toolCount) tools)"}else{"fail: $($_.probeError)"});imported=$(if(Test-SCMcpServerImported $_.name){'yes'}else{'no'})}}|Format-Table -AutoSize;break}

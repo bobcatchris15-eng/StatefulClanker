@@ -144,9 +144,9 @@ See `docs/DIRECT_INFERENCE.md` for the direct worker protocol and security bound
 
 Open the **Integrations** tab.
 
-The top of the page shows the resident Streamable HTTP endpoint and the stdio bridge command. Below that, known MCP clients show whether they appear installed, whether StatefulClanker is already registered, and whether the config location is verified.
+The top of the page shows the optional resident Streamable HTTP endpoint and the direct stdio command. Local clients should prefer stdio. Below that, known MCP clients show whether they appear installed, whether StatefulClanker is already registered, and whether the config location is verified.
 
-For verified integration targets, **Register selected** writes/updates the MCP registration using the existing integration catalogue. For an unverified client/config path, the app refuses to write a guessed location; copy the stdio command or endpoint into that client's MCP settings instead.
+For verified integration targets, **Register selected** writes/updates the MCP registration using the existing integration catalogue. For an unverified client/config path, the app refuses to write a guessed location; copy the stdio command into that client's MCP settings instead. Use the HTTP endpoint only when a client specifically requires HTTP.
 
 ### stdio registration
 

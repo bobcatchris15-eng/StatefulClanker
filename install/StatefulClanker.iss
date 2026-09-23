@@ -66,7 +66,6 @@ Source: "{#RepoRoot}\README.md";                   DestDir: "{app}";          Fl
 Source: "{#RepoRoot}\LICENSE";                     DestDir: "{app}";          Flags: ignoreversion
 Source: "{#RepoRoot}\lib\*.ps1";                   DestDir: "{app}\lib";      Flags: ignoreversion
 Source: "{#RepoRoot}\mcp\*.ps1";                   DestDir: "{app}\mcp";      Flags: ignoreversion
-Source: "{#RepoRoot}\desktop\*.ps1";               DestDir: "{app}\desktop";  Flags: ignoreversion
 Source: "{#RepoRoot}\docs\*.md";                   DestDir: "{app}\docs";     Flags: ignoreversion
 Source: "{#RepoRoot}\skills\*";                    DestDir: "{app}\skills";   Flags: ignoreversion recursesubdirs
 Source: "{#RepoRoot}\examples\*";                  DestDir: "{app}\examples"; Flags: ignoreversion recursesubdirs

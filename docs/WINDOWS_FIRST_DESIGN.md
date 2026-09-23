@@ -122,7 +122,7 @@ One endpoint serves both MCP eras:
 - legacy handshake-era clients (`initialize`);
 - modern `2026-07-28` stateless clients (`server/discover` / per-request metadata).
 
-The stdio bridge preserves the incoming era when forwarding to the resident HTTP server. Modern `subscriptions/listen` is used for control-event wake-up notifications; the durable event cursor remains the correctness path.
+Local stdio clients invoke the MCP dispatcher directly and do not depend on the resident HTTP server. Modern `subscriptions/listen` remains available to clients that want push notifications; bundled Pi uses the durable control-event cursor over its direct stdio child as the correctness path.
 
 ## Desktop pages
 
@@ -130,9 +130,9 @@ Current/expected top-level surfaces are:
 
 - **Overview** — active project authority and headline metrics;
 - **Activity** — durable project event activity;
-- **Integrations** — MCP endpoint/stdio bridge/client registration;
-- **Endpoints & Routing** — project CLI/API endpoints, health, priority, and route preferences;
-- **Connections** — machine inference credentials, validation, and discovered model catalogs;
+- **Integrations** — optional HTTP endpoint, direct stdio, and client registration;
+- **CLI Backends** — explicit compatibility harnesses plus direct Pi/agy/OpenCode/Goose launchers;
+- **Connections** — machine inference credentials, discovered models, endpoint enablement, health, and automatic-routing catalog;
 - **Worker Capabilities** — machine grants/profiles and external MCP tool sources.
 
 Planning remains conversational through MCP; the desktop app is primarily observation and configuration.

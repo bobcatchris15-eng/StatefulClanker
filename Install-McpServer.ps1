@@ -1,9 +1,9 @@
 <# Emit MCP client registration for this StatefulClanker install.
 
-   The normal Windows-first registration does NOT pin a project. While the desktop
-   app is running, the stdio bridge forwards into its resident MCP host and follows
-   whichever project is active in the app. -ProjectPath remains available for
-   headless/legacy use when an explicit fixed default is desired.
+   Stdio is the normal local transport and executes the MCP dispatcher directly.
+   An unpinned stdio server follows the active-project pointer maintained by the
+   Windows app; -ProjectPath pins a fixed project. HTTP remains an optional
+   loopback interoperability transport and is never required by local stdio clients.
 #>
 [CmdletBinding()]
 param(
@@ -22,9 +22,8 @@ $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
 $stdioServer = Join-Path $repo 'mcp\StatefulClanker.Mcp.ps1'
 $httpServer = Join-Path $repo 'mcp\StatefulClanker.McpHttp.ps1'
-foreach ($required in @($stdioServer, $httpServer)) {
-    if (-not (Test-Path -LiteralPath $required)) { throw "Missing $required. Run this from a full install/checkout." }
-}
+if (-not (Test-Path -LiteralPath $stdioServer)) { throw "Missing $stdioServer. Run this from a full install/checkout." }
+if ($Transport -eq 'http' -and -not (Test-Path -LiteralPath $httpServer)) { throw "Missing $httpServer. The optional HTTP transport is not installed." }
 
 $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue)
 if ($pwshPath) { $pwshPath = $pwshPath.Source } else { $pwshPath = 'powershell' }
@@ -75,7 +74,7 @@ switch ($Client) {
         $tail=($stdioArgs|ForEach-Object{"`"$_`""}) -join ' '
         Write-Host "  claude mcp add statefulclanker --scope user -- `"$pwshPath`" $tail"
         Write-Host ''
-        if(-not$resolvedProject){Write-Host 'This registration follows the active project selected in the StatefulClanker app.'}
+        if(-not$resolvedProject){Write-Host 'This direct stdio registration follows the active project selected in the StatefulClanker app.'}
         return
     }
     'opencode' {
@@ -134,6 +133,6 @@ Show-Snippet $config 'Generic MCP stdio server entry:'
 if($resolvedProject){
     Write-Host "This registration pins the default project to: $resolvedProject"
 } else {
-    Write-Host 'When the StatefulClanker app is running, this stdio bridge follows its active project.'
+    Write-Host 'This direct stdio server follows the active project selected in the StatefulClanker app.'
     Write-Host 'Every tool can still pass an explicit "project" argument when needed.'
 }

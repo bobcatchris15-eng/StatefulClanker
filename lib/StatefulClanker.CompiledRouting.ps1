@@ -1,12 +1,40 @@
-# Compiled router dispatch bridge. The C# service owns leases/health/cursor;
-# PowerShell continues to own provider invocation and worker transcript semantics.
+# Compiled router dispatch bridge. The C# service owns endpoint selection,
+# leases, health, cooldowns, probing, and the round-robin cursor. PowerShell owns
+# provider invocation and durable worker transcript semantics only.
 
-function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null) {
+function Get-SCCompiledRouterRoot {
+    if($env:SC_ROUTER_ROOT){return [IO.Path]::GetFullPath([string]$env:SC_ROUTER_ROOT)}
+    return Join-Path $env:LOCALAPPDATA 'StatefulClanker'
+}
+function Get-SCMachineEndpointCatalogPath { return Join-Path (Get-SCCompiledRouterRoot) 'endpoints.json' }
+function Get-SCMachineEndpointRecord([string]$Endpoint) {
+    $catalogId=if($Endpoint.StartsWith('pool:',[StringComparison]::OrdinalIgnoreCase)){$Endpoint.Substring(5)}else{$Endpoint}
+    $path=Get-SCMachineEndpointCatalogPath
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return $null}
+    try{$catalog=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json}catch{return $null}
+    if(-not$catalog.PSObject.Properties['entries'] -or -not$catalog.entries){return $null}
+    $prop=$catalog.entries.PSObject.Properties[$catalogId]
+    if($null-eq$prop){return $null}
+    $entry=$prop.Value
+    return [pscustomobject][ordered]@{
+        name=('pool:'+$catalogId)
+        config=[pscustomobject][ordered]@{
+            type='api'
+            connection=[string]$entry.connection
+            model=[string]$entry.model
+            toolMode=if($entry.PSObject.Properties['toolMode'] -and $entry.toolMode){[string]$entry.toolMode}else{'native'}
+            supportsTools=if($entry.PSObject.Properties['supportsTools']){$entry.supportsTools}else{$null}
+            contextLength=if($entry.PSObject.Properties['contextLength']){$entry.contextLength}else{$null}
+        }
+    }
+}
+
+function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
     $history=@()
     $routeSnapshot=Get-SCRouteSnapshotReceipt
     Set-SCProperty $routeSnapshot 'router' 'compiled'
-    $preferred=$null
-    if($Stage-eq'run' -and $WorkerSessionId){
+    $preferred=$EndpointOverride
+    if(-not$preferred -and -not$ConnectionOverride -and $Stage-eq'run' -and $WorkerSessionId){
         $pin=Get-SCWorkerSessionRoutePin $WorkerSessionId
         if($pin){$preferred=[string]$pin.endpoint}
     }
@@ -21,6 +49,8 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
         $acquireArgs=@('acquire','--owner-pid',[string]$PID)
         if($WorkerSessionId){$acquireArgs+=@('--session',$WorkerSessionId)}
         if($preferred){$acquireArgs+=@('--preferred',$preferred)}
+        if($ConnectionOverride){$acquireArgs+=@('--connection',$ConnectionOverride)}
+        if($EndpointOverride){$acquireArgs+=@('--strict-preferred','true')}
         $acquire=Invoke-SCCompiledRouterCommand $acquireArgs
 
         if(-not[bool]$acquire.ok){
@@ -34,7 +64,7 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
             }
             return [pscustomobject][ordered]@{
                 schemaVersion=4;id=New-SCId $Stage;agentId=New-SCId 'agent';taskId=$Task.id;stage=$Stage
-                provider=$preferred;endpoint=$preferred;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId)
+                provider=if($preferred){$preferred}else{$ConnectionOverride};endpoint=$preferred;connection=$ConnectionOverride;workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]$WorkerSessionId)
                 compilationId=if($Compilation){$Compilation.id}else{$null};inputFingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null}
                 command='compiled-router';args=@();promptPath=$null;startedAt=$now.ToString('o');endedAt=$now.ToString('o');durationSeconds=0
                 exitCode=-3;stdout='';stderr=[string]$acquire.error;routeDeferred=$true;retryAfter=$retry.ToString('o')
@@ -44,15 +74,15 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
 
         $leaseToken=[string]$acquire.data.lease
         $endpoint=[string]$acquire.data.endpoint
-        $record=@(Get-SCTargetPoolRecords|Where-Object{[string]$_.name-eq$endpoint}|Select-Object -First 1)
+        $record=Get-SCMachineEndpointRecord $endpoint
         $released=$false
-        if($record.Count-eq0){
+        if($null-eq$record){
             try{[void](Invoke-SCCompiledRouterCommand @('failure','--lease',$leaseToken,'--class','configuration','--message',"Endpoint $endpoint disappeared from the catalog after lease acquisition."));$released=$true}catch{}
             $history+=,[ordered]@{endpoint=$endpoint;outcome='failed';failureClass='configuration';healthScope='connection'}
+            if($EndpointOverride){throw "Explicit endpoint '$EndpointOverride' disappeared from the endpoint catalog after lease acquisition."}
             $preferred=$null
             continue
         }
-        $record=$record[0]
 
         try{
             $type=if($record.config.PSObject.Properties['type']){[string]$record.config.type}else{'api'}
@@ -89,18 +119,23 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
                 return $receipt
             }
 
-            $class=Get-SCRouteFailureClass ([int]$receipt.exitCode) $text
-            $failure=Invoke-SCCompiledRouterCommand @('failure','--lease',$leaseToken,'--class',$class,'--message',$text)
+            $failure=Invoke-SCCompiledRouterCommand @('failure','--lease',$leaseToken,'--message',$text)
             $released=$true
+            $class=if($failure.data -and $failure.data.PSObject.Properties['failureClass']){[string]$failure.data.failureClass}else{'request_error'}
             $scope=if($failure.data -and $failure.data.PSObject.Properties['scope']){[string]$failure.data.scope}else{'request'}
             $key=if($failure.data -and $failure.data.PSObject.Properties['key']){[string]$failure.data.key}else{$null}
+            $canFailover=if($failure.data -and $failure.data.PSObject.Properties['failoverAllowed']){[bool]$failure.data.failoverAllowed}else{$false}
             $history+=,[ordered]@{endpoint=$endpoint;connection=[string]$record.config.connection;model=[string]$record.config.model;outcome='failed';failureClass=$class;healthScope=$scope;healthKey=$key}
             Set-SCProperty $receipt 'routeAttempts' $history.Count
             Set-SCProperty $receipt 'routeHistory' @($history)
             Set-SCProperty $receipt 'compiledRouter' $true
 
-            if(-not(Test-SCRouteFailureTransient $class) -and $class-ne'auth'){
-                Add-SCEvent 'routing.failover_stopped' "Compiled router stopped replay after non-transient failure: $class" @{taskId=$Task.id;stage=$Stage;endpoint=$endpoint;failureClass=$class}
+            if($EndpointOverride){
+                Add-SCEvent 'routing.endpoint_override_failed' "Explicit endpoint override $EndpointOverride failed ($class); not failing over to another endpoint." @{taskId=$Task.id;stage=$Stage;endpoint=$endpoint;failureClass=$class}
+                return $receipt
+            }
+            if(-not$canFailover){
+                Add-SCEvent 'routing.failover_stopped' "Compiled router stopped replay after non-failover failure: $class" @{taskId=$Task.id;stage=$Stage;endpoint=$endpoint;failureClass=$class}
                 return $receipt
             }
             Add-SCEvent 'routing.failover' "Compiled router retired $endpoint for $class; acquiring another endpoint." @{taskId=$Task.id;stage=$Stage;endpoint=$endpoint;failureClass=$class;attempt=$history.Count}

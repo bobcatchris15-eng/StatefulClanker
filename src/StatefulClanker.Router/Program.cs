@@ -75,6 +75,8 @@ internal static class Program
         {
             op=op,
             preferred=Get(map,"preferred"),
+            preferredConnection=Get(map,"connection"),
+            strictPreferred=bool.TryParse(Get(map,"strict-preferred"),out var sp)&&sp,
             sessionId=Get(map,"session"),
             requireTools=bool.TryParse(Get(map,"require-tools"),out var rt)&&rt,
             ownerPid=int.TryParse(Get(map,"owner-pid"),out var pid)?pid:0,

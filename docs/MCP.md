@@ -45,7 +45,7 @@ Modern MCP is stateless:
 
 `server/discover` advertises both `2026-07-28` and the supported legacy revision, server capabilities, instructions, and cache hints.
 
-The stdio bridge inspects modern request metadata and adds the equivalent modern routing headers when forwarding to the resident HTTP server, so protocol era is preserved across transports.
+The stdio server is a direct local transport: it reads JSON-RPC from stdin and invokes the same MCP dispatcher in-process. It does not discover or tunnel through the resident HTTP server. Modern request metadata is interpreted directly by the dispatcher.
 
 ## Modern subscriptions and durable events
 

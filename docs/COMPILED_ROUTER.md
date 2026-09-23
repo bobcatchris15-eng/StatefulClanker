@@ -134,21 +134,13 @@ Current operations:
 
 The first PowerShell router client call starts the daemon automatically if it is not already running.
 
-## Compatibility and fallback
+## Routing authority and explicit compatibility backends
 
-Normal automatic dispatch uses the compiled router when its executable is available.
+The compiled router is the sole authority for automatic endpoint selection, leases, health, cooldowns, and round-robin state. If it cannot be contacted or started, automatic dispatch fails visibly; it does not switch to a second routing implementation.
 
-Explicit operator/provider overrides remain on the existing strict PowerShell route path.
+Project-local CLI providers remain available only when explicitly requested as compatibility/debug backends. They do not participate in automatic endpoint routing and are never an automatic fallback.
 
-If the compiled router cannot be contacted or started, dispatch records a `routing.compiled_router_fallback` event and uses the legacy PowerShell router for that call. This keeps source checkouts and recovery paths usable while the migration is in progress.
-
-Set:
-
-```
-STATEFULCLANKER_DISABLE_COMPILED_ROUTER=1
-```
-
-to force legacy routing for diagnosis.
+`STATEFULCLANKER_DISABLE_COMPILED_ROUTER=1` disables automatic compiled routing for diagnosis; it does not enable a legacy router.
 
 ## Packaging
 

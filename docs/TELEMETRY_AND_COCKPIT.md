@@ -26,11 +26,7 @@ A `CONTEXT_REQUEST:` is not merely informational telemetry: the corresponding wo
 
 ## Resident desktop cockpit
 
-The installed .NET 8 Windows host is now the primary resident cockpit. The older PowerShell cockpit remains useful as a lightweight fallback:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\desktop\StatefulClanker.Cockpit.ps1 -ProjectPath C:\path\to\your\project
-```
+The installed .NET 8 Windows host is the resident cockpit. The retired PowerShell tray/cockpit is no longer shipped.
 
 The resident cockpit is organized around three persistent regions:
 
@@ -47,7 +43,9 @@ The Overview terminal is a real ConPTY-backed terminal using the Windows Termina
 Presets include:
 
 - PowerShell;
+- bundled Pi, with direct stdio StatefulClanker tools and control-event wakeups;
 - Antigravity CLI (`agy`);
+- Goose (`goose session`);
 - OpenCode (`opencode`);
 - OpenCode mini (`opencode mini`);
 - a custom command.

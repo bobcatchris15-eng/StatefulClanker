@@ -36,17 +36,22 @@ public sealed class RouterEngine
             .ToArray();
     }
 
-    public RouterResponse Acquire(string? preferred,string? sessionId,bool requireTools,int ownerPid=0)
+    public RouterResponse Acquire(string? preferred,string? preferredConnection,bool strictPreferred,string? sessionId,bool requireTools,int ownerPid=0)
     {
         ReapExpiredLeases();
         var health=_store.LoadHealth();
         var routes=Routes()
             .Where(r=>!requireTools || (r.Endpoint.supportsTools==true && string.Equals(r.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase)))
+            .Where(r=>string.IsNullOrWhiteSpace(preferredConnection) || string.Equals(r.Endpoint.connection,preferredConnection,StringComparison.OrdinalIgnoreCase))
             .Where(r=>Available(r,health))
             .ToList();
 
         if(routes.Count==0)
-            return RouterResponse.Fail("No healthy eligible endpoint is available.",new { nextRetryAt=NextRetryAt(health) });
+            return RouterResponse.Fail(
+                string.IsNullOrWhiteSpace(preferredConnection)
+                    ? "No healthy eligible endpoint is available."
+                    : $"No healthy eligible endpoint is available on connection '{preferredConnection}'.",
+                new { nextRetryAt=NextRetryAt(health), connection=preferredConnection });
 
         EndpointRoute? selected=null;
         if(!string.IsNullOrWhiteSpace(preferred))
@@ -55,6 +60,8 @@ public sealed class RouterEngine
                 string.Equals(r.RouteName,preferred,StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(r.CatalogId,preferred,StringComparison.OrdinalIgnoreCase));
             if(selected is not null && IsLeased(selected.RouteName)) selected=null;
+            if(strictPreferred && selected is null)
+                return RouterResponse.Fail($"Preferred endpoint '{preferred}' is not currently healthy and available.",new { nextRetryAt=NextRetryAt(health) });
         }
 
         if(selected is null)
@@ -110,6 +117,8 @@ public sealed class RouterEngine
             preferredHonored=!string.IsNullOrWhiteSpace(preferred) &&
                 (string.Equals(selected.RouteName,preferred,StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(selected.CatalogId,preferred,StringComparison.OrdinalIgnoreCase)),
+            connectionHonored=!string.IsNullOrWhiteSpace(preferredConnection) &&
+                string.Equals(selected.Endpoint.connection,preferredConnection,StringComparison.OrdinalIgnoreCase),
             expiresAt=lease.expiresAt
         });
     }
@@ -162,7 +171,7 @@ public sealed class RouterEngine
         if(scope=="request")
         {
             if(lease is not null) Release(lease.token);
-            return RouterResponse.Ok(new { endpoint=route.RouteName,failureClass=klass,scope,healthChanged=false });
+            return RouterResponse.Ok(new { endpoint=route.RouteName,failureClass=klass,scope,healthChanged=false,failoverAllowed=FailurePolicy.CanFailover(klass) });
         }
 
         var key=scope=="connection" ? "connection:"+route.Endpoint.connection : route.RouteName;
@@ -174,7 +183,7 @@ public sealed class RouterEngine
         if(lease is not null) Release(lease.token);
         return RouterResponse.Ok(new
         {
-            endpoint=route.RouteName,key,scope,failureClass=klass,
+            endpoint=route.RouteName,key,scope,failureClass=klass,failoverAllowed=FailurePolicy.CanFailover(klass),
             state=entry.state,retryAfter=entry.retryAfter,nextProbeAt=entry.nextProbeAt,quota=entry.quota
         });
     }

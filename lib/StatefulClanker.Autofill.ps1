@@ -56,7 +56,7 @@ function Test-SCAutofillMainTreeReady {
     return [ordered]@{ok=$true;reason=$null}
 }
 
-function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[string]$HarnessPath,[switch]$NoMerge) {
+function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[string]$HarnessPath,[string]$Endpoint=$null,[string]$Connection=$null,[switch]$NoMerge) {
     Assert-SCInitialized
     if(-not(Test-SCAutofillEnabled)){Write-Host 'Autofill is disabled in project config.';return}
     $interval=Get-SCAutofillIntervalSeconds $IntervalSeconds
@@ -73,7 +73,6 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
     Add-SCEvent 'autofill.started' "Autofill supervisor started; interval ${interval}s." @{pid=$PID;intervalSeconds=$interval;maxConcurrent=$limit}
     try {
         while($true){
-            try{if(Get-Command Invoke-SCRouteDoctor -ErrorAction SilentlyContinue){Invoke-SCRouteDoctor 1|Out-Null}}catch{}
             $now=Get-Date;$results=@();$still=@()
             foreach($r in @($running)){
                 if($r.process.HasExited){try{$results+=,(Complete-SCParallelChild (Get-SCStateRoot) $r -NoMerge:$NoMerge)}catch{Write-Warning "Autofill could not finalize $($r.taskId): $($_.Exception.Message)"};try{$r.process.Dispose()}catch{}}
@@ -117,7 +116,7 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
                 foreach($task in @($readyCandidates|Select-Object -First $slots)){
                     try{
                         $wt=New-SCWorktree (Get-SCStateRoot) $task.id
-                        $run=Start-SCCycleProcess (Get-SCStateRoot) $wt $task.id $Provider $HarnessPath
+                        $run=Start-SCCycleProcess (Get-SCStateRoot) $wt $task.id $Provider $HarnessPath $Endpoint $Connection
                         $running+=,$run
                         $dispatched++
                         Add-SCEvent 'autofill.dispatched' "Autofill dispatched $($task.id)." @{taskId=$task.id;activeAfter=$running.Count;maxConcurrent=$limit;queue='ready'}
@@ -134,7 +133,7 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
                             Write-Host "Autofill retrying $($task.id) from retry queue..."
                             Retry-SCTask $task.id
                             $wt=New-SCWorktree (Get-SCStateRoot) $task.id
-                            $run=Start-SCCycleProcess (Get-SCStateRoot) $wt $task.id $Provider $HarnessPath
+                            $run=Start-SCCycleProcess (Get-SCStateRoot) $wt $task.id $Provider $HarnessPath $Endpoint $Connection
                             $running+=,$run
                             Add-SCEvent 'autofill.dispatched' "Autofill dispatched $($task.id) from retry queue." @{taskId=$task.id;activeAfter=$running.Count;maxConcurrent=$limit;queue='retry'}
                         }catch{

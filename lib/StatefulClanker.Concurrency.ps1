@@ -150,7 +150,7 @@ function Merge-SCWorktreeBranch([string]$StateRoot, $Worktree) {
     return [ordered]@{ merged = $true; reason = $null; detail = $result.output.Trim() }
 }
 
-function Start-SCCycleProcess([string]$StateRoot, $Worktree, [string]$TaskId, [string]$Provider, [string]$HarnessPath) {
+function Start-SCCycleProcess([string]$StateRoot, $Worktree, [string]$TaskId, [string]$Provider, [string]$HarnessPath, [string]$Endpoint=$null, [string]$Connection=$null) {
     $logDir = Join-Path (Join-Path $StateRoot '.statefulclanker') 'parallel'
     if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
@@ -159,6 +159,8 @@ function Start-SCCycleProcess([string]$StateRoot, $Worktree, [string]$TaskId, [s
 
     $cli = @('run', '-TaskId', $TaskId, '-StateRoot', $StateRoot)
     if ($Provider) { $cli += @('-Provider', $Provider) }
+    if ($Endpoint) { $cli += @('-Endpoint', $Endpoint) }
+    if ($Connection) { $cli += @('-Connection', $Connection) }
 
     $pwshPath = (Get-Process -Id $PID).Path
     if ([string]::IsNullOrWhiteSpace($pwshPath)) { $pwshPath = 'pwsh' }
@@ -170,7 +172,7 @@ function Start-SCCycleProcess([string]$StateRoot, $Worktree, [string]$TaskId, [s
 
     return [ordered]@{
         taskId = $TaskId; worktree = $Worktree; process = $proc
-        logPath = $logPath; startedAt = (Get-Date); provider = $Provider
+        logPath = $logPath; startedAt = (Get-Date); provider = $Provider; endpoint = $Endpoint; connection = $Connection
     }
 }
 
@@ -306,7 +308,7 @@ function Invoke-SCParallelPostMergeReview($Results) {
     }
 }
 
-function Invoke-SCParallel([int]$Limit=0, [string]$Provider, [switch]$NoMerge, [switch]$NoProjectReview) {
+function Invoke-SCParallel([int]$Limit=0, [string]$Provider, [string]$Endpoint=$null, [string]$Connection=$null, [switch]$NoMerge, [switch]$NoProjectReview) {
     Assert-SCInitialized
     $stateRoot = Get-SCStateRoot
     $cfg = Get-SCConfig
@@ -329,7 +331,7 @@ function Invoke-SCParallel([int]$Limit=0, [string]$Provider, [switch]$NoMerge, [
     foreach ($task in $batch) {
         try {
             $wt = New-SCWorktree $stateRoot $task.id
-            $running += Start-SCCycleProcess $stateRoot $wt $task.id $Provider $HarnessPath
+            $running += Start-SCCycleProcess $stateRoot $wt $task.id $Provider $HarnessPath $Endpoint $Connection
             Write-Host "  started $($task.id) in $($wt.path)"
         } catch {
             Write-Warning "  could not start $($task.id): $($_.Exception.Message)"

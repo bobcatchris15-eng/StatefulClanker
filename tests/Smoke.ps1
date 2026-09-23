@@ -4,7 +4,6 @@ $harness = Join-Path $repo 'StatefulClanker.ps1'
 $mockPs = Join-Path $PSScriptRoot 'MockProvider.ps1'
 $mockCmd = Join-Path $PSScriptRoot 'MockProvider.cmd'
 $mcp = Join-Path $repo 'mcp\StatefulClanker.Mcp.ps1'
-$cockpit = Join-Path $repo 'desktop\StatefulClanker.Cockpit.ps1'
 
 Write-Host 'STEP 1: parse every PowerShell file in the repo'
 foreach($script in @(Get-ChildItem -LiteralPath $repo -Recurse -Filter '*.ps1' -File |
@@ -50,9 +49,6 @@ try {
     & $harness init
     $cfgPath = Join-Path $temp '.statefulclanker\config.json'
     $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
-    $cfg.defaultProvider = 'mock'
-    $cfg.criticProvider = 'mock'
-    $cfg.validatorProvider = 'mock'
     $cfg.providers | Add-Member -NotePropertyName mock -NotePropertyValue ([pscustomobject]@{
         command = 'cmd.exe'
         args = @('/d','/c',$mockCmd)
@@ -68,7 +64,7 @@ try {
     $job = Start-Job -ArgumentList $harness,$temp -ScriptBlock {
         param($HarnessPath,$ProjectPath)
         Set-Location $ProjectPath
-        & $HarnessPath run -TaskId smoke-task
+        & $HarnessPath run -TaskId smoke-task -Provider mock
     }
     $finished = Wait-Job -Job $job -Timeout 15
     if($null -eq $finished){

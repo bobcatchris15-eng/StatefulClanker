@@ -68,7 +68,6 @@ try {
     . (Join-Path $repo 'lib\StatefulClanker.Directives.ps1')
     . (Join-Path $repo 'lib\StatefulClanker.Semantics.ps1')
     . (Join-Path $repo 'lib\StatefulClanker.Execution.ps1')
-    . (Join-Path $repo 'lib\StatefulClanker.Routing.ps1')
     . (Join-Path $repo 'lib\StatefulClanker.Intent.ps1')
     Set-SCRoots $temp $temp
     $task=Get-SCTask 'launcher-task'

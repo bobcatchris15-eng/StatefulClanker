@@ -9,8 +9,8 @@ disposable cold-start workers. See README.md and docs/ARCHITECTURE.md.
 - `lib/StatefulClanker.Core.ps1` — state, tasks, events, config, plans.
 - `lib/StatefulClanker.Context.ps1` — retrieval and context compilation.
 - `lib/StatefulClanker.Execution.ps1` — provider dispatch, review, proposals, commit.
-- `mcp/` — MCP server exposing the project to a conversational agent.
-- `desktop/StatefulClanker.Cockpit.ps1` — local telemetry viewer.
+- `mcp/` — direct stdio MCP server plus optional HTTP interoperability transport.
+- `src/StatefulClanker.Tray/` — native Windows tray/cockpit and embedded terminal.
 
 ## VALIDATE
 
