@@ -135,13 +135,21 @@ function Get-SCMcpSourceTools([string]$SourceName) {
         Initialize-SCMcpStdioSource $SourceName $source;$response=Invoke-SCMcpStdioJsonRpc $SourceName $source 'tools/list' ([ordered]@{});if($response.PSObject.Properties['error']-and$response.error){throw "MCP tools/list error from '$SourceName': $($response.error.message)"};if(-not$response.PSObject.Properties['result']){return @()};return @($response.result.tools)
     }else{throw "Worker MCP source '$SourceName' uses unsupported transport '$transport'. Current inherent-worker support is HTTP/Streamable HTTP/stdio."}
 }
+function ConvertTo-SCWorkerMcpModelText([string]$Text) {
+    if([string]::IsNullOrWhiteSpace($Text)){return [string]$Text}
+    $trim=$Text.Trim()
+    if($trim.StartsWith('{')-or$trim.StartsWith('[')){
+        try{return ConvertTo-SCModelText ($trim|ConvertFrom-Json) 24 -MaxChars 48000}catch{}
+    }
+    return [string]$Text
+}
 function Invoke-SCMcpSourceTool([string]$SourceName,[string]$ToolName,$Arguments) {
     $catalog=Get-SCWorkerCapabilityCatalog;$p=$catalog.sources.PSObject.Properties[$SourceName];if($null-eq$p){throw "Unknown worker MCP source '$SourceName'."};$source=$p.Value;$transport=if($source.PSObject.Properties['transport']){[string]$source.transport}else{'http'}
     $callParams=[ordered]@{name=$ToolName;arguments=if($Arguments){$Arguments}else{[ordered]@{}}}
     if($transport-eq'stdio'){Initialize-SCMcpStdioSource $SourceName $source;$response=Invoke-SCMcpStdioJsonRpc $SourceName $source 'tools/call' $callParams}
     else{Initialize-SCMcpHttpSource $SourceName $source;$response=Invoke-SCMcpHttpJsonRpc $SourceName $source 'tools/call' $callParams}
     if($response.PSObject.Properties['error']-and$response.error){throw "MCP tool '$SourceName/$ToolName' failed: $($response.error.message)"};if(-not$response.PSObject.Properties['result']){return ''}
-    $result=$response.result;if($result.PSObject.Properties['content']){$texts=@();foreach($item in @($result.content)){if($item.PSObject.Properties['text']){$texts+=,[string]$item.text}else{$texts+=,($item|ConvertTo-Json -Depth 20 -Compress)}};return ($texts-join"`n")};return ($result|ConvertTo-Json -Depth 30 -Compress)
+    $result=$response.result;if($result.PSObject.Properties['content']){$texts=@();foreach($item in @($result.content)){if($item.PSObject.Properties['text']){$texts+=,(ConvertTo-SCWorkerMcpModelText ([string]$item.text))}else{$texts+=,(ConvertTo-SCModelText $item 20 -MaxChars 48000)}};return ($texts-join"`n")};return (ConvertTo-SCModelText $result 30 -MaxChars 48000)
 }
 function ConvertTo-SCWorkerMcpToolName([string]$Source,[string]$Tool) {$safeSource=($Source -replace '[^A-Za-z0-9_-]','_');$safeTool=($Tool -replace '[^A-Za-z0-9_-]','_');return "mcp__$safeSource`__$safeTool"}
 function Get-SCExternalWorkerToolRecords($Task,[string]$Stage='worker') {
