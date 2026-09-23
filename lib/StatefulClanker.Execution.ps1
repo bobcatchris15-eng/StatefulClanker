@@ -138,35 +138,28 @@ function Get-SCValidationSetting([string]$Name,$Default) {
     return $Default
 }
 
-function Invoke-SCMechanicalAcceptanceCommand([string]$Command,[int]$Index) {
+function Invoke-SCMechanicalAcceptanceCommand([string]$Command,[int]$Index,$Task) {
     $timeout=[int](Get-SCValidationSetting 'mechanicalTimeoutSeconds' 300)
     $budget=[int](Get-SCValidationSetting 'mechanicalOutputChars' 12000)
-    $root=Get-SCRoot
-    $outPath=Join-Path ([IO.Path]::GetTempPath()) ("sc-accept-{0}-{1}.out"-f$PID,[Guid]::NewGuid().ToString('N'))
-    $errPath="$outPath.err"
     $started=[datetimeoffset]::UtcNow
-    $exitCode=$null;$timedOut=$false;$error=$null
+    $exitCode=$null;$timedOut=$false;$text=''
     try {
-        $job=Start-Job -ScriptBlock {
-            param($Cmd,$Wd,$Out,$Err)
-            Set-Location -LiteralPath $Wd
-            & cmd.exe /d /s /c $Cmd 1> $Out 2> $Err
-            if($null-eq$LASTEXITCODE){0}else{$LASTEXITCODE}
-        } -ArgumentList $Command,$root,$outPath,$errPath
-        if(Wait-Job -Job $job -Timeout $timeout){$exitCode=[int](Receive-Job -Job $job)}
-        else{$timedOut=$true;Stop-Job -Job $job -ErrorAction SilentlyContinue}
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
-    } catch {
-        $exitCode=-1;$error=$_.Exception.Message
-    }
-    $text=''
-    foreach($p in @($outPath,$errPath)){
-        if(Test-Path -LiteralPath $p){
-            try{$raw=Get-Content -Raw -LiteralPath $p;if($null-ne$raw){$text+=[string]$raw}}catch{}
+        # Mechanical acceptance is trusted as evidence, not as an authority bypass.
+        # Reuse the exact worker command boundary: project-only paths, no mutation
+        # of .statefulclanker/.git control state, and no killing oversight processes.
+        Assert-SCWorkerCommandSafe $Command $Task
+        $result=Invoke-SCBoundedCommand $Command $timeout
+        $exitCode=[int]$result.exitCode
+        $timedOut=($exitCode-eq-2)
+        if($result.stdout){$text+=[string]$result.stdout}
+        if($result.stderr){
+            if($text){$text+=[Environment]::NewLine}
+            $text+=[string]$result.stderr
         }
+    } catch {
+        $exitCode=-1
+        $text="HARNESS ERROR: "+$_.Exception.Message
     }
-    Remove-Item -LiteralPath $outPath,$errPath -Force -ErrorAction SilentlyContinue
-    if($error){$text+=([Environment]::NewLine+"HARNESS ERROR: "+$error)}
     if($text.Length-gt$budget){
         $head=$text.Substring(0,[int]($budget*.4));$tail=$text.Substring($text.Length-[int]($budget*.6))
         $text=$head+[Environment]::NewLine+"... [mechanical acceptance output truncated] ..."+[Environment]::NewLine+$tail
@@ -176,11 +169,10 @@ function Invoke-SCMechanicalAcceptanceCommand([string]$Command,[int]$Index) {
         startedAt=$started.ToString('o');durationSeconds=[math]::Round(([datetimeoffset]::UtcNow-$started).TotalSeconds,3);output=$text
     }
 }
-
 function Invoke-SCMechanicalAcceptance($Task) {
     $checks=if($Task.PSObject.Properties['checks']){@($Task.checks|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})}else{@()}
     $results=@()
-    for($i=0;$i-lt$checks.Count;$i++){$results+=,(Invoke-SCMechanicalAcceptanceCommand ([string]$checks[$i]) ($i+1))}
+    for($i=0;$i-lt$checks.Count;$i++){$results+=,(Invoke-SCMechanicalAcceptanceCommand ([string]$checks[$i]) ($i+1) $Task)}
     return [pscustomobject][ordered]@{
         configured=($checks.Count-gt0);passed=($checks.Count-gt0-and@($results|Where-Object{-not[bool]$_.passed}).Count-eq0)
         checks=@($results);count=$checks.Count;failed=@($results|Where-Object{-not[bool]$_.passed}).Count
