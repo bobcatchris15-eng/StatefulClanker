@@ -515,7 +515,21 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
             $task=Get-SCTask $task.id;$task.latestValidationId=$validation.id;Save-SCTask $task
 
             if($validation.verdict-eq'ERROR'){
-                $errDetail=if($validation.stderr){$validation.stderr.Trim()}else{'Validator review encountered an infrastructure error.'}
+                $errDetail=if($validation.stderr){$validation.stderr.Trim()}elseif($validation.stdout){$validation.stdout.Trim()}else{'Validator review encountered an infrastructure error.'}
+                $acceptanceInfrastructure=($validation.PSObject.Properties['validationKind'] -and [string]$validation.validationKind-eq'acceptance-infrastructure')
+                if($acceptanceInfrastructure){
+                    $task.status='needs_rework'
+                    $task.blockReason="Acceptance infrastructure error after successful worker completion: $errDetail"
+                    Set-SCProperty $task 'activeWorkerSessionId' $null
+                    Set-SCProperty $task 'routingNotBefore' $null
+                    Set-SCProperty $task 'lastRoutingError' $null
+                    Save-SCTask $task
+                    Close-SCWorkerSession $workerSessionId 'acceptance-infrastructure'
+                    Add-SCProgressRecord $task $compilation $false 'acceptance-infrastructure-error' $errDetail|Out-Null
+                    Add-SCEvent 'validator.infrastructure_failed' $errDetail @{taskId=$task.id;receiptId=$validation.id;workerSessionId=$workerSessionId;error=$errDetail;attemptCount=$task.attemptCount;proposalId=$proposal.id}
+                    Write-Warning $task.blockReason;return
+                }
+
                 $routeUnavailable=($validation.PSObject.Properties['routeDeferred'] -and [bool]$validation.routeDeferred) -or ($validation.PSObject.Properties['routeExhausted'] -and [bool]$validation.routeExhausted)
                 $retryAt=if($validation.PSObject.Properties['retryAfter'] -and $validation.retryAfter){[string]$validation.retryAfter}else{[datetimeoffset]::UtcNow.AddSeconds(5).ToString('o')}
                 $task.status='ready';$task.blockReason=$null
