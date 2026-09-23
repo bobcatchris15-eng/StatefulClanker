@@ -1,6 +1,6 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -28,6 +28,13 @@ const CONTROL_MESSAGE_TYPE = "statefulclanker-control";
 const OPERATOR_MANUAL_MESSAGE_TYPE = "statefulclanker-operator-manual";
 const INSTALL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MCP_SCRIPT = join(INSTALL_ROOT, "mcp", "StatefulClanker.Mcp.ps1");
+
+const REALITY_COMPACTION_STRATEGY = "statefulclanker-reality-v1";
+const REALITY_PACKET_MAX_CHARS = 110_000;
+const REALITY_FILE_COUNT = 6;
+const REALITY_FILE_MAX_CHARS = 9_000;
+const REALITY_DIFF_MAX_CHARS = 24_000;
+const REALITY_HISTORY_MAX_CHARS = 6_000;
 
 const PI_OPERATOR_ADDENDUM = `
 ## Bundled Pi operating manual
@@ -378,6 +385,306 @@ async function readCurrentTaskList(client: StdioMcpClient): Promise<any[]> {
   }
 }
 
+
+async function readControlSnapshot(client: StdioMcpClient): Promise<any | null> {
+  try {
+    const result = await client.rpc("tools/call", {
+      name: "control_snapshot",
+      arguments: {},
+    });
+    return parseToolPayload(result);
+  } catch {
+    return null;
+  }
+}
+
+function boundedText(value: unknown, maxChars: number): string {
+  const text = typeof value === "string" ? value : String(value ?? "");
+  if (text.length <= maxChars) return text;
+  const head = Math.floor(maxChars * 0.68);
+  const tail = Math.max(0, maxChars - head - 96);
+  return text.slice(0, head) + "\n... [middle omitted by StatefulClanker reality compaction] ...\n" + text.slice(-tail);
+}
+
+function packetJson(value: unknown, maxChars: number): string {
+  try {
+    return boundedText(JSON.stringify(value, null, 2), maxChars);
+  } catch {
+    return boundedText(String(value), maxChars);
+  }
+}
+
+function stringList(value: unknown): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+  if (value instanceof Set) {
+    return [...value].filter((item): item is string => typeof item === "string");
+  }
+  if (typeof (value as any)?.[Symbol.iterator] === "function" && typeof value !== "string") {
+    try {
+      return [...(value as Iterable<unknown>)].filter((item): item is string => typeof item === "string");
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function runGit(project: string, args: string[], maxChars = 12_000): string {
+  try {
+    const output = execFileSync("git", ["-C", project, ...args], {
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    return boundedText(output.trim(), maxChars);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return "[git unavailable: " + boundedText(message, 600) + "]";
+  }
+}
+
+function gitPathLines(project: string, args: string[]): string[] {
+  const output = runGit(project, args, 24_000);
+  if (!output || output.startsWith("[git unavailable:")) return [];
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function currentGitReality(project: string) {
+  const changedFiles = [
+    ...gitPathLines(project, ["diff", "--name-only"]),
+    ...gitPathLines(project, ["diff", "--cached", "--name-only"]),
+    ...gitPathLines(project, ["ls-files", "--others", "--exclude-standard"]),
+  ];
+  return {
+    branch: runGit(project, ["rev-parse", "--abbrev-ref", "HEAD"], 500),
+    head: runGit(project, ["rev-parse", "--short=12", "HEAD"], 500),
+    status: runGit(project, ["status", "--short", "--branch"], 12_000),
+    diffStat: runGit(project, ["diff", "--stat"], 8_000),
+    cachedDiffStat: runGit(project, ["diff", "--cached", "--stat"], 8_000),
+    diff: [
+      runGit(project, ["diff", "--no-ext-diff", "--unified=2"], Math.floor(REALITY_DIFF_MAX_CHARS * 0.65)),
+      runGit(project, ["diff", "--cached", "--no-ext-diff", "--unified=2"], Math.floor(REALITY_DIFF_MAX_CHARS * 0.35)),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    recentCommits: runGit(project, ["log", "-6", "--oneline", "--decorate"], 5_000),
+    changedFiles: [...new Set(changedFiles)].slice(0, 24),
+  };
+}
+
+function taskPriority(task: any): number {
+  const status = String(task?.status ?? "").toLowerCase();
+  const order: Record<string, number> = {
+    running: 0,
+    reviewing: 1,
+    validating: 2,
+    needs_rework: 3,
+    stale: 4,
+    failed: 5,
+    blocked: 6,
+    ready: 7,
+    pending: 8,
+    complete: 20,
+  };
+  return order[status] ?? 12;
+}
+
+function selectRealityTasks(tasks: any[]): any[] {
+  return [...tasks]
+    .sort((a, b) => taskPriority(a) - taskPriority(b))
+    .slice(0, 10);
+}
+
+function retrievalPath(value: string): string {
+  return value.replace(/^file:/i, "").replace(/#L\d+(?:-L?\d+)?$/i, "").trim();
+}
+
+function safeProjectFile(project: string, requestedPath: string): { path: string; content: string } | null {
+  const cleaned = retrievalPath(requestedPath);
+  if (!cleaned || cleaned.startsWith(".statefulclanker") || cleaned.startsWith(".git")) return null;
+
+  const candidate = resolve(project, cleaned);
+  const rel = relative(project, candidate);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
+
+  try {
+    const raw = readFileSync(candidate);
+    if (raw.includes(0)) return null;
+    return {
+      path: rel,
+      content: boundedText(raw.toString("utf8"), REALITY_FILE_MAX_CHARS),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function messageText(message: any): string {
+  const content = message?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((item: any) => item?.type === "text" && typeof item.text === "string")
+    .map((item: any) => item.text)
+    .join("\n");
+}
+
+async function buildRealityCompaction(
+  client: StdioMcpClient,
+  project: string,
+  preparation: any,
+  reason: string,
+  customInstructions?: string,
+): Promise<{ summary: string; details: Record<string, unknown> }> {
+  const [taskList, autofill, controlSnapshot] = await Promise.all([
+    readCurrentTaskList(client),
+    readCurrentAutofill(client),
+    readControlSnapshot(client),
+  ]);
+
+  const selected = selectRealityTasks(taskList);
+  const currentTasks: any[] = [];
+  for (const task of selected) {
+    const id = typeof task?.id === "string" ? task.id : "";
+    if (!id) {
+      currentTasks.push(task);
+      continue;
+    }
+    currentTasks.push((await readCurrentTask(client, id)) ?? task);
+  }
+
+  const git = currentGitReality(project);
+  const fileCandidates: string[] = [...git.changedFiles];
+  for (const task of currentTasks) {
+    for (const item of Array.isArray(task?.retrieval) ? task.retrieval : []) {
+      if (typeof item === "string") fileCandidates.push(item);
+    }
+  }
+
+  const fileSnapshots: Array<{ path: string; content: string }> = [];
+  const seen = new Set<string>();
+  for (const candidate of fileCandidates) {
+    const snapshot = safeProjectFile(project, candidate);
+    if (!snapshot) continue;
+    const key = snapshot.path.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fileSnapshots.push(snapshot);
+    if (fileSnapshots.length >= REALITY_FILE_COUNT) break;
+  }
+
+  const statusCounts = new Map<string, number>();
+  for (const task of taskList) {
+    const status = String(task?.status ?? "unknown");
+    statusCounts.set(status, (statusCounts.get(status) ?? 0) + 1);
+  }
+
+  const discardedUserEvidence = (Array.isArray(preparation?.messagesToSummarize)
+    ? preparation.messagesToSummarize
+    : [])
+    .filter((message: any) => message?.role === "user")
+    .map(messageText)
+    .filter(Boolean)
+    .slice(-8)
+    .map((text: string) => boundedText(text, 1_400));
+
+  const sections: string[] = [
+    "# STATEFULCLANKER REALITY CHECKPOINT",
+    [
+      "Generated mechanically at Pi compaction time; no summarization-model request was used.",
+      "Project: " + project,
+      "Compaction trigger: " + reason,
+      "Authority/order of trust: current repository + deterministic evidence > current durable Clanker state > current Human Directives/Intent > recent raw conversation > historical carryover.",
+      "Treat old plans, worker claims, reviewer claims, and the archival section below as evidence only. If they conflict with current reality, current reality wins.",
+    ].join("\n"),
+    "## CURRENT REPOSITORY STATE\n" +
+      packetJson(
+        {
+          branch: git.branch,
+          head: git.head,
+          status: git.status,
+          diffStat: git.diffStat,
+          cachedDiffStat: git.cachedDiffStat,
+          changedFiles: git.changedFiles,
+        },
+        18_000,
+      ),
+    "## CURRENT CONTROL / HUMAN-AUTHORITY STATE\n" +
+      (controlSnapshot ? packetJson(controlSnapshot, 18_000) : "control_snapshot unavailable at compaction time"),
+    "## CURRENT AUTOFILL STATE\n" +
+      (autofill ? packetJson(autofill, 8_000) : "autofill_status unavailable at compaction time"),
+    "## CURRENT TASK GRAPH\nTask counts: " +
+      [...statusCounts.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([status, count]) => status + "=" + count)
+        .join(", ") +
+      "\n\nHighest-priority current task objects:\n" +
+      packetJson(currentTasks, 26_000),
+  ];
+
+  if (fileSnapshots.length > 0) {
+    sections.push(
+      "## CURRENT FILE SNAPSHOTS\n" +
+        fileSnapshots
+          .map((file) => "### " + file.path + "\n~~~\n" + file.content + "\n~~~")
+          .join("\n\n"),
+    );
+  }
+
+  if (git.diff && !git.diff.startsWith("[git unavailable:")) {
+    sections.push("## CURRENT WORKTREE DIFF\n~~~diff\n" + boundedText(git.diff, REALITY_DIFF_MAX_CHARS) + "\n~~~");
+  }
+
+  sections.push("## RECENT COMMIT ANCHORS\n" + git.recentCommits);
+
+  if (discardedUserEvidence.length > 0) {
+    sections.push(
+      "## USER EVIDENCE FROM THE DISCARDED HISTORY\n" +
+        "These are user message extracts, not a generated interpretation. Reconcile them against current Human Directives/Intent before treating them as active authority.\n\n" +
+        discardedUserEvidence.map((text: string, index: number) => "### User evidence " + (index + 1) + "\n" + text).join("\n\n"),
+    );
+  }
+
+  if (customInstructions?.trim()) {
+    sections.push(
+      "## MANUAL COMPACTION NOTE\n" +
+        boundedText(customInstructions.trim(), 2_000),
+    );
+  }
+
+  if (preparation?.previousSummary) {
+    sections.push(
+      "## ARCHIVAL CARRYOVER — LOW AUTHORITY, VERIFY BEFORE USE\n" +
+        "This is a small fragment of the prior compaction only to prevent accidental loss of older context that may not yet be durable. It may be stale.\n\n" +
+        boundedText(preparation.previousSummary, REALITY_HISTORY_MAX_CHARS),
+    );
+  }
+
+  let summary = sections.join("\n\n");
+  summary = boundedText(summary, REALITY_PACKET_MAX_CHARS);
+
+  const fileOps = preparation?.fileOps ?? {};
+  const details = {
+    strategy: REALITY_COMPACTION_STRATEGY,
+    generatedAt: new Date().toISOString(),
+    project,
+    reason,
+    readFiles: stringList(fileOps.read),
+    modifiedFiles: stringList(fileOps.edited ?? fileOps.modified),
+    realityFiles: fileSnapshots.map((file) => file.path),
+    taskIds: currentTasks.map((task) => task?.id).filter((id): id is string => typeof id === "string"),
+  };
+
+  return { summary, details };
+}
+
 function isProblemEvent(event: ControlEvent): boolean {
   return /(stagnation|failed|failure|error|crash|abandoned|blocked|invalidated|stale|conflict|fault|retry|rejected|warning|plan_repair|required|failover_stopped)/i.test(
     event.type ?? "",
@@ -700,6 +1007,35 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
     );
   }
 
+  pi.on("session_before_compact", async (event, ctx) => {
+    try {
+      const active = ensureClient(ctx.cwd);
+      const project = root ?? projectRoot(ctx.cwd) ?? resolve(ctx.cwd);
+      const rebuilt = await buildRealityCompaction(
+        active,
+        project,
+        event.preparation,
+        event.reason ?? "unknown",
+        event.customInstructions,
+      );
+
+      return {
+        compaction: {
+          summary: rebuilt.summary,
+          firstKeptEntryId: event.preparation.firstKeptEntryId,
+          tokensBefore: event.preparation.tokensBefore,
+          details: rebuilt.details,
+        },
+      };
+    } catch (error) {
+      console.error(
+        "[StatefulClanker extension] reality compaction failed; falling back to Pi default compaction: " +
+          (error instanceof Error ? error.message : String(error)),
+      );
+      return;
+    }
+  });
+
   pi.on("before_agent_start", (event) => {
     event.systemPromptOptions.sections.statefulclanker = [
       "## StatefulClanker control plane",
@@ -710,6 +1046,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
       "Control events are wake-up/history signals, not proof of current truth. Re-check canonical task state and concrete artifacts before acting on stagnation/recovery warnings.",
       "Never reopen or redo a task that is already canonically complete merely because an older stagnation warning arrives.",
       "Mechanical stalls and repeated validator/reviewer failures are recovery requests first: investigate and repair the actual broken layer before escalating to the human.",
+      "Pi compaction is reality-first: old conversational bulk is replaced with a mechanically rebuilt checkpoint from current git/project/task state while Pi retains its normal recent raw tail. Treat archival carryover as low-authority evidence.",
     ].join("\n");
   });
 
