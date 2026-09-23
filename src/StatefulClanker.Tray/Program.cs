@@ -1157,11 +1157,14 @@ sealed class PrecisionTabControl : TabControl
 
 sealed class QuietSplitContainer : SplitContainer
 {
+    const int HitPadding = 6;
     public int ResetDistance { get; set; } = 240;
     public int? ResetPanel2Width { get; set; }
     public event EventHandler? SplitterReset;
 
     private int? _pendingPanel2MinSize;
+    bool _dragging;
+    int _dragOffset;
 
     public QuietSplitContainer(Orientation orientation)
     {
@@ -1195,7 +1198,32 @@ sealed class QuietSplitContainer : SplitContainer
     bool IsSplitter(Point point)
     {
         var axis = this.Orientation == System.Windows.Forms.Orientation.Vertical ? point.X : point.Y;
-        return axis >= SplitterDistance - 3 && axis <= SplitterDistance + SplitterWidth + 3;
+        return axis >= SplitterDistance - HitPadding && axis <= SplitterDistance + SplitterWidth + HitPadding;
+    }
+
+    int Axis(Point point) => Orientation == System.Windows.Forms.Orientation.Vertical ? point.X : point.Y;
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        if(e.Button==MouseButtons.Left&&IsSplitter(e.Location))
+        {
+            _dragging=true;_dragOffset=Axis(e.Location)-SplitterDistance;Capture=true;
+            return;
+        }
+        base.OnMouseDown(e);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        if(_dragging){RestoreDistance(Axis(e.Location)-_dragOffset);return;}
+        Cursor=IsSplitter(e.Location)?(Orientation==System.Windows.Forms.Orientation.Vertical?Cursors.VSplit:Cursors.HSplit):Cursors.Default;
+        base.OnMouseMove(e);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        if(_dragging&&e.Button==MouseButtons.Left){_dragging=false;Capture=false;return;}
+        base.OnMouseUp(e);
     }
 
     protected override void OnLayout(LayoutEventArgs levent)
