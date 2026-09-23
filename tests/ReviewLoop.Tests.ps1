@@ -11,8 +11,8 @@ $end=$execution.IndexOf('function Retry-SCTask',$start)
 Assert-True ($start-ge0-and$end-gt$start) 'Could not isolate Invoke-SCTask.'
 $taskLoop=$execution.Substring($start,$end-$start)
 
-Write-Host '  REVIEW 1: ordinary task completion has one model review stage'
-Assert-True ($taskLoop.Contains('Invoke-SCReview $task $run $compilation ''validator''')) 'Invoke-SCTask does not call the validator.'
+Write-Host '  REVIEW 1: ordinary task completion enters one acceptance gate, not an unconditional model review'
+Assert-True ($taskLoop.Contains('Invoke-SCAcceptanceValidation $task $run $compilation')) 'Invoke-SCTask does not call the acceptance gate.'
 Assert-True (-not$taskLoop.Contains('Invoke-SCReview $task $run $compilation ''critic''')) 'Invoke-SCTask still calls the critic.'
 
 Write-Host '  REVIEW 2: validator failure returns to the same direct worker session'
@@ -40,4 +40,4 @@ Write-Host '  REVIEW 6: stagnation warning fires once when crossing the threshol
 Assert-True ($execution.Contains('if($same.Count-eq$threshold)')) 'Stagnation warning does not use threshold-crossing semantics.'
 Assert-True (-not$execution.Contains('if($same.Count-ge$threshold)')) 'Stagnation warning still repeats on every non-advancing attempt after the threshold.'
 
-Write-Host 'PASS: task review is validator-only; direct sessions resume; compiled routing owns migration/operator pins; stagnation warnings are edge-triggered.'
+Write-Host 'PASS: task acceptance is mechanical-first; direct sessions resume; compiled routing owns migration/operator pins; stagnation warnings are edge-triggered.'
