@@ -492,7 +492,15 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
 
         if([bool]$cfg.validatorEnabled){
             $task.status='validating';Save-SCTask $task
-            $validation=Invoke-SCAcceptanceValidation $task $run $compilation $EndpointOverride $ConnectionOverride
+            try{
+                $validation=Invoke-SCAcceptanceValidation $task $run $compilation $EndpointOverride $ConnectionOverride
+            }catch{
+                $acceptanceError=$_.Exception.Message
+                $acceptanceDetail=$_|Out-String
+                if($acceptanceDetail.Length-gt6000){$acceptanceDetail=$acceptanceDetail.Substring(0,6000)}
+                $validation=New-SCSyntheticValidationReceipt $task $run $compilation 'ERROR' 'acceptance-infrastructure' ("VERDICT: ERROR"+[Environment]::NewLine+$acceptanceError) ([ordered]@{error=$acceptanceError;detail=$acceptanceDetail;runId=$run.id;proposalId=$proposal.id})
+                Add-SCEvent 'validator.infrastructure_exception' $acceptanceError @{taskId=$task.id;runId=$run.id;proposalId=$proposal.id;validationId=$validation.id;error=$acceptanceError}
+            }
             $proposal.evidence.validationId=$validation.id;$proposal.evidence.validationVerdict=$validation.verdict;Save-SCProposal $proposal
             # Per-task validation is the normalization boundary for project muscle-memory.
             try{
