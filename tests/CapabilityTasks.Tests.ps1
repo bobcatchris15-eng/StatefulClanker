@@ -31,6 +31,23 @@ end
     Assert-True (@($task.checks).Count-eq1 -and [string]$task.checks[0]-match'pwsh') 'SCPLAN mechanical check was not persisted.'
     Assert-True (@($task.semanticAcceptance).Count-eq1 -and [string]$task.semanticAcceptance[0]-match'documentation wording') 'SCPLAN semantic judge criterion was not persisted.'
 
+    Write-Host '  CAPABILITY TASK: empty acceptance execution lists persist as arrays, not null'
+    $plan2=@'
+SCPLAN 1
+plan empty-acceptance-lists
+task t-empty
+title no explicit validation execution fields
+instruction Persist an ordinary task with no check or judge lines.
+accept task persists
+end
+'@
+    $plan2Path=Join-Path $temp 'empty.scplan';$plan2|Set-Content -LiteralPath $plan2Path -Encoding UTF8;& $harness plan import -Path $plan2Path|Out-Null
+    $emptyTask=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\t-empty.json')|ConvertFrom-Json
+    Assert-True ($null-ne$emptyTask.checks) 'Imported task checks collapsed to JSON null.'
+    Assert-True ($null-ne$emptyTask.semanticAcceptance) 'Imported task semanticAcceptance collapsed to JSON null.'
+    Assert-True (@($emptyTask.checks).Count-eq0) 'Imported task checks should be an empty array.'
+    Assert-True (@($emptyTask.semanticAcceptance).Count-eq0) 'Imported task semanticAcceptance should be an empty array.'
+
     & $harness task add -TaskId t-cli -Title 'CLI capability task' -Instruction 'Exercise CLI task authoring.' -OutputKind diagnosis -CapabilityProfile coding -ToolAllow 'builtin.read_file' -ToolDeny 'mcp.*' -Check 'cmd /d /c exit 0' -Judge 'semantic criterion'|Out-Null
     $cliTask=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\t-cli.json')|ConvertFrom-Json
     Assert-True ([string]$cliTask.capabilityProfile-eq'coding') 'CLI capability profile was not persisted.'
