@@ -180,7 +180,10 @@ function planningIntent(prompt: string): boolean {
   if (!text) return false;
 
   const explicit = [
-    /\bplan(?:ning|ned|s)?\b/,
+    /\bplanning\b/,
+    /^\s*plan\b/,
+    /\b(?:build|create|make|write|draft|generate|construct|design|prepare|revise|update|rework|repair|redo)\b.{0,100}\bplan\b/,
+    /\bplan\b.{0,100}\b(?:this|it|out|for|implementation|project|feature|work)\b/,
     /\bdecompos(?:e|ing|ition)\b/,
     /\bbreak\s+(?:this|it|work|the\s+work)\s+(?:down|up)\b/,
     /\btask\s+(?:list|graph|breakdown|decomposition)\b/,
