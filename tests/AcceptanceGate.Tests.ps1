@@ -48,4 +48,10 @@ function Invoke-SCJevAcceptance { param($Task,$Run,$Compilation,$Mechanical); [p
 $v=Invoke-SCAcceptanceValidation $task $run $comp
 Assert-True ($v.verdict-eq'PASS' -and $script:fallbackCalls-eq2) 'Uncertain Jev did not fall back exactly once.'
 
+Write-Host '  ACCEPTANCE 6: mechanical commands inherit the worker safety boundary'
+$executionSource=Get-Content -Raw -LiteralPath (Join-Path $repo 'lib\StatefulClanker.Execution.ps1')
+Assert-True ($executionSource.Contains('Assert-SCWorkerCommandSafe $Command $Task')) 'Mechanical acceptance bypasses the worker command safety guard.'
+Assert-True ($executionSource.Contains('Invoke-SCBoundedCommand $Command $timeout')) 'Mechanical acceptance does not use the bounded project-root command runner.'
+Assert-True (-not $executionSource.Contains('& cmd.exe /d /s /c $Cmd')) 'Mechanical acceptance still owns a raw privileged cmd.exe execution path.'
+
 Write-Host 'PASS: mechanical acceptance owns deterministic outcomes; Jev is preferred for semantic decisions; routed inference is fallback only.'
