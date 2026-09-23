@@ -129,6 +129,184 @@ function Get-SCReasonExcerpt([string]$Text,[int]$MaxLen=240) {
     if($excerpt.Length-gt$MaxLen){$excerpt=$excerpt.Substring(0,$MaxLen).TrimEnd()+'...'}
     return $excerpt
 }
+
+function Get-SCValidationSetting([string]$Name,$Default) {
+    $cfg=Get-SCConfig
+    if($cfg.PSObject.Properties['validation'] -and $cfg.validation -and $cfg.validation.PSObject.Properties[$Name] -and $null-ne$cfg.validation.$Name){
+        return $cfg.validation.$Name
+    }
+    return $Default
+}
+
+function Invoke-SCMechanicalAcceptanceCommand([string]$Command,[int]$Index) {
+    $timeout=[int](Get-SCValidationSetting 'mechanicalTimeoutSeconds' 300)
+    $budget=[int](Get-SCValidationSetting 'mechanicalOutputChars' 12000)
+    $root=Get-SCRoot
+    $outPath=Join-Path ([IO.Path]::GetTempPath()) ("sc-accept-{0}-{1}.out"-f$PID,[Guid]::NewGuid().ToString('N'))
+    $errPath="$outPath.err"
+    $started=[datetimeoffset]::UtcNow
+    $exitCode=$null;$timedOut=$false;$error=$null
+    try {
+        $job=Start-Job -ScriptBlock {
+            param($Cmd,$Wd,$Out,$Err)
+            Set-Location -LiteralPath $Wd
+            & cmd.exe /d /s /c $Cmd 1> $Out 2> $Err
+            if($null-eq$LASTEXITCODE){0}else{$LASTEXITCODE}
+        } -ArgumentList $Command,$root,$outPath,$errPath
+        if(Wait-Job -Job $job -Timeout $timeout){$exitCode=[int](Receive-Job -Job $job)}
+        else{$timedOut=$true;Stop-Job -Job $job -ErrorAction SilentlyContinue}
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    } catch {
+        $exitCode=-1;$error=$_.Exception.Message
+    }
+    $text=''
+    foreach($p in @($outPath,$errPath)){
+        if(Test-Path -LiteralPath $p){
+            try{$raw=Get-Content -Raw -LiteralPath $p;if($null-ne$raw){$text+=[string]$raw}}catch{}
+        }
+    }
+    Remove-Item -LiteralPath $outPath,$errPath -Force -ErrorAction SilentlyContinue
+    if($error){$text+=([Environment]::NewLine+"HARNESS ERROR: "+$error)}
+    if($text.Length-gt$budget){
+        $head=$text.Substring(0,[int]($budget*.4));$tail=$text.Substring($text.Length-[int]($budget*.6))
+        $text=$head+[Environment]::NewLine+"... [mechanical acceptance output truncated] ..."+[Environment]::NewLine+$tail
+    }
+    return [pscustomobject][ordered]@{
+        index=$Index;command=$Command;passed=(-not$timedOut-and$exitCode-eq0);exitCode=$exitCode;timedOut=$timedOut
+        startedAt=$started.ToString('o');durationSeconds=[math]::Round(([datetimeoffset]::UtcNow-$started).TotalSeconds,3);output=$text
+    }
+}
+
+function Invoke-SCMechanicalAcceptance($Task) {
+    $checks=if($Task.PSObject.Properties['checks']){@($Task.checks|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})}else{@()}
+    $results=@()
+    for($i=0;$i-lt$checks.Count;$i++){$results+=,(Invoke-SCMechanicalAcceptanceCommand ([string]$checks[$i]) ($i+1))}
+    return [pscustomobject][ordered]@{
+        configured=($checks.Count-gt0);passed=($checks.Count-gt0-and@($results|Where-Object{-not[bool]$_.passed}).Count-eq0)
+        checks=@($results);count=$checks.Count;failed=@($results|Where-Object{-not[bool]$_.passed}).Count
+    }
+}
+
+function Get-SCValidationRepositoryEvidence {
+    $root=Get-SCRoot
+    if(-not(Get-Command git -ErrorAction SilentlyContinue)){return [ordered]@{available=$false}}
+    try{
+        $status=(& git -C $root status --short 2>$null|Out-String).Trim()
+        $stat=(& git -C $root diff --stat 2>$null|Out-String).Trim()
+        $diff=(& git -C $root diff --no-ext-diff --unified=1 2>$null|Out-String)
+        if($diff.Length-gt16000){$diff=$diff.Substring(0,10000)+[Environment]::NewLine+"... [diff truncated] ..."+[Environment]::NewLine+$diff.Substring($diff.Length-6000)}
+        return [ordered]@{available=$true;status=$status;diffStat=$stat;diff=$diff}
+    }catch{return [ordered]@{available=$false;error=$_.Exception.Message}}
+}
+
+function New-SCSyntheticValidationReceipt($Task,$Run,$Compilation,[string]$Verdict,[string]$Kind,[string]$Summary,$Evidence) {
+    $now=[datetimeoffset]::UtcNow.ToString('o')
+    $receipt=[pscustomobject][ordered]@{
+        schemaVersion=4;id=New-SCId 'validation';agentId=New-SCId 'accept';taskId=$Task.id;stage='validator'
+        provider=$Kind;validationKind=$Kind;compilationId=$Compilation.id;startedAt=$now;endedAt=$now;durationSeconds=0
+        exitCode=0;stdout=$Summary;stderr='';verdict=$Verdict;evidence=$Evidence
+    }
+    Write-SCJson (Get-SCPath ("validations/{0}.json"-f$receipt.id)) $receipt
+    Add-SCEvent 'validator.finished' "Acceptance gate finished for $($Task.id): $Verdict ($Kind)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$Verdict;validationKind=$Kind;compilationId=$Compilation.id}
+    return $receipt
+}
+
+function Get-SCJevApiKey {
+    $envName=[string](Get-SCValidationSetting 'jevApiKeyEnv' 'TYPESAFE_API_KEY')
+    if([string]::IsNullOrWhiteSpace($envName)){return $null}
+    return [Environment]::GetEnvironmentVariable($envName)
+}
+
+function Invoke-SCJevAcceptance($Task,$Run,$Compilation,$Mechanical) {
+    if(-not[bool](Get-SCValidationSetting 'preferJev' $true)){return [pscustomobject]@{available=$false;reason='disabled'}}
+    $criteria=if($Task.PSObject.Properties['semanticAcceptance']){@($Task.semanticAcceptance|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})}else{@()}
+    if($criteria.Count-eq0){return [pscustomobject]@{available=$false;reason='no-semantic-criteria'}}
+
+    $key=Get-SCJevApiKey
+    if([string]::IsNullOrWhiteSpace($key)){return [pscustomobject]@{available=$false;reason='TypeSafe API key unavailable'}}
+
+    $model=[string](Get-SCValidationSetting 'jevModel' 'jev-latest')
+    $base=[string](Get-SCValidationSetting 'jevBaseUrl' 'https://api.typesafe.ai')
+    $passThreshold=[double](Get-SCValidationSetting 'jevPassThreshold' 0.90)
+    $failThreshold=[double](Get-SCValidationSetting 'jevFailThreshold' 0.10)
+    $questions=[ordered]@{}
+    for($i=0;$i-lt$criteria.Count;$i++){
+        $name=("criterion_{0:d2}"-f($i+1))
+        $criterion=[string]$criteria[$i]
+        $questions[$name]=[ordered]@{
+            type='noul'
+            instructions="Does the current implementation satisfy this semantic acceptance criterion, based only on the supplied current-state evidence? Criterion: $criterion"
+            criteria=[ordered]@{
+                true='The current implementation and evidence establish the criterion.'
+                false='The implementation violates the criterion or the supplied evidence does not establish it.'
+            }
+        }
+    }
+
+    $workerOut=[string]$Run.stdout;if($workerOut.Length-gt10000){$workerOut=$workerOut.Substring(0,10000)}
+    $state=[ordered]@{
+        task=[ordered]@{id=$Task.id;title=$Task.title;instruction=$Task.instruction;acceptance=@($Task.acceptance);semanticAcceptance=@($criteria)}
+        intent=$Compilation.ir.project.intent.contract
+        worker=[ordered]@{runId=$Run.id;exitCode=$Run.exitCode;report=$workerOut}
+        mechanical=$Mechanical
+        repository=Get-SCValidationRepositoryEvidence
+        rule='Deterministic mechanical evidence outranks semantic suspicion. Decide only the listed semantic criteria.'
+    }
+    $body=[ordered]@{state=$state;model=$model;questions=$questions}|ConvertTo-Json -Depth 30 -Compress
+    try{
+        $response=Invoke-RestMethod -Method Post -Uri ($base.TrimEnd('/')+'/v1/systemone') -Headers @{Authorization="Bearer $key"} -ContentType 'application/json' -Body $body -TimeoutSec ([int](Get-SCValidationSetting 'jevTimeoutSeconds' 20))
+    }catch{
+        return [pscustomobject]@{available=$false;reason=$_.Exception.Message}
+    }
+
+    $decisions=@();$uncertain=$false;$failed=$false
+    for($i=0;$i-lt$criteria.Count;$i++){
+        $name=("criterion_{0:d2}"-f($i+1));$answer=$response.answers.$name
+        if($null-eq$answer -or -not$answer.PSObject.Properties['noul']){$uncertain=$true;continue}
+        $p=[double]$answer.noul
+        $stateLabel=if($p-ge$passThreshold){'pass'}elseif($p-le$failThreshold){'fail'}else{'uncertain'}
+        if($stateLabel-eq'fail'){$failed=$true};if($stateLabel-eq'uncertain'){$uncertain=$true}
+        $decisions+=,[ordered]@{criterion=[string]$criteria[$i];probabilitySatisfied=$p;decision=$stateLabel}
+    }
+    $verdict=if($failed){'FAIL'}elseif(-not$uncertain-and$decisions.Count-eq$criteria.Count){'PASS'}else{'UNCERTAIN'}
+    return [pscustomobject][ordered]@{
+        available=$true;verdict=$verdict;model=if($response.model){[string]$response.model}else{$model}
+        decisions=@($decisions);usage=$response.usage;passThreshold=$passThreshold;failThreshold=$failThreshold
+    }
+}
+
+function Invoke-SCAcceptanceValidation($Task,$Run,$Compilation,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
+    Add-SCEvent 'validator.started' "Acceptance gate started for $($Task.id)" @{taskId=$Task.id;stage='validator';compilationId=$Compilation.id}
+    $mechanical=Invoke-SCMechanicalAcceptance $Task
+    Set-SCProperty $Run 'acceptanceEvidence' $mechanical
+    Write-SCJson (Get-SCPath ("runs/{0}.json"-f$Run.id)) $Run
+
+    if($mechanical.configured -and -not$mechanical.passed){
+        $failed=@($mechanical.checks|Where-Object{-not[bool]$_.passed}|ForEach-Object{"check $($_.index) exit=$($_.exitCode) timedOut=$($_.timedOut): $($_.command)"})
+        $summary="VERDICT: FAIL"+[Environment]::NewLine+"Mechanical acceptance failed. "+($failed-join'; ')
+        return New-SCSyntheticValidationReceipt $Task $Run $Compilation 'FAIL' 'mechanical' $summary $mechanical
+    }
+
+    $semantic=if($Task.PSObject.Properties['semanticAcceptance']){@($Task.semanticAcceptance|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})}else{@()}
+    if($mechanical.configured -and $semantic.Count-eq0){
+        $summary="VERDICT: PASS"+[Environment]::NewLine+"All $($mechanical.count) configured mechanical acceptance checks passed; no semantic judgment was requested."
+        return New-SCSyntheticValidationReceipt $Task $Run $Compilation 'PASS' 'mechanical' $summary $mechanical
+    }
+
+    if($semantic.Count-gt0){
+        $jev=Invoke-SCJevAcceptance $Task $Run $Compilation $mechanical
+        if($jev.available -and @('PASS','FAIL')-contains[string]$jev.verdict){
+            $detail=@($jev.decisions|ForEach-Object{"$($_.decision.ToUpperInvariant()) p=$([math]::Round([double]$_.probabilitySatisfied,3)) :: $($_.criterion)"})-join[Environment]::NewLine
+            $summary="VERDICT: $($jev.verdict)"+[Environment]::NewLine+"Jev semantic acceptance ($($jev.model)):"+[Environment]::NewLine+$detail
+            return New-SCSyntheticValidationReceipt $Task $Run $Compilation ([string]$jev.verdict) 'jev' $summary ([ordered]@{mechanical=$mechanical;jev=$jev})
+        }
+        $why=if($jev.available){"Jev returned uncertain semantic decisions."}else{"Jev unavailable: $($jev.reason)"}
+        Add-SCEvent 'validator.fallback' "$why Falling back to routed validator." @{taskId=$Task.id;compilationId=$Compilation.id;jevAvailable=[bool]$jev.available;reason=$why}
+    }
+
+    return Invoke-SCReview $Task $Run $Compilation 'validator' $EndpointOverride $ConnectionOverride
+}
+
 function Invoke-SCReview($Task,$Run,$Compilation,[string]$Stage,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
     Add-SCEvent "$Stage.started" "$Stage review started for $($Task.id)" @{taskId=$Task.id;stage=$Stage;compilationId=$Compilation.id}
     $reviewOverride=$null
@@ -312,7 +490,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
 
         if([bool]$cfg.validatorEnabled){
             $task.status='validating';Save-SCTask $task
-            $validation=Invoke-SCReview $task $run $compilation 'validator' $EndpointOverride $ConnectionOverride
+            $validation=Invoke-SCAcceptanceValidation $task $run $compilation $EndpointOverride $ConnectionOverride
             $proposal.evidence.validationId=$validation.id;$proposal.evidence.validationVerdict=$validation.verdict;Save-SCProposal $proposal
             # Per-task validation is the normalization boundary for project muscle-memory.
             try{
