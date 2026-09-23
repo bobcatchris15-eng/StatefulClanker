@@ -94,7 +94,7 @@ function Test-SCModelTable($Items) {
     if($first.Count-eq0-or$first.Count-gt16){return $false}
     if(@($first|Where-Object{-not(Test-SCModelScalar $_.Value)}).Count-gt0){return $false}
     $names=@($first|ForEach-Object{$_.Name})
-    foreach($row in $rows|Select-Object -Skip 1){
+    foreach($row in @($rows|Select-Object -Skip 1)){
         $pairs=@(Get-SCModelPairs $row)
         if($pairs.Count-ne$names.Count){return $false}
         for($i=0;$i-lt$names.Count;$i++){
