@@ -9,12 +9,20 @@ namespace StatefulClanker.Tray;
 static class Program
 {
     [STAThread]
-    static void Main()
+    static int Main(string[] args)
     {
+        // StatefulClanker.exe also hosts the project-local RPK CLI. Utility
+        // invocations must remain strictly headless: workers call --rpk during
+        // indexing/retrieval, and those calls must never resurrect the tray UI
+        // after the operator deliberately exits it.
+        if (args.Length > 0 && string.Equals(args[0], "--rpk", StringComparison.OrdinalIgnoreCase))
+            return ReflexiveProjectKnowledge.Run(args.Skip(1).ToArray());
+
         ApplicationConfiguration.Initialize();
         using var mutex = new Mutex(true, "Local\\StatefulClanker.WindowsHost", out var first);
-        if (!first) return;
+        if (!first) return 0;
         Application.Run(new MainForm());
+        return 0;
     }
 }
 

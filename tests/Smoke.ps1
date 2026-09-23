@@ -40,6 +40,10 @@ if((Get-SCVerdict "VERDICT: FAIL`nOn reflection VERDICT: PASS" 0) -ne 'FAIL'){th
 if((Get-SCVerdict "Do not emit VERDICT: PASS unless tests ran." 0) -ne 'FAIL'){throw 'A prose mention of a verdict is not a vote.'}
 if((Get-SCVerdict "The worker said VERDICT: PASS but is wrong.`nVERDICT: FAIL" 0) -ne 'FAIL'){throw 'Prose PASS must not outrank a real FAIL.'}
 
+Write-Host 'STEP 1d: headless RPK entrypoint'
+& (Join-Path $PSScriptRoot 'HeadlessRpk.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Headless RPK tests failed (exit $LASTEXITCODE)." }
+
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('statefulclanker-smoke-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
 Push-Location $temp
