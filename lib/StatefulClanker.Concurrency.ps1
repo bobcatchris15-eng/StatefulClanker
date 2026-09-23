@@ -224,17 +224,35 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
             $detail=@(([string]$child.stderr -split "\r?\n")+([string]$child.stdout -split "\r?\n") |
                 Where-Object{-not[string]::IsNullOrWhiteSpace($_)} | Select-Object -Last 4) -join ' | '
             if($detail.Length-gt320){$detail=$detail.Substring(0,317)+'...'}
-            $task.status = 'failed'
-            $task.blockReason = "Worker crashed with exit code $($Run.process.ExitCode)"+$(if($detail){": $detail"}else{''})
-            Close-SCFailedTaskWorkerSession $task 'crashed'
-            Add-SCEvent 'run.failed' $task.blockReason @{
-                taskId=$task.id
-                exitCode=[int]$Run.process.ExitCode
-                provider=$Run.provider
-                workerSessionId=$workerSessionId
-                logPath=$Run.logPath
-                detail=$detail
+
+            if(@('reviewing','validating')-contains[string]$task.status){
+                $stage=[string]$task.status
+                $task.status='needs_rework'
+                $task.blockReason="Post-worker acceptance infrastructure crashed during $stage with exit code $($Run.process.ExitCode)"+$(if($detail){": $detail"}else{''})
+                Close-SCFailedTaskWorkerSession $task 'acceptance-infrastructure'
+                Add-SCEvent 'validator.infrastructure_failed' $task.blockReason @{
+                    taskId=$task.id
+                    stage=$stage
+                    exitCode=[int]$Run.process.ExitCode
+                    provider=$Run.provider
+                    workerSessionId=$workerSessionId
+                    logPath=$Run.logPath
+                    detail=$detail
+                }
+            }else{
+                $task.status = 'failed'
+                $task.blockReason = "Worker crashed with exit code $($Run.process.ExitCode)"+$(if($detail){": $detail"}else{''})
+                Close-SCFailedTaskWorkerSession $task 'crashed'
+                Add-SCEvent 'run.failed' $task.blockReason @{
+                    taskId=$task.id
+                    exitCode=[int]$Run.process.ExitCode
+                    provider=$Run.provider
+                    workerSessionId=$workerSessionId
+                    logPath=$Run.logPath
+                    detail=$detail
+                }
             }
+            Save-SCTask $task
         }
     }
     if ($task.status -ne 'complete') {
