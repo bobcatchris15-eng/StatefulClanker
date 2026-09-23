@@ -1949,6 +1949,18 @@ sealed class TaskBoardPanel : Panel
     }
 }
 
+public sealed class ProjectRefreshQueue
+{
+    readonly SemaphoreSlim _gate=new(1,1);
+
+    public async Task RunAsync(Func<Task> refresh)
+    {
+        await _gate.WaitAsync();
+        try { await refresh(); }
+        finally { _gate.Release(); }
+    }
+}
+
 sealed class MainForm : Form
 {
     readonly string _root = Runtime.FindRoot();
@@ -1975,7 +1987,7 @@ sealed class MainForm : Form
     bool _updatingAutofillUi;
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
     readonly System.Windows.Forms.Timer _layoutSaveTimer = new() { Interval = 450 };
-    int _refreshing;
+    readonly ProjectRefreshQueue _refreshQueue=new();
     int _mcpDiscoveryRunning;
     readonly McpHost _mcp;
     readonly AutofillHost _autofill;
@@ -2452,16 +2464,17 @@ sealed class MainForm : Form
 
     async Task RefreshAllAsync(bool refreshConfiguration = true)
     {
-        if (Interlocked.Exchange(ref _refreshing, 1) != 0) return;
-        var projectPath = _settings.ActiveProjectPath;
-        try
+        await _refreshQueue.RunAsync(async () =>
         {
-            var snapshot = await Task.Run(() => BuildSnapshot(projectPath, refreshConfiguration));
-            if (IsDisposed || Disposing) return;
-            ApplySnapshot(snapshot, refreshConfiguration);
-        }
-        catch { }
-        finally { Interlocked.Exchange(ref _refreshing, 0); }
+            var projectPath = _settings.ActiveProjectPath;
+            try
+            {
+                var snapshot = await Task.Run(() => BuildSnapshot(projectPath, refreshConfiguration));
+                if (IsDisposed || Disposing) return;
+                ApplySnapshot(snapshot, refreshConfiguration);
+            }
+            catch { }
+        });
     }
 
     UiSnapshot BuildSnapshot(string? projectPath, bool refreshConfiguration)
