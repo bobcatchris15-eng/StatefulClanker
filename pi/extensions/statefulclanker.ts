@@ -446,7 +446,7 @@ function boundedText(value: unknown, maxChars: number): string {
   if (text.length <= maxChars) return text;
   const head = Math.floor(maxChars * 0.68);
   const tail = Math.max(0, maxChars - head - 96);
-  return text.slice(0, head) + "\n... [middle omitted by StatefulClanker reality compaction] ...\n" + text.slice(-tail);
+  return text.slice(0, head) + "\n... [middle omitted by StatefulClanker compact projection] ...\n" + text.slice(-tail);
 }
 
 const COMPACT_TOOL_RESULTS = new Set([
