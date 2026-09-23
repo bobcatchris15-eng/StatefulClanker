@@ -87,7 +87,22 @@ function Import-SCPlan([string]$PlanPath) {
 
 function Get-SCTaskDefinitionHash($Task) {
     $taskRole=if($Task.PSObject.Properties['role']-and$Task.role){[string]$Task.role}else{'worker'}
-    $definition=[ordered]@{title=$Task.title;instruction=$Task.instruction;size=if($Task.PSObject.Properties['size']){$Task.size}else{'small'};sources=if($Task.PSObject.Properties['sources']){@($Task.sources)}else{@()};intentRefs=if($Task.PSObject.Properties['intentRefs']){@($Task.intentRefs)}else{@()};capabilityProfile=if($Task.PSObject.Properties['capabilityProfile']){$Task.capabilityProfile}else{$null};toolPolicy=if($Task.PSObject.Properties['toolPolicy']){$Task.toolPolicy}else{$null};acceptance=@($Task.acceptance);checks=if($Task.PSObject.Properties['checks']){@($Task.checks)}else{@()};semanticAcceptance=if($Task.PSObject.Properties['semanticAcceptance']){@($Task.semanticAcceptance)}else{@()};implications=if($Task.PSObject.Properties['implications']){@($Task.implications)}else{@()};proofObligations=if($Task.PSObject.Properties['proofObligations']){@($Task.proofObligations)}else{@()};parentTaskId=if($Task.PSObject.Properties['parentTaskId']){$Task.parentTaskId}else{$null};dependsOn=@($Task.dependsOn);relations=if($Task.PSObject.Properties['relations']){@($Task.relations)}else{@()};retrieval=@($Task.retrieval);evidence=@($Task.evidence);provider=$Task.provider;role=$taskRole;outputKind=if($Task.PSObject.Properties['outputKind']){$Task.outputKind}else{'change'};humanGate=[bool]$Task.humanGate}
+    $sources=@();if($Task.PSObject.Properties['sources']){$sources=@($Task.sources)}
+    $intentRefs=@();if($Task.PSObject.Properties['intentRefs']){$intentRefs=@($Task.intentRefs)}
+    $checks=@();if($Task.PSObject.Properties['checks']){$checks=@($Task.checks)}
+    $semantic=@();if($Task.PSObject.Properties['semanticAcceptance']){$semantic=@($Task.semanticAcceptance)}
+    $implications=@();if($Task.PSObject.Properties['implications']){$implications=@($Task.implications)}
+    $proof=@();if($Task.PSObject.Properties['proofObligations']){$proof=@($Task.proofObligations)}
+    $relations=@();if($Task.PSObject.Properties['relations']){$relations=@($Task.relations)}
+    $definition=[ordered]@{
+        title=$Task.title;instruction=$Task.instruction;size=if($Task.PSObject.Properties['size']){$Task.size}else{'small'}
+        sources=$sources;intentRefs=$intentRefs;capabilityProfile=if($Task.PSObject.Properties['capabilityProfile']){$Task.capabilityProfile}else{$null}
+        toolPolicy=if($Task.PSObject.Properties['toolPolicy']){$Task.toolPolicy}else{$null};acceptance=@($Task.acceptance)
+        checks=$checks;semanticAcceptance=$semantic;implications=$implications;proofObligations=$proof
+        parentTaskId=if($Task.PSObject.Properties['parentTaskId']){$Task.parentTaskId}else{$null};dependsOn=@($Task.dependsOn);relations=$relations
+        retrieval=@($Task.retrieval);evidence=@($Task.evidence);provider=$Task.provider;role=$taskRole
+        outputKind=if($Task.PSObject.Properties['outputKind']){$Task.outputKind}else{'change'};humanGate=[bool]$Task.humanGate
+    }
     return Get-SCHashString (ConvertTo-SCJson $definition 18)
 }
 
