@@ -75,4 +75,10 @@ foreach($needle in @(
     Assert-True ($runtime.Contains($needle)) "Direct worker still reinjects verbose structured output: $needle"
 }
 
+Write-Host '  COMPACT CONTEXT 7: external worker MCP results are projected after transport'
+$workerPolicy=Get-Content -Raw -LiteralPath (Join-Path $repo 'lib\StatefulClanker.WorkerPolicy.ps1')
+Assert-True ($workerPolicy.Contains('function ConvertTo-SCWorkerMcpModelText')) 'External MCP JSON text has no compact projection adapter.'
+Assert-True ($workerPolicy.Contains('ConvertTo-SCModelText $result 30 -MaxChars 48000')) 'Structured external MCP result is still serialized verbosely into worker context.'
+Assert-True ($workerPolicy.Contains('$trim|ConvertFrom-Json')) 'JSON-looking external MCP text is not recognized before projection.'
+
 Write-Host 'PASS: JSON remains canonical while repeated model context uses deterministic compact projections.'
