@@ -501,7 +501,7 @@ sealed class ApiConnectionsPage : TabPage
             else if(string.Equals(p.health,"failed",StringComparison.OrdinalIgnoreCase))_connections.Rows[i].Cells["health"].Style.ForeColor=Theme.Error;
         }
         var pool=TargetPoolStore.LoadActive();
-        _summary.Text=$"{_profiles.Count} connection(s) • {pool.entries.Count} enabled endpoint(s)";
+        _summary.Text=$"{_profiles.Count} connection(s) • {pool.entries.Count(x=>x.Value.enabled)} enabled endpoint(s)";
         if(_connections.Rows.Count>0)
         {
             var row=_connections.Rows.Cast<DataGridViewRow>().FirstOrDefault(x=>string.Equals(x.Cells["id"].Value?.ToString(),select,StringComparison.OrdinalIgnoreCase))??_connections.Rows[0];
