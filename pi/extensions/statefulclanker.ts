@@ -35,6 +35,10 @@ const REALITY_FILE_COUNT = 6;
 const REALITY_FILE_MAX_CHARS = 9_000;
 const REALITY_DIFF_MAX_CHARS = 24_000;
 const REALITY_HISTORY_MAX_CHARS = 6_000;
+const REALITY_COMPACTION_MAX_TRIGGER_TOKENS = 64_000;
+const REALITY_COMPACTION_MIN_TRIGGER_TOKENS = 24_000;
+const REALITY_COMPACTION_TRIGGER_FRACTION = 0.45;
+const REALITY_COMPACTION_MIN_TURNS = 2;
 
 const PI_OPERATOR_ADDENDUM = `
 ## Bundled Pi operating manual
@@ -542,6 +546,7 @@ async function buildRealityCompaction(
   preparation: any,
   reason: string,
   customInstructions?: string,
+  contextWindow?: number,
 ): Promise<{ summary: string; details: Record<string, unknown> }> {
   const [taskList, autofill, controlSnapshot] = await Promise.all([
     readCurrentTaskList(client),
@@ -668,7 +673,11 @@ async function buildRealityCompaction(
   }
 
   let summary = sections.join("\n\n");
-  summary = boundedText(summary, REALITY_PACKET_MAX_CHARS);
+  const contextScaledBudget =
+    contextWindow && contextWindow > 0
+      ? Math.max(24_000, Math.floor(contextWindow * 1.5))
+      : REALITY_PACKET_MAX_CHARS;
+  summary = boundedText(summary, Math.min(REALITY_PACKET_MAX_CHARS, contextScaledBudget));
 
   const fileOps = preparation?.fileOps ?? {};
   const details = {
@@ -848,6 +857,8 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
   let timer: ReturnType<typeof setInterval> | null = null;
   let delivering = false;
   let manualQueuedForRoot: string | null = null;
+  let compactionInFlight = false;
+  let turnsSinceCompaction = Number.MAX_SAFE_INTEGER;
 
   const ensureClient = (cwd: string): StdioMcpClient => {
     const nextRoot = projectRoot(cwd) ?? resolve(cwd);
@@ -1008,6 +1019,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
   }
 
   pi.on("session_before_compact", async (event, ctx) => {
+    compactionInFlight = true;
     try {
       const active = ensureClient(ctx.cwd);
       const project = root ?? projectRoot(ctx.cwd) ?? resolve(ctx.cwd);
@@ -1017,6 +1029,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
         event.preparation,
         event.reason ?? "unknown",
         event.customInstructions,
+        ctx.getContextUsage()?.contextWindow,
       );
 
       return {
@@ -1036,6 +1049,51 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
     }
   });
 
+  pi.on("session_compact", () => {
+    compactionInFlight = false;
+    turnsSinceCompaction = 0;
+  });
+
+  pi.on("session_compact_failed", () => {
+    compactionInFlight = false;
+  });
+
+  pi.on("turn_end", (_event, ctx) => {
+    turnsSinceCompaction += 1;
+    if (compactionInFlight || turnsSinceCompaction < REALITY_COMPACTION_MIN_TURNS) return;
+
+    const usage = ctx.getContextUsage();
+    const tokens = usage?.tokens ?? null;
+    const contextWindow = usage?.contextWindow ?? 0;
+    if (tokens === null || contextWindow <= 0) return;
+
+    const triggerTokens = Math.max(
+      REALITY_COMPACTION_MIN_TRIGGER_TOKENS,
+      Math.min(
+        REALITY_COMPACTION_MAX_TRIGGER_TOKENS,
+        Math.floor(contextWindow * REALITY_COMPACTION_TRIGGER_FRACTION),
+      ),
+    );
+    if (tokens < triggerTokens) return;
+
+    compactionInFlight = true;
+    ctx.compact({
+      customInstructions:
+        "Routine StatefulClanker reality refresh. Reconstitute from current project state; do not preserve stale conversational bulk merely for continuity.",
+      onComplete: () => {
+        compactionInFlight = false;
+        turnsSinceCompaction = 0;
+      },
+      onError: (error) => {
+        compactionInFlight = false;
+        console.error(
+          "[StatefulClanker extension] proactive reality compaction failed: " +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      },
+    });
+  });
+
   pi.on("before_agent_start", (event) => {
     event.systemPromptOptions.sections.statefulclanker = [
       "## StatefulClanker control plane",
@@ -1047,6 +1105,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
       "Never reopen or redo a task that is already canonically complete merely because an older stagnation warning arrives.",
       "Mechanical stalls and repeated validator/reviewer failures are recovery requests first: investigate and repair the actual broken layer before escalating to the human.",
       "Pi compaction is reality-first: old conversational bulk is replaced with a mechanically rebuilt checkpoint from current git/project/task state while Pi retains its normal recent raw tail. Treat archival carryover as low-authority evidence.",
+      "Reality compaction is intentionally proactive and frequent: the bundled Pi refreshes its working context well before the provider context window is close to full.",
     ].join("\n");
   });
 
