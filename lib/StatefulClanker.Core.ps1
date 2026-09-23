@@ -120,14 +120,14 @@ function ConvertTo-SCModelLines($Value,[int]$Depth=12,[int]$Indent=0) {
             $lines=@($pad+'['+($names-join'|')+']')
             foreach($row in $items){
                 $values=@(Get-SCModelPairs $row|ForEach-Object{ConvertTo-SCModelScalar $_.Value})
-                $lines+=,$pad+($values-join'|')
+                $lines+=,($pad+($values-join'|'))
             }
             return @($lines)
         }
         $lines=@()
         foreach($item in $items){
-            if(Test-SCModelScalar $item){$lines+=,$pad+'- '+(ConvertTo-SCModelScalar $item);continue}
-            $lines+=,$pad+'-'
+            if(Test-SCModelScalar $item){$lines+=,($pad+'- '+(ConvertTo-SCModelScalar $item));continue}
+            $lines+=,($pad+'-')
             $lines+=@(ConvertTo-SCModelLines $item ($Depth-1) ($Indent+2))
         }
         return @($lines)
@@ -140,14 +140,14 @@ function ConvertTo-SCModelLines($Value,[int]$Depth=12,[int]$Indent=0) {
         $name=[string]$pair.Name;$item=$pair.Value
         if(Test-SCModelScalar $item){
             if($item-is[string]-and([string]$item).IndexOf([char]10)-ge0){
-                $lines+=,$pad+$name+':'
-                foreach($line in @([regex]::Split([string]$item,'\r?\n'))){$lines+=,(' ' * ($Indent+2))+$line}
+                $lines+=,($pad+$name+':')
+                foreach($line in @([regex]::Split([string]$item,'\r?\n'))){$lines+=((' ' * ($Indent+2))+$line)}
             }else{
-                $lines+=,$pad+$name+'='+(ConvertTo-SCModelScalar $item)
+                $lines+=,($pad+$name+'='+(ConvertTo-SCModelScalar $item))
             }
             continue
         }
-        $lines+=,$pad+$name+':'
+        $lines+=,($pad+$name+':')
         $lines+=@(ConvertTo-SCModelLines $item ($Depth-1) ($Indent+2))
     }
     return @($lines)

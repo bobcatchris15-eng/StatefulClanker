@@ -70,7 +70,7 @@ Assert-True ($v.verdict-eq'PASS' -and $v.validationKind-eq'mechanical') 'Passing
 Assert-True ($script:fallbackCalls-eq0) 'Passing mechanical-only task invoked inference.'
 
 Write-Host '  ACCEPTANCE 2: mechanical FAIL performs zero inference'
-function Invoke-SCMechanicalAcceptance { param($Task); [pscustomobject]@{configured=$true;passed=$false;count=1;failed=1;checks=@([pscustomobject]@{index=1;exitCode=7;timedOut=$false;command='bad'})} }
+function Invoke-SCMechanicalAcceptance { param($Task); [pscustomobject]@{configured=$true;passed=$false;count=1;failed=1;checks=@([pscustomobject]@{index=1;passed=$false;exitCode=7;timedOut=$false;command='bad'})} }
 $v=Invoke-SCAcceptanceValidation $task $run $comp
 Assert-True ($v.verdict-eq'FAIL' -and $v.validationKind-eq'mechanical') 'Failing mechanical task did not fail mechanically.'
 Assert-True ($script:fallbackCalls-eq0) 'Failing mechanical task invoked inference.'
