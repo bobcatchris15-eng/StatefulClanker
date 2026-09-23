@@ -47,10 +47,40 @@ function Import-SCPlan([string]$PlanPath) {
     $planRecord=[ordered]@{schemaVersion=4;id=$planId;name=$name;summary=$summary;format=$input.format;source=$input.resolved;sourceRefs=$planSources;intentRefs=$planIntent;importedAt=(Get-Date).ToUniversalTime().ToString('o');tasks=@($plan.tasks)}
     Write-SCJson (Get-SCPath ("plans/{0}.json"-f$planId)) $planRecord;if($input.format-eq'scplan'){Copy-Item -LiteralPath $input.resolved -Destination (Get-SCPath ("plans/{0}.scplan"-f$planId)) -Force}
     foreach($item in @($plan.tasks)){
-        $id=if($item.PSObject.Properties['id']-and$item.id){[string]$item.id}else{New-SCId 'task'};if(Test-Path (Get-SCPath ("tasks/{0}.json"-f$id))){throw "Plan task id already exists: $id"}
-        $taskObj=New-SCTaskObject $id ([string]$item.title) ([string]$item.instruction) $(if($item.PSObject.Properties['acceptance']){@($item.acceptance)}else{@()}) $(if($item.PSObject.Properties['dependsOn']){@($item.dependsOn)}else{@()}) $(if($item.PSObject.Properties['relations']){@($item.relations)}else{@()}) $(if($item.PSObject.Properties['retrieval']){@($item.retrieval)}else{@()}) $(if($item.PSObject.Properties['evidence']){@($item.evidence)}else{@()}) $(if($item.PSObject.Properties['provider']){[string]$item.provider}else{$null}) $(if($item.PSObject.Properties['role']-and$item.role){[string]$item.role}else{'worker'}) $(if($item.PSObject.Properties['humanGate']){[bool]$item.humanGate}else{$false})
-        Set-SCProperty $taskObj 'size' $(if($item.PSObject.Properties['size']){[string]$item.size}else{'small'});Set-SCProperty $taskObj 'outputKind' $(if($item.PSObject.Properties['outputKind']-and$item.outputKind){[string]$item.outputKind}else{'change'});Set-SCProperty $taskObj 'sources' $(if($item.PSObject.Properties['sources']){@($item.sources)}else{@()});Set-SCProperty $taskObj 'intentRefs' $(if($item.PSObject.Properties['intentRefs']){@($item.intentRefs)}else{@()})
-        Set-SCProperty $taskObj 'capabilityProfile' $(if($item.PSObject.Properties['capabilityProfile']-and$item.capabilityProfile){[string]$item.capabilityProfile}else{$null});Set-SCProperty $taskObj 'toolPolicy' $(if($item.PSObject.Properties['toolPolicy']){$item.toolPolicy}else{$null});Set-SCProperty $taskObj 'checks' $(if($item.PSObject.Properties['checks']){@($item.checks)}else{@()});Set-SCProperty $taskObj 'semanticAcceptance' $(if($item.PSObject.Properties['semanticAcceptance']){@($item.semanticAcceptance)}else{@()});Set-SCProperty $taskObj 'implications' $(if($item.PSObject.Properties['implications']){@($item.implications)}else{@()});Set-SCProperty $taskObj 'proofObligations' $(if($item.PSObject.Properties['proofObligations']){@($item.proofObligations)}else{@()});Set-SCProperty $taskObj 'refinementStatus' 'pending';Set-SCProperty $taskObj 'refinementDepth' 0;Set-SCProperty $taskObj 'parentTaskId' $null;Set-SCProperty $taskObj 'childTaskIds' @();Save-SCTask $taskObj
+        $id=if($item.PSObject.Properties['id']-and$item.id){[string]$item.id}else{New-SCId 'task'}
+        if(Test-Path (Get-SCPath ("tasks/{0}.json"-f$id))){throw "Plan task id already exists: $id"}
+
+        $itemAcceptance=@();if($item.PSObject.Properties['acceptance']){$itemAcceptance=@($item.acceptance)}
+        $itemDepends=@();if($item.PSObject.Properties['dependsOn']){$itemDepends=@($item.dependsOn)}
+        $itemRelations=@();if($item.PSObject.Properties['relations']){$itemRelations=@($item.relations)}
+        $itemRetrieval=@();if($item.PSObject.Properties['retrieval']){$itemRetrieval=@($item.retrieval)}
+        $itemEvidence=@();if($item.PSObject.Properties['evidence']){$itemEvidence=@($item.evidence)}
+        $itemSources=@();if($item.PSObject.Properties['sources']){$itemSources=@($item.sources)}
+        $itemIntentRefs=@();if($item.PSObject.Properties['intentRefs']){$itemIntentRefs=@($item.intentRefs)}
+        $itemChecks=@();if($item.PSObject.Properties['checks']){$itemChecks=@($item.checks)}
+        $itemSemantic=@();if($item.PSObject.Properties['semanticAcceptance']){$itemSemantic=@($item.semanticAcceptance)}
+        $itemImplications=@();if($item.PSObject.Properties['implications']){$itemImplications=@($item.implications)}
+        $itemProof=@();if($item.PSObject.Properties['proofObligations']){$itemProof=@($item.proofObligations)}
+
+        $provider=if($item.PSObject.Properties['provider']){[string]$item.provider}else{$null}
+        $role=if($item.PSObject.Properties['role']-and$item.role){[string]$item.role}else{'worker'}
+        $humanGate=if($item.PSObject.Properties['humanGate']){[bool]$item.humanGate}else{$false}
+        $taskObj=New-SCTaskObject $id ([string]$item.title) ([string]$item.instruction) $itemAcceptance $itemDepends $itemRelations $itemRetrieval $itemEvidence $provider $role $humanGate
+        Set-SCProperty $taskObj 'size' $(if($item.PSObject.Properties['size']){[string]$item.size}else{'small'})
+        Set-SCProperty $taskObj 'outputKind' $(if($item.PSObject.Properties['outputKind']-and$item.outputKind){[string]$item.outputKind}else{'change'})
+        Set-SCProperty $taskObj 'sources' $itemSources
+        Set-SCProperty $taskObj 'intentRefs' $itemIntentRefs
+        Set-SCProperty $taskObj 'capabilityProfile' $(if($item.PSObject.Properties['capabilityProfile']-and$item.capabilityProfile){[string]$item.capabilityProfile}else{$null})
+        Set-SCProperty $taskObj 'toolPolicy' $(if($item.PSObject.Properties['toolPolicy']){$item.toolPolicy}else{$null})
+        Set-SCProperty $taskObj 'checks' $itemChecks
+        Set-SCProperty $taskObj 'semanticAcceptance' $itemSemantic
+        Set-SCProperty $taskObj 'implications' $itemImplications
+        Set-SCProperty $taskObj 'proofObligations' $itemProof
+        Set-SCProperty $taskObj 'refinementStatus' 'pending'
+        Set-SCProperty $taskObj 'refinementDepth' 0
+        Set-SCProperty $taskObj 'parentTaskId' $null
+        Set-SCProperty $taskObj 'childTaskIds' @()
+        Save-SCTask $taskObj
     }
     $state=Get-SCState;$state.activePlanId=$planId;$cfg=Get-SCConfig;$state.planApproved=-not[bool]$cfg.requireHumanApprovalForPlan;Save-SCState $state;Update-SCReadiness;Add-SCEvent 'plan.imported' "Imported $planId" @{taskCount=@($plan.tasks).Count;format=$input.format};Write-Host "Imported $planId ($($input.format), $(@($plan.tasks).Count) tasks)"
 }
