@@ -93,6 +93,7 @@ static class TargetPoolStore
 {
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
     static readonly TargetPoolChangeDispatcher Changes = new();
+    static readonly Mutex StoreMutex = new(false, StoreMutexName());
     public static event EventHandler? Changed { add => Changes.Changed += value; remove => Changes.Changed -= value; }
 
     // Endpoint selection is machine-operational state, not project truth. StatefulClanker
@@ -100,7 +101,26 @@ static class TargetPoolStore
     // whichever project is active now.
     public static string ActivePoolPath() => System.IO.Path.Combine(AppStore.Root,"endpoints.json");
 
-    public static TargetPoolDocument LoadActive()
+    static string StoreMutexName()
+    {
+        var hash=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(AppStore.Root))).ToLowerInvariant()[..16];
+        return "Local\\StatefulClankerRouterState-"+hash;
+    }
+
+    static T WithStoreLock<T>(Func<T> action)
+    {
+        var held=false;
+        try
+        {
+            try { held=StoreMutex.WaitOne(TimeSpan.FromSeconds(10)); }
+            catch(AbandonedMutexException) { held=true; }
+            if(!held) throw new TimeoutException("Timed out waiting for endpoint catalog lock.");
+            return action();
+        }
+        finally { if(held) try{StoreMutex.ReleaseMutex();}catch{} }
+    }
+
+    static TargetPoolDocument LoadActiveUnlocked()
     {
         var path = ActivePoolPath();
         if (!File.Exists(path))
@@ -132,16 +152,36 @@ static class TargetPoolStore
         catch { return new(); }
     }
 
-    public static void SaveActive(TargetPoolDocument doc)
+    static void SaveActiveUnlocked(TargetPoolDocument doc)
     {
         var path = ActivePoolPath();
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
         doc.schemaVersion = 2;
         doc.updatedAt = DateTimeOffset.UtcNow.ToString("O");
-        var tmp = path + ".tmp";
+        var tmp = path + ".tmp-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(tmp,JsonSerializer.Serialize(doc,Json),new UTF8Encoding(false));
         File.Move(tmp,path,true);
+    }
+
+    public static TargetPoolDocument LoadActive() => WithStoreLock(LoadActiveUnlocked);
+
+    public static void SaveActive(TargetPoolDocument doc)
+    {
+        WithStoreLock(() => { SaveActiveUnlocked(doc); return 0; });
         Changes.Publish();
+    }
+
+    public static TResult UpdateActive<TResult>(Func<TargetPoolDocument,TResult> update)
+    {
+        var result=WithStoreLock(() =>
+        {
+            var doc=LoadActiveUnlocked();
+            var value=update(doc);
+            SaveActiveUnlocked(doc);
+            return value;
+        });
+        Changes.Publish();
+        return result;
     }
 
     public static void ApplySelection(TargetPoolDocument doc,TargetPoolEntry entry,bool selected)
@@ -380,6 +420,8 @@ static class ApiConnectionsUiBootstrap
     }
 }
 
+sealed record ApiModelRowBinding(string ConnectionId,string ModelId);
+
 sealed class ApiConnectionsPage : TabPage
 {
     readonly DataGridView _connections = new();
@@ -387,7 +429,7 @@ sealed class ApiConnectionsPage : TabPage
     readonly Label _summary = new();
     Dictionary<string,ApiConnectionProfile> _profiles = new(StringComparer.OrdinalIgnoreCase);
     bool _loadingModels;
-    bool _modelSelectionDirty;
+    string? _loadedModelConnection;
 
     public ApiConnectionsPage() : base("Connections")
     {
@@ -427,7 +469,12 @@ sealed class ApiConnectionsPage : TabPage
     {
         _connections.Dock=DockStyle.Fill;_connections.ReadOnly=true;_connections.AllowUserToAddRows=false;_connections.RowHeadersVisible=false;_connections.SelectionMode=DataGridViewSelectionMode.FullRowSelect;_connections.MultiSelect=false;_connections.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
         _connections.Columns.Add("id","Connection");_connections.Columns.Add("preset","Service");_connections.Columns.Add("url","Base URL");_connections.Columns.Add("models","Models");_connections.Columns.Add("health","Health");_connections.Columns.Add("tested","Last tested");
-        _connections.SelectionChanged+=(_,_)=>LoadModels(true);
+        _connections.SelectionChanged+=(_,_)=>
+        {
+            var selected=SelectedId;
+            if(string.Equals(selected,_loadedModelConnection,StringComparison.OrdinalIgnoreCase))return;
+            LoadModels();
+        };
     }
 
     void ConfigureModelGrid()
@@ -460,18 +507,21 @@ sealed class ApiConnectionsPage : TabPage
             var row=_connections.Rows.Cast<DataGridViewRow>().FirstOrDefault(x=>string.Equals(x.Cells["id"].Value?.ToString(),select,StringComparison.OrdinalIgnoreCase))??_connections.Rows[0];
             row.Selected=true;
         }
-        LoadModels(true);
+        LoadModels();
     }
 
     static string FormatTime(string text)=>DateTimeOffset.TryParse(text,out var dto)?dto.ToLocalTime().ToString("MM-dd HH:mm"):"—";
 
-    void LoadModels(bool discardUnsaved=false)
+    void LoadModels()
     {
-        if(_modelSelectionDirty&&!discardUnsaved)return;
         _loadingModels=true;
         try
         {
-            _models.Rows.Clear();var id=SelectedId;if(id is null||!_profiles.TryGetValue(id,out var p)){_modelSelectionDirty=false;return;}
+            _models.Rows.Clear();
+            var id=SelectedId;
+            _loadedModelConnection=id;
+            if(id is null||!_profiles.TryGetValue(id,out var p))return;
+
             var pool=TargetPoolStore.LoadActive();
             foreach(var m in p.models)
             {
@@ -479,16 +529,38 @@ sealed class ApiConnectionsPage : TabPage
                 var free=m.isFree==true?"yes":m.isFree==false?"no":"?";
                 var targeted=pool.entries.TryGetValue(TargetPoolStore.Id(id,m.id),out var entry);
                 var state=!targeted?"—":entry!.enabled?"enabled":"disabled";
-                var row=_models.Rows.Add(targeted,m.displayName,m.id,state,m.supportsTools==false?"text":"native",context,free);
-                if(targeted)_models.Rows[row].Cells["state"].Style.ForeColor=entry!.enabled?Theme.Good:Theme.Muted;
+                var rowIndex=_models.Rows.Add(targeted,m.displayName,m.id,state,m.supportsTools==false?"text":"native",context,free);
+                var row=_models.Rows[rowIndex];
+                row.Tag=new ApiModelRowBinding(id,m.id);
+                if(targeted)row.Cells["state"].Style.ForeColor=entry!.enabled?Theme.Good:Theme.Muted;
             }
-            _modelSelectionDirty=false;
             _summary.ForeColor=Theme.Muted;
         }
         finally{_loadingModels=false;}
     }
 
-    public void RefreshProjectMarkers() => LoadModels(false);
+    void RefreshEndpointSelectionMarkers()
+    {
+        var pool=TargetPoolStore.LoadActive();
+        var enabled=pool.entries.Count(x=>x.Value.enabled);
+        _loadingModels=true;
+        try
+        {
+            foreach(DataGridViewRow row in _models.Rows)
+            {
+                if(row.Tag is not ApiModelRowBinding binding)continue;
+                var targeted=pool.entries.TryGetValue(TargetPoolStore.Id(binding.ConnectionId,binding.ModelId),out var entry);
+                row.Cells["use"].Value=targeted;
+                row.Cells["state"].Value=!targeted?"—":entry!.enabled?"enabled":"disabled";
+                row.Cells["state"].Style.ForeColor=targeted&&entry!.enabled?Theme.Good:Theme.Muted;
+            }
+            _summary.Text=$"{_profiles.Count} connection(s) • {enabled} enabled endpoint(s)";
+            _summary.ForeColor=Theme.Muted;
+        }
+        finally{_loadingModels=false;}
+    }
+
+    public void RefreshProjectMarkers() => RefreshEndpointSelectionMarkers();
 
     void Add(object? s,EventArgs e)
     {
@@ -520,8 +592,8 @@ sealed class ApiConnectionsPage : TabPage
     {
         var id=SelectedId;if(id is null)return;
         if(MessageBox.Show(FindForm(),$"Remove machine connection '{id}' and every endpoint selected from it?", "Remove connection",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
-        var pool=TargetPoolStore.LoadActive();TargetPoolStore.RemoveConnection(pool,id);
-        _profiles.Remove(id);ApiConnectionStore.Save(_profiles);TargetPoolStore.SaveActive(pool);Reload();
+        TargetPoolStore.UpdateActive(pool=>TargetPoolStore.RemoveConnection(pool,id));
+        _profiles.Remove(id);ApiConnectionStore.Save(_profiles);Reload();
     }
 
     void SetupHelp(object? s,EventArgs e)
@@ -531,59 +603,47 @@ sealed class ApiConnectionsPage : TabPage
         if(choice==DialogResult.Yes&&!string.IsNullOrWhiteSpace(preset.SetupUrl))try{Process.Start(new ProcessStartInfo(preset.SetupUrl){UseShellExecute=true});}catch{}
     }
 
-    void SaveTargetSelection(object? s,EventArgs e)
-    {
-        var connection=SelectedId;if(connection is null)return;
-        if(false){}
-        try
-        {
-            var pool=TargetPoolStore.LoadActive();
-            var p=_profiles[connection];
-            foreach(DataGridViewRow row in _models.Rows)
-            {
-                var modelId=row.Cells["id"].Value?.ToString();if(string.IsNullOrWhiteSpace(modelId))continue;
-                var key=TargetPoolStore.Id(connection,modelId);
-                var selected=Convert.ToBoolean(row.Cells["use"].Value??false);
-                if(!selected){pool.entries.Remove(key);continue;}
-                var model=p.models.FirstOrDefault(x=>string.Equals(x.id,modelId,StringComparison.OrdinalIgnoreCase));
-                if(model is null)continue;
-                if(!pool.entries.TryGetValue(key,out var entry))entry=new TargetPoolEntry{id=key,connection=connection,model=model.id,source="user"};
-                entry.displayName=model.displayName;entry.enabled=true;entry.workhorse=true;entry.free=model.isFree;entry.supportsTools=model.supportsTools;
-                entry.contextLength=model.contextLength;entry.toolMode=model.supportsTools==false?"text":"native";entry.updatedAt=DateTimeOffset.UtcNow.ToString("O");
-                if(string.IsNullOrWhiteSpace(entry.rationale))entry.rationale="Selected by the operator from the discovered connection catalog.";
-                pool.entries[key]=entry;
-            }
-            TargetPoolStore.SaveActive(pool);Reload(connection);
-        }
-        catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not save endpoint catalog",MessageBoxButtons.OK,MessageBoxIcon.Error);}
-    }
-
     void PersistTargetSelection(DataGridViewRow row)
     {
-        var connection=SelectedId;if(connection is null||!_profiles.TryGetValue(connection,out var p))return;
+        if(row.Tag is not ApiModelRowBinding binding)return;
+        if(!_profiles.TryGetValue(binding.ConnectionId,out var p))return;
         try
         {
-            var modelId=row.Cells["id"].Value?.ToString();if(string.IsNullOrWhiteSpace(modelId))return;
             var selected=Convert.ToBoolean(row.Cells["use"].Value??false);
-            var key=TargetPoolStore.Id(connection,modelId);
-            var pool=TargetPoolStore.LoadActive();
-            var model=p.models.FirstOrDefault(x=>string.Equals(x.id,modelId,StringComparison.OrdinalIgnoreCase));
-            var entry=pool.entries.TryGetValue(key,out var existing)
-                ? existing
-                : new TargetPoolEntry{id=key,connection=connection,model=modelId,source="user"};
-            if(model is not null)
+            var model=p.models.FirstOrDefault(x=>string.Equals(x.id,binding.ModelId,StringComparison.OrdinalIgnoreCase));
+            var entry=new TargetPoolEntry{id=TargetPoolStore.Id(binding.ConnectionId,binding.ModelId),connection=binding.ConnectionId,model=binding.ModelId,source="user"};
+
+            TargetPoolStore.UpdateActive(pool =>
             {
-                entry.displayName=model.displayName;entry.workhorse=true;entry.free=model.isFree;entry.supportsTools=model.supportsTools;
-                entry.contextLength=model.contextLength;entry.toolMode=model.supportsTools==false?"text":"native";entry.updatedAt=DateTimeOffset.UtcNow.ToString("O");
-                if(string.IsNullOrWhiteSpace(entry.rationale))entry.rationale="Selected by the operator from the discovered connection catalog.";
-            }
-            TargetPoolStore.ApplySelection(pool,entry,selected);
-            TargetPoolStore.SaveActive(pool);
+                if(pool.entries.TryGetValue(entry.id,out var existing))entry=existing;
+                if(model is not null)
+                {
+                    entry.displayName=model.displayName;
+                    entry.workhorse=true;
+                    entry.free=model.isFree;
+                    entry.supportsTools=model.supportsTools;
+                    entry.contextLength=model.contextLength;
+                    entry.toolMode=model.supportsTools==false?"text":"native";
+                    entry.updatedAt=DateTimeOffset.UtcNow.ToString("O");
+                    if(string.IsNullOrWhiteSpace(entry.rationale))entry.rationale="Selected by the operator from the discovered connection catalog.";
+                }
+                TargetPoolStore.ApplySelection(pool,entry,selected);
+                return 0;
+            });
+
             row.Cells["state"].Value=selected?"enabled":"—";
             row.Cells["state"].Style.ForeColor=selected?Theme.Good:Theme.Muted;
-            _modelSelectionDirty=false;_summary.Text=$"Endpoint {(selected?"enabled":"removed")}: {modelId}";_summary.ForeColor=Theme.Muted;
+            var current=TargetPoolStore.LoadActive();
+            _summary.Text=$"{_profiles.Count} connection(s) • {current.entries.Count(x=>x.Value.enabled)} enabled endpoint(s) · {(selected?"enabled":"removed")} {binding.ModelId}";
+            _summary.ForeColor=Theme.Muted;
         }
-        catch(Exception ex){_modelSelectionDirty=true;_summary.Text="Endpoint selection was not saved";_summary.ForeColor=Theme.Error;MessageBox.Show(FindForm(),ex.Message,"Could not save endpoint catalog",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+        catch(Exception ex)
+        {
+            RefreshEndpointSelectionMarkers();
+            _summary.Text="Endpoint selection was not saved";
+            _summary.ForeColor=Theme.Error;
+            MessageBox.Show(FindForm(),ex.Message,"Could not update endpoint catalog",MessageBoxButtons.OK,MessageBoxIcon.Error);
+        }
     }
 
     void AutoTargetFreeWorkhorses(object? s,EventArgs e)
@@ -591,7 +651,9 @@ sealed class ApiConnectionsPage : TabPage
         if(false){}
         try
         {
-            var pool=TargetPoolStore.LoadActive();var added=0;
+            var added=0;
+            TargetPoolStore.UpdateActive(pool =>
+            {
             foreach(var kv in _profiles)
             {
                 var connection=kv.Key;var p=kv.Value;var preset=InferencePresets.Get(p.presetId);
@@ -617,7 +679,9 @@ sealed class ApiConnectionsPage : TabPage
                     };added++;
                 }
             }
-            TargetPoolStore.SaveActive(pool);Reload(SelectedId);
+            return 0;
+            });
+            RefreshEndpointSelectionMarkers();
             MessageBox.Show(FindForm(),$"Seeded {added} new endpoint(s). Existing user/Clanker choices were preserved.");
         }
         catch(Exception ex){MessageBox.Show(FindForm(),ex.Message,"Could not auto-target models",MessageBoxButtons.OK,MessageBoxIcon.Error);}
