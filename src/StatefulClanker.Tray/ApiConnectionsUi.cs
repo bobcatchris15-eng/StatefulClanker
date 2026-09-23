@@ -155,6 +155,13 @@ static class TargetPoolStore
         doc.entries.Remove(entry.id);
     }
 
+    public static int RemoveConnection(TargetPoolDocument doc,string connection)
+    {
+        var keys=doc.entries.Where(x=>string.Equals(x.Value.connection,connection,StringComparison.OrdinalIgnoreCase)).Select(x=>x.Key).ToArray();
+        foreach(var key in keys) doc.entries.Remove(key);
+        return keys.Length;
+    }
+
     public static string Id(string connection,string model) => connection.Trim() + "::" + model.Trim();
 }
 
@@ -512,8 +519,9 @@ sealed class ApiConnectionsPage : TabPage
     void Remove(object? s,EventArgs e)
     {
         var id=SelectedId;if(id is null)return;
-        if(MessageBox.Show(FindForm(),$"Remove machine connection '{id}'? Endpoint catalog rows that reference it will remain visible to Clanker but cannot route until the connection is restored or those rows are removed.","Remove connection",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
-        _profiles.Remove(id);ApiConnectionStore.Save(_profiles);Reload();
+        if(MessageBox.Show(FindForm(),$"Remove machine connection '{id}' and every endpoint selected from it?", "Remove connection",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
+        var pool=TargetPoolStore.LoadActive();TargetPoolStore.RemoveConnection(pool,id);
+        _profiles.Remove(id);ApiConnectionStore.Save(_profiles);TargetPoolStore.SaveActive(pool);Reload();
     }
 
     void SetupHelp(object? s,EventArgs e)

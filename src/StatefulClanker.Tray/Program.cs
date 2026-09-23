@@ -2580,7 +2580,6 @@ sealed class MainForm : Form
         Interlocked.Exchange(ref _targetPoolRefreshQueued,0);
         if(IsDisposed||Disposing)return;
         PopulateOverviewTargets();
-        ApiConnectionsUiBootstrap.RefreshProjectMarkers();
     }
 
     void ToggleOverviewTarget(TargetPoolEntry target, bool enabled)
