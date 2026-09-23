@@ -61,8 +61,8 @@ public static partial class FailurePolicy
 
     public static string ScopeFor(string failureClass) => failureClass switch
     {
-        "auth" or "permission" or "configuration" or "billing_exhausted" or "timeout" or "server_error" => "connection",
-        "rate_limited" or "capacity" or "model_unavailable" or "malformed_response" or "empty_response" or "protocol_error" => "endpoint",
+        "auth" or "permission" or "configuration" or "billing_exhausted" => "connection",
+        "rate_limited" or "capacity" or "model_unavailable" or "malformed_response" or "empty_response" or "protocol_error" or "timeout" or "server_error" => "endpoint",
         _ => "request"
     };
 
