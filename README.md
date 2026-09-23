@@ -91,7 +91,7 @@ t-02|running|1|repair route eligibility
 
 Nested state uses terse key=value / indented sections; multiline source, diff, and command output remains readable. The projection is intentionally **not** a replacement serialization format and is never parsed back into authority state.
 
-Compact projection is used for worker compiled packets, semantic-review evidence, project-review packets, Jev's shared state text, Pi reality checkpoints, selected high-volume Pi control-plane tool results, and structured built-in direct-worker tool results. SCPLAN remains the plan/task authoring format, while MCP arguments/results and persisted .statefulclanker records remain JSON.
+Compact projection is used for worker compiled packets, semantic-review evidence, project-review packets, Jev's shared state text, Pi reality checkpoints, selected high-volume Pi control-plane tool results, and structured built-in or external-MCP direct-worker tool results. SCPLAN remains the plan/task authoring format, while MCP arguments/results and persisted .statefulclanker records remain JSON.
 ### Reality-first embedded Pi compaction
 
 The bundled Pi replaces ordinary conversation-summary compaction with a **reality checkpoint** assembled mechanically from the current project. At compaction time the extension samples git/worktree state, current task objects, Autofill, control/Human-Authority state, relevant current files, and recent deterministic evidence. Pi still retains its normal recent raw conversation tail.
