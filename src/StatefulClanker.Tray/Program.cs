@@ -2584,11 +2584,21 @@ sealed class MainForm : Form
 
     void ToggleOverviewTarget(TargetPoolEntry target, bool enabled)
     {
-        var pool = TargetPoolStore.LoadActive();
         var id = TargetPoolStore.Id(target.connection, target.model);
-        if (!pool.entries.TryGetValue(id, out var current)) return;
-        current.enabled = enabled; current.updatedAt = DateTimeOffset.UtcNow.ToString("O"); pool.entries[id] = current;
-        try { TargetPoolStore.SaveActive(pool); PopulateOverviewTargets(); ApiConnectionsUiBootstrap.RefreshProjectMarkers(); }
+        try
+        {
+            var changed=TargetPoolStore.UpdateActive(pool =>
+            {
+                if(!pool.entries.TryGetValue(id,out var current))return false;
+                current.enabled=enabled;
+                if(string.Equals(current.managedBy,"free-capacity",StringComparison.OrdinalIgnoreCase))
+                    current.userOverride=enabled?"enabled":"disabled";
+                current.updatedAt=DateTimeOffset.UtcNow.ToString("O");
+                pool.entries[id]=current;
+                return true;
+            });
+            if(changed){PopulateOverviewTargets();ApiConnectionsUiBootstrap.RefreshProjectMarkers();}
+        }
         catch (Exception ex) { MessageBox.Show(this, "Failed to update target: " + ex.Message, "Target update failed", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
 
