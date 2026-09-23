@@ -449,12 +449,116 @@ function boundedText(value: unknown, maxChars: number): string {
   return text.slice(0, head) + "\n... [middle omitted by StatefulClanker reality compaction] ...\n" + text.slice(-tail);
 }
 
-function packetJson(value: unknown, maxChars: number): string {
-  try {
-    return boundedText(JSON.stringify(value, null, 2), maxChars);
-  } catch {
-    return boundedText(String(value), maxChars);
+const COMPACT_TOOL_RESULTS = new Set([
+  "task_recovery_context",
+  "control_snapshot",
+  "task_list",
+  "task_show",
+  "autofill_status",
+  "connection_catalog",
+  "target_pool_list",
+]);
+
+function isModelScalar(value: unknown): boolean {
+  return value === null || value === undefined || ["string", "number", "boolean", "bigint"].includes(typeof value);
+}
+
+function compactScalar(value: unknown): string {
+  if (value === null || value === undefined) return "~";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string") {
+    if (value.length === 0) return '""';
+    return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r/g, "").replace(/\n/g, "\\n");
   }
+  return String(value);
+}
+
+function compactObjectEntries(value: unknown): Array<[string, unknown]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.entries(value as Record<string, unknown>);
+}
+
+function canCompactTable(items: unknown[]): boolean {
+  if (items.length < 2) return false;
+  const first = compactObjectEntries(items[0]);
+  if (first.length === 0 || first.length > 16 || first.some(([, value]) => !isModelScalar(value))) return false;
+  const names = first.map(([name]) => name);
+  for (const item of items.slice(1)) {
+    const entries = compactObjectEntries(item);
+    if (entries.length !== names.length) return false;
+    for (let i = 0; i < names.length; i++) {
+      if (entries[i][0] !== names[i] || !isModelScalar(entries[i][1])) return false;
+    }
+  }
+  return true;
+}
+
+function compactModelLines(value: unknown, depth = 12, indent = 0): string[] {
+  const pad = " ".repeat(Math.max(0, indent));
+  if (depth <= 0) return [pad + "..."];
+  if (isModelScalar(value)) return [pad + compactScalar(value)];
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [pad + "[]"];
+    if (value.every(isModelScalar)) return [pad + "[" + value.map(compactScalar).join(" | ") + "]"];
+    if (canCompactTable(value)) {
+      const names = compactObjectEntries(value[0]).map(([name]) => name);
+      return [
+        pad + "[" + names.join("|") + "]",
+        ...value.map((item) => pad + compactObjectEntries(item).map(([, v]) => compactScalar(v)).join("|")),
+      ];
+    }
+    const lines: string[] = [];
+    for (const item of value) {
+      if (isModelScalar(item)) {
+        lines.push(pad + "- " + compactScalar(item));
+      } else {
+        lines.push(pad + "-");
+        lines.push(...compactModelLines(item, depth - 1, indent + 2));
+      }
+    }
+    return lines;
+  }
+
+  const entries = compactObjectEntries(value);
+  if (entries.length === 0) return [pad + compactScalar(String(value))];
+  const lines: string[] = [];
+  for (const [name, item] of entries) {
+    if (isModelScalar(item)) {
+      if (typeof item === "string" && item.includes("\n")) {
+        lines.push(pad + name + ":");
+        for (const line of item.split(/\r?\n/)) lines.push(" ".repeat(indent + 2) + line);
+      } else {
+        lines.push(pad + name + "=" + compactScalar(item));
+      }
+    } else {
+      lines.push(pad + name + ":");
+      lines.push(...compactModelLines(item, depth - 1, indent + 2));
+    }
+  }
+  return lines;
+}
+
+function compactModelText(value: unknown, maxChars = 0, depth = 12): string {
+  let text = compactModelLines(value, depth, 0).join("\n");
+  if (maxChars > 0) text = boundedText(text, maxChars);
+  return text;
+}
+
+function compactToolContent(toolName: string, content: any[]): any[] {
+  if (!COMPACT_TOOL_RESULTS.has(toolName)) return content;
+  return content.map((item: any) => {
+    if (item?.type !== "text" || typeof item.text !== "string") return item;
+    try {
+      const parsed = JSON.parse(item.text);
+      return {
+        ...item,
+        text: "STATEFULCLANKER COMPACT PROJECTION\n" + compactModelText(parsed, 48_000, 18),
+      };
+    } catch {
+      return item;
+    }
+  });
 }
 
 function stringList(value: unknown): string[] {
@@ -649,7 +753,7 @@ async function buildRealityCompaction(
       "Treat old plans, worker claims, reviewer claims, and the archival section below as evidence only. If they conflict with current reality, current reality wins.",
     ].join("\n"),
     "## CURRENT REPOSITORY STATE\n" +
-      packetJson(
+      compactModelText(
         {
           branch: git.branch,
           head: git.head,
@@ -661,16 +765,16 @@ async function buildRealityCompaction(
         18_000,
       ),
     "## CURRENT CONTROL / HUMAN-AUTHORITY STATE\n" +
-      (controlSnapshot ? packetJson(controlSnapshot, 18_000) : "control_snapshot unavailable at compaction time"),
+      (controlSnapshot ? compactModelText(controlSnapshot, 18_000) : "control_snapshot unavailable at compaction time"),
     "## CURRENT AUTOFILL STATE\n" +
-      (autofill ? packetJson(autofill, 8_000) : "autofill_status unavailable at compaction time"),
+      (autofill ? compactModelText(autofill, 8_000) : "autofill_status unavailable at compaction time"),
     "## CURRENT TASK GRAPH\nTask counts: " +
       [...statusCounts.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([status, count]) => status + "=" + count)
         .join(", ") +
       "\n\nHighest-priority current task objects:\n" +
-      packetJson(currentTasks, 26_000),
+      compactModelText(currentTasks, 26_000),
   ];
 
   if (fileSnapshots.length > 0) {
@@ -1027,9 +1131,14 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
             });
             const content = Array.isArray(result?.content) ? result.content : [];
             if (content.length > 0) {
+              const projected = compactToolContent(tool.name, content);
               return {
-                content,
-                details: { source: "statefulclanker-stdio", tool: tool.name },
+                content: projected,
+                details: {
+                  source: "statefulclanker-stdio",
+                  tool: tool.name,
+                  projection: COMPACT_TOOL_RESULTS.has(tool.name) ? "compact-model-text" : "canonical",
+                },
               };
             }
             return {
