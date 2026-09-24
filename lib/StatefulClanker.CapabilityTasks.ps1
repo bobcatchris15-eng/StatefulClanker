@@ -724,7 +724,8 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
     Assert-SCInitialized
     Recover-SCInterruptedPlanTransactions|Out-Null
     if([string]::IsNullOrWhiteSpace($HandoffPath)-or-not(Test-Path -LiteralPath $HandoffPath -PathType Leaf)){throw '-Path to accepted planning handoff is required.'}
-    $handoff=Read-SCJson (Resolve-Path -LiteralPath $HandoffPath).Path
+    $resolvedHandoff=(Resolve-Path -LiteralPath $HandoffPath).Path
+    $handoff=Read-SCJson $resolvedHandoff
     if($null-eq$handoff){throw 'Planning handoff is empty.'}
 
     $already=Find-SCCommittedPlanningTransaction ([string]$handoff.id)
@@ -734,6 +735,8 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
     if($null-eq$active){throw 'No active planning session owns this project.'}
     if([string]$active.phase-ne'handoff'){throw "Planning session is '$($active.phase)', not handoff."}
     if([string]$active.sessionId-ne[string]$handoff.sessionId-or[string]$active.acceptedHandoffId-ne[string]$handoff.id){throw 'Handoff does not match the active accepted planning handoff.'}
+    $expectedHandoffHash=if($active.PSObject.Properties['acceptedHandoffSha256']){[string]$active.acceptedHandoffSha256}else{$null}
+    if([string]::IsNullOrWhiteSpace($expectedHandoffHash)-or(Get-SCFileHashValue $resolvedHandoff)-ne$expectedHandoffHash){throw 'Accepted planning handoff manifest hash mismatch.'}
 
     $planPath=Resolve-SCPlanningArtifactPath ([string]$handoff.planPath)
     if(-not(Test-Path -LiteralPath $planPath -PathType Leaf)){throw "Handoff plan artifact is missing: $($handoff.planPath)"}
