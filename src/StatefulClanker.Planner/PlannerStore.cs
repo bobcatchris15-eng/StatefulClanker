@@ -96,7 +96,16 @@ public sealed class PlannerStore
         {
             busy = BusyTaskIds();
             if (busy.Count == 0)
+            {
+                var snapshotDir = Path.Combine(SessionDir(control.sessionId), "baseline-state");
+                RecreateDirectory(snapshotDir);
+                CopyIfExists(Path.Combine(_stateRoot, "state.json"), Path.Combine(snapshotDir, "state.json"));
+                CopyDirectoryIfExists(Path.Combine(_stateRoot, "tasks"), Path.Combine(snapshotDir, "tasks"));
+                CopyDirectoryIfExists(Path.Combine(_stateRoot, "intent"), Path.Combine(snapshotDir, "intent"));
+                CopyDirectoryIfExists(Path.Combine(_stateRoot, "directives"), Path.Combine(snapshotDir, "directives"));
                 baseline = CaptureBaseline();
+                baseline.snapshotPath = RelativeToState(snapshotDir);
+            }
             return 0;
         });
 
@@ -172,7 +181,7 @@ public sealed class PlannerStore
             .ToList();
     }
 
-    public PlannerCandidate AddCandidate(string planFile, string? intentFile, string summary) => WithLock(() =>
+    public PlannerCandidate AddCandidate(string planFile, string? intentFile, string? directiveChangesFile, string summary) => WithLock(() =>
     {
         var control = RequireActive();
         RequirePlanningPhase(control);
@@ -181,6 +190,8 @@ public sealed class PlannerStore
             throw new FileNotFoundException("Plan file not found.", planFile);
         if (!string.IsNullOrWhiteSpace(intentFile) && !File.Exists(intentFile))
             throw new FileNotFoundException("Intent file not found.", intentFile);
+        if (!string.IsNullOrWhiteSpace(directiveChangesFile) && !File.Exists(directiveChangesFile))
+            throw new FileNotFoundException("Directive changes file not found.", directiveChangesFile);
 
         var candidate = new PlannerCandidate
         {
@@ -203,6 +214,14 @@ public sealed class PlannerStore
             File.Copy(Path.GetFullPath(intentFile), intentDest, true);
             candidate.intentPath = RelativeToState(intentDest);
             candidate.intentSha256 = FileHash(intentDest);
+        }
+
+        if (!string.IsNullOrWhiteSpace(directiveChangesFile))
+        {
+            var directiveDest = Path.Combine(dir, "directive-changes.json");
+            File.Copy(Path.GetFullPath(directiveChangesFile), directiveDest, true);
+            candidate.directiveChangesPath = RelativeToState(directiveDest);
+            candidate.directiveChangesSha256 = FileHash(directiveDest);
         }
 
         WriteJson(Path.Combine(dir, "candidate.json"), candidate);
@@ -240,6 +259,8 @@ public sealed class PlannerStore
             planSha256 = candidate.planSha256,
             intentPath = candidate.intentPath,
             intentSha256 = candidate.intentSha256,
+            directiveChangesPath = candidate.directiveChangesPath,
+            directiveChangesSha256 = candidate.directiveChangesSha256,
             baselinePath = control.baselinePath
         };
 
@@ -342,22 +363,74 @@ public sealed class PlannerStore
             counts[status] = counts.TryGetValue(status, out var count) ? count + 1 : 1;
         }
 
+        var dirtyPaths = GitLines("status", "--porcelain", "--untracked-files=all")
+            .Select(ParseDirtyPath)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var dirtyFiles = dirtyPaths.Select(path =>
+        {
+            var full = Path.Combine(_root, path.Replace('/', Path.DirectorySeparatorChar));
+            return new PlannerDirtyFile
+            {
+                path = path.Replace('\\', '/'),
+                sha256 = File.Exists(full) ? FileHash(full) : "<missing>"
+            };
+        }).ToList();
+
         var intentPath = Path.Combine(_stateRoot, "intent", "contract.json");
+        var directiveFiles = Directory.Exists(Path.Combine(_stateRoot, "directives", "current"))
+            ? Directory.GetFiles(Path.Combine(_stateRoot, "directives", "current"), "*.json")
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+            : Array.Empty<string>();
+
         return new PlannerBaseline
         {
             projectRoot = _root,
             gitHead = Git("rev-parse", "HEAD"),
-            dirtyPaths = GitLines("status", "--porcelain")
-                .Select(ParseDirtyPath)
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .ToList(),
+            dirtyPaths = dirtyPaths,
+            dirtyFiles = dirtyFiles,
             stateRevision = TryLong(state, "revision"),
             intentRevision = TryLong(state, "intentRevision"),
             intentHash = File.Exists(intentPath) ? FileHash(intentPath) : null,
+            directiveHash = HashFiles(directiveFiles),
             activePlanId = TryString(state, "activePlanId"),
             taskGraphHash = HashFiles(taskFiles),
             taskCounts = counts
         };
+    }
+
+    static void RecreateDirectory(string path)
+    {
+        if (Directory.Exists(path))
+            Directory.Delete(path, true);
+        Directory.CreateDirectory(path);
+    }
+
+    static void CopyIfExists(string source, string destination)
+    {
+        if (!File.Exists(source))
+            return;
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        File.Copy(source, destination, true);
+    }
+
+    static void CopyDirectoryIfExists(string source, string destination)
+    {
+        if (!Directory.Exists(source))
+            return;
+        Directory.CreateDirectory(destination);
+        foreach (var dir in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, dir)));
+        foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var dest = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.Copy(file, dest, true);
+        }
     }
 
     List<string> BusyTaskIds()
