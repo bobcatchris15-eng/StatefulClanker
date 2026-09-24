@@ -386,8 +386,96 @@ function Invoke-McpRecoveryMutation([string]$Project,[string]$TaskId,[string]$Re
     }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
 }
 
+function Get-McpPlannerExecutable {
+    if($env:STATEFULCLANKER_PLANNER_EXE-and(Test-Path -LiteralPath $env:STATEFULCLANKER_PLANNER_EXE -PathType Leaf)){return [string]$env:STATEFULCLANKER_PLANNER_EXE}
+    $installRoot=Split-Path -Parent $PSScriptRoot
+    $candidates=@(
+        (Join-Path $installRoot 'planner\StatefulClanker.Planner.exe'),
+        (Join-Path $installRoot 'install\planner-publish\StatefulClanker.Planner.exe'),
+        (Join-Path $installRoot 'src\StatefulClanker.Planner\bin\Release\net8.0-windows\win-x64\publish\StatefulClanker.Planner.exe'),
+        (Join-Path $installRoot 'src\StatefulClanker.Planner\bin\Debug\net8.0-windows\StatefulClanker.Planner.exe')
+    )
+    foreach($candidate in $candidates){if(Test-Path -LiteralPath $candidate -PathType Leaf){return $candidate}}
+    return $null
+}
+
+function Invoke-McpPlannerCommand([string]$Project,[string[]]$PlannerArgs) {
+    $exe=Get-McpPlannerExecutable
+    if(-not$exe){throw 'StatefulClanker.Planner is not built/installed. Build the research Planner module or reinstall a package containing planner\StatefulClanker.Planner.exe.'}
+    $args=@($PlannerArgs+@('--project',$Project))
+    $raw=& $exe @args 2>&1|Out-String
+    $code=$LASTEXITCODE
+    $lines=@($raw -split [Environment]::NewLine|Where-Object{-not[string]::IsNullOrWhiteSpace($_)})
+    if($lines.Count-eq0){throw "Planner returned no response (exit $code)."}
+    try{$response=$lines[-1]|ConvertFrom-Json -ErrorAction Stop}catch{throw "Planner returned malformed JSON (exit $code): $raw"}
+    if(-not$response.PSObject.Properties['ok']){throw "Planner response is missing ok: $raw"}
+    if(-not[bool]$response.ok){throw ([string]$response.error)}
+    return $response.data
+}
+
+function Invoke-McpPlanningControl([string]$Project,$Arguments) {
+    $action=(Get-McpArgRequired $Arguments 'action').ToLowerInvariant()
+    switch($action) {
+        'status' { return Invoke-McpPlannerCommand $Project @('status') }
+        'begin' {
+            $reason=Get-McpArgOptional $Arguments 'reason';if(-not$reason){$reason='Explicit planning/replanning session.'}
+            $cli=@('begin','--reason',$reason)
+            $estimate=Get-McpArgOptional $Arguments 'executionTokenEstimate';if($estimate){$cli+=@('--execution-token-estimate',[string]$estimate)}
+            return Invoke-McpPlannerCommand $Project $cli
+        }
+        'settle' { return Invoke-McpPlannerCommand $Project @('settle') }
+        'ask' {
+            $text=Get-McpArgRequired $Arguments 'text';$cli=@('ask','--text',$text)
+            foreach($pair in @(@('why','--why'),@('impact','--impact'),@('owner','--owner'))){$v=Get-McpArgOptional $Arguments $pair[0];if($v){$cli+=@($pair[1],[string]$v)}}
+            if(Test-McpArgumentPresent $Arguments 'blocking'){$cli+=@('--blocking',([string](ConvertTo-McpBoolean (Get-McpRawArgument $Arguments 'blocking') 'blocking')).ToLowerInvariant())}
+            return Invoke-McpPlannerCommand $Project $cli
+        }
+        'answer' {
+            $id=Get-McpArgRequired $Arguments 'questionId';$text=Get-McpArgRequired $Arguments 'text'
+            return Invoke-McpPlannerCommand $Project @('answer','--question',$id,'--text',$text)
+        }
+        'questions' { return Invoke-McpPlannerCommand $Project @('questions') }
+        'candidate' {
+            $planText=Get-McpArgRequired $Arguments 'planText'
+            $planTemp=Join-Path ([IO.Path]::GetTempPath()) ("statefulclanker-planning-{0}.scplan"-f[Guid]::NewGuid().ToString('N'))
+            $intentTemp=$null
+            try {
+                [IO.File]::WriteAllText($planTemp,$planText,(New-Object Text.UTF8Encoding($false)))
+                $cli=@('candidate','--plan',$planTemp)
+                $summary=Get-McpArgOptional $Arguments 'summary';if($summary){$cli+=@('--summary',$summary)}
+                if(Test-McpArgumentPresent $Arguments 'intentContract'){
+                    $intent=Get-McpRawArgument $Arguments 'intentContract'
+                    if($null-ne$intent){
+                        $intentTemp=Join-Path ([IO.Path]::GetTempPath()) ("statefulclanker-planning-intent-{0}.json"-f[Guid]::NewGuid().ToString('N'))
+                        [IO.File]::WriteAllText($intentTemp,($intent|ConvertTo-Json -Depth 30),(New-Object Text.UTF8Encoding($false)))
+                        $cli+=@('--intent',$intentTemp)
+                    }
+                }
+                return Invoke-McpPlannerCommand $Project $cli
+            } finally {
+                Remove-Item -LiteralPath $planTemp -Force -ErrorAction SilentlyContinue
+                if($intentTemp){Remove-Item -LiteralPath $intentTemp -Force -ErrorAction SilentlyContinue}
+            }
+        }
+        'accept' {
+            $id=Get-McpArgRequired $Arguments 'candidateId'
+            return Invoke-McpPlannerCommand $Project @('accept','--candidate',$id)
+        }
+        'release' {
+            $handoff=Get-McpArgRequired $Arguments 'handoffId';$plan=Get-McpArgRequired $Arguments 'appliedPlanId'
+            return Invoke-McpPlannerCommand $Project @('release','--handoff',$handoff,'--applied-plan-id',$plan)
+        }
+        'cancel' {
+            $reason=Get-McpArgOptional $Arguments 'reason';$cli=@('cancel');if($reason){$cli+=@('--reason',$reason)}
+            return Invoke-McpPlannerCommand $Project $cli
+        }
+        default { throw "Unknown planning action: $action." }
+    }
+}
+
 function New-SCExtendedTools {
     @(
+        @{name='planning_control';description='Operate the isolated Planner session. Planning owns the project while active and blocks implementation dispatch. Actions: status, begin, settle, ask, answer, questions, candidate, accept, release, cancel.';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('status','begin','settle','ask','answer','questions','candidate','accept','release','cancel')};reason=@{type='string'};executionTokenEstimate=@{type='integer';minimum=1};text=@{type='string'};why=@{type='string'};impact=@{type='string';enum=@('low','medium','high')};owner=@{type='string';enum=@('human','system')};blocking=@{type='boolean'};questionId=@{type='string'};planText=@{type='string';description='Complete candidate SCPLAN 1 text.'};intentContract=@{type='object';description='Optional staged normalized Intent candidate.'};summary=@{type='string'};candidateId=@{type='string'};handoffId=@{type='string'};appliedPlanId=@{type='string'}};required=@('action')}},
         @{name='plan_apply';description='Apply a compact SCPLAN 1 plan directly from text. Preferred for conversational planning because no intermediate local file is required.';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string';description='Complete SCPLAN 1 document.'}};required=@('text')}},
         @{name='source_add';description='Persist verbatim source/background text as a durable human:<id> artifact. For material current human direction use directive_set instead.';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string'}};required=@('text')}},
         @{name='source_get';description='Read a durable source by reference, including optional #Lx-Ly ranges.';inputSchema=@{type='object';properties=@{project=@{type='string'};sourceRef=@{type='string'}};required=@('sourceRef')}},
@@ -441,6 +529,7 @@ function Invoke-SCDirectiveTool([string]$Name,$Arguments) {
 function Invoke-SCExtendedTool([string]$Name,$Arguments) {
     $project=Get-McpProject $Arguments;Assert-McpInitialized $project
     switch($Name) {
+        'planning_control' { return New-McpTextResult (Invoke-McpPlanningControl $project $Arguments) }
         'plan_apply' {
             $text=Get-McpArgRequired $Arguments 'text';if($text -notmatch '(?m)^\s*SCPLAN\s+1\s*$'){throw 'plan_apply requires a complete SCPLAN 1 document.'}
             $temp=Join-Path ([IO.Path]::GetTempPath()) ("statefulclanker-{0}.scplan"-f[Guid]::NewGuid().ToString('N'))
