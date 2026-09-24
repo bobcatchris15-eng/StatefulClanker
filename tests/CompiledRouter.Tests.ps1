@@ -16,6 +16,9 @@ $daemon=$null
 try {
     New-Item -ItemType Directory -Force -Path $temp|Out-Null
     $env:SC_ROUTER_ROOT=$temp
+    $workspaceA=Join-Path $temp 'workspace-a'
+    $workspaceB=Join-Path $temp 'workspace-b'
+    New-Item -ItemType Directory -Force -Path $workspaceA,$workspaceB|Out-Null
 
     $endpointDoc=[ordered]@{
         schemaVersion=2
@@ -25,6 +28,7 @@ try {
             'free-b::m3'=[ordered]@{id='free-b::m3';connection='free-b';model='m3';displayName='B3';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native'}
             'free-b::m4'=[ordered]@{id='free-b::m4';connection='free-b';model='m4';displayName='B4 unknown tool metadata';enabled=$true;workhorse=$true;free=$true;toolMode='native'}
             'auto::openrouter/free'=[ordered]@{id='auto::openrouter/free';connection='auto';model='openrouter/free';displayName='OpenRouter Free Auto';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native'}
+            'workspace::free'=[ordered]@{id='workspace::free';connection='workspace-a';model='opencode/test-free';displayName='Workspace transient';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='native';source='managed-harness';managedBy='test-transient'}
         }
     }
     $endpointDoc|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $temp 'endpoints.json') -Encoding UTF8
@@ -35,6 +39,7 @@ try {
             'free-a'=[ordered]@{name='free-a';presetId='custom';protocol='openai-chat';baseUrl='http://127.0.0.1:65531/v1';modelsPath='/models';authKind='none';headers=[ordered]@{}}
             'free-b'=[ordered]@{name='free-b';presetId='custom';protocol='openai-chat';baseUrl='http://127.0.0.1:65532/v1';modelsPath='/models';authKind='none';headers=[ordered]@{}}
             'auto'=[ordered]@{name='auto';presetId='custom';protocol='openai-chat';baseUrl='http://127.0.0.1:65533/v1';modelsPath='/models';authKind='none';headers=[ordered]@{}}
+            'workspace-a'=[ordered]@{name='workspace-a';presetId='test';protocol='opencode-server';baseUrl='http://127.0.0.1:65534';modelsPath='/api/model';authKind='none';transient=$true;managedBy='test-transient';workingDirectory=$workspaceA;headers=[ordered]@{'x-opencode-directory'=$workspaceA}}
         }
     }
     $connectionDoc|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $temp 'connections.json') -Encoding UTF8
@@ -46,6 +51,16 @@ try {
         try{[void](Call-Router @('ping'));$ready=$true;break}catch{}
     }
     Assert-True $ready 'Router daemon did not become ready.'
+
+    Write-Host '  ROUTER 0A: transient harness endpoints are visible only to their worker checkout'
+    $workspaceLease=Call-Router @('acquire','--preferred','workspace::free','--strict-preferred','true','--working-directory',$workspaceA,'--session','workspace-match','--owner-pid',[string]$PID)
+    Assert-True ([string]$workspaceLease.data.catalogId -eq 'workspace::free') 'Matching workspace could not lease its transient harness endpoint.'
+    [void](Call-Router @('release','--lease',[string]$workspaceLease.data.lease))
+    $wrongWorkspace=& $router acquire --preferred 'workspace::free' --strict-preferred true --working-directory $workspaceB --session workspace-wrong --owner-pid $PID | ConvertFrom-Json
+    Assert-True (-not [bool]$wrongWorkspace.ok) 'A different workspace leased another checkout''s transient harness endpoint.'
+    Assert-True ([string]$wrongWorkspace.data.reason -eq 'preferred_not_eligible') 'Wrong-workspace rejection did not identify endpoint ineligibility.'
+    $missingWorkspace=& $router acquire --preferred 'workspace::free' --strict-preferred true --session workspace-missing --owner-pid $PID | ConvertFrom-Json
+    Assert-True (-not [bool]$missingWorkspace.ok) 'A transient harness endpoint was leasable without a workspace identity.'
 
     Write-Host '  ROUTER 0: operator may pin a connection pool or one exact endpoint'
     $connPin=Call-Router @('acquire','--connection','free-a','--session','pin-connection','--owner-pid',[string]$PID)

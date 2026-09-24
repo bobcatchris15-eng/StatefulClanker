@@ -126,6 +126,7 @@ Current operations:
 
 - `ping`
 - `snapshot`
+- `ensure-harness`
 - `acquire`
 - `heartbeat`
 - `release`
@@ -133,6 +134,37 @@ Current operations:
 - `failure`
 
 The first PowerShell router client call starts the daemon automatically if it is not already running.
+
+## Managed harness endpoints
+
+Some useful inference capacity is available only through another harness rather than as a stable provider API. The compiled router represents that capacity as **transient internal connections**. It owns process lifecycle, health, workspace scoping, model discovery, and leases; it does not impersonate the upstream client.
+
+OpenCode is the first managed adapter:
+
+- the router starts one authenticated `opencode serve` process on a random loopback port,
+- each worker checkout gets a transient logical connection to that shared server,
+- the connection carries the worker directory so the OpenCode server resolves the correct project instance per request,
+- only OpenCode-provider models whose live catalog explicitly reports zero input/output cost, or whose model id explicitly ends in `-free`, enter the automatic pool,
+- the server password is random and DPAPI-protected in the transient connection profile,
+- transient routes cannot be leased from a different worker directory,
+- provider quota/discovery monitors ignore transient connections because the harness manager owns them,
+- idle workspace routes are removed, and the OpenCode process is stopped when no managed routes remain.
+
+Actual worker execution deliberately goes back through the real OpenCode CLI:
+
+```
+opencode run --attach <router-managed-server> --dir <worker-root> --model <provider/model> --agent build --format json
+```
+
+The task packet is written to stdin, avoiding command-line length limits. The exact leased model is selected explicitly. When OpenCode returns a session id, StatefulClanker stores it on the worker session and reuses it for validator/repair continuation turns; if the remote session has disappeared, the harness retries once with a fresh session and the full compiled task packet.
+
+This keeps OpenCode responsible for its own request construction, authentication behavior, tools, and free-quota eligibility. It also keeps StatefulClanker insulated from churn in OpenCode's internal REST session schema.
+
+OpenCode remains a powerful local coding harness, not an operating-system sandbox. StatefulClanker gives it the worker checkout as its directory and injects the project-boundary instruction on every turn. OpenCode's non-interactive permission requests are left in their normal reject-without-approval behavior; `--auto` is intentionally not used. The worktree, candidate checks, validation, and router receipts remain the durable acceptance boundary.
+
+Set `SC_DISABLE_MANAGED_OPENCODE=1` to suppress automatic OpenCode capacity. `SC_OPENCODE_EXE` may point to a non-PATH OpenCode executable or command shim.
+
+The adapter boundary is generic so future Claude Code, Codex, Goose, AGY, or other harness-backed capacity can add lifecycle/discovery support without teaching the router to spoof their upstream protocols.
 
 ## Routing authority and explicit compatibility backends
 

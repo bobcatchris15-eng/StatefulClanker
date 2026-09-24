@@ -29,7 +29,18 @@ function Get-SCMachineEndpointRecord([string]$Endpoint) {
     }
 }
 
+function Ensure-SCManagedHarnessRoutes {
+    if($env:SC_DISABLE_MANAGED_OPENCODE -eq '1'){return}
+    if(-not$env:SC_OPENCODE_EXE -and -not(Get-Command opencode -ErrorAction SilentlyContinue)){return}
+    try{
+        [void](Invoke-SCCompiledRouterCommand @('ensure-harness','--adapter','opencode','--working-directory',(Get-SCRoot)))
+    }catch{
+        try{Add-SCEvent 'routing.harness_discovery_failed' "Managed OpenCode capacity was unavailable; continuing with ordinary endpoints." @{adapter='opencode';error=$_.Exception.Message}}catch{}
+    }
+}
+
 function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
+    if(-not$EndpointOverride -and -not$ConnectionOverride){Ensure-SCManagedHarnessRoutes}
     $history=@()
     $routeSnapshot=Get-SCRouteSnapshotReceipt
     Set-SCProperty $routeSnapshot 'router' 'compiled'
@@ -46,7 +57,7 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
 
     $last=$null
     for($attempt=1;$attempt-le$max;$attempt++){
-        $acquireArgs=@('acquire','--owner-pid',[string]$PID)
+        $acquireArgs=@('acquire','--owner-pid',[string]$PID,'--working-directory',(Get-SCRoot))
         if($WorkerSessionId){$acquireArgs+=@('--session',$WorkerSessionId)}
         if($preferred){$acquireArgs+=@('--preferred',$preferred)}
         if($ConnectionOverride){$acquireArgs+=@('--connection',$ConnectionOverride)}

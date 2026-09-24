@@ -988,9 +988,201 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
     throw "Direct worker exceeded maxSteps=$maxSteps without finishing."
 }
 
+
+function Get-SCOpenCodeExecutable {
+    if($env:SC_OPENCODE_EXE){
+        $configured=[Environment]::ExpandEnvironmentVariables([string]$env:SC_OPENCODE_EXE)
+        if(Test-Path -LiteralPath $configured -PathType Leaf){return [IO.Path]::GetFullPath($configured)}
+        throw "SC_OPENCODE_EXE does not point to a file: $configured"
+    }
+    $commands=@(Get-Command opencode.exe,opencode -All -ErrorAction SilentlyContinue)
+    $exe=@($commands|Where-Object{$_.Source -and [IO.Path]::GetExtension([string]$_.Source)-ieq'.exe'}|Select-Object -First 1)
+    if($exe.Count-gt0){return [string]$exe[0].Source}
+    $first=@($commands|Where-Object{$_.Source}|Select-Object -First 1)
+    if($first.Count-gt0){return [string]$first[0].Source}
+    throw 'OpenCode executable is not installed or not visible on PATH.'
+}
+function ConvertTo-SCCmdArgument([string]$Value) {
+    if($null-eq$Value){return '""'}
+    return '"'+(($Value-replace '\^','^^')-replace '(["&|<>])','^$1')+'"'
+}
+function New-SCOpenCodeStartInfo([string]$Executable,[string[]]$Arguments,[string]$WorkingDirectory,[string]$Username,[string]$Password) {
+    $psi=New-Object Diagnostics.ProcessStartInfo
+    $psi.UseShellExecute=$false
+    $psi.CreateNoWindow=$true
+    $psi.WorkingDirectory=$WorkingDirectory
+    $psi.RedirectStandardInput=$true
+    $psi.RedirectStandardOutput=$true
+    $psi.RedirectStandardError=$true
+    $ext=[IO.Path]::GetExtension($Executable)
+    if($ext-ieq'.cmd' -or $ext-ieq'.bat'){
+        $psi.FileName=if($env:ComSpec){$env:ComSpec}else{'cmd.exe'}
+        [void]$psi.ArgumentList.Add('/d');[void]$psi.ArgumentList.Add('/s');[void]$psi.ArgumentList.Add('/c')
+        $line=(ConvertTo-SCCmdArgument $Executable)+' '+(($Arguments|ForEach-Object{ConvertTo-SCCmdArgument ([string]$_)})-join' ')
+        [void]$psi.ArgumentList.Add($line)
+    }elseif($ext-ieq'.ps1'){
+        $shell=if(Get-Command pwsh.exe -ErrorAction SilentlyContinue){'pwsh.exe'}else{'powershell.exe'}
+        $psi.FileName=$shell
+        [void]$psi.ArgumentList.Add('-NoProfile');[void]$psi.ArgumentList.Add('-NonInteractive');[void]$psi.ArgumentList.Add('-File');[void]$psi.ArgumentList.Add($Executable)
+        foreach($arg in $Arguments){[void]$psi.ArgumentList.Add([string]$arg)}
+    }else{
+        $psi.FileName=$Executable
+        foreach($arg in $Arguments){[void]$psi.ArgumentList.Add([string]$arg)}
+    }
+    $psi.Environment['OPENCODE_SERVER_USERNAME']=$Username
+    $psi.Environment['OPENCODE_SERVER_PASSWORD']=$Password
+    return $psi
+}
+function ConvertFrom-SCOpenCodeJsonStream([string]$Stdout,[string]$FallbackModel) {
+    $text=New-Object Text.StringBuilder
+    $raw=New-Object Collections.Generic.List[string]
+    $sessionId=$null;$promptTokens=0L;$completionTokens=0L;$usageSeen=$false
+    foreach($line in @($Stdout -split "\r?\n")){
+        if([string]::IsNullOrWhiteSpace($line)){continue}
+        try{$event=$line|ConvertFrom-Json -ErrorAction Stop}catch{$raw.Add($line);continue}
+        if($event.PSObject.Properties['sessionID'] -and $event.sessionID){$sessionId=[string]$event.sessionID}
+        $type=if($event.PSObject.Properties['type']){[string]$event.type}else{''}
+        $part=if($event.PSObject.Properties['part']){$event.part}else{$null}
+        if($type-eq'text' -and $part -and $part.PSObject.Properties['text'] -and $null-ne$part.text){[void]$text.Append([string]$part.text)}
+        if($part -and $part.PSObject.Properties['tokens'] -and $part.tokens){
+            $usageSeen=$true
+            if($part.tokens.PSObject.Properties['input']){try{$promptTokens+=[long]$part.tokens.input}catch{}}
+            if($part.tokens.PSObject.Properties['output']){try{$completionTokens+=[long]$part.tokens.output}catch{}}
+        }
+    }
+    $output=$text.ToString().Trim()
+    if([string]::IsNullOrWhiteSpace($output) -and $raw.Count-gt0){$output=($raw -join [Environment]::NewLine).Trim()}
+    return [pscustomobject][ordered]@{
+        output=$output;sessionId=$sessionId;model=$FallbackModel;usageSeen=$usageSeen
+        promptTokens=$promptTokens;completionTokens=$completionTokens;totalTokens=($promptTokens+$completionTokens)
+    }
+}
+function Invoke-SCOpenCodeAttachedTurn($Connection,[string]$TurnPrompt,[string]$HarnessSessionId=$null,[int]$TimeoutSeconds=1800) {
+    $executable=Get-SCOpenCodeExecutable
+    $base=[string]$Connection.baseUrl
+    if([string]::IsNullOrWhiteSpace($base)){throw 'Managed OpenCode connection has no baseUrl.'}
+    $model=[string]$Connection.model
+    if([string]::IsNullOrWhiteSpace($model)){throw 'Managed OpenCode endpoint has no model.'}
+    $root=[IO.Path]::GetFullPath((Get-SCRoot))
+    $username=if($Connection.PSObject.Properties['username'] -and $Connection.username){[string]$Connection.username}else{'opencode'}
+    $password=Get-SCApiKey $Connection
+    if([string]::IsNullOrWhiteSpace($password)){throw 'Managed OpenCode connection credential is unavailable.'}
+
+    $args=@('run','--attach',$base,'--dir',$root,'--model',$model,'--agent','build','--format','json')
+    if(-not[string]::IsNullOrWhiteSpace($HarnessSessionId)){$args+=@('--session',$HarnessSessionId)}
+    $psi=New-SCOpenCodeStartInfo $executable $args $root $username $password
+    $p=New-Object Diagnostics.Process;$p.StartInfo=$psi
+    try{
+        [void]$p.Start()
+        $stdoutTask=$p.StandardOutput.ReadToEndAsync()
+        $stderrTask=$p.StandardError.ReadToEndAsync()
+        $p.StandardInput.Write($TurnPrompt)
+        $p.StandardInput.Close()
+        if(-not$p.WaitForExit($TimeoutSeconds*1000)){
+            try{$p.Kill($true)}catch{try{$p.Kill()}catch{}}
+            return [pscustomobject][ordered]@{exitCode=-2;stdout='';stderr="OpenCode attached run timed out after $TimeoutSeconds seconds.";parsed=$null}
+        }
+        $stdout=$stdoutTask.Result;$stderr=$stderrTask.Result
+        return [pscustomobject][ordered]@{exitCode=$p.ExitCode;stdout=$stdout;stderr=$stderr;parsed=(ConvertFrom-SCOpenCodeJsonStream $stdout $model)}
+    }finally{$p.Dispose()}
+}
+function Invoke-SCOpenCodeHarnessProvider($Task,[string]$Prompt,[string]$Stage,$ProviderRecord,[string]$ParentAgentId,$Compilation,[string]$WorkerSessionId,[string]$ContinuationMessage,$Connection) {
+    $connectionName=[string]$ProviderRecord.config.connection
+    $receiptId=New-SCId $Stage;$agentId=New-SCId 'agent'
+    $promptPath=Get-SCPath ("prompts/{0}.txt"-f$receiptId);$Prompt|Set-Content -LiteralPath $promptPath -Encoding UTF8
+    $stdoutPath=Get-SCPath ("runs/{0}.stdout.txt"-f$receiptId);$stderrPath=Get-SCPath ("runs/{0}.stderr.txt"-f$receiptId)
+    $started=(Get-Date).ToUniversalTime()
+    $compilationId=if($Compilation){$Compilation.id}else{$null};$fingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null}
+    $retrievedChars=0;if($Compilation-and$Compilation.ir.sources.retrieved){$retrievedChars=[int]$Compilation.ir.sources.retrieved.usedChars}
+    $capabilities=@('harness.opencode')
+    $telemetry=[ordered]@{schemaVersion=4;agentId=$agentId;receiptId=$receiptId;parentAgentId=$ParentAgentId;taskId=$Task.id;taskTitle=$Task.title;stage=$Stage;role=$Task.role;provider=$ProviderRecord.name;endpoint=$ProviderRecord.name;backendType='harness';connection=$connectionName;model=[string]$Connection.model;actualModels=@();modelUsage=@();apiRequests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L;capabilities=$capabilities;lifecycle='running';processId=$PID;startedAt=$started.ToString('o');heartbeatAt=$started.ToString('o');endedAt=$null;durationSeconds=$null;promptChars=$Prompt.Length;retrievedChars=$retrievedChars;compilationId=$compilationId;inputFingerprint=$fingerprint;command='opencode-run-attach';args=@();exitCode=$null;verdict=$null;stdoutPath=$stdoutPath;stderrPath=$stderrPath;error=$null}
+    Save-SCActiveTelemetry $telemetry;Add-SCTelemetryEvent 'agent.started' $telemetry
+
+    $harnessSessionId=$null
+    if($Stage-eq'run' -and $WorkerSessionId){
+        $registry=@(Get-SCWorkerToolRecords $Task $Stage)
+        $session=New-SCWorkerSession $WorkerSessionId $Task $Compilation $Prompt 'opencode-harness' $registry
+        Set-SCProperty $session 'backend' 'harness:opencode'
+        if($Compilation){Set-SCProperty $session 'compilationId' ([string]$Compilation.id);Set-SCProperty $session 'inputFingerprint' ([string]$Compilation.inputFingerprint)}
+        Set-SCProperty $session 'status' 'active'
+        Save-SCWorkerSession $session
+        Add-SCWorkerSessionContinuation $WorkerSessionId $ContinuationMessage
+        Add-SCWorkerSessionProvider $WorkerSessionId ([string]$ProviderRecord.name) $connectionName ([string]$Connection.model
+        )
+        $session=Get-SCWorkerSession $WorkerSessionId
+        if($session.PSObject.Properties['harnessSessionConnection'] -and [string]$session.harnessSessionConnection-eq$connectionName -and
+           $session.PSObject.Properties['harnessSessionId'] -and -not[string]::IsNullOrWhiteSpace([string]$session.harnessSessionId)){
+            $harnessSessionId=[string]$session.harnessSessionId
+        }
+    }
+
+    $boundary=@'
+STATEFULCLANKER HARNESS BOUNDARY:
+Operate only inside the current StatefulClanker worker checkout. Do not access paths outside this checkout. Do not modify .git or .statefulclanker control state. Treat the supplied task packet as authoritative for this turn. Complete the task in the worktree and leave a concise final summary of what changed and what you verified.
+'@
+    $turnBody=if($harnessSessionId -and -not[string]::IsNullOrWhiteSpace($ContinuationMessage)){$ContinuationMessage}else{
+        if(-not[string]::IsNullOrWhiteSpace($ContinuationMessage)){$Prompt+[Environment]::NewLine+[Environment]::NewLine+$ContinuationMessage}else{$Prompt}
+    }
+    $turnPrompt=$boundary+[Environment]::NewLine+[Environment]::NewLine+$turnBody
+
+    $result=Invoke-SCOpenCodeAttachedTurn $Connection $turnPrompt $harnessSessionId
+    $combined=(([string]$result.stderr)+[Environment]::NewLine+([string]$result.stdout)).Trim()
+    if([int]$result.exitCode-ne0 -and $harnessSessionId -and $combined-match'(?is)(session.{0,80}(not found|unknown|invalid|missing)|\b404\b)'){
+        Add-SCEvent 'worker.opencode_session_recreated' "OpenCode session $harnessSessionId was unavailable; retrying once with a fresh OpenCode session." @{sessionId=$WorkerSessionId;harnessSessionId=$harnessSessionId;taskId=$Task.id;connection=$connectionName}
+        $harnessSessionId=$null
+        $freshPrompt=$boundary+[Environment]::NewLine+[Environment]::NewLine+$Prompt
+        if(-not[string]::IsNullOrWhiteSpace($ContinuationMessage)){$freshPrompt+=[Environment]::NewLine+[Environment]::NewLine+$ContinuationMessage}
+        $result=Invoke-SCOpenCodeAttachedTurn $Connection $freshPrompt $null
+    }
+
+    $stdout=[string]$result.stdout;$stderr=[string]$result.stderr;$exitCode=[int]$result.exitCode
+    $stdout|Set-Content -LiteralPath $stdoutPath -Encoding UTF8;$stderr|Set-Content -LiteralPath $stderrPath -Encoding UTF8
+    $parsed=$result.parsed
+    $output=if($parsed){[string]$parsed.output}else{''}
+    if($exitCode-eq0 -and [string]::IsNullOrWhiteSpace($output)){$output='OpenCode completed the attached run without emitting a final text event; inspect the worktree and validator evidence for the candidate result.'}
+
+    if($parsed){
+        $telemetry.apiRequests=1L;$telemetry.usageReports=if([bool]$parsed.usageSeen){1L}else{0L}
+        $telemetry.promptTokens=[long]$parsed.promptTokens;$telemetry.completionTokens=[long]$parsed.completionTokens;$telemetry.totalTokens=[long]$parsed.totalTokens
+        $telemetry.actualModels=@([string]$Connection.model)
+        $telemetry.modelUsage=@([ordered]@{model=[string]$Connection.model;requests=1L;usageReports=$telemetry.usageReports;promptTokens=$telemetry.promptTokens;completionTokens=$telemetry.completionTokens;totalTokens=$telemetry.totalTokens})
+    }
+    if($exitCode-ne0){$telemetry.error=$combined}
+
+    if($exitCode-eq0 -and $Stage-eq'run' -and $WorkerSessionId){
+        $session=Get-SCWorkerSession $WorkerSessionId
+        if($session){
+            $newHarnessId=if($parsed -and $parsed.sessionId){[string]$parsed.sessionId}else{$harnessSessionId}
+            Set-SCProperty $session 'backend' 'harness:opencode'
+            Set-SCProperty $session 'harnessSessionProtocol' 'opencode-run-attach'
+            Set-SCProperty $session 'harnessSessionConnection' $connectionName
+            Set-SCProperty $session 'harnessSessionId' $newHarnessId
+            Save-SCWorkerSession $session
+            Add-SCWorkerSessionMessage $WorkerSessionId ([ordered]@{role='assistant';content=$output})
+            Set-SCWorkerCandidateClaim $WorkerSessionId $null $output
+            New-SCWorkerCheckpoint $WorkerSessionId 'candidate-submit' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null
+            $session=Get-SCWorkerSession $WorkerSessionId
+            if($session){Set-SCProperty $session 'turn' ([int]$session.turn+1);Save-SCWorkerSession $session}
+        }
+    }
+
+    $ended=(Get-Date).ToUniversalTime();$telemetry.lifecycle=if($exitCode-eq0){'completed'}else{'failed'};$telemetry.exitCode=$exitCode;$telemetry.endedAt=$ended.ToString('o');$telemetry.heartbeatAt=$telemetry.endedAt;$telemetry.durationSeconds=[math]::Round(($ended-$started).TotalSeconds,3);Complete-SCTelemetry $telemetry
+    return [pscustomobject][ordered]@{schemaVersion=4;id=$receiptId;agentId=$agentId;taskId=$Task.id;stage=$Stage;provider=$ProviderRecord.name;endpoint=$ProviderRecord.name;backendType='harness';workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]($Stage-eq'run' -and $WorkerSessionId -and ((Get-SCWorkerSession $WorkerSessionId).harnessSessionId)));connection=$connectionName;model=[string]$Connection.model;actualModels=@($telemetry.actualModels);modelUsage=@($telemetry.modelUsage);apiRequests=$telemetry.apiRequests;usageReports=$telemetry.usageReports;promptTokens=$telemetry.promptTokens;completionTokens=$telemetry.completionTokens;totalTokens=$telemetry.totalTokens;capabilities=$capabilities;compilationId=$compilationId;inputFingerprint=$fingerprint;command='opencode-run-attach';args=@('run','--attach','<router-managed>','--dir','<worker-root>','--model',[string]$Connection.model,'--agent','build','--format','json');promptPath=$promptPath;startedAt=$started.ToString('o');endedAt=$ended.ToString('o');durationSeconds=$telemetry.durationSeconds;exitCode=$exitCode;stdout=$output;stderr=$stderr;verdict=$null}
+}
+function Invoke-SCHarnessProvider($Task,[string]$Prompt,[string]$Stage,$ProviderRecord,[string]$ParentAgentId,$Compilation,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,$Connection=$null) {
+    if($null-eq$Connection){$Connection=Get-SCEffectiveApiConnection $ProviderRecord}
+    switch(Get-SCConnectionProtocol $Connection){
+        'opencode-server' { return Invoke-SCOpenCodeHarnessProvider $Task $Prompt $Stage $ProviderRecord $ParentAgentId $Compilation $WorkerSessionId $ContinuationMessage $Connection }
+        default { throw "Unsupported managed harness protocol '$((Get-SCConnectionProtocol $Connection))'." }
+    }
+}
+
 function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$ProviderRecord,[string]$ParentAgentId,$Compilation,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null) {
     $connectionName=[string]$ProviderRecord.config.connection
     $connection=Get-SCEffectiveApiConnection $ProviderRecord
+    if((Get-SCConnectionProtocol $connection)-eq'opencode-server'){
+        return Invoke-SCHarnessProvider $Task $Prompt $Stage $ProviderRecord $ParentAgentId $Compilation $WorkerSessionId $ContinuationMessage $connection
+    }
     $receiptId=New-SCId $Stage;$agentId=New-SCId 'agent';$promptPath=Get-SCPath ("prompts/{0}.txt"-f$receiptId);$Prompt|Set-Content -LiteralPath $promptPath -Encoding UTF8
     $stdoutPath=Get-SCPath ("runs/{0}.stdout.txt"-f$receiptId);$stderrPath=Get-SCPath ("runs/{0}.stderr.txt"-f$receiptId);$started=(Get-Date).ToUniversalTime();$compilationId=if($Compilation){$Compilation.id}else{$null};$fingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};$retrievedChars=0;if($Compilation-and$Compilation.ir.sources.retrieved){$retrievedChars=[int]$Compilation.ir.sources.retrieved.usedChars}
     $capabilities=@(Get-SCWorkerToolRecords $Task $Stage|ForEach-Object{[string]$_.capability})
