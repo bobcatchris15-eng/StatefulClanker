@@ -115,6 +115,12 @@ The conversational model owns semantic reasoning about the human request:
 
 If two competent implementers could make materially different product choices, the control plane should ask the human rather than silently selecting one. Mechanical file/line/token splitting is retrieval tooling, not semantic decomposition.
 
+### Project-specific personality
+
+The human-facing Clanker control plane should develop a distinct personality for each project over time. Its voice should emerge from that project's goals, vocabulary, decisions, collaboration history, and the human's feedback, rather than being a single global persona copied across projects. This continuity should survive session and model changes through explicit, editable, project-scoped memory; it must not depend on one model's hidden context.
+
+Personality affects tone and presentation, never authority or task outcomes. Current Human Directives and reconciled Intent remain authoritative, and the control plane must not invent preferences, hide uncertainty, or let a familiar voice override evidence and validation. The human should be able to inspect, correct, or reset a project's personality without erasing its task history.
+
 ## Plans and tasks
 
 `SCPLAN 1` is the preferred repeatedly-consumed authoring format. JSON remains valid for RPC, settings, receipts, and compatibility imports.

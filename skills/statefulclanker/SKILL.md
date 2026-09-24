@@ -390,6 +390,8 @@ When a task is too coarse, implication analysis reveals multiple independently i
 
 Prefer `SCPLAN 1` for repeated model/human consumption.
 
+Before importing a plan, re-read the active project, active plan, current task IDs, and approval state. For a substantial plan, write the complete SCPLAN to a file inside the project, inspect it, then use `plan_import_file`; reserve `plan_apply` for short plans. If a provider stops while forming a tool call, do not assume the import ran: re-read plan/task state before any retry. Never repeat an uncertain import blindly.
+
 A task should normally contain:
 
 - stable id;
@@ -462,7 +464,8 @@ Tool availability can vary by protocol/version. Prefer discovery/current MCP ins
 
 ## Planning and tasks
 
-- `plan_apply` — preferred SCPLAN application.
+- `plan_import_file` — preferred for substantial SCPLAN documents already written and inspected inside the project.
+- `plan_apply` — direct-text application for short SCPLAN documents.
 - `plan_import` — compatibility/import path.
 - `task_list/show/add` — inspect/add bounded work.
 - `task_retry` — explicitly retry/reopen with normal invalidation/freshness semantics.

@@ -227,6 +227,7 @@ function Assert-SCWorkerCommandSafe([string]$Command,$Task) {
         }
         foreach($redir in @($cmd.Redirections)){
             $raw=([string]$redir.Extent.Text -replace '^\s*\d*\s*>+\s*','').Trim()
+            if($raw -eq '/dev/null'){throw 'run_command uses PowerShell on Windows: /dev/null is not a valid redirection target. Use Out-Null or a file inside the worker root.'}
             $check=Test-SCWorkerCommandPathToken $raw
             if($check-and$check.outside){
                 throw "run_command redirection escapes worker root: $($check.token)"
@@ -261,7 +262,7 @@ function Get-SCIntrinsicWorkerToolRecords($Task,[string]$Stage='worker') {
       (New-SCWorkerToolRecord 'builtin.search_text' 'search_text' 'Search text recursively or within a path.' @{type='object';properties=@{pattern=@{type='string'};path=@{type='string'};maxResults=@{type='integer'}};required=@('pattern')}),
       (New-SCWorkerToolRecord 'builtin.write_file' 'write_file' 'Write complete UTF-8 text content to a file inside the worker root.' @{type='object';properties=@{path=@{type='string'};content=@{type='string'}};required=@('path','content')}),
       (New-SCWorkerToolRecord 'builtin.replace_text' 'replace_text' 'Replace one exact text block in a file. Fails unless the old text occurs exactly once.' @{type='object';properties=@{path=@{type='string'};old=@{type='string'};new=@{type='string'}};required=@('path','old','new')}),
-      (New-SCWorkerToolRecord 'builtin.run_command' 'run_command' 'Run a bounded PowerShell command in the worker root.' @{type='object';properties=@{command=@{type='string'};timeoutSeconds=@{type='integer'}};required=@('command')}),
+      (New-SCWorkerToolRecord 'builtin.run_command' 'run_command' 'Run a bounded PowerShell command in the worker root. Use Windows/PowerShell syntax and Out-Null, not /dev/null; absolute file paths must remain in this worker root.' @{type='object';properties=@{command=@{type='string'};timeoutSeconds=@{type='integer'}};required=@('command')}),
       (New-SCWorkerToolRecord 'builtin.git_diff' 'git_diff' 'Return git status and diff for the worker checkout.' @{type='object';properties=@{}}),
       (New-SCWorkerToolRecord 'intent.human.read' 'read_human_intent' 'Read an authoritative durable human/source artifact by human:<id> reference. Read-only.' @{type='object';properties=@{sourceRef=@{type='string';description='human:<id> optionally with #Lx-Ly'}};required=@('sourceRef')}),
       (New-SCWorkerToolRecord 'intent.normalized.read' 'read_normalized_intent' 'Read the current orchestrator-owned normalized Intent Contract plus current direct human directives. Read-only.' @{type='object';properties=@{}}),
@@ -894,15 +895,17 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
         }
         $calls=@();if($m.PSObject.Properties['tool_calls']-and$m.tool_calls){$calls=@($m.tool_calls)}
         if($calls.Count-eq0){
-            if(-not[string]::IsNullOrWhiteSpace([string]$m.content)){
-                $assistant=[ordered]@{role='assistant';content=[string]$m.content}
+            $replyContent=if($m.PSObject.Properties['content'] -and $null-ne$m.content){[string]$m.content}else{''}
+            if(-not[string]::IsNullOrWhiteSpace($replyContent)){
+                $assistant=[ordered]@{role='assistant';content=$replyContent}
                 $messages+=$assistant
-                if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId $assistant;Set-SCWorkerCandidateClaim $WorkerSessionId $null ([string]$m.content);New-SCWorkerCheckpoint $WorkerSessionId 'candidate-submit' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null}
-                return [string]$m.content
+                if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId $assistant;Set-SCWorkerCandidateClaim $WorkerSessionId $null $replyContent;New-SCWorkerCheckpoint $WorkerSessionId 'candidate-submit' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null}
+                return $replyContent
             }
             throw "Model returned no content or tool call at step $step."
         }
-        $assistant=[ordered]@{role='assistant';content=$m.content;tool_calls=@($calls)}
+        $toolCallContent=if($m.PSObject.Properties['content'] -and $null-ne$m.content){[string]$m.content}else{''}
+        $assistant=[ordered]@{role='assistant';content=$toolCallContent;tool_calls=@($calls)}
         $messages+=$assistant
         if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId $assistant}
         $finished=$false;$finishResult=$null

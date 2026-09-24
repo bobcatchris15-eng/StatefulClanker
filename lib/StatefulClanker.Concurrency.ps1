@@ -35,6 +35,8 @@ function Get-SCWorktreeRoot([string]$StateRoot) {
 
 function Get-SCDispatchableTasks {
     Update-SCReadiness
+    $state=Get-SCState;$cfg=Get-SCConfig
+    if($state.activePlanId -and [bool]$cfg.requireHumanApprovalForPlan -and -not[bool]$state.planApproved){return @()}
     $now=[datetimeoffset]::UtcNow
     return @(Get-SCTasks |
         Where-Object {
@@ -49,6 +51,8 @@ function Get-SCDispatchableTasks {
 }
 
 function Get-SCRetryableTasks {
+    $state=Get-SCState;$approvalCfg=Get-SCConfig
+    if($state.activePlanId -and [bool]$approvalCfg.requireHumanApprovalForPlan -and -not[bool]$state.planApproved){return @()}
     $tasks = @(Get-SCTasks)
     $cfg = Get-SCConfig
     $maxAttempts = if($cfg.PSObject.Properties['maxTaskAttempts'] -and $cfg.maxTaskAttempts){ [int]$cfg.maxTaskAttempts } else { 5 }

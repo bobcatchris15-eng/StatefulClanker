@@ -31,21 +31,12 @@ Write-Host '  PI COMPACTION 5: Pi file-operation continuity survives custom comp
 Assert-True ($source.Contains('readFiles: stringList(fileOps.read)')) 'Read-file history is not carried through compaction details.'
 Assert-True ($source.Contains('modifiedFiles: stringList(fileOps.edited ?? fileOps.modified)')) 'Modified-file history is not carried through compaction details.'
 
-Write-Host '  PI COMPACTION 6: proactive refresh only starts after the agent run settles'
-Assert-True ($source.Contains('pi.on("turn_end"')) 'Completed turns are not counted for the proactive compaction threshold.'
-Assert-True ($source.Contains('pi.on("agent_settled"')) 'No fully-settled proactive compaction boundary is registered.'
-$turnEndHandler=[regex]::Match($source,'pi\.on\("turn_end",[\s\S]*?\n  \}\);')
-Assert-True $turnEndHandler.Success 'Turn-end handler could not be inspected.'
-Assert-True (-not $turnEndHandler.Value.Contains('ctx.compact(')) 'Compaction is still launched before queued agent work has settled.'
-$settledHandler=[regex]::Match($source,'pi\.on\("agent_settled",[\s\S]*?\n  \}\);')
-Assert-True $settledHandler.Success 'Settled handler could not be inspected.'
-Assert-True ($settledHandler.Value.Contains('ctx.compact({')) 'Compaction is not launched at the fully-settled boundary.'
-Assert-True ($source.Contains('REALITY_COMPACTION_TRIGGER_FRACTION = 0.45')) 'Proactive compaction no longer targets roughly 45% context usage.'
-Assert-True ($source.Contains('REALITY_COMPACTION_MAX_TRIGGER_TOKENS = 64_000')) 'Large-context models can drift too far before reality refresh.'
-Assert-True ($source.Contains('REALITY_COMPACTION_MIN_TURNS = 2')) 'Compaction churn guard is missing.'
-Assert-True ($source.Contains('ctx.compact({')) 'Settled-run policy does not actually trigger Pi compaction.'
+Write-Host '  PI COMPACTION 6: no unsolicited compaction interrupts active work'
+Assert-True (-not $source.Contains('ctx.compact({')) 'The extension still launches proactive compaction.'
+Assert-True (-not $source.Contains('REALITY_COMPACTION_TRIGGER_FRACTION')) 'Proactive compaction threshold is still configured.'
+Assert-True ($source.Contains('pi.on("session_before_compact"')) 'Pi-requested reality compaction is missing.'
 
 Write-Host '  PI COMPACTION 7: packet budget scales down for small-context models'
 Assert-True ($source.Contains('Math.floor(contextWindow * 1.5)')) 'Reality packet budget is not scaled to model context size.'
 
-Write-Host 'PASS: bundled Pi compaction is reality-first, proactive, request-free, bounded, and retains the recent raw tail.'
+Write-Host 'PASS: bundled Pi compaction is reality-first, Pi-requested, bounded, and retains the recent raw tail.'

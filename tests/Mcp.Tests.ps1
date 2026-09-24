@@ -192,7 +192,17 @@ try {
     Assert-True (@($progress).Count -ge 1) 'No progress records surfaced.'
     Assert-True (@($progress | Where-Object { $_.advanced }).Count -ge 1) 'No advancing progress record.'
 
-    Write-Host 'PASS: MCP control plane (handshake, id echo, arg fidelity, gating, async run, polling)'
+    Write-Host '  MCP 9: project-local file plan import avoids large tool arguments'
+    Assert-True ($toolNames -contains 'plan_import_file') 'File-based plan import tool is not advertised.'
+    $planFile=Join-Path $temp 'next.scplan'
+    @('SCPLAN 1','plan mcp-file-import','task mcp-next','title Next task','instruction Do the next bounded task.','accept Task result is recorded.','end')|Set-Content -LiteralPath $planFile
+    $importCall=New-McpCall 9 'plan_import_file' @{path='next.scplan'}
+    $importResult=Get-ToolPayload (Invoke-McpLines $temp @($importCall))[0]
+    Assert-True ([bool]$importResult.applied) 'File plan was not imported.'
+    $next=Get-ToolPayload (Invoke-McpLines $temp @((New-McpCall 10 'task_show' @{taskId='mcp-next'})))[0]
+    Assert-True ($next.id -eq 'mcp-next') 'Imported file did not create its task.'
+
+    Write-Host 'PASS: MCP control plane (handshake, id echo, arg fidelity, gating, async run, polling, file plan import)'
 } finally {
     Set-Location $repo
     # run_status waits for the detached cycle to finish and release its lock.

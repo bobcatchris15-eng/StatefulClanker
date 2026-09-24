@@ -23,7 +23,8 @@ Assert-True ($extension.Contains('MANDATORY STATEFULCLANKER PLANNING MODE')) 'Pl
 Assert-True ($extension.Contains('readPlannerSkill(),')) 'Planning turn does not inject the full planner skill.'
 
 Write-Host '  PI PLANNER 4: ordinary turns do not retain planner bulk'
-Assert-True ($extension.Contains('delete event.systemPromptOptions.sections.statefulclankerPlanner')) 'Planner system-prompt section is not removed for non-planning turns.'
+Assert-True ($extension.Contains('delete event.systemPromptOptions.sections.statefulclanker_planner')) 'Planner system-prompt section is not removed for non-planning turns.'
+Assert-True (-not $extension.Contains('statefulclankerPlanner')) 'Planner system-prompt section uses an invalid camel-case name.'
 
 Write-Host '  PI PLANNER 5: expected planning phrases are covered'
 foreach($needle in @('planning','decompos','task\s+(?:list|graph','scplan','map\s+out')){

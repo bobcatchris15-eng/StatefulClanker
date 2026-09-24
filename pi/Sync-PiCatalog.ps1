@@ -99,8 +99,14 @@ foreach($connectionName in $groups.Keys){
     if($headers.Count-gt0){$provider.headers=$headers}
     foreach($e in $groups[$connectionName]){
         $ctx=if($e.PSObject.Properties['contextLength']-and$e.contextLength){[long]$e.contextLength}else{128000}
+        $modelId=[string]$e.model
+        # Discovery uses Google's native "models/..." resource names, but its
+        # OpenAI-compatible chat endpoint expects the bare model ID.
+        if($piApi-eq'openai-completions' -and [string]$c.baseUrl -match '^https://generativelanguage\.googleapis\.com/v1beta/openai/?$'){
+            $modelId=$modelId -replace '^models/',''
+        }
         $provider.models+=,[ordered]@{
-            id=[string]$e.model
+            id=$modelId
             name=if($e.PSObject.Properties['displayName']-and$e.displayName){[string]$e.displayName}else{[string]$e.model}
             reasoning=$false
             input=@('text')

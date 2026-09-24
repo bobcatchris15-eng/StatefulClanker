@@ -23,6 +23,7 @@ try {
         schemaVersion=1
         connections=[ordered]@{
             Gemini=[ordered]@{protocol='gemini-native';authKind='x-goog-api-key';baseUrl='https://generativelanguage.googleapis.com/v1beta';apiKeyProtected='dummy'}
+            AiStudio=[ordered]@{protocol='openai-chat';authKind='bearer';baseUrl='https://generativelanguage.googleapis.com/v1beta/openai';apiKeyProtected='dummy'}
             Anthropic=[ordered]@{protocol='anthropic-messages';authKind='x-api-key';baseUrl='https://api.anthropic.com/v1';apiKeyProtected='dummy'}
             Local=[ordered]@{protocol='openai-chat';authKind='none';baseUrl='http://127.0.0.1:1234/v1'}
             Dpapi=[ordered]@{protocol='openai-chat';authKind='bearer';baseUrl='https://example.invalid/v1';apiKeyProtected=$protected}
@@ -32,6 +33,7 @@ try {
         schemaVersion=2
         entries=[ordered]@{
             'Gemini::gemini-test'=[ordered]@{connection='Gemini';model='gemini-test';displayName='Gemini Test';enabled=$true;contextLength=100000}
+            'AiStudio::models/gemini-test'=[ordered]@{connection='AiStudio';model='models/gemini-test';displayName='AI Studio Test';enabled=$true;contextLength=100000}
             'Anthropic::claude-test'=[ordered]@{connection='Anthropic';model='claude-test';displayName='Claude Test';enabled=$true;contextLength=100000}
             'Local::local-test'=[ordered]@{connection='Local';model='local-test';displayName='Local Test';enabled=$true;contextLength=32000}
         }
@@ -51,6 +53,7 @@ try {
     Assert-True ($g.api-eq'google-generative-ai') 'Gemini did not map to Pi google-generative-ai.'
     Assert-True (-not[bool]$g.authHeader) 'Gemini incorrectly enabled Bearer auth.'
     Assert-True ([string]$g.apiKey -like '!*Get-Credential.ps1*') 'Gemini does not resolve its key through StatefulClanker.'
+    Assert-True ([string]$models.providers.'sc-aistudio'.models[0].id -eq 'gemini-test') 'Google OpenAI-compatible model ID retained its native models/ prefix.'
 
     $a=$models.providers.'sc-anthropic'
     Assert-True ($a.api-eq'anthropic-messages') 'Anthropic did not map to Pi anthropic-messages.'

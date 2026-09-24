@@ -42,10 +42,16 @@ $script:SCBaseImportPlanCapabilities=${function:Import-SCPlan}
 function Import-SCPlan([string]$PlanPath) {
     Assert-SCInitialized;if(-not(Test-Path -LiteralPath $PlanPath)){throw "Plan not found: $PlanPath"};Ensure-SCInputLayout
     $input=Get-SCPlanInput $PlanPath;$plan=$input.plan;if($null-eq$plan-or$null-eq$plan.tasks){throw 'Plan must contain tasks.'}
+    $importLock=Enter-SCPlanImportLock
+    try {
+    Assert-SCPlanTaskIdsAvailable $plan
     $planId=New-SCId 'plan';$name=if($plan.PSObject.Properties['name']){[string]$plan.name}else{'Imported plan'};$summary=if($plan.PSObject.Properties['summary']){[string]$plan.summary}else{''}
     $planSources=if($plan.PSObject.Properties['sources']){@($plan.sources)}else{@()};$planIntent=if($plan.PSObject.Properties['intent']){@($plan.intent)}else{@()}
     $planRecord=[ordered]@{schemaVersion=4;id=$planId;name=$name;summary=$summary;format=$input.format;source=$input.resolved;sourceRefs=$planSources;intentRefs=$planIntent;importedAt=(Get-Date).ToUniversalTime().ToString('o');tasks=@($plan.tasks)}
-    Write-SCJson (Get-SCPath ("plans/{0}.json"-f$planId)) $planRecord;if($input.format-eq'scplan'){Copy-Item -LiteralPath $input.resolved -Destination (Get-SCPath ("plans/{0}.scplan"-f$planId)) -Force}
+    $created=@()
+    try {
+    $planJson=Get-SCPath ("plans/{0}.json"-f$planId);$created+=,$planJson;Write-SCJson $planJson $planRecord
+    if($input.format-eq'scplan'){$planCopy=Get-SCPath ("plans/{0}.scplan"-f$planId);Copy-Item -LiteralPath $input.resolved -Destination $planCopy -Force;$created+=,$planCopy}
     foreach($item in @($plan.tasks)){
         $id=if($item.PSObject.Properties['id']-and$item.id){[string]$item.id}else{New-SCId 'task'}
         if(Test-Path (Get-SCPath ("tasks/{0}.json"-f$id))){throw "Plan task id already exists: $id"}
@@ -80,9 +86,12 @@ function Import-SCPlan([string]$PlanPath) {
         Set-SCProperty $taskObj 'refinementDepth' 0
         Set-SCProperty $taskObj 'parentTaskId' $null
         Set-SCProperty $taskObj 'childTaskIds' @()
-        Save-SCTask $taskObj
+        $created+=,(Get-SCPath ("tasks/{0}.json"-f$id));Save-SCTask $taskObj
     }
-    $state=Get-SCState;$state.activePlanId=$planId;$cfg=Get-SCConfig;$state.planApproved=-not[bool]$cfg.requireHumanApprovalForPlan;Save-SCState $state;Update-SCReadiness;Add-SCEvent 'plan.imported' "Imported $planId" @{taskCount=@($plan.tasks).Count;format=$input.format};Write-Host "Imported $planId ($($input.format), $(@($plan.tasks).Count) tasks)"
+    $state=Get-SCState;$state.activePlanId=$planId;$cfg=Get-SCConfig;$state.planApproved=-not[bool]$cfg.requireHumanApprovalForPlan;Save-SCState $state
+    }catch{foreach($path in $created){Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue};throw}
+    Update-SCReadiness;Add-SCEvent 'plan.imported' "Imported $planId" @{taskCount=@($plan.tasks).Count;format=$input.format};Write-Host "Imported $planId ($($input.format), $(@($plan.tasks).Count) tasks)"
+    }finally{try{$importLock.ReleaseMutex()}catch{};$importLock.Dispose()}
 }
 
 function Get-SCTaskDefinitionHash($Task) {

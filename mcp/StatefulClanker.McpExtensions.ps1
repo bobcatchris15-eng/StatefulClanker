@@ -79,7 +79,7 @@ Size against the worker, not against the plan. Task workers are cold-start, unsp
 
 A task that has already failed critic or validator review is a decomposition or recovery signal, not a retry-harder signal. Before resubmitting it unchanged, inspect task_recovery_context, attemptCount, blockReason, and the actual current artifact. One rejection can be a fluke; repeated rejection at the same scope means either the task was cut badly, the implementation really needs repair, or the reviewer/task bookkeeping is wrong. Diagnose which before acting. A task whose attemptCount reaches maxTaskAttempts stops being retried automatically and must be investigated by the control plane. It becomes a human question only if that investigation reaches a genuine unresolved human-authority/Intent decision.
 
-Prefer plan_apply with SCPLAN 1 for substantial new plans. Normally delegate implementation to workers, but during recovery the conversational control plane may directly inspect and repair orchestration/task metadata and may use host code/file tools to repair implementation when that is the shortest safe resolution. Do not fabricate completion merely to clear a graph: task_recover_complete requires concrete current evidence and is the last resort for a demonstrably false/stale review loop.
+Prefer plan_import_file with an inspected SCPLAN 1 file inside the active project for substantial new plans; reserve plan_apply for short plans. Re-read active plan and task state before retrying an uncertain import. Normally delegate implementation to workers, but during recovery the conversational control plane may directly inspect and repair orchestration/task metadata and may use host code/file tools to repair implementation when that is the shortest safe resolution. Do not fabricate completion merely to clear a graph: task_recover_complete requires concrete current evidence and is the last resort for a demonstrably false/stale review loop.
 
 Workers must never weaken current human directives or the reconciled Intent Contract. INTENT_QUESTION and INTENT_CONFLICT are successful detection of specification uncertainty: surface them to the human rather than penalizing the worker or guessing.
 
@@ -389,6 +389,7 @@ function Invoke-McpRecoveryMutation([string]$Project,[string]$TaskId,[string]$Re
 function New-SCExtendedTools {
     @(
         @{name='plan_apply';description='Apply a compact SCPLAN 1 plan directly from text. Preferred for conversational planning because no intermediate local file is required.';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string';description='Complete SCPLAN 1 document.'}};required=@('text')}},
+        @{name='plan_import_file';description='Import a complete SCPLAN 1 or JSON plan from a file inside the active project. Prefer this for substantial plans: write and inspect the file first, then call once. Re-read project status before retrying an uncertain import.';inputSchema=@{type='object';properties=@{project=@{type='string'};path=@{type='string';description='Project-relative or absolute path within the project.'}};required=@('path')}},
         @{name='source_add';description='Persist verbatim source/background text as a durable human:<id> artifact. For material current human direction use directive_set instead.';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string'}};required=@('text')}},
         @{name='source_get';description='Read a durable source by reference, including optional #Lx-Ly ranges.';inputSchema=@{type='object';properties=@{project=@{type='string'};sourceRef=@{type='string'}};required=@('sourceRef')}},
         @{name='source_list';description='List durable source artifacts. This includes historical evidence; listing it does NOT make superseded wording current authority.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
@@ -445,6 +446,15 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
             $text=Get-McpArgRequired $Arguments 'text';if($text -notmatch '(?m)^\s*SCPLAN\s+1\s*$'){throw 'plan_apply requires a complete SCPLAN 1 document.'}
             $temp=Join-Path ([IO.Path]::GetTempPath()) ("statefulclanker-{0}.scplan"-f[Guid]::NewGuid().ToString('N'))
             try{[IO.File]::WriteAllText($temp,$text,(New-Object Text.UTF8Encoding($false)));$result=Invoke-McpHarness $project @('plan','import','-Path',$temp);return New-McpTextResult ([ordered]@{applied=$true;output=$result.stdout})}finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+        }
+        'plan_import_file' {
+            $path=Get-McpArgRequired $Arguments 'path'
+            $root=[IO.Path]::GetFullPath($project).TrimEnd([char[]]'\/')
+            $resolved=if([IO.Path]::IsPathRooted($path)){[IO.Path]::GetFullPath($path)}else{[IO.Path]::GetFullPath((Join-Path $root $path))}
+            if(-not($resolved.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase))){throw 'Plan file must be inside the active project.'}
+            if(-not(Test-Path -LiteralPath $resolved -PathType Leaf)){throw "Plan file not found: $path"}
+            $result=Invoke-McpHarness $project @('plan','import','-Path',$resolved)
+            return New-McpTextResult ([ordered]@{applied=$true;path=$resolved;output=$result.stdout})
         }
         'source_add' {$text=Get-McpArgRequired $Arguments 'text';$result=Invoke-McpHarness $project @('source','add','-Message',$text);return New-McpTextResult ([ordered]@{sourceRef=([string]$result.stdout).Trim();output=$result.stdout})}
         'source_get' {$ref=Get-McpArgRequired $Arguments 'sourceRef';$result=Invoke-McpHarness $project @('source','show','-SourceRef',$ref);return New-McpTextResult ([ordered]@{sourceRef=$ref;text=$result.stdout})}

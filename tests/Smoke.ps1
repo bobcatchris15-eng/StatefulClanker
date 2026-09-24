@@ -148,6 +148,14 @@ Write-Host 'STEP 8aa: Pi planner skill invocation'
 & (Join-Path $PSScriptRoot 'PiPlannerSkill.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Pi planner skill tests failed (exit $LASTEXITCODE)." }
 
+Write-Host 'STEP 8ab: Pi compaction does not interrupt work'
+& (Join-Path $PSScriptRoot 'PiRealityCompaction.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Pi compaction tests failed (exit $LASTEXITCODE)." }
+
+Write-Host 'STEP 8ac: atomic plan import and approval gate'
+& (Join-Path $PSScriptRoot 'PlanStartupGuard.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Plan startup guard tests failed (exit $LASTEXITCODE)." }
+
 Write-Host 'STEP 8b: prompt delivery'
 & (Join-Path $PSScriptRoot 'Prompt.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Prompt tests failed (exit $LASTEXITCODE)." }

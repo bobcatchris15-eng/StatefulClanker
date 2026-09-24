@@ -483,7 +483,11 @@ function Add-SCTask {
 }
 function Show-SCStatus {
     Assert-SCInitialized;Update-SCReadiness;$state=Get-SCState;$tasks=@(Get-SCTasks);$active=@(Get-SCActiveTelemetry);$faults=@(Get-SCContextFaults 100)
+    Write-Host "Project: $(Get-SCRoot)"
     Write-Host "Goal: $($state.goal)";Write-Host "Plan: $($state.activePlanId)  Approved: $($state.planApproved)  Revision: $($state.revision)";Write-Host "Active agents: $($active.Count)  Recent context faults: $($faults.Count)"
+    if($state.activePlanId -and -not[bool]$state.planApproved){Write-Host 'Dispatch gate: active plan awaits approval.'}
+    if(Get-Command Get-SCAutofillStatus -ErrorAction SilentlyContinue){$supervisor=Get-SCAutofillStatus;if($supervisor){Write-Host "Autofill: $($supervisor.state)  PID $($supervisor.pid)";if($supervisor.blockReason){Write-Host "Autofill block: $($supervisor.blockReason)"}}else{Write-Host 'Autofill: stopped'}}
+    if(Get-Command Get-SCWorktreeDirtySummary -ErrorAction SilentlyContinue){$dirty=Get-SCWorktreeDirtySummary (Get-SCRoot);if($dirty){Write-Host "Worktree: $($dirty.message)"}else{Write-Host 'Worktree: clean'}}
     if($tasks.Count-eq 0){Write-Host 'Tasks: none';return};$tasks|Sort-Object createdAt|Select-Object id,status,attemptCount,role,title|Format-Table -AutoSize
 }
 function Import-SCPlan([string]$PlanPath) {

@@ -7,8 +7,10 @@ $script:SCDispatchGuardParallelBase = (Get-Item Function:\Invoke-SCParallel).Scr
 
 function Assert-SCDispatchAuthority {
     Assert-SCInitialized
-    if(Test-SCDirectivesReconciled){return}
     $state=Get-SCState
+    $cfg=Get-SCConfig
+    if($state.activePlanId -and [bool]$cfg.requireHumanApprovalForPlan -and -not[bool]$state.planApproved){throw "Dispatch blocked: active plan $($state.activePlanId) requires human approval."}
+    if(Test-SCDirectivesReconciled){return}
     $pending=if($state.PSObject.Properties['pendingDirectiveIds']){@($state.pendingDirectiveIds)-join', '}else{'unknown'}
     throw "Dispatch blocked: current human directives have not been reconciled into Intent. Pending directive(s): $pending. The conversational control plane must resolve ambiguity/contradictions and commit intent_apply before launching workers."
 }

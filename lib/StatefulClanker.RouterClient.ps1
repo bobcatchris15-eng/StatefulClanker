@@ -1,7 +1,6 @@
 # Thin PowerShell client for the compiled machine-wide router service.
 function Get-SCCompiledRouterExecutable {
     if($env:STATEFULCLANKER_ROUTER_EXE -and (Test-Path -LiteralPath $env:STATEFULCLANKER_ROUTER_EXE -PathType Leaf)){return [string]$env:STATEFULCLANKER_ROUTER_EXE}
-    if($env:STATEFULCLANKER_DISABLE_COMPILED_ROUTER -match '^(?i:1|true|yes)$'){return $null}
     $installRoot=if($script:StatefulClankerHome){[string]$script:StatefulClankerHome}else{Split-Path -Parent $PSScriptRoot}
     $candidates=@(
         (Join-Path $installRoot 'router\StatefulClanker.Router.exe'),
