@@ -498,9 +498,12 @@ function Find-SCIntentRefValue($Intent,[string]$Ref) {
     return $null
 }
 
-function Test-SCTaskIntentCompatible($Task,$OldIntent,$NewIntent) {
+function Test-SCTaskIntentCompatible($Task,$OldIntent,$NewIntent,[string]$OldGoal,[string]$NewGoal) {
     $refs=if($Task.PSObject.Properties['intentRefs']){@($Task.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})}else{@()}
-    if($refs.Count-eq0){return ([string](Get-SCIntentSemanticHash $OldIntent)-eq[string](Get-SCIntentSemanticHash $NewIntent))}
+    if($refs.Count-eq0){
+        if($OldGoal-ne$NewGoal){return $false}
+        return ([string](Get-SCIntentSemanticHash $OldIntent)-eq[string](Get-SCIntentSemanticHash $NewIntent))
+    }
     foreach($ref in $refs){
         $old=Find-SCIntentRefValue $OldIntent $ref
         $new=Find-SCIntentRefValue $NewIntent $ref
@@ -736,6 +739,9 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                 $intentChanged=$true
             }
 
+            $oldGoal=[string]$liveState.goal
+            $newGoal=if($handoff.PSObject.Properties['projectGoal']-and-not[string]::IsNullOrWhiteSpace([string]$handoff.projectGoal)){[string]$handoff.projectGoal}else{$oldGoal}
+
             $freshTasks=@()
             foreach($item in @($plan.tasks)){$freshTasks+=,(New-SCTaskFromPlanItem $item)}
             Assert-SCReplacementPlanGraph $freshTasks
@@ -749,7 +755,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                 $newHash=Get-SCTaskDefinitionHash $fresh
                 if($old){
                     $oldHash=Get-SCTaskDefinitionHash $old
-                    $intentCompatible=Test-SCTaskIntentCompatible $fresh $baselineIntent $newIntent
+                    $intentCompatible=Test-SCTaskIntentCompatible $fresh $baselineIntent $newIntent $oldGoal $newGoal
                     if($oldHash-eq$newHash-and$intentCompatible-and[string]$old.status-eq'complete'){
                         Copy-SCCompletedTaskRuntime $old $fresh
                         $dispositions+=,[ordered]@{taskId=$id;action='preserved-complete';previousStatus=[string]$old.status;definitionChanged=$false;intentCompatible=$true}
@@ -793,8 +799,6 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
             if($input.format-eq'scplan'){Copy-Item -LiteralPath $planPath -Destination (Join-Path $stagePlans ("{0}.scplan"-f$planId)) -Force}
 
             $nextState=(ConvertTo-SCJson $liveState 30)|ConvertFrom-Json
-            $oldGoal=[string]$nextState.goal
-            $newGoal=if($handoff.PSObject.Properties['projectGoal']-and-not[string]::IsNullOrWhiteSpace([string]$handoff.projectGoal)){[string]$handoff.projectGoal}else{$oldGoal}
             $nextState.goal=$newGoal
             $nextState.activePlanId=$planId
             $nextState.planApproved=-not[bool]$cfg.requireHumanApprovalForPlan
