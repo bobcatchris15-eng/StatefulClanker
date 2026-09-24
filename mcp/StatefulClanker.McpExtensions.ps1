@@ -130,6 +130,35 @@ function Get-McpControlEventsSince([string]$Project,[long]$Since,[int]$Limit=100
     }
     return @($out)
 }
+function Get-McpPlanningSnapshot([string]$Project) {
+    $path=Join-Path (Get-McpStateDir $Project) 'planning\active.json'
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){
+        return [ordered]@{active=$false;phase=$null;sessionId=$null;reason=$null;error=$null}
+    }
+    try{
+        $record=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json -ErrorAction Stop
+        return [ordered]@{
+            active=$true
+            phase=if($record.PSObject.Properties['phase']){[string]$record.phase}else{'unknown'}
+            sessionId=if($record.PSObject.Properties['sessionId']){[string]$record.sessionId}else{$null}
+            reason=if($record.PSObject.Properties['reason']){[string]$record.reason}else{$null}
+            baselinePath=if($record.PSObject.Properties['baselinePath']){$record.baselinePath}else{$null}
+            acceptedHandoffId=if($record.PSObject.Properties['acceptedHandoffId']){$record.acceptedHandoffId}else{$null}
+            error=$null
+        }
+    }catch{
+        return [ordered]@{
+            active=$true
+            phase='unreadable'
+            sessionId=$null
+            reason=$null
+            baselinePath=$null
+            acceptedHandoffId=$null
+            error=$_.Exception.Message
+        }
+    }
+}
+
 function Get-McpControlSnapshot([string]$Project) {
     Assert-McpInitialized $Project
     $stateDir=Get-McpStateDir $Project;$state=Read-McpJson (Join-Path $stateDir 'state.json');$intent=Read-McpJson (Join-Path $stateDir 'intent\contract.json')
@@ -150,6 +179,7 @@ function Get-McpControlSnapshot([string]$Project) {
         planApproved=if($state){$state.planApproved}else{$null}
         projectHold=if($state-and$state.PSObject.Properties['projectHold']){$state.projectHold}else{$null}
         taskSummary=$summary
+        planning=Get-McpPlanningSnapshot $Project
         activeAgents=@($active|ForEach-Object{[ordered]@{agentId=$_.agentId;taskId=$_.taskId;stage=$_.stage;provider=$_.provider;startedAt=$_.startedAt}})
     }
 }
@@ -494,7 +524,7 @@ function New-SCExtendedTools {
         @{name='directive_retire';description='Retire a current human directive because the human removed that rule/feature. Requires Intent reconciliation.';inputSchema=@{type='object';properties=@{project=@{type='string'};id=@{type='string'};reason=@{type='string'}};required=@('id')}},
         @{name='intent_apply';description='Commit the complete normalized Intent Contract after reconciling it against ALL current human directives. Clears the directive-reconciliation gate. contract object requires 9 fields: objective (string), requirements (array), constraints (array), invariants (array), nonGoals (array), decisions (array), preferences (array), openQuestions (array), successDefinition (string).';inputSchema=@{type='object';properties=@{project=@{type='string'};contract=@{type='object';description='Intent contract object containing objective, requirements, constraints, invariants, nonGoals, decisions, preferences, openQuestions, successDefinition.'};reason=@{type='string'}};required=@('contract')}},
         @{name='control_events_since';description='Read durable sequenced control-plane events after a cursor. Keep the returned cursor and use it next time; push notifications are only a wake-up signal.';inputSchema=@{type='object';properties=@{project=@{type='string'};since=@{type='integer';minimum=0};limit=@{type='integer';minimum=1;maximum=1000};minimumLevel=@{type='string';enum=@('fyi','attention','human_required')}}}},
-        @{name='control_snapshot';description='Read the current human-facing project snapshot: goal, current directives, Intent, reconciliation gate, task counts, holds, active agents, and event cursor.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
+        @{name='control_snapshot';description='Read the current human-facing project snapshot: goal, current directives, Intent, planning ownership/phase, reconciliation gate, task counts, holds, active agents, and event cursor.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
         @{name='autofill_status';description='Inspect the resident autofill supervisor: state (running, paused, idle, blocked, draining, stopped), PID, slot availability, ready task count, and blocking reasons.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
         @{name='autofill_control';description='Control the resident autofill supervisor: pause (suspend dispatch and allow manual runs), resume, stop (drain and exit), or trigger_now (immediate dispatch tick).';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('stop','pause','resume','trigger_now')}};required=@('action')}},
         @{name='task_recovery_context';description='Read one stalled task recovery dossier: task state plus latest compilation, worker receipt, proposal, critic, validator, progress, and recent task events. Use this before asking the human about a mechanical/review stall.';inputSchema=@{type='object';properties=@{project=@{type='string'};taskId=@{type='string'}};required=@('taskId')}},
