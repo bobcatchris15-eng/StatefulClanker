@@ -36,8 +36,11 @@ main is 5 behind with uncommitted edits to DispatchGuard.ps1/WorkerRuntime.ps1 â
 | t3 | Packet: lessons, neighbours, attempt history | DONE | 1 | merged; context faults on RPK failure |
 | t8 | Router weights + project allowlist | DONE | 2 | merged ae92b37; attempt 1 was packet scope (missing Router/Program.cs) |
 | t9 | Boundary violation event + escalation | DONE | 1 | merged; orchestrator added Eventing attention + Pi problem regex (no tray whitelist exists anymore) |
-| t4+t5 | validation/repair/merge checkpoints; evidence-based failure + stagnation | RUNNING | 0 | |
+| t4+t5 | Checkpoints + evidence-based failure/stagnation | DONE | 1 | merged 06ed4b2 |
 | t7 | Lesson MCP tools + worker record_lesson | DONE | 1 | merged c7f0e65; WorkerRuntime conflict w/ t9 resolved (signatures only) |
+
+## Status
+Effort complete 2026-09-24. Final gate on 06ed4b2: router+tray build, 16 suites green. Branch not pushed; user merges.
 
 ## Unverified assumptions
 - 4 tray tests (OverviewUi, TrayRefreshStability, TraySplitterVisibility, TrayTargetPoolLayout)
