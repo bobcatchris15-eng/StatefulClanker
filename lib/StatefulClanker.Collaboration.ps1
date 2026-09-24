@@ -110,19 +110,49 @@ function Get-SCImplementationCooperationGroups($Candidates) {
     }
     return @($groups)
 }
-function Select-SCCooperativeDispatchWave($Candidates,[int]$Slots) {
-    $items=@($Candidates);if($Slots-le0-or$items.Count-eq0){return @()}
-    $groups=@(Get-SCImplementationCooperationGroups $items);$member=@{};foreach($g in $groups){foreach($id in @($g.taskIds)){$member[[string]$id]=$g}}
-    $selected=@();$selectedIds=@{}
-    foreach($t in $items){
-        if($selected.Count-ge$Slots){break};$id=[string]$t.id;if($selectedIds.ContainsKey($id)){continue}
-        if(-not$member.ContainsKey($id)){$selected+=,$t;$selectedIds[$id]=$true;continue}
-        $g=$member[$id];$available=@($g.tasks|Where-Object{-not$selectedIds.ContainsKey([string]$_.id)})
-        if(($Slots-$selected.Count)-lt2){continue} # never strand a co-op member alone
-        $take=@($available|Select-Object -First ([Math]::Min($available.Count,$Slots-$selected.Count)))
-        if($take.Count-lt2){continue}
-        Set-SCCollaborationTeam (Get-SCStateRoot) ([string]$g.id) @($g.taskIds) 'automatic implementation cooperation group'|Out-Null
-        foreach($x in $take){$selected+=,$x;$selectedIds[[string]$x.id]=$true}
+function Get-SCImplementationFormations($Candidates,[string[]]$ActiveTaskIds=@()) {
+    $items=@($Candidates);$groups=@(Get-SCImplementationCooperationGroups $items);$member=@{};$formations=@()
+    foreach($g in $groups){
+        foreach($id in @($g.taskIds)){$member[[string]$id]=$true}
+        $active=@($g.taskIds|Where-Object{$ActiveTaskIds-contains[string]$_})
+        $available=@($g.tasks|Where-Object{$ActiveTaskIds-notcontains[string]$_.id})
+        $formations+=,[pscustomobject]@{
+            id=[string]$g.id;kind='coop';taskIds=@($g.taskIds);tasks=@($available)
+            activeTaskIds=@($active);minimum=if($active.Count-gt0){1}else{2}
+            desired=[Math]::Min(3,[Math]::Max(2,$g.taskIds.Count))
+            state=if($active.Count-gt0){'active'}else{'viable'}
+            createdAt=@($g.tasks|Sort-Object createdAt|Select-Object -First 1).createdAt
+        }
     }
-    return @($selected)
+    foreach($t in $items){
+        if(-not$member.ContainsKey([string]$t.id)){
+            $formations+=,[pscustomobject]@{id=('solo-'+[string]$t.id);kind='solo';taskIds=@([string]$t.id);tasks=@($t);activeTaskIds=@();minimum=1;desired=1;state='viable';createdAt=$t.createdAt}
+        }
+    }
+    return @($formations)
+}
+function Select-SCImplementationDispatchPlan($Candidates,[int]$Slots,[string[]]$ActiveTaskIds=@()) {
+    $items=@($Candidates);if($Slots-le0-or$items.Count-eq0){return [pscustomobject]@{tasks=@();formations=@();deferred=@()}}
+    $forms=@(Get-SCImplementationFormations $items $ActiveTaskIds)
+    # Active co-ops first, then viable new co-ops, then solo work. Age breaks ties.
+    $ordered=@($forms|Sort-Object @{Expression={if($_.kind-eq'coop'-and$_.state-eq'active'){0}elseif($_.kind-eq'coop'){1}else{2}}},createdAt)
+    $selected=@();$chosen=@();$deferred=@();$left=$Slots
+    foreach($form in $ordered){
+        $available=@($form.tasks);if($available.Count-eq0){continue}
+        $minimum=[int]$form.minimum
+        if($left-lt$minimum){$deferred+=,[pscustomobject]@{formationId=$form.id;reason="needs $minimum slot(s), $left available";taskIds=@($form.taskIds)};continue}
+        $want=[Math]::Min($available.Count,[Math]::Min([int]$form.desired,$left))
+        if($form.kind-eq'coop'-and$form.state-eq'active'){$want=[Math]::Min($available.Count,$left)}
+        $take=@($available|Select-Object -First $want);if($take.Count-lt$minimum){continue}
+        if($form.kind-eq'coop'){
+            Set-SCCollaborationTeam (Get-SCStateRoot) ([string]$form.id) @($form.taskIds) 'automatic implementation execution formation'|Out-Null
+        }
+        $selected+=@($take);$chosen+=,[pscustomobject]@{id=$form.id;kind=$form.kind;state=$form.state;launched=@($take|ForEach-Object{[string]$_.id});members=@($form.taskIds)}
+        $left-=$take.Count;if($left-le0){break}
+    }
+    return [pscustomobject]@{tasks=@($selected);formations=@($chosen);deferred=@($deferred)}
+}
+# Compatibility wrapper for callers not yet migrated to formation-aware dispatch.
+function Select-SCCooperativeDispatchWave($Candidates,[int]$Slots) {
+    return @((Select-SCImplementationDispatchPlan $Candidates $Slots @()).tasks)
 }
