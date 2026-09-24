@@ -346,9 +346,10 @@ function Get-SCFileSetAggregateHash([string]$Directory) {
 }
 
 function Get-SCPlanningDirtyFiles {
+    if(-not(Get-Command git -ErrorAction SilentlyContinue)){return @()}
     $root=Get-SCStateRoot
     $old=$ErrorActionPreference
-    try{$ErrorActionPreference='Continue';$raw=& git -C $root status --porcelain --untracked-files=all 2>$null|Out-String}finally{$ErrorActionPreference=$old}
+    try{$ErrorActionPreference='Continue';$raw=& git -C $root status --porcelain --untracked-files=all 2>$null|Out-String}finally{$ErrorActionPreference=$old;$global:LASTEXITCODE=0}
     $paths=@()
     foreach($line in @($raw -split '\r?\n')){
         if([string]::IsNullOrWhiteSpace($line)){continue}
@@ -387,7 +388,7 @@ function Assert-SCPlanningBaselineFresh($Baseline) {
 
     if($Baseline.PSObject.Properties['gitHead']-and$Baseline.gitHead){
         $old=$ErrorActionPreference
-        try{$ErrorActionPreference='Continue';$head=(& git -C (Get-SCStateRoot) rev-parse HEAD 2>$null|Out-String).Trim()}finally{$ErrorActionPreference=$old}
+        try{$ErrorActionPreference='Continue';$head=(& git -C (Get-SCStateRoot) rev-parse HEAD 2>$null|Out-String).Trim()}finally{$ErrorActionPreference=$old;$global:LASTEXITCODE=0}
         if([string]$head-ne[string]$Baseline.gitHead){throw "Planning baseline drift: Git HEAD changed from $($Baseline.gitHead) to $head."}
     }
 
