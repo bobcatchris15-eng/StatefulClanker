@@ -27,6 +27,16 @@ try {
     $bundle=Format-SCCollaborationPacketBundle $b
     Assert-True ($bundle -match 'TEAM UPDATE' -and $bundle -match 'ACK REQUESTED') 'model injection bundle omitted cooperation framing'
 
-    Write-Host 'PASS: durable collaboration teams, targeted/team packets, evidence, replies, consumption filtering, and compact injection formatting.'
+    $ta=[pscustomobject]@{id='impl-a';createdAt='2026-01-01T00:00:00Z';dependsOn=@();retrieval=@('src/shared.ps1');evidence=@();intentRefs=@();relations=@()}
+    $tb=[pscustomobject]@{id='impl-b';createdAt='2026-01-01T00:00:01Z';dependsOn=@();retrieval=@('src/shared.ps1');evidence=@();intentRefs=@();relations=@()}
+    $tc=[pscustomobject]@{id='solo-c';createdAt='2026-01-01T00:00:02Z';dependsOn=@();retrieval=@('src/elsewhere.ps1');evidence=@();intentRefs=@();relations=@()}
+    $one=Select-SCImplementationDispatchPlan @($ta,$tb,$tc) 1 @()
+    Assert-True (@($one.tasks).Count-eq1-and[string]$one.tasks[0].id-eq'solo-c') 'co-op member consumed a lone slot'
+    $two=Select-SCImplementationDispatchPlan @($ta,$tb,$tc) 2 @()
+    Assert-True (@($two.tasks).Count-eq2-and(@($two.tasks|ForEach-Object{$_.id})-contains'impl-a')-and(@($two.tasks|ForEach-Object{$_.id})-contains'impl-b')) 'viable co-op was not preferred as a formation'
+    $join=Select-SCImplementationDispatchPlan @($tb,$tc) 1 @('impl-a')
+    Assert-True (@($join.tasks).Count-eq1-and[string]$join.tasks[0].id-eq'impl-b') 'active co-op did not receive first available capacity'
+
+    Write-Host 'PASS: durable collaboration teams, targeted/team packets, evidence, replies, consumption filtering, and compact injection formatting, and formation-first implementation dispatch.'
 }
 finally {Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue}
