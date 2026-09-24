@@ -30,14 +30,14 @@ main is 5 behind with uncommitted edits to DispatchGuard.ps1/WorkerRuntime.ps1 â
 | id | targets | status | attempts | last return line |
 |----|---------|--------|----------|------------------|
 | t0 | RPK args, commit freshness, validator-off gate | DONE | 1 | 3f5f684 |
-| t1 | Tray Program.cs, EndpointsRoutingUi.cs | DONE (unmerged) | 1 | PASS; 82c71db on task/t1-tray-refresh; build clean, smoke green |
-| t2 | mcp/StatefulClanker.SubscriptionPump.ps1 | RUNNING | 0 | |
-| t6 | Tray ReflexiveProjectKnowledge.cs (code graph) | RUNNING | 0 | |
-| t3 | Context.ps1 packet: RPK lessons, graph neighbours, attempt history | QUEUED w2 | 0 | |
-| t8 | Router: per-project allowlist + weights | RUNNING | 0 | |
-| t9 | WorkerRuntime boundary-violation event + escalation | QUEUED w2 | 0 | |
-| t4+t5 | validation/repair/merge checkpoints; evidence-based failure + stagnation | QUEUED w3 | 0 | |
-| t7 | Lesson log/confirm/reject via MCP + worker tool | QUEUED w3 | 0 | |
+| t1 | Tray refresh/opt-in HTTP | DONE | 1 | merged 60797aa; needs user visual check |
+| t2 | SubscriptionPump watcher | DONE | 1 | merged 0b20087 |
+| t6 | RPK code graph | DONE | 1 | merged abb7b7c |
+| t3 | Packet: lessons, neighbours, attempt history | DONE | 1 | merged; context faults on RPK failure |
+| t8 | Router weights + project allowlist | DONE | 2 | merged ae92b37; attempt 1 was packet scope (missing Router/Program.cs) |
+| t9 | Boundary violation event + escalation | DONE | 1 | merged; orchestrator added Eventing attention + Pi problem regex (no tray whitelist exists anymore) |
+| t4+t5 | validation/repair/merge checkpoints; evidence-based failure + stagnation | RUNNING | 0 | |
+| t7 | Lesson MCP tools + worker record_lesson | DONE | 1 | merged c7f0e65; WorkerRuntime conflict w/ t9 resolved (signatures only) |
 
 ## Unverified assumptions
 - 4 tray tests (OverviewUi, TrayRefreshStability, TraySplitterVisibility, TrayTargetPoolLayout)
