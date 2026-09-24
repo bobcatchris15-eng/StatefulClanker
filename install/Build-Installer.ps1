@@ -28,8 +28,10 @@ $issPath = Join-Path $installDir 'StatefulClanker.iss'
 $outDir = Join-Path $installDir 'output'
 $publishDir = Join-Path $installDir 'publish'
 $routerPublishDir = Join-Path $installDir 'router-publish'
+$plannerPublishDir = Join-Path $installDir 'planner-publish'
 $trayProject = Join-Path $repoRoot 'src\StatefulClanker.Tray\StatefulClanker.Tray.csproj'
 $routerProject = Join-Path $repoRoot 'src\StatefulClanker.Router\StatefulClanker.Router.csproj'
+$plannerProject = Join-Path $repoRoot 'src\StatefulClanker.Planner\StatefulClanker.Planner.csproj'
 $piRuntimeDir = Join-Path $installDir 'pi-runtime'
 
 function New-GlyphBitmap([int]$Size) {
@@ -93,6 +95,14 @@ if($LASTEXITCODE-ne0){throw "router dotnet publish failed with exit code $LASTEX
 $routerExe=Join-Path $routerPublishDir 'StatefulClanker.Router.exe'
 if(-not(Test-Path -LiteralPath $routerExe)){throw "Router publish succeeded but $routerExe was not produced."}
 Write-Host "  Compiled router: $([math]::Round((Get-Item $routerExe).Length/1MB,1)) MB"
+if(Test-Path -LiteralPath $plannerPublishDir){Remove-Item -LiteralPath $plannerPublishDir -Recurse -Force}
+New-Item -ItemType Directory -Force -Path $plannerPublishDir|Out-Null
+Write-Host "Publishing isolated planning module..."
+& $dotnetPath publish $plannerProject -c Release -r win-x64 --self-contained true -o $plannerPublishDir -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false
+if($LASTEXITCODE-ne0){throw "planner dotnet publish failed with exit code $LASTEXITCODE"}
+$plannerExe=Join-Path $plannerPublishDir 'StatefulClanker.Planner.exe'
+if(-not(Test-Path -LiteralPath $plannerExe)){throw "Planner publish succeeded but $plannerExe was not produced."}
+Write-Host "  Planner module: $([math]::Round((Get-Item $plannerExe).Length/1MB,1)) MB"
 
 function Find-NodeTool([string]$Name) {
     $cmd=Get-Command $Name -ErrorAction SilentlyContinue
@@ -123,7 +133,7 @@ function Find-Iscc {
 
 $iscc=Find-Iscc;Write-Host "Inno Setup: $iscc"
 if(-not(Test-Path -LiteralPath $outDir)){New-Item -ItemType Directory -Force -Path $outDir|Out-Null}
-$isccArgs=@("/DMyAppVersion=$Version","/DRepoRoot=$repoRoot","/DPublishDir=$publishDir","/DRouterPublishDir=$routerPublishDir","/O$outDir",$issPath)
+$isccArgs=@("/DMyAppVersion=$Version","/DRepoRoot=$repoRoot","/DPublishDir=$publishDir","/DRouterPublishDir=$routerPublishDir","/DPlannerPublishDir=$plannerPublishDir","/O$outDir",$issPath)
 & $iscc @isccArgs
 if($LASTEXITCODE-ne0){throw "ISCC failed with exit code $LASTEXITCODE"}
 $setup=Get-ChildItem -LiteralPath $outDir -Filter '*.exe'|Sort-Object LastWriteTime -Descending|Select-Object -First 1
