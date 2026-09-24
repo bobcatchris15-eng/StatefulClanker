@@ -34,6 +34,31 @@ if($Command.ToLowerInvariant()-ne'init'){
     if(Test-Path (Get-SCPath 'state.json')){Upgrade-SCStateLayout;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout}
 }
 
+function Assert-SCCommandAllowedDuringPlanning([string]$Cmd,[string]$Sub) {
+    $planning=Get-SCPlanningActiveRecord
+    if($null-eq$planning){return}
+    $cmdLower=if($Cmd){$Cmd.ToLowerInvariant()}else{''}
+    $subLower=if($Sub){$Sub.ToLowerInvariant()}else{''}
+    $blocked=$false
+    switch($cmdLower){
+        'goal' {$blocked=$true}
+        'event' {$blocked=$true}
+        'complete' {$blocked=$true}
+        'block' {$blocked=$true}
+        'task' {$blocked=@('add','set','retry','repair','recover')-contains$subLower}
+        'plan' {$blocked=@('import','approve')-contains$subLower}
+        'directive' {$blocked=@('set','retire')-contains$subLower}
+        'intent' {$blocked=$subLower-eq'replace'}
+        'review' {$blocked=$subLower-eq'run'}
+        'autofill' {$blocked=@('run','resume','trigger')-contains$subLower}
+    }
+    if($blocked){
+        $phase=if($planning.PSObject.Properties['phase']){[string]$planning.phase}else{'unknown'}
+        throw "Command '$Cmd $Sub' cannot mutate live project state while planning owns the project (phase: $phase). Stage semantic changes in the planning candidate and apply the accepted handoff transactionally."
+    }
+}
+if($Command.ToLowerInvariant()-ne'init'){Assert-SCCommandAllowedDuringPlanning $Command $Subcommand}
+
 switch($Command.ToLowerInvariant()){
 'init'{Initialize-SC;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout;break}
 'goal'{$text=if($Message){$Message}elseif($Subcommand){$Subcommand}else{$Title};Set-SCGoal $text;break}
