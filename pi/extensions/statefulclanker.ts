@@ -1270,7 +1270,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
         "This Pi session was explicitly launched as the human-facing planning/replanning conversation.",
         "Do not dispatch implementation workers or resume Autofill while planning owns the project.",
         "Use the durable Planner barrier/session as the phase authority; planning and implementation are mutually exclusive.",
-        "Work against the settled planning baseline, persist material questions/answers, preserve provenance, and produce an accepted Intent + plan handoff.",
+        "Work against the settled planning baseline, persist material questions/answers, preserve provenance, stage semantic changes rather than mutating live state, and finish accepted planning with planning_control apply.",
         "Use heterogeneous models for distinct planning jobs rather than several complete-plan votes.",
         "The decomposition specialist skill is available for the task-graph pass after Intent is sufficiently constrained.",
         "Initial planning inference policy targets roughly 1.0x the expected implementation token budget.",
@@ -1288,7 +1288,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
       "Control events are wake-up/history signals, not proof of current truth. Re-check canonical task state and concrete artifacts before acting on stagnation/recovery warnings.",
       "Never reopen or redo a task that is already canonically complete merely because an older stagnation warning arrives.",
       "Mechanical stalls and repeated validator/reviewer failures are recovery requests first: investigate and repair the actual broken layer before escalating to the human.",
-      "If a requested change alters desired behavior, architecture, acceptance semantics, constraints, or other accepted planning assumptions, enter the Planner barrier and transfer to Interrogator rather than changing the future while workers run.",
+      "If a requested change alters desired behavior, architecture, acceptance semantics, constraints, or other accepted planning assumptions, enter the Planner barrier and transfer to Interrogator; Operator resumes only after planning_control apply succeeds.",
     ].join("\n");
   });
 
