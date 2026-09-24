@@ -252,7 +252,8 @@ When the human wants to change project direction, or execution discovers a struc
 1. establish the Planner's quiescing barrier;
 2. allow already-started implementation cycles to settle;
 3. hand the human conversation to the `statefulclanker-interrogator` skill;
-4. return to Operator only after an accepted planning handoff has been transactionally applied and the Planner releases the barrier.
+4. Interrogator finishes with `planning_control apply`, which transactionally replaces accepted semantic/task state and releases the Planner barrier;
+5. return to Operator only after that combined apply reports success.
 
 The `statefulclanker-planner` skill owns decomposition inside that separate planning phase.
 
@@ -352,6 +353,7 @@ Tool availability can vary by protocol/version. Prefer discovery/current MCP ins
 
 - `planning_control status` — inspect whether a separate planning session currently owns the project.
 - `planning_control begin` — establish the quiescing barrier when semantic replanning is required, then transfer the conversation to Interrogator.
+- `planning_control apply` — Interrogator's normal terminal operation after an accepted candidate; it replaces goal/directives/Intent/plan/tasks transactionally and releases planning.
 - `plan_apply` / `plan_import` — legacy additive import surfaces. Operator must not use them to redesign or replace the accepted project future during execution. Full replanning goes through the isolated Planner handoff.
 - `task_list/show/add` — inspect accepted work; add only bounded work that is already entailed by accepted Intent/plan, not newly invented product semantics.
 - `task_retry` — explicitly retry/reopen with normal invalidation/freshness semantics.
