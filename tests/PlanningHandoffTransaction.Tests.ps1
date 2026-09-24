@@ -39,6 +39,8 @@ try {
         & $harness init|Out-Null
         & $harness goal -Message 'Exercise transactional replanning.'|Out-Null
 
+        & $harness directive set -DirectiveId 'behavior-selection' -Message 'Use the original behavior.' -Scope 'behavior-selection' -IntentRef 'REQ-CHANGE'|Out-Null
+
         $oldIntent=[pscustomobject]@{
             objective='Exercise transactional replanning.'
             requirements=@(
@@ -120,6 +122,20 @@ end
         $newIntentPath=Join-Path $temp 'intent-new.json'
         Write-Json $newIntentPath $newIntent
 
+        $directiveChangesPath=Join-Path $temp 'directive-changes.json'
+        Write-Json $directiveChangesPath ([pscustomobject]@{
+            changes=@(
+                [pscustomobject]@{
+                    action='set'
+                    id='behavior-selection'
+                    scope='behavior-selection'
+                    text='Use the replacement behavior.'
+                    intentRefs=@('REQ-CHANGE')
+                    reason='Transaction test changes the direct human behavior choice.'
+                }
+            )
+        })
+
         $newPlanPath=Join-Path $temp 'new.scplan'
         @'
 SCPLAN 1
@@ -156,6 +172,8 @@ end
             'candidate','--project',$temp,
             '--plan',$newPlanPath,
             '--intent',$newIntentPath,
+            '--directives',$directiveChangesPath,
+            '--goal','Replacement transaction project goal.',
             '--summary','replacement transaction integration candidate')
         $handoff=Invoke-Planner @('accept','--project',$temp,'--candidate',[string]$candidate.id)
         $handoffPath=Join-Path $stateRoot ("planning\sessions\{0}\handoffs\{1}.json"-f$begin.sessionId,$handoff.id)
@@ -179,9 +197,15 @@ end
         Assert-True (@($result.replacedTasks)-contains't-change') 'Intent-invalidated task was not replaced.'
         Assert-True (@($result.newTasks)-contains't-new') 'New task was not classified as new.'
         Assert-True (@($result.retiredTasks)-contains't-drop') 'Omitted old task was not retired from active graph.'
+        Assert-True ([bool]$result.goalChanged) 'Staged project goal was not part of the transaction.'
+        Assert-True (@($result.directiveChanges).Count-eq1) 'Staged directive change was not part of the transaction.'
 
         $newState=Read-Json (Join-Path $stateRoot 'state.json')
         Assert-True ([string]$newState.activePlanId-eq[string]$result.appliedPlanId) 'activePlanId does not match committed transaction.'
+        Assert-True ([string]$newState.goal-eq'Replacement transaction project goal.') 'Project goal was not committed transactionally.'
+        Assert-True (-not[bool]$newState.directiveReconciliationRequired) 'Transaction left directives awaiting reconciliation.'
+        $directiveNow=Read-Json (Join-Path $stateRoot 'directives\current\behavior-selection.json')
+        Assert-True ([string]$directiveNow.text-eq'Use the replacement behavior.') 'Staged human directive was not committed.'
 
         $keepNow=Read-Json (Join-Path $stateRoot 'tasks\t-keep.json')
         $changeNow=Read-Json (Join-Path $stateRoot 'tasks\t-change.json')
