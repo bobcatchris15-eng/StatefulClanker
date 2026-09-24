@@ -878,6 +878,9 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
             $nextState=(ConvertTo-SCJson $liveState 30)|ConvertFrom-Json
             $nextState.goal=$newGoal
             $nextState.activePlanId=$planId
+            Set-SCProperty $nextState 'lastPlanningHandoffId' ([string]$handoff.id)
+            Set-SCProperty $nextState 'lastPlanningTransactionId' $transactionId
+            Set-SCProperty $nextState 'lastPlanningAppliedAt' ((Get-Date).ToUniversalTime().ToString('o'))
             $nextState.planApproved=-not[bool]$cfg.requireHumanApprovalForPlan
             if($intentChanged){
                 $direction=if($nextState.PSObject.Properties['directionRevision']){[int]$nextState.directionRevision}else{0}
