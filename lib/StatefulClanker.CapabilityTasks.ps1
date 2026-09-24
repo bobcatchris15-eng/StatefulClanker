@@ -667,7 +667,7 @@ function Invalidate-SCStagedCompletedDependents([string]$StageTasks,$Disposition
                 $disp=$dispositionMap[[string]$task.id]
                 $disp['action']='dependency-invalidated'
                 $disp['dependencyInvalidatedBy']=@($invalid)
-                $disp['intentCompatible']=$true
+                $disp['semanticCompatible']=$true
             }
             $changed=$true
         }
@@ -814,20 +814,20 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                 $newHash=Get-SCTaskDefinitionHash $fresh
                 if($old){
                     $oldHash=Get-SCTaskDefinitionHash $old
-                    $intentCompatible=Test-SCTaskIntentCompatible $fresh $baselineIntent $newIntent $oldGoal $newGoal $directiveResult.changes
-                    if($oldHash-eq$newHash-and$intentCompatible-and[string]$old.status-eq'complete'){
+                    $semanticCompatible=Test-SCTaskIntentCompatible $fresh $baselineIntent $newIntent $oldGoal $newGoal $directiveResult.changes
+                    if($oldHash-eq$newHash-and$semanticCompatible-and[string]$old.status-eq'complete'){
                         Copy-SCCompletedTaskRuntime $old $fresh
-                        $dispositions+=,[ordered]@{taskId=$id;action='preserved-complete';previousStatus=[string]$old.status;definitionChanged=$false;intentCompatible=$true}
-                    } elseif($oldHash-eq$newHash-and$intentCompatible){
+                        $dispositions+=,[ordered]@{taskId=$id;action='preserved-complete';previousStatus=[string]$old.status;definitionChanged=$false;semanticCompatible=$true}
+                    } elseif($oldHash-eq$newHash-and$semanticCompatible){
                         Reset-SCReplannedTaskRuntime $fresh
-                        $dispositions+=,[ordered]@{taskId=$id;action='carried-reset';previousStatus=[string]$old.status;definitionChanged=$false;intentCompatible=$true}
+                        $dispositions+=,[ordered]@{taskId=$id;action='carried-reset';previousStatus=[string]$old.status;definitionChanged=$false;semanticCompatible=$true}
                     } else {
                         Reset-SCReplannedTaskRuntime $fresh
-                        $dispositions+=,[ordered]@{taskId=$id;action='replaced';previousStatus=[string]$old.status;definitionChanged=($oldHash-ne$newHash);intentCompatible=$intentCompatible}
+                        $dispositions+=,[ordered]@{taskId=$id;action='replaced';previousStatus=[string]$old.status;definitionChanged=($oldHash-ne$newHash);semanticCompatible=$semanticCompatible}
                     }
                 } else {
                     Reset-SCReplannedTaskRuntime $fresh
-                    $dispositions+=,[ordered]@{taskId=$id;action='new';previousStatus=$null;definitionChanged=$true;intentCompatible=$false}
+                    $dispositions+=,[ordered]@{taskId=$id;action='new';previousStatus=$null;definitionChanged=$true;semanticCompatible=$false}
                 }
                 Write-SCJson (Join-Path $stageTasks ("{0}.json"-f$id)) $fresh
             }
@@ -836,7 +836,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                 if($candidateIds.ContainsKey($oldId)){continue}
                 $old=$oldTasks[$oldId]
                 $action=if([string]$old.status-eq'complete'){'retired-complete'}else{'invalidated-removed'}
-                $dispositions+=,[ordered]@{taskId=$oldId;action=$action;previousStatus=[string]$old.status;definitionChanged=$true;intentCompatible=$false}
+                $dispositions+=,[ordered]@{taskId=$oldId;action=$action;previousStatus=[string]$old.status;definitionChanged=$true;semanticCompatible=$false}
             }
             Invalidate-SCStagedCompletedDependents $stageTasks $dispositions
             Set-SCStagedTaskReadiness $stageTasks
