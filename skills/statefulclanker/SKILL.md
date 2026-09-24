@@ -1,8 +1,8 @@
 # StatefulClanker conversational operator skill
 
-Use this skill whenever a conversational model is asked to **operate, inspect, resume, plan, supervise, troubleshoot, or change work through StatefulClanker**.
+Use this skill whenever a conversational model is asked to **operate, inspect, resume, supervise, troubleshoot, or control accepted implementation work through StatefulClanker**.
 
-This is the canonical field manual for the human-facing conversational harness. The separate `statefulclanker-planner` skill is the specialist for producing or revising semantic task graphs; use it when planning/decomposition is the main work, while this skill remains authoritative for the overall operating loop.
+This is the execution-side field manual for the human-facing conversational harness. Deliberate planning/replanning belongs to the separate `statefulclanker-interrogator` conversation skill; semantic decomposition inside that planning phase belongs to `statefulclanker-planner`. The Operator must not quietly combine planning and implementation ownership.
 
 ## Mission
 
@@ -53,8 +53,8 @@ Use this skill for requests such as:
 - operate this project through StatefulClanker;
 - resume where it left off;
 - tell me what it is doing;
-- plan/decompose this feature;
-- add or change these requirements;
+- resume or supervise an already accepted feature plan;
+- report planning pressure that should trigger a separate Interrogator session;
 - send work to workers;
 - inspect a stuck or failed task;
 - retry, block, or rework a task;
@@ -266,11 +266,22 @@ A directive should preserve or point back to direct human wording where possible
 
 ---
 
-# 6. Planning and decomposition
+# 6. Planning boundary
 
-When planning is substantial, use the companion `statefulclanker-planner` skill.
+The Operator does not perform deliberate planning or replanning while implementation is active.
 
-The conversational control plane still owns the decision to plan, replan, split, merge, invalidate, or escalate work.
+When the human wants to change project direction, or execution discovers a structural plan problem:
+
+1. request/enter the Planner's quiescing barrier;
+2. allow already-started implementation cycles to settle;
+3. hand the human conversation to the `statefulclanker-interrogator` skill;
+4. return to Operator only after an accepted planning handoff has been transactionally applied and the Planner releases the barrier.
+
+The `statefulclanker-planner` skill remains the decomposition specialist inside that separate planning phase.
+
+The Operator may repair mechanical task bookkeeping and execution failures without invoking planning. It must not use "repair" as cover for changing product intent, architecture, or accepted plan semantics.
+
+## 6.1 Existing task semantics
 
 ## 6.1 Semantic decomposition only
 
