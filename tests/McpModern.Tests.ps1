@@ -30,7 +30,7 @@ try {
 
     Write-Host '  MCP MODERN 3: modern tools/resources carry server identity and capability authoring'
     $tools=Invoke-McpRpc ([pscustomobject]@{jsonrpc='2.0';id=2;method='tools/list';params=[pscustomobject]@{_meta=New-ModernMeta}});$names=@($tools.result.tools|ForEach-Object{[string]$_.name})
-    foreach($required in @('directive_set','directive_list','intent_apply','control_events_since','control_snapshot','worker_policy_get','worker_profile_set','autofill_status','autofill_control','task_recovery_context','task_repair','task_recover_complete')){Assert-True ($names-contains$required) "Missing tool $required."}
+    foreach($required in @('directive_set','directive_list','intent_apply','control_events_since','control_snapshot','planning_control','worker_policy_get','worker_profile_set','autofill_status','autofill_control','task_recovery_context','task_repair','task_recover_complete')){Assert-True ($names-contains$required) "Missing tool $required."}
     Assert-True ([string]$discover.result.instructions-match'RECOVERY BEFORE HUMAN ESCALATION') 'Control-plane instructions do not define repair-first recovery.'
     Assert-True ($null-ne$tools.result._meta.'io.modelcontextprotocol/serverInfo') 'Modern tools/list lacks serverInfo response metadata.'
     $task=@($tools.result.tools|Where-Object { $_.name -eq 'task_add' }|Select-Object -First 1)[0];Assert-True ($null-ne$task.inputSchema.properties.capabilityProfile) 'task_add lacks capabilityProfile.';Assert-True ($null-ne$task.inputSchema.properties.toolAllow) 'task_add lacks toolAllow.'
