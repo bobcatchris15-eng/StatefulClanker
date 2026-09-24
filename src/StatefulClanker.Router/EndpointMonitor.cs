@@ -104,7 +104,10 @@ public sealed class EndpointMonitor
             {
                 var name=key["connection:".Length..];
                 if(connections.TryGetValue(name,out var c))
+                {
+                    if(c.transient) continue;
                     await ProbeConnectionHealthAsync(name,c,token);
+                }
                 continue;
             }
 
@@ -152,6 +155,7 @@ public sealed class EndpointMonitor
     {
         foreach(var kv in connections.OrderBy(x=>x.Key,StringComparer.OrdinalIgnoreCase))
         {
+            if(kv.Value.transient) continue;
             var plan=ProviderProbeCatalog.Resolve(kv.Value);
             if(!plan.Enabled) continue;
 
@@ -191,6 +195,7 @@ public sealed class EndpointMonitor
 
     async Task ProbeConnectionHealthAsync(string name,ConnectionProfile profile,CancellationToken token)
     {
+        if(profile.transient) return;
         var plan=ProviderProbeCatalog.Resolve(profile);
         if(!plan.Enabled) return;
         var result=await ProbeAsync(profile,plan,token);

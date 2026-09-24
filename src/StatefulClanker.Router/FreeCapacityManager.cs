@@ -39,6 +39,7 @@ public sealed class FreeCapacityManager
         var connections=_store.LoadConnections().connections;
         foreach(var kv in connections.OrderBy(x=>x.Key,StringComparer.OrdinalIgnoreCase))
         {
+            if(kv.Value.transient) continue;
             if(_nextSync.TryGetValue(kv.Key,out var due) && due>now) continue;
             var ok=await SyncConnectionAsync(kv.Key,kv.Value,token);
             var plan=ProviderProbeCatalog.Resolve(kv.Value);
@@ -59,6 +60,7 @@ public sealed class FreeCapacityManager
 
     public async Task<bool> SyncConnectionAsync(string connectionName,ConnectionProfile profile,CancellationToken token=default)
     {
+        if(profile.transient) return true;
         if(ProviderProbeCatalog.IsRetired(profile))
         {
             RecordFailure(connectionName,"provider retired");

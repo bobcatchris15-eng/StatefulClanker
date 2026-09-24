@@ -42,7 +42,7 @@ public sealed class EndpointEntry
 
 public sealed class ConnectionDocument
 {
-    public int schemaVersion { get; set; } = 2;
+    public int schemaVersion { get; set; } = 3;
     public Dictionary<string, ConnectionProfile> connections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
@@ -58,6 +58,12 @@ public sealed class ConnectionProfile
     public string? accountId { get; set; }
     public string? apiKeyProtected { get; set; }
     public string? apiKeyEnv { get; set; }
+    public string? username { get; set; }
+    public bool transient { get; set; }
+    public string? managedBy { get; set; }
+    public string? workingDirectory { get; set; }
+    public int? processId { get; set; }
+    public string? processStartedAt { get; set; }
     public Dictionary<string,string> headers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
@@ -161,6 +167,8 @@ public sealed class RouterRequest
     public string? endpoint { get; set; }
     public string? failureClass { get; set; }
     public string? message { get; set; }
+    public string? adapter { get; set; }
+    public string? workingDirectory { get; set; }
 }
 
 public sealed class RouterResponse

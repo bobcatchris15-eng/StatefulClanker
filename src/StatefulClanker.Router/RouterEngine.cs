@@ -5,6 +5,7 @@ namespace StatefulClanker.Router;
 public sealed class RouterEngine
 {
     readonly RouterStore _store;
+    readonly HarnessAdapterManager _harnesses;
     readonly object _leaseLock = new();
     readonly Dictionary<string,LeaseRecord> _leasesByToken = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string,string> _tokenByRoute = new(StringComparer.OrdinalIgnoreCase);
@@ -14,8 +15,14 @@ public sealed class RouterEngine
         _store=store;
         RestoreLeases();
         ReapExpiredLeases();
+        _harnesses=new HarnessAdapterManager(this);
     }
     public RouterStore Store => _store;
+
+    public Task<RouterResponse> EnsureHarnessAsync(string? adapter,string? workingDirectory,CancellationToken token=default) =>
+        _harnesses.EnsureAsync(adapter,workingDirectory,token);
+    public Task RunHarnessMaintenanceAsync(CancellationToken token) => _harnesses.RunAsync(token);
+    public Task StopHarnessesAsync() => _harnesses.StopAllAsync();
 
     public IReadOnlyList<EndpointRoute> Routes()
     {
@@ -35,13 +42,13 @@ public sealed class RouterEngine
             .ToArray();
     }
 
-    public RouterResponse Acquire(string? preferred,string? preferredConnection,bool strictPreferred,string? sessionId,bool requireTools,int ownerPid=0)
+    public RouterResponse Acquire(string? preferred,string? preferredConnection,bool strictPreferred,string? sessionId,bool requireTools,int ownerPid=0,string? workingDirectory=null)
     {
         ReapExpiredLeases();
         NormalizeExpiredCooldowns();
         var health=_store.LoadHealth();
 
-        var configured=Routes().ToList();
+        var configured=Routes().Where(r=>WorkspaceEligible(r.Connection,workingDirectory)).ToList();
         var eligible=configured
             .Where(r=>!requireTools || (r.Endpoint.supportsTools==true && string.Equals(r.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase)))
             .Where(r=>string.IsNullOrWhiteSpace(preferredConnection) || string.Equals(r.Endpoint.connection,preferredConnection,StringComparison.OrdinalIgnoreCase))
@@ -161,6 +168,19 @@ public sealed class RouterEngine
         });
     }
 
+    static bool WorkspaceEligible(ConnectionProfile? connection,string? workingDirectory)
+    {
+        if(connection?.transient!=true) return true;
+        if(string.IsNullOrWhiteSpace(connection.workingDirectory) || string.IsNullOrWhiteSpace(workingDirectory)) return false;
+        try
+        {
+            var a=Path.GetFullPath(connection.workingDirectory).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
+            var b=Path.GetFullPath(workingDirectory).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
+            return string.Equals(a,b,StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
     public RouterResponse Release(string? token)
     {
         if(string.IsNullOrWhiteSpace(token)) return RouterResponse.Fail("lease is required.");
@@ -255,6 +275,7 @@ public sealed class RouterEngine
             enabledRoutes=routes.Count,
             healthyRoutes=eligible.Count,
             activeLeases=leases.Count,
+            harnesses=_harnesses.Snapshot(),
             nextRetryAt=NextRetryAt(routes,health),
             freeCapacity=new
             {
@@ -589,7 +610,7 @@ public sealed class RouterEngine
 
     public static string? ServiceName(ConnectionProfile? c)
     {
-        if(c is null || string.IsNullOrWhiteSpace(c.baseUrl)) return null;
+        if(c is null || c.transient || string.IsNullOrWhiteSpace(c.baseUrl)) return null;
         try { return new Uri(c.baseUrl).Host.ToLowerInvariant(); } catch { return null; }
     }
 }

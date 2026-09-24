@@ -50,17 +50,19 @@ public sealed class RouterPipeServer
             var line=await reader.ReadLineAsync(token);
             if(string.IsNullOrWhiteSpace(line)){await writer.WriteLineAsync(JsonSerializer.Serialize(RouterResponse.Fail("Empty request."),_json));return;}
             var req=JsonSerializer.Deserialize<RouterRequest>(line,_json) ?? new();
-            var response=req.op.ToLowerInvariant() switch
+            RouterResponse response;
+            switch(req.op.ToLowerInvariant())
             {
-                "ping" => RouterResponse.Ok(new{service="StatefulClanker.Router",version="0.1"}),
-                "acquire" => _engine.Acquire(req.preferred,req.preferredConnection,req.strictPreferred,req.sessionId,req.requireTools,req.ownerPid),
-                "release" => _engine.Release(req.lease),
-                "heartbeat" => _engine.Heartbeat(req.lease),
-                "success" => _engine.Success(req.lease,req.endpoint),
-                "failure" => _engine.Failure(req.lease,req.endpoint,req.failureClass,req.message),
-                "snapshot" => RouterResponse.Ok(_engine.Snapshot()),
-                _ => RouterResponse.Fail("Unknown router operation: "+req.op)
-            };
+                case "ping": response=RouterResponse.Ok(new{service="StatefulClanker.Router",version="0.2"}); break;
+                case "ensure-harness": response=await _engine.EnsureHarnessAsync(req.adapter,req.workingDirectory,token); break;
+                case "acquire": response=_engine.Acquire(req.preferred,req.preferredConnection,req.strictPreferred,req.sessionId,req.requireTools,req.ownerPid,req.workingDirectory); break;
+                case "release": response=_engine.Release(req.lease); break;
+                case "heartbeat": response=_engine.Heartbeat(req.lease); break;
+                case "success": response=_engine.Success(req.lease,req.endpoint); break;
+                case "failure": response=_engine.Failure(req.lease,req.endpoint,req.failureClass,req.message); break;
+                case "snapshot": response=RouterResponse.Ok(_engine.Snapshot()); break;
+                default: response=RouterResponse.Fail("Unknown router operation: "+req.op); break;
+            }
             await writer.WriteLineAsync(JsonSerializer.Serialize(response,_json));
         }
         catch(Exception ex)

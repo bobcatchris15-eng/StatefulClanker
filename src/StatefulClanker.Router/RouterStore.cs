@@ -53,6 +53,7 @@ public sealed class RouterStore
     public CapacityDiscoveryDocument LoadCapacityDiscovery() => WithLock(() => Load<CapacityDiscoveryDocument>(CapacityDiscoveryPath) ?? new());
 
     public void SaveEndpoints(EndpointCatalog doc) => WithLock(() => { doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(EndpointPath,doc); return 0; });
+    public void SaveConnections(ConnectionDocument doc) => WithLock(() => { doc.schemaVersion=Math.Max(doc.schemaVersion,3); Save(ConnectionPath,doc); return 0; });
     public void SaveHealth(RoutingHealthDocument doc) => WithLock(() => { Save(HealthPath, doc); return 0; });
     public void SaveCursor(RoundRobinDocument doc) => WithLock(() => { Save(CursorPath, doc); return 0; });
     public void SaveLeases(LeaseDocument doc) => WithLock(() => { doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(LeasePath,doc); return 0; });
@@ -60,6 +61,9 @@ public sealed class RouterStore
 
     public TResult UpdateEndpoints<TResult>(Func<EndpointCatalog,TResult> update) =>
         WithLock(() => { var doc=Load<EndpointCatalog>(EndpointPath) ?? new(); var r=update(doc); doc.updatedAt=DateTimeOffset.UtcNow.ToString("O"); Save(EndpointPath,doc); return r; });
+
+    public TResult UpdateConnections<TResult>(Func<ConnectionDocument,TResult> update) =>
+        WithLock(() => { var doc=Load<ConnectionDocument>(ConnectionPath) ?? new(); var r=update(doc); doc.schemaVersion=Math.Max(doc.schemaVersion,3); Save(ConnectionPath,doc); return r; });
 
     public TResult UpdateHealth<TResult>(Func<RoutingHealthDocument,TResult> update) =>
         WithLock(() => { var doc=Load<RoutingHealthDocument>(HealthPath) ?? new(); var r=update(doc); Save(HealthPath,doc); return r; });
@@ -79,7 +83,8 @@ public sealed class RouterStore
         {
             profile.presetId, profile.protocol, profile.baseUrl, profile.modelsPath,
             profile.discoveryKind, profile.authKind, profile.accountId, profile.apiKeyProtected,
-            profile.apiKeyEnv, headers=profile.headers.OrderBy(x=>x.Key,StringComparer.OrdinalIgnoreCase)
+            profile.apiKeyEnv, profile.username, profile.transient, profile.managedBy, profile.workingDirectory,
+            headers=profile.headers.OrderBy(x=>x.Key,StringComparer.OrdinalIgnoreCase)
         });
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }

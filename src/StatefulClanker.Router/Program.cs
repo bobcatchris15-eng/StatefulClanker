@@ -18,7 +18,7 @@ internal static class Program
         var request=ParseRequest(args);
         if(request is null)
         {
-            Console.Error.WriteLine("Usage: StatefulClanker.Router <ping|snapshot|acquire|release|heartbeat|success|failure> [options]");
+            Console.Error.WriteLine("Usage: StatefulClanker.Router <ping|snapshot|ensure-harness|acquire|release|heartbeat|success|failure> [options]");
             return 2;
         }
 
@@ -51,10 +51,18 @@ internal static class Program
         Console.CancelKeyPress+=(s,e)=>{e.Cancel=true;cts.Cancel();};
         AppDomain.CurrentDomain.ProcessExit+=(s,e)=>cts.Cancel();
 
-        await Task.WhenAll(
-            server.RunAsync(cts.Token),
-            monitor.RunAsync(cts.Token),
-            freeCapacity.RunAsync(cts.Token));
+        try
+        {
+            await Task.WhenAll(
+                server.RunAsync(cts.Token),
+                monitor.RunAsync(cts.Token),
+                freeCapacity.RunAsync(cts.Token),
+                engine.RunHarnessMaintenanceAsync(cts.Token));
+        }
+        finally
+        {
+            await engine.StopHarnessesAsync();
+        }
         return 0;
     }
 
@@ -62,7 +70,7 @@ internal static class Program
     {
         if(args.Length==0) return new RouterRequest{op="snapshot"};
         var op=args[0].ToLowerInvariant();
-        if(op is not ("ping" or "snapshot" or "acquire" or "release" or "heartbeat" or "success" or "failure")) return null;
+        if(op is not ("ping" or "snapshot" or "ensure-harness" or "acquire" or "release" or "heartbeat" or "success" or "failure")) return null;
         var map=new Dictionary<string,string?>(StringComparer.OrdinalIgnoreCase);
         for(var i=1;i<args.Length;i++)
         {
@@ -83,7 +91,9 @@ internal static class Program
             lease=Get(map,"lease"),
             endpoint=Get(map,"endpoint"),
             failureClass=Get(map,"class"),
-            message=Get(map,"message")
+            message=Get(map,"message"),
+            adapter=Get(map,"adapter"),
+            workingDirectory=Get(map,"working-directory")
         };
     }
 
