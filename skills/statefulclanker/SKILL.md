@@ -98,7 +98,7 @@ When the human changes an existing decision, reuse the same stable directive id 
 
 Retire a directive only when the rule itself no longer applies.
 
-After changing or retiring a directive, reconcile the **complete current directive set** into Intent before dispatch. StatefulClanker intentionally blocks worker compilation while reconciliation is pending.
+After changing or retiring a semantic directive, reconcile the **complete current directive set** into Intent before dispatch. On this research branch, that reconciliation belongs inside a quiesced Interrogator planning session. StatefulClanker intentionally blocks worker compilation while reconciliation is pending.
 
 ---
 
@@ -213,56 +213,33 @@ If a manual run is rejected because resident autofill owns dispatch, do not figh
 
 ---
 
-# 5. Human intent capture and clarification
+# 5. Human direction during execution
 
-The conversational plane owns semantic interpretation.
+The Operator distinguishes **execution control** from **semantic project change**.
 
-Before encoding a materially consequential decision, ask:
+Execution control can remain in Operator. Examples:
 
-> Could two competent implementers reasonably produce materially different behavior from the current direction?
+- pause/resume/stop Autofill;
+- retry or inspect a failed task;
+- select or disable an endpoint;
+- change worker capability access;
+- request status, diagnostics, or evidence;
+- repair bookkeeping so it again matches already accepted Intent.
 
-If yes, clarify unless the difference is provably irrelevant to the stated goal.
+A statement is a semantic project change when it alters what the product should do, what success means, an architectural commitment, a hard constraint, a non-goal, or another accepted planning assumption.
 
-Ask the human about:
+When the human gives a semantic project change during execution:
 
-- desired behavior;
-- product semantics;
-- scope and priority;
-- risk/trust boundaries;
-- credential/secrets decisions;
-- cost/latency preferences;
-- irreversible actions;
-- policy choices;
-- whether a new statement supersedes, narrows, or exceptions an old rule.
+1. preserve the direct human wording as durable source evidence;
+2. establish the Planner's quiescing barrier before revising normalized Intent or the task graph;
+3. let already-started worker cycles settle;
+4. transfer the conversation to the `statefulclanker-interrogator` role;
+5. reconcile the statement with current directives/Intent inside planning;
+6. return to Operator only after the accepted handoff is applied.
 
-Do not ask the human to rediscover technical facts that are directly inspectable from project, repository, logs, tests, or runtime state.
+Do not rewrite Intent while implementation workers are still being dispatched.
 
-Prefer contrastive questions: "This can mean A or B; which is intended?"
-
-When a structured questionnaire/interview facility exists, use focused rounds instead of one giant questionnaire.
-
-## 5.1 Material direction workflow
-
-For every material human decision:
-
-1. identify the stable directive scope/id;
-2. preserve direct wording/source evidence;
-3. create or update the current directive;
-4. compare it against the complete current directive set;
-5. reconcile the normalized Intent Contract;
-6. ask the human if precedence/replacement/exception remains uncertain;
-7. commit the new Intent revision;
-8. only then compile or dispatch affected work.
-
-## 5.2 Source vs directive
-
-Use `source_add` for durable evidence/reference material.
-
-Use `directive_set` for active human authority.
-
-A source does not automatically become a directive.
-
-A directive should preserve or point back to direct human wording where possible.
+If it is unclear whether a human instruction is merely operational or changes project semantics, prefer the planning boundary when acting without it could create knock-on implementation work.
 
 ---
 
