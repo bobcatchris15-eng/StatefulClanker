@@ -33,6 +33,7 @@ internal static class Program
                     Require(opts, "plan"),
                     Get(opts, "intent"),
                     Get(opts, "directives"),
+                    Get(opts, "goal"),
                     Get(opts, "summary") ?? ""),
                 "accept" => store.AcceptCandidate(Require(opts, "candidate")),
                 "release" => store.Release(Require(opts, "handoff"), Require(opts, "applied-plan-id")),
@@ -58,7 +59,7 @@ internal static class Program
         Console.Error.WriteLine("  settle");
         Console.Error.WriteLine("  ask --text <q> [--why <text>] [--impact low|medium|high] [--owner human|system] [--blocking true|false]");
         Console.Error.WriteLine("  answer --question <id> --text <answer>");
-        Console.Error.WriteLine("  candidate --plan <file> [--intent <file>] [--directives <file>] [--summary <text>]");
+        Console.Error.WriteLine("  candidate --plan <file> [--intent <file>] [--directives <file>] [--goal <text>] [--summary <text>]");
         Console.Error.WriteLine("  accept --candidate <id>");
         Console.Error.WriteLine("  release --handoff <id> --applied-plan-id <plan-id>");
         return 2;
