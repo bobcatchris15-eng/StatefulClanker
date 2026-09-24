@@ -58,8 +58,8 @@ Presence of planning/active.json is itself the dispatch barrier. The execution h
         v
     HANDOFF
         |
-        | future transactional execution-side apply
-        | release after state.activePlanId proves application
+        | planning_control apply
+        | journaled replacement transaction + verified release
         v
     EXECUTING
 
@@ -111,9 +111,11 @@ Candidate creation copies and hashes:
 
 Acceptance turns that candidate into an inert handoff manifest and leaves the execution barrier in place.
 
-The Planner intentionally does not call the existing additive plan import path. A real replan can invalidate or replace existing graph structure, so the correct next boundary is a transactional execution-side apply operation rather than teaching the research module to edit live tasks piecemeal.
+Normal completion is now `planning_control apply`. The execution runtime validates the settled baseline, builds the complete replacement graph off to the side, journals backups, commits project goal/directives/Intent/plan/tasks/state under the canonical state mutex, and only then asks Planner to release the barrier.
 
-Release currently requires an applied plan id that matches state.activePlanId. This prevents the Planner from reopening implementation merely because somebody generated a plan file.
+The old `plan_apply` / `plan_import` paths remain additive compatibility machinery outside planning. They are blocked while isolated planning owns the project.
+
+Low-level Planner `release` still verifies that state.activePlanId equals the applied plan id. This is retained as a recovery seam if the graph transaction committed but the normal combined apply/release call was interrupted.
 
 ## Conversation entrypoints
 
@@ -139,24 +141,46 @@ The Pi extension no longer contains a prompt-regex "planning intent" switch. The
 
 Interrogator uses one MCP surface, `planning_control`, for Planner state:
 
-    status -> begin -> settle -> ask/answer -> candidate -> accept -> release
+    status -> begin -> settle -> ask/answer -> candidate -> accept -> apply
 
 The ordinary `control_snapshot` also exposes `planning.active`, `planning.phase`, session id, baseline path, and accepted handoff id when available. This makes phase ownership observable to any control-plane client without requiring Planner-specific filesystem knowledge.
 
-## Deliberately incomplete boundary
+## Transactional replacement boundary
 
-The first research slice stops before **transactional plan application**.
+The first replacement transaction is implemented.
 
-An accepted handoff is intentionally inert. The Planner does not yet replace/rewrite live tasks, because the existing `plan_apply` / `plan_import` path is additive and does not define safe semantics for:
+The transaction owns these live targets as one semantic unit:
 
-- completed tasks that remain valid;
-- pending tasks invalidated by the replan;
-- task ids that are replaced or superseded;
-- downstream invalidation;
-- Intent replacement plus graph replacement as one atomic operation;
-- rollback if applying the new graph fails halfway through.
+- `state.json`;
+- active `tasks/`;
+- `plans/`;
+- `intent/`;
+- `directives/`;
+- directive-origin `input/` sources.
 
-Until that transaction exists, the old import path remains compatibility machinery, not the replanning mechanism. The research flow therefore proves the phase barrier, stable baseline, question channel, candidate staging, and handoff boundary without pretending graph replacement is solved.
+Before touching them it verifies the handoff hashes and the settled baseline: active plan, goal, task-graph bytes, Intent bytes, current-directive bytes, Git HEAD, and dirty/untracked file content. Any drift rejects the handoff before mutation.
+
+A complete replacement graph is staged and validated. Missing dependency targets and dependency cycles fail before commit.
+
+Prior tasks receive one transaction disposition:
+
+- `preserved-complete`: same stable id, identical definition, and compatible governing Intent;
+- `carried-reset`: identical/compatible incomplete work, with runtime attempt/review state reset;
+- `replaced`: same id but changed definition or governing Intent;
+- `new`: new id;
+- `retired-complete` / `invalidated-removed`: old id omitted from the replacement graph.
+
+The active task directory contains only the new graph. Historical/tombstoned nodes do not remain active merely to preserve provenance; the transaction backup and plan record preserve the old graph and disposition table.
+
+Intent compatibility is deliberately conservative. Explicit task Intent refs are compared clause-by-clause. Tasks with no Intent refs only preserve completion when the whole semantic Intent is unchanged.
+
+Commit uses a write-ahead journal under `.statefulclanker/transactions/<id>/` plus full backups. Journal state advances:
+
+    staging -> prepared -> committing -> committed
+
+If startup finds a journal stuck in `committing`, it restores every backed-up target and marks the transaction `rolled_back`. A crash after all file copies but before the final committed marker therefore rolls back rather than guessing that the transaction was complete.
+
+A committed handoff is idempotent: retrying apply before Planner release returns the existing committed transaction.
 
 ## Multi-agent planning shape
 
@@ -184,8 +208,8 @@ Initial token policy is parity: planning target approximately equals expected im
 3. Planning does not need a daemon yet.
 4. Planning should own questions as durable data, not as worker-message plumbing.
 5. Quiescence should be a real phase rather than a prompt convention.
-6. Accepted planning should end in a handoff, not direct task mutation.
-7. Replanning needs a transactional graph-apply boundary before this can safely replace active plans.
+6. Accepted planning ends in a handoff, not direct task mutation by Planner.
+7. The execution runtime applies that handoff as one journaled replacement transaction.
 8. Equal planning tokens should be a budget target, not equal token quotas for every pass.
 9. One reconciler is simpler and safer than consensus voting.
 10. Planning inertia is useful when it keeps the project from changing underneath implementation.
