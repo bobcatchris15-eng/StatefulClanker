@@ -162,15 +162,15 @@ end
 
         Write-Host '  REPLAN TX 3: refuse stale baseline before touching live graph'
         $keepPath=Join-Path $stateRoot 'tasks\t-keep.json'
-        $keepRaw=Get-Content -Raw -LiteralPath $keepPath
-        $keep=($keepRaw|ConvertFrom-Json)
+        $keepBytes=[IO.File]::ReadAllBytes($keepPath)
+        $keep=([Text.Encoding]::UTF8.GetString($keepBytes)|ConvertFrom-Json)
         $keep.blockReason='external drift injected by test'
         Write-Json $keepPath $keep
 
         $failed=$false
         try{& $harness plan apply-handoff -Path $handoffPath|Out-Null}catch{$failed=$_.Exception.Message -match 'baseline drift'}
         Assert-True $failed 'Handoff apply did not refuse a task-graph change after settle.'
-        Set-Content -LiteralPath $keepPath -Value $keepRaw -Encoding UTF8
+        [IO.File]::WriteAllBytes($keepPath,$keepBytes)
 
         Write-Host '  REPLAN TX 4: atomically replace graph and classify old work'
         $result=Invoke-HarnessJson @('plan','apply-handoff','-Path',$handoffPath)
