@@ -90,11 +90,23 @@ public sealed class PlannerStore
         if (control.phase != PlannerPhases.Quiescing)
             throw new InvalidOperationException($"Planning session is '{control.phase}', not quiescing.");
 
-        var busy = BusyTaskIds();
+        List<string> busy = new();
+        PlannerBaseline? baseline = null;
+        WithStateLock(() =>
+        {
+            busy = BusyTaskIds();
+            if (busy.Count == 0)
+                baseline = CaptureBaseline();
+            return 0;
+        });
+
         if (busy.Count > 0)
             return new { settled = false, phase = control.phase, busyTaskIds = busy };
 
-        var baseline = CaptureBaseline();
+        if (baseline is null)
+            throw new InvalidOperationException("Planning baseline was not captured.");
+
+
         var baselinePath = Path.Combine(SessionDir(control.sessionId), "baseline.json");
         WriteJson(baselinePath, baseline);
 
@@ -408,6 +420,40 @@ public sealed class PlannerStore
                 $"'{_root}' is not an initialized StatefulClanker project.");
     }
 
+    T WithStateLock<T>(Func<T> body)
+    {
+        // Share the exact durable-state mutex used by the PowerShell runtime so
+        // quiescence + baseline capture sees one coherent accepted state.
+        var name = "Local\\StatefulClanker-" +
+                   HashPrefix(_root.ToLowerInvariant(), 32);
+        using var mutex = new Mutex(false, name);
+        var held = false;
+        try
+        {
+            try
+            {
+                held = mutex.WaitOne(TimeSpan.FromSeconds(120));
+            }
+            catch (AbandonedMutexException)
+            {
+                held = true;
+            }
+
+            if (!held)
+                throw new TimeoutException("Timed out waiting for StatefulClanker durable-state lock.");
+
+            return body();
+        }
+        finally
+        {
+            if (held)
+            {
+                try { mutex.ReleaseMutex(); }
+                catch { }
+            }
+        }
+    }
+
     T WithLock<T>(Func<T> body)
     {
         var name = "Local\\StatefulClankerPlanner-" +
@@ -515,10 +561,16 @@ public sealed class PlannerStore
         => Convert.ToHexString(
             SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 
-    static string ShortHash(string value)
-        => Convert.ToHexString(
+    static string HashPrefix(string value, int length)
+    {
+        var hash = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(value)))
-            .ToLowerInvariant()[..24];
+            .ToLowerInvariant();
+        return hash[..Math.Min(length, hash.Length)];
+    }
+
+    static string ShortHash(string value)
+        => HashPrefix(value, 24);
 
     static string NewId(string prefix)
     {
