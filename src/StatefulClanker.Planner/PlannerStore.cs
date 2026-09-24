@@ -311,6 +311,20 @@ public sealed class PlannerStore
     public object Cancel(string reason) => WithLock(() =>
     {
         var control = RequireActive();
+        if (control.phase == PlannerPhases.Handoff && !string.IsNullOrWhiteSpace(control.baselinePath))
+        {
+            var baselineFull = Path.Combine(_root, control.baselinePath.Replace('/', Path.DirectorySeparatorChar));
+            var baseline = ReadJson<PlannerBaseline>(baselineFull);
+            if (baseline is not null)
+            {
+                var state = ReadElement(Path.Combine(_stateRoot, "state.json"));
+                var activePlanId = TryString(state, "activePlanId");
+                if (!string.Equals(activePlanId, baseline.activePlanId, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        "Cannot cancel this handoff because project activePlanId changed after planning. Release the applied handoff instead.");
+            }
+        }
+
         ArchiveAndClear(control, "cancelled", reason);
         return new { cancelled = true, sessionId = control.sessionId, reason };
     });
