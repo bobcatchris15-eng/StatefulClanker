@@ -348,15 +348,16 @@ Tool availability can vary by protocol/version. Prefer discovery/current MCP ins
 - `intent_apply` — commit fully reconciled normalized Intent.
 - `source_add/get/list` — manage durable supporting evidence/provenance.
 
-## Planning and tasks
+## Planning ownership and task controls
 
-- `plan_apply` — preferred SCPLAN application.
-- `plan_import` — compatibility/import path.
-- `task_list/show/add` — inspect/add bounded work.
+- `planning_control status` — inspect whether a separate planning session currently owns the project.
+- `planning_control begin` — establish the quiescing barrier when semantic replanning is required, then transfer the conversation to Interrogator.
+- `plan_apply` / `plan_import` — legacy additive import surfaces. Operator must not use them to redesign or replace the accepted project future during execution. Full replanning goes through the isolated Planner handoff.
+- `task_list/show/add` — inspect accepted work; add only bounded work that is already entailed by accepted Intent/plan, not newly invented product semantics.
 - `task_retry` — explicitly retry/reopen with normal invalidation/freshness semantics.
 - `task_block` — stop wrong/unsafe work and preserve control-plane truth.
 - `task_recovery_context` — read the stalled task plus latest compilation/run/proposal/critic/validator/progress evidence in one recovery dossier.
-- `task_repair` — audited control-plane repair of a stalled non-human-gated task definition/graph; resets exhausted retry/reviewer counters and reopens readiness.
+- `task_repair` — audited control-plane repair of a stalled non-human-gated task definition/graph; resets exhausted retry/reviewer counters and reopens readiness without changing accepted semantics.
 - `task_recover_complete` — last-resort audited recovery when concrete current evidence proves the work is already correct despite a broken/stale review loop.
 
 Do not use the human-authority `task_complete` merely to unblock the graph. `task_recover_complete` is a separate control-plane authority path: it requires concrete evidence, refuses active/human-gated tasks, and must never be used to invent or override unresolved human intent.
