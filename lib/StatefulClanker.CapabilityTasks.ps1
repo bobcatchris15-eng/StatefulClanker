@@ -372,6 +372,7 @@ function Assert-SCPlanningBaselineFresh($Baseline) {
     if($busy.Count-gt0){throw "Planning handoff cannot apply while tasks are active: $($busy -join ', ')"}
 
     $state=Get-SCState
+    if([string]$state.goal-ne[string]$Baseline.projectGoal){throw 'Planning baseline drift: project goal changed after settle.'}
     if([string]$state.activePlanId-ne[string]$Baseline.activePlanId){throw "Planning baseline drift: activePlanId changed from '$($Baseline.activePlanId)' to '$($state.activePlanId)'."}
 
     $taskHash=Get-SCFileSetAggregateHash (Get-SCPath 'tasks')
@@ -792,6 +793,9 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
             if($input.format-eq'scplan'){Copy-Item -LiteralPath $planPath -Destination (Join-Path $stagePlans ("{0}.scplan"-f$planId)) -Force}
 
             $nextState=(ConvertTo-SCJson $liveState 30)|ConvertFrom-Json
+            $oldGoal=[string]$nextState.goal
+            $newGoal=if($handoff.PSObject.Properties['projectGoal']-and-not[string]::IsNullOrWhiteSpace([string]$handoff.projectGoal)){[string]$handoff.projectGoal}else{$oldGoal}
+            $nextState.goal=$newGoal
             $nextState.activePlanId=$planId
             $nextState.planApproved=-not[bool]$cfg.requireHumanApprovalForPlan
             if($intentChanged){
@@ -844,6 +848,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
 
             $summary=[ordered]@{
                 transactionId=$transactionId;handoffId=[string]$handoff.id;appliedPlanId=$planId;replacedPlanId=[string]$baseline.activePlanId
+                previousGoal=$oldGoal;projectGoal=$newGoal;goalChanged=($oldGoal-ne$newGoal)
                 intentRevision=if($newIntent.PSObject.Properties['revision']){[int]$newIntent.revision}else{$null}
                 directiveRevision=[int]$directiveResult.revision
                 directiveChanges=@($directiveResult.changes)
@@ -863,6 +868,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
 
         Add-SCEvent 'planning.handoff_applied' "Applied planning handoff $($handoff.id) as plan $($result.appliedPlanId)." $result
         Add-SCEvent 'plan.replaced' "Active plan replaced transactionally: $($result.replacedPlanId) -> $($result.appliedPlanId)." @{transactionId=$result.transactionId;handoffId=$handoff.id;previousPlanId=$result.replacedPlanId;activePlanId=$result.appliedPlanId;preservedComplete=@($result.preservedComplete);resetTasks=@($result.resetTasks);replacedTasks=@($result.replacedTasks);newTasks=@($result.newTasks);retiredTasks=@($result.retiredTasks)}
+        if([bool]$result.goalChanged){Add-SCEvent 'goal.changed' ([string]$result.projectGoal) @{transactionId=$result.transactionId;handoffId=$handoff.id;previousGoal=$result.previousGoal}}
         if($intentPath){Add-SCEvent 'intent.revised' "Intent contract revised transactionally to $($result.intentRevision)." @{revision=$result.intentRevision;transactionId=$result.transactionId;handoffId=$handoff.id}}
         foreach($change in @($result.directiveChanges)){
             if([string]$change.action-eq'set'){
