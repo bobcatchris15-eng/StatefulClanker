@@ -397,7 +397,7 @@ public sealed class PlannerStore
 
     string RelativeToState(string path)
     {
-        var relative = Path.GetRelativePath(_stateRoot, path).Replace('\', '/');
+        var relative = Path.GetRelativePath(_stateRoot, path).Replace(Path.DirectorySeparatorChar, '/');
         return ".statefulclanker/" + relative;
     }
 
