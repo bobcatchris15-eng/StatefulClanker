@@ -31,16 +31,25 @@ public sealed class PlannerControl
     public PlanningBudgetPolicy budget { get; set; } = new();
 }
 
+public sealed class PlannerDirtyFile
+{
+    public string path { get; set; } = "";
+    public string sha256 { get; set; } = "";
+}
+
 public sealed class PlannerBaseline
 {
-    public int schemaVersion { get; set; } = 1;
+    public int schemaVersion { get; set; } = 2;
     public string capturedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public string projectRoot { get; set; } = "";
     public string? gitHead { get; set; }
     public List<string> dirtyPaths { get; set; } = new();
+    public List<PlannerDirtyFile> dirtyFiles { get; set; } = new();
+    public string? snapshotPath { get; set; }
     public long stateRevision { get; set; }
     public long intentRevision { get; set; }
     public string? intentHash { get; set; }
+    public string? directiveHash { get; set; }
     public string? activePlanId { get; set; }
     public string taskGraphHash { get; set; } = "";
     public Dictionary<string,int> taskCounts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -71,6 +80,8 @@ public sealed class PlannerCandidate
     public string planSha256 { get; set; } = "";
     public string? intentPath { get; set; }
     public string? intentSha256 { get; set; }
+    public string? directiveChangesPath { get; set; }
+    public string? directiveChangesSha256 { get; set; }
 }
 
 public sealed class PlannerHandoff
@@ -85,6 +96,8 @@ public sealed class PlannerHandoff
     public string planSha256 { get; set; } = "";
     public string? intentPath { get; set; }
     public string? intentSha256 { get; set; }
+    public string? directiveChangesPath { get; set; }
+    public string? directiveChangesSha256 { get; set; }
     public string? baselinePath { get; set; }
     public string? appliedPlanId { get; set; }
     public string? releasedAt { get; set; }
