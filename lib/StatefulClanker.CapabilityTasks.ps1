@@ -423,10 +423,10 @@ function New-SCTaskFromPlanItem($Item) {
     Set-SCProperty $task 'semanticAcceptance' $(if($Item.PSObject.Properties['semanticAcceptance']){@($Item.semanticAcceptance)}else{@()})
     Set-SCProperty $task 'implications' $(if($Item.PSObject.Properties['implications']){@($Item.implications)}else{@()})
     Set-SCProperty $task 'proofObligations' $(if($Item.PSObject.Properties['proofObligations']){@($Item.proofObligations)}else{@()})
-    Set-SCProperty $task 'refinementStatus' $(if($Item.PSObject.Properties['refinementStatus']-and$Item.refinementStatus){[string]$Item.refinementStatus}else{'pending'})
-    Set-SCProperty $task 'refinementDepth' $(if($Item.PSObject.Properties['refinementDepth']){[int]$Item.refinementDepth}else{0})
-    Set-SCProperty $task 'parentTaskId' $(if($Item.PSObject.Properties['parentTaskId']-and$Item.parentTaskId){[string]$Item.parentTaskId}else{$null})
-    Set-SCProperty $task 'childTaskIds' $(if($Item.PSObject.Properties['childTaskIds']){@($Item.childTaskIds)}else{@()})
+    Set-SCProperty $task 'refinementStatus' 'pending'
+    Set-SCProperty $task 'refinementDepth' 0
+    Set-SCProperty $task 'parentTaskId' $null
+    Set-SCProperty $task 'childTaskIds' @()
     return $task
 }
 
