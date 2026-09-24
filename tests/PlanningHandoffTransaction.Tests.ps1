@@ -253,11 +253,25 @@ end
         Assert-True ([string]$again.transactionId-eq[string]$result.transactionId) 'Retry created a second transaction for same handoff.'
         Assert-True ([string]$again.appliedPlanId-eq[string]$result.appliedPlanId) 'Retry changed applied plan id.'
 
-        $released=Invoke-Planner @('release','--project',$temp,'--handoff',[string]$handoff.id,'--applied-plan-id',[string]$result.appliedPlanId)
-        Assert-True ([string]$released.status-eq'applied') 'Planner did not verify/release committed handoff.'
-        Assert-True (-not(Test-Path -LiteralPath (Join-Path $stateRoot 'planning\active.json'))) 'Planning barrier survived release.'
+        Write-Host '  REPLAN TX 6: normal MCP apply is idempotent and releases Planner'
+        . (Join-Path $repo 'mcp\StatefulClanker.McpCore.ps1')
+        . (Join-Path $repo 'mcp\StatefulClanker.McpExtensions.ps1')
+        Set-McpDefaultProject $temp
+        $rpc=Invoke-McpRpc ([pscustomobject]@{
+            jsonrpc='2.0';id=900;method='tools/call'
+            params=[pscustomobject]@{
+                name='planning_control'
+                arguments=[pscustomobject]@{action='apply';project=$temp}
+            }
+        })
+        if($rpc.result.PSObject.Properties['isError']-and[bool]$rpc.result.isError){throw $rpc.result.content[0].text}
+        $appliedThroughMcp=$rpc.result.content[0].text|ConvertFrom-Json
+        Assert-True ([bool]$appliedThroughMcp.applied) 'planning_control apply did not report success.'
+        Assert-True ([string]$appliedThroughMcp.transaction.transactionId-eq[string]$result.transactionId) 'planning_control apply did not reuse committed handoff transaction.'
+        Assert-True ([string]$appliedThroughMcp.release.status-eq'applied') 'planning_control apply did not verify/release Planner.'
+        Assert-True (-not(Test-Path -LiteralPath (Join-Path $stateRoot 'planning\active.json'))) 'Planning barrier survived combined apply/release.'
 
-        Write-Host '  REPLAN TX 6: recover a crash that removed state.json mid-commit'
+        Write-Host '  REPLAN TX 7: recover a crash that removed state.json mid-commit'
         $crashId='replan-crash-test'
         $crashDir=Join-Path $stateRoot ("transactions\{0}"-f$crashId)
         $crashBackup=Join-Path $crashDir 'backup'
