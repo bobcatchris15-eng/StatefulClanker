@@ -277,6 +277,10 @@ function Get-SCWorkerToolRecords($Task,[string]$Stage='worker') {
     return @($records)
 }
 function Get-SCArgValue($ToolArgs,[string]$Name,$Default=$null){if($ToolArgs-and$ToolArgs.PSObject.Properties[$Name]){return $ToolArgs.$Name};return $Default}
+function Write-SCWorkerToolFailure($Task,[string]$Stage,[string]$ToolName,[string]$Result,[int]$Step) {
+    if(-not$Result.StartsWith('TOOL_ERROR:')){return}
+    Add-SCEvent 'worker.tool_error' $Result @{taskId=$Task.id;stage=$Stage;tool=$ToolName;step=$Step;error=$Result}
+}
 function Invoke-SCWorkerTool([string]$Name,$ToolArgs,$Task,[string]$Stage,$Registry) {
     $record=@($Registry|Where-Object{[string]$_.wireName-eq$Name}|Select-Object -First 1)
     if($record.Count-eq0){throw "Tool '$Name' is not authorized for this worker."}
@@ -503,7 +507,8 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
         $statusText=if($status-gt0){" HTTP $status"}else{''}
         $metadata=if($headerParts.Count){[Environment]::NewLine+($headerParts-join[Environment]::NewLine)}else{''}
         $bodyDetail=if($detail){" Body: $detail"}else{''}
-        throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$metadata$bodyDetail"
+        $requestShape=" Protocol: $protocol; tool mode: $ToolMode; request fields: $(@($body.Keys)-join',')."
+        throw "Direct inference request failed${statusText}: $($ex.Exception.Message)$metadata$bodyDetail$requestShape Inspect the endpoint's request format and the harness serializer before retrying this task unchanged."
     }
 }
 function Get-SCResponseDiagnostic($Response,[int]$MaximumLength=240) {
@@ -842,6 +847,7 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
     }
     $tools=@($registry|ForEach-Object{$_.definition})
     $protocol=Get-SCConnectionProtocol $Connection
+    $malformedTextTurns=0
     for($step=1;$step-le$maxSteps;$step++){
         $response=Invoke-SCApiChat $Connection $messages $tools $toolMode
         if($WorkerSessionId -and $ProviderRecord){Set-SCWorkerSessionRoutePin $WorkerSessionId ([string]$ProviderRecord.name) ([string]$ProviderRecord.config.connection) ([string]$ProviderRecord.config.model)}
@@ -850,14 +856,28 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
         if($toolMode-eq'text'){
             $raw=[string]$m.content
             if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId ([ordered]@{role='assistant';content=$raw})}
-            try{$cmd=$raw|ConvertFrom-Json}catch{throw ("Text-tool model returned invalid JSON at step {0}: {1}"-f$step,$raw)}
+            try{$cmd=$raw|ConvertFrom-Json -ErrorAction Stop}catch{
+                $malformedTextTurns++
+                if($malformedTextTurns-ge3){throw ("Text-tool model returned invalid JSON on {0} consecutive turns. Last response: {1}"-f$malformedTextTurns,$raw)}
+                $repair='TOOL_PROTOCOL_ERROR: Your last response was not valid JSON. Return exactly one JSON object with either tool and arguments or final. Do not include markdown. Parsing error: '+$_.Exception.Message
+                $messages+=@{role='user';content=$repair}
+                if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId ([ordered]@{role='user';content=$repair})}
+                continue
+            }
+            $malformedTextTurns=0
             if($cmd.PSObject.Properties['final']){
                 if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $null ([string]$cmd.final);New-SCWorkerCheckpoint $WorkerSessionId 'candidate-submit' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null}
                 return [string]$cmd.final
             }
-            if(-not$cmd.PSObject.Properties['tool']){throw "Text-tool model returned neither tool nor final at step $step."}
+            if(-not$cmd.PSObject.Properties['tool']){
+                $repair='TOOL_PROTOCOL_ERROR: JSON was valid but had neither tool nor final. Return exactly one authorized tool call or a final summary.'
+                $messages+=@{role='user';content=$repair}
+                if($WorkerSessionId){Add-SCWorkerSessionMessage $WorkerSessionId ([ordered]@{role='user';content=$repair})}
+                continue
+            }
             $toolName=[string]$cmd.tool
             $result=try{Invoke-SCWorkerTool $toolName $cmd.arguments $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
+            Write-SCWorkerToolFailure $Task $Stage $toolName ([string]$result) $step
             if($WorkerSessionId -and -not([string]$result).StartsWith('TOOL_ERROR:')){Add-SCWorkerMutationToolCall $WorkerSessionId $toolName}
             if($toolName-eq'finish'){
                 if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $cmd.arguments ([string]$result);New-SCWorkerCheckpoint $WorkerSessionId 'candidate-submit' ([string]$ProviderRecord.name) ([string]$Connection.model)|Out-Null}
@@ -892,6 +912,7 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
                 $args=if([string]::IsNullOrWhiteSpace([string]$call.function.arguments)){[pscustomobject]@{}}else{[string]$call.function.arguments|ConvertFrom-Json}
                 $result=try{Invoke-SCWorkerTool $name $args $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
             }catch{$args=[pscustomobject]@{};$result="TOOL_ERROR: malformed arguments: $($_.Exception.Message)"}
+            Write-SCWorkerToolFailure $Task $Stage $name ([string]$result) $step
             if($WorkerSessionId -and -not([string]$result).StartsWith('TOOL_ERROR:')){Add-SCWorkerMutationToolCall $WorkerSessionId $name}
             if($name-eq'finish'){
                 if($WorkerSessionId){Set-SCWorkerCandidateClaim $WorkerSessionId $args ([string]$result)}

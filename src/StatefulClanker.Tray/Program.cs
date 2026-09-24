@@ -335,6 +335,8 @@ sealed class TaskBoardEntry
     public string Status = "";
     public string CreatedAt = "";
     public string? BlockReason;
+    public string? LastRoutingError;
+    public string? RoutingNotBefore;
     public int AttemptCount;
     public string? LatestRunId;
     public string? LatestCritiqueId;
@@ -461,6 +463,8 @@ static class Inspector
                 var title = root.TryGetProperty("title", out var titleProp) && titleProp.ValueKind == JsonValueKind.String ? (titleProp.GetString() ?? "") : "";
                 var createdAt = root.TryGetProperty("createdAt", out var caProp) && caProp.ValueKind == JsonValueKind.String ? (caProp.GetString() ?? "") : "";
                 var blockReason = root.TryGetProperty("blockReason", out var brProp) && brProp.ValueKind == JsonValueKind.String ? brProp.GetString() : null;
+                var lastRoutingError = root.TryGetProperty("lastRoutingError", out var lreProp) && lreProp.ValueKind == JsonValueKind.String ? lreProp.GetString() : null;
+                var routingNotBefore = root.TryGetProperty("routingNotBefore", out var rnbProp) && rnbProp.ValueKind == JsonValueKind.String ? rnbProp.GetString() : null;
                 var attemptCount = root.TryGetProperty("attemptCount", out var acProp) && acProp.TryGetInt32(out var ac) ? ac : 0;
                 var latestRunId = root.TryGetProperty("latestRunId", out var lriProp) && lriProp.ValueKind == JsonValueKind.String ? lriProp.GetString() : null;
                 var latestCritiqueId = root.TryGetProperty("latestCritiqueId", out var lciProp) && lciProp.ValueKind == JsonValueKind.String ? lciProp.GetString() : null;
@@ -485,6 +489,8 @@ static class Inspector
                     Status = status,
                     CreatedAt = createdAt,
                     BlockReason = blockReason,
+                    LastRoutingError = lastRoutingError,
+                    RoutingNotBefore = routingNotBefore,
                     AttemptCount = attemptCount,
                     LatestRunId = latestRunId,
                     LatestCritiqueId = latestCritiqueId,
@@ -729,7 +735,7 @@ static class Inspector
     {
         var state = System.IO.Path.Combine(project, ".statefulclanker");
         var sb = new StringBuilder();
-        string summary = task.BlockReason ?? (!string.IsNullOrEmpty(task.Status) ? $"Status: {task.Status}" : "No failure reason recorded.");
+        string summary = task.BlockReason ?? task.LastRoutingError ?? (!string.IsNullOrEmpty(task.Status) ? $"Status: {task.Status}" : "No failure reason recorded.");
 
         sb.AppendLine($"TASK ID:         {task.Id}");
         sb.AppendLine($"TITLE:           {task.Title}");
@@ -747,6 +753,15 @@ static class Inspector
             sb.AppendLine("PRIMARY FAILURE / BLOCK REASON:");
             sb.AppendLine($"  {task.BlockReason}");
             sb.AppendLine("================================================================================");
+        }
+
+        if (!string.IsNullOrWhiteSpace(task.LastRoutingError))
+        {
+            sb.AppendLine();
+            sb.AppendLine("[LATEST ENDPOINT / HARNESS ERROR]");
+            sb.AppendLine(task.LastRoutingError);
+            if (!string.IsNullOrWhiteSpace(task.RoutingNotBefore)) sb.AppendLine($"Next routing attempt: {task.RoutingNotBefore}");
+            sb.AppendLine("Check the worker run receipt and route history below. An HTTP 400 or malformed response may indicate an endpoint-specific harness request mismatch, not bad task work.");
         }
 
         // 1. Critic Review Receipt / Diagnostics
@@ -847,6 +862,11 @@ static class Inspector
                     if (root.TryGetProperty("startedAt", out var sa)) sb.AppendLine($"Started:    {sa.GetString()}");
                     if (root.TryGetProperty("finishedAt", out var fa)) sb.AppendLine($"Finished:   {fa.GetString()}");
                     if (root.TryGetProperty("durationSeconds", out var ds)) sb.AppendLine($"Duration:   {ds.GetDouble():F1}s");
+                    if (root.TryGetProperty("routeHistory", out var routeHistory) && routeHistory.ValueKind == JsonValueKind.Array)
+                    {
+                        sb.AppendLine("Route History:");
+                        foreach (var route in routeHistory.EnumerateArray()) sb.AppendLine($"  {route}");
+                    }
                 }
                 catch { }
             }

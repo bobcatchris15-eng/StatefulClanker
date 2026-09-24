@@ -424,13 +424,17 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
             $retryAt=if($run.PSObject.Properties['retryAfter'] -and $run.retryAfter){[string]$run.retryAfter}else{[datetimeoffset]::UtcNow.AddSeconds(5).ToString('o')}
             # Transport/provider failures are scheduler events, not task attempts. Put
             # the task back in the ready queue without consuming maxTaskAttempts.
-            $task.status='ready';$task.blockReason=$null
+            $routeClasses=if($run.PSObject.Properties['routeHistory']){@($run.routeHistory|ForEach-Object{[string]$_.failureClass})}else{@()}
+            $requestShapeFault=(@($routeClasses|Where-Object{$_ -in @('bad_request','request_error','protocol_error')}).Count-gt0) -or ($routingMessage -match '(?i)HTTP (400|422)\b|unsupported parameter|invalid request')
+            $task.status=if($requestShapeFault){'needs_rework'}else{'ready'}
+            $task.blockReason=if($requestShapeFault){"Endpoint/harness request needs diagnosis: $routingMessage"}else{$null}
+            if($requestShapeFault){Set-SCProperty $task 'retryDisposition' 'diagnose-request'}
             Set-SCProperty $task 'activeWorkerSessionId' $null
             Set-SCProperty $task 'routingNotBefore' $retryAt
             Set-SCProperty $task 'lastRoutingError' $routingMessage
             Save-SCTask $task
             Close-SCWorkerSession $workerSessionId $(if($routeUnavailable){'routing-deferred'}else{'provider-error'})
-            Add-SCEvent 'routing.deferred' $routingMessage @{taskId=$task.id;runId=$run.id;workerSessionId=$workerSessionId;compilationId=$compilation.id;retryAfter=$retryAt;routeHistory=if($run.PSObject.Properties['routeHistory']){@($run.routeHistory)}else{@()};attemptCount=$task.attemptCount}
+            Add-SCEvent $(if($requestShapeFault){'routing.request_diagnosis_required'}else{'routing.deferred'}) $routingMessage @{taskId=$task.id;runId=$run.id;workerSessionId=$workerSessionId;compilationId=$compilation.id;retryAfter=$retryAt;routeHistory=if($run.PSObject.Properties['routeHistory']){@($run.routeHistory)}else{@()};attemptCount=$task.attemptCount}
             Add-SCProgressRecord $task $compilation $false 'routing-deferred' $routingMessage|Out-Null
             Write-Warning $routingMessage;return
         }
@@ -543,14 +547,18 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
 
                 $routeUnavailable=($validation.PSObject.Properties['routeDeferred'] -and [bool]$validation.routeDeferred) -or ($validation.PSObject.Properties['routeExhausted'] -and [bool]$validation.routeExhausted)
                 $retryAt=if($validation.PSObject.Properties['retryAfter'] -and $validation.retryAfter){[string]$validation.retryAfter}else{[datetimeoffset]::UtcNow.AddSeconds(5).ToString('o')}
-                $task.status='ready';$task.blockReason=$null
+                $validationRouteClasses=if($validation.PSObject.Properties['routeHistory']){@($validation.routeHistory|ForEach-Object{[string]$_.failureClass})}else{@()}
+                $validationRequestFault=(@($validationRouteClasses|Where-Object{$_ -in @('bad_request','request_error','protocol_error')}).Count-gt0) -or ($errDetail -match '(?i)HTTP (400|422)\b|unsupported parameter|invalid request')
+                $task.status=if($validationRequestFault){'needs_rework'}else{'ready'}
+                $task.blockReason=if($validationRequestFault){"Validator endpoint/harness request needs diagnosis; worker result is preserved: $errDetail"}else{$null}
+                if($validationRequestFault){Set-SCProperty $task 'retryDisposition' 'diagnose-request'}
                 Set-SCProperty $task 'activeWorkerSessionId' $null
                 Set-SCProperty $task 'routingNotBefore' $retryAt
                 Set-SCProperty $task 'lastRoutingError' ("Validator infrastructure: "+$errDetail)
                 Save-SCTask $task
                 Close-SCWorkerSession $workerSessionId 'validator-error'
                 Add-SCProgressRecord $task $compilation $false 'validator-routing-deferred' $errDetail|Out-Null
-                Add-SCEvent 'validator.error' $errDetail @{taskId=$task.id;receiptId=$validation.id;workerSessionId=$workerSessionId;error=$errDetail;retryAfter=$retryAt;attemptCount=$task.attemptCount}
+                Add-SCEvent $(if($validationRequestFault){'validator.request_diagnosis_required'}else{'validator.error'}) $errDetail @{taskId=$task.id;receiptId=$validation.id;workerSessionId=$workerSessionId;error=$errDetail;retryAfter=$retryAt;attemptCount=$task.attemptCount}
                 Write-Warning $errDetail;return
             }
 

@@ -31,7 +31,7 @@ public static partial class FailurePolicy
     private static partial Regex SessionRx();
     [GeneratedRegex(@"(?i)protocol|unsupported response shape|unexpected response shape")]
     private static partial Regex ProtocolRx();
-    [GeneratedRegex(@"(?i)\b400\b|bad request|invalid request|unsupported parameter")]
+    [GeneratedRegex(@"(?i)\b(?:400|422)\b|bad request|unprocessable entity|invalid request|unsupported parameter|invalid tool schema")]
     private static partial Regex BadRequestRx();
 
     public static string Classify(string? text,int? status=null)
@@ -46,11 +46,11 @@ public static partial class FailurePolicy
         if(TimeoutRx().IsMatch(t)) return "timeout";
         if(CapacityRx().IsMatch(t)) return "capacity";
         if(ContextRx().IsMatch(t)) return "context_too_large";
+        if((status is 400 or 422) || BadRequestRx().IsMatch(t)) return "bad_request";
         if(MalformedRx().IsMatch(t)) return "malformed_response";
         if(EmptyRx().IsMatch(t)) return "empty_response";
         if(SessionRx().IsMatch(t)) return "session_incompatible";
         if(ProtocolRx().IsMatch(t)) return "protocol_error";
-        if(status==400 || BadRequestRx().IsMatch(t)) return "bad_request";
         return "request_error";
     }
 
