@@ -67,3 +67,62 @@ function Format-SCCollaborationPacketBundle($Packets) {
     }
     return ($lines-join[Environment]::NewLine).Trim()
 }
+
+# Implementation cooperation grouping is deliberately conservative. It uses declared
+# task topology/context, not speculative model inference. A task that belongs to a
+# group is dispatched only when at least one peer can start in the same wave.
+function Get-SCTaskCooperationTokens($Task) {
+    $tokens=@()
+    foreach($field in @('retrieval','evidence','intentRefs')){
+        if($Task.PSObject.Properties[$field]){
+            foreach($v in @($Task.$field)){if(-not[string]::IsNullOrWhiteSpace([string]$v)){$tokens+=(([string]$v).Trim().ToLowerInvariant())}}
+        }
+    }
+    if($Task.PSObject.Properties['relations']){
+        foreach($r in @($Task.relations)){
+            if($r-and$r.PSObject.Properties['target']-and$r.target){$tokens+=("relation:"+([string]$r.target).Trim().ToLowerInvariant())}
+        }
+    }
+    return @($tokens|Select-Object -Unique)
+}
+function Test-SCTasksShouldCooperate($A,$B) {
+    if($null-eq$A-or$null-eq$B-or[string]$A.id-eq[string]$B.id){return $false}
+    $aid=[string]$A.id;$bid=[string]$B.id
+    if(@($A.dependsOn)-contains$bid-or@($B.dependsOn)-contains$aid){return $true}
+    $at=@(Get-SCTaskCooperationTokens $A);$bt=@(Get-SCTaskCooperationTokens $B)
+    if(@($at|Where-Object{$bt-contains$_}).Count-gt0){return $true}
+    return $false
+}
+function Get-SCImplementationCooperationGroups($Candidates) {
+    $items=@($Candidates);$byId=@{};foreach($t in $items){$byId[[string]$t.id]=$t}
+    $adj=@{};foreach($t in $items){$adj[[string]$t.id]=New-Object Collections.Generic.List[string]}
+    for($i=0;$i-lt$items.Count;$i++){for($j=$i+1;$j-lt$items.Count;$j++){
+        if(Test-SCTasksShouldCooperate $items[$i] $items[$j]){
+            $adj[[string]$items[$i].id].Add([string]$items[$j].id);$adj[[string]$items[$j].id].Add([string]$items[$i].id)
+        }
+    }}
+    $seen=@{};$groups=@()
+    foreach($t in $items){
+        $id=[string]$t.id;if($seen.ContainsKey($id)-or$adj[$id].Count-eq0){continue}
+        $q=New-Object Collections.Queue;$q.Enqueue($id);$ids=@()
+        while($q.Count-gt0){$x=[string]$q.Dequeue();if($seen.ContainsKey($x)){continue};$seen[$x]=$true;$ids+=,$x;foreach($n in $adj[$x]){if(-not$seen.ContainsKey($n)){$q.Enqueue($n)}}}
+        if($ids.Count-gt1){$groups+=,[pscustomobject]@{id=('impl-'+(Get-SCHashString (($ids|Sort-Object)-join'|')).Substring(0,16));taskIds=@($ids);tasks=@($ids|ForEach-Object{$byId[$_]})}}
+    }
+    return @($groups)
+}
+function Select-SCCooperativeDispatchWave($Candidates,[int]$Slots) {
+    $items=@($Candidates);if($Slots-le0-or$items.Count-eq0){return @()}
+    $groups=@(Get-SCImplementationCooperationGroups $items);$member=@{};foreach($g in $groups){foreach($id in @($g.taskIds)){$member[[string]$id]=$g}}
+    $selected=@();$selectedIds=@{}
+    foreach($t in $items){
+        if($selected.Count-ge$Slots){break};$id=[string]$t.id;if($selectedIds.ContainsKey($id)){continue}
+        if(-not$member.ContainsKey($id)){$selected+=,$t;$selectedIds[$id]=$true;continue}
+        $g=$member[$id];$available=@($g.tasks|Where-Object{-not$selectedIds.ContainsKey([string]$_.id)})
+        if(($Slots-$selected.Count)-lt2){continue} # never strand a co-op member alone
+        $take=@($available|Select-Object -First ([Math]::Min($available.Count,$Slots-$selected.Count)))
+        if($take.Count-lt2){continue}
+        Set-SCCollaborationTeam (Get-SCStateRoot) ([string]$g.id) @($g.taskIds) 'automatic implementation cooperation group'|Out-Null
+        foreach($x in $take){$selected+=,$x;$selectedIds[[string]$x.id]=$true}
+    }
+    return @($selected)
+}
