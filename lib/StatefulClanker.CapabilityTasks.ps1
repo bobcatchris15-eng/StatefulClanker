@@ -511,8 +511,19 @@ function Assert-SCStagedDirectiveIntentRefs($DirectiveResult,$Intent) {
     }
 }
 
-function Test-SCTaskIntentCompatible($Task,$OldIntent,$NewIntent,[string]$OldGoal,[string]$NewGoal) {
+function Test-SCTaskIntentCompatible($Task,$OldIntent,$NewIntent,[string]$OldGoal,[string]$NewGoal,$DirectiveChanges) {
     $refs=if($Task.PSObject.Properties['intentRefs']){@($Task.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})}else{@()}
+    $changes=@($DirectiveChanges)
+
+    if($changes.Count-gt0){
+        if($refs.Count-eq0){return $false}
+        foreach($change in $changes){
+            $directiveRefs=if($change.record-and$change.record.PSObject.Properties['intentRefs']){@($change.record.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})}else{@()}
+            if($directiveRefs.Count-eq0){return $false}
+            foreach($ref in $refs){if($directiveRefs-contains$ref){return $false}}
+        }
+    }
+
     if($refs.Count-eq0){
         if($OldGoal-ne$NewGoal){return $false}
         return ([string](Get-SCIntentSemanticHash $OldIntent)-eq[string](Get-SCIntentSemanticHash $NewIntent))
@@ -803,7 +814,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                 $newHash=Get-SCTaskDefinitionHash $fresh
                 if($old){
                     $oldHash=Get-SCTaskDefinitionHash $old
-                    $intentCompatible=Test-SCTaskIntentCompatible $fresh $baselineIntent $newIntent $oldGoal $newGoal
+                    $intentCompatible=Test-SCTaskIntentCompatible $fresh $baselineIntent $newIntent $oldGoal $newGoal $directiveResult.changes
                     if($oldHash-eq$newHash-and$intentCompatible-and[string]$old.status-eq'complete'){
                         Copy-SCCompletedTaskRuntime $old $fresh
                         $dispositions+=,[ordered]@{taskId=$id;action='preserved-complete';previousStatus=[string]$old.status;definitionChanged=$false;intentCompatible=$true}
