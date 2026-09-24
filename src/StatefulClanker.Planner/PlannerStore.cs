@@ -296,10 +296,16 @@ public sealed class PlannerStore
 
         var state = ReadElement(Path.Combine(_stateRoot, "state.json"));
         var activePlanId = TryString(state, "activePlanId");
+        var appliedHandoffId = TryString(state, "lastPlanningHandoffId");
+        var transactionId = TryString(state, "lastPlanningTransactionId");
         if (string.IsNullOrWhiteSpace(appliedPlanId) ||
             !string.Equals(activePlanId, appliedPlanId, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
                 $"Applied plan verification failed. state.activePlanId='{activePlanId ?? "<null>"}'.");
+        if (!string.Equals(appliedHandoffId, handoff.id, StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(transactionId))
+            throw new InvalidOperationException(
+                $"Planning transaction verification failed. state.lastPlanningHandoffId='{appliedHandoffId ?? "<null>"}', transaction='{transactionId ?? "<null>"}'.");
 
         handoff.status = "applied";
         handoff.appliedPlanId = appliedPlanId;
