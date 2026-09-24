@@ -35,12 +35,13 @@ Core actions:
 - `begin` — establish the execution barrier and enter quiescing.
 - `settle` — capture the stable baseline only after active implementation work is gone.
 - `ask` / `answer` / `questions` — persist structured uncertainty and decisions.
-- `candidate` — stage and hash a complete SCPLAN plus optional Intent candidate.
-- `accept` — create an inert accepted handoff after blocking questions are resolved.
-- `release` — drop the barrier only after execution reports the applied active plan id.
-- `cancel` — abandon a planning session and restore execution ownership.
+- `candidate` — stage and hash a complete SCPLAN, optional reconciled Intent candidate, and optional directive-change delta.
+- `accept` — freeze the selected candidate into an accepted handoff after blocking questions are resolved.
+- `apply` — normal terminal action: validate the frozen baseline, transactionally replace semantic/task state, preserve only still-valid completed work, and release the Planner barrier.
+- `release` — low-level recovery primitive for the rare case where the transaction committed but automatic release did not complete.
+- `cancel` — abandon a planning session only before a handoff transaction changes the active plan.
 
-Do not call the ordinary additive `plan_apply` path as a substitute for the future transactional handoff apply step when replanning an existing graph.
+Do not call ordinary additive `plan_apply` / `plan_import` while planning owns the project. Replanning ends with `planning_control apply`.
 
 ## Entering planning
 
@@ -88,6 +89,23 @@ When asking, include:
 - whether work is blocked.
 
 Persist the question through Planner rather than relying on chat history.
+
+## Frozen semantic state
+
+After `settle`, treat the live project semantics as read-only until the accepted handoff is applied.
+
+Do not call live mutation tools such as `directive_set`, `directive_retire`, `intent_apply`, `goal_set`, task mutation/recovery tools, or legacy plan import during planning.
+
+When the human changes a current directive during the planning conversation, stage it in the candidate as a directive delta:
+
+- `action: set` with stable `id`, exact human `text`, optional `scope`, `intentRefs`, `reason`, and optional existing `sourceRef`;
+- `action: retire` with stable `id` and optional `reason`.
+
+If no sourceRef is supplied for a staged set, the execution transaction creates the durable human source atomically with the directive change.
+
+Any staged directive change requires a reconciled Intent candidate in the same handoff.
+
+Planning may gather evidence and create planning artifacts, but it does not mutate the thing it is reasoning about.
 
 ## Intent representation
 
@@ -145,10 +163,11 @@ The Planner module persists planningToExecutionRatio = 1.0 and optionally accept
 
 ## Candidate acceptance
 
-Planning should produce two primary candidate artifacts:
+Planning normally produces one coherent candidate bundle:
 
-1. normalized/reconciled Intent;
-2. executable plan/task graph.
+1. directive-change delta when direct human authority changed;
+2. normalized/reconciled Intent when semantics changed;
+3. executable replacement plan/task graph.
 
 Before accepting a candidate, verify:
 - all blocking human-owned questions are answered;
@@ -163,21 +182,43 @@ The Planner copies candidate artifacts into its session and hashes them.
 
 Acceptance creates a handoff, not live task mutation.
 
-## Handoff boundary
+## Handoff application
 
-The Planner remains in handoff and the implementation dispatch barrier remains active until the execution side transactionally applies the accepted plan revision.
+The Planner remains in `handoff` and the implementation dispatch barrier remains active until `planning_control apply` succeeds.
 
-Do not remove the barrier merely because a plan file exists.
+Application is execution-side because the execution runtime already owns current task, Intent, directive, readiness, and state schemas. Planner does not duplicate them.
 
-The future execution bridge should:
-1. validate the handoff hashes and baseline;
-2. reconcile or replace Intent as required;
-3. apply the new task graph transactionally;
-4. set the accepted active plan id;
-5. tell Planner which plan id was applied;
-6. release the planning barrier.
+The apply transaction:
 
-This keeps partial plan imports from reopening implementation.
+1. verifies handoff artifact hashes;
+2. verifies Git/worktree content, current task graph, Intent, directives, and active plan still match the settled baseline;
+3. stages directive deltas and reconciled Intent without mutating live state;
+4. builds and validates the complete replacement task graph, including dependency existence and cycle checks;
+5. classifies prior work against the replacement graph;
+6. backs up every live target and writes a commit journal;
+7. swaps tasks, plan, Intent, directives, human-source input, and project state under the canonical cross-process state lock;
+8. marks the journal committed;
+9. verifies the resulting active plan id and releases the Planner barrier.
+
+If the process dies after commit begins but before the journal reaches `committed`, the next StatefulClanker startup restores the complete backup. Recovery always rolls back an incomplete transaction rather than attempting an ambiguous roll-forward.
+
+A repeated apply for the same accepted handoff is idempotent while Planner is still waiting for release: it returns the already-committed transaction instead of creating a second plan.
+
+### Prior-task preservation
+
+The replacement plan is authoritative. Every prerequisite that should remain active, including completed prerequisites, must still be present in it.
+
+For a task with the same stable id:
+
+- completed + identical definition + compatible governing Intent -> preserve completion and its execution evidence;
+- incomplete + identical definition + compatible governing Intent -> keep the semantic task but reset runtime/retry/review state;
+- definition changed or governing Intent changed -> create a fresh task from the replacement definition;
+- new id -> create a fresh task;
+- old id omitted from the replacement graph -> remove it from the active graph.
+
+Omitted/replaced history is not destroyed. The transaction backup and new plan record retain the prior graph plus disposition records. Do not keep tombstone tasks in the active graph merely for history.
+
+For tasks with explicit Intent refs, compatibility is checked against those referenced clauses. A task with no Intent refs is preserved complete only when the whole semantic Intent is unchanged. This conservative rule prefers re-verification over carrying a questionable completion forward.
 
 ## Pressure from execution
 
