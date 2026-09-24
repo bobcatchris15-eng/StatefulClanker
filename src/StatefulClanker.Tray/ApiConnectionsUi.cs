@@ -60,6 +60,7 @@ sealed class TargetPoolEntry
     public bool? supportsTools { get; set; }
     public long? contextLength { get; set; }
     public string toolMode { get; set; } = "native";
+    public int weight { get; set; } = 1;
     public string source { get; set; } = "user";
     public string? rationale { get; set; }
     public string? researchedAt { get; set; }
@@ -476,7 +477,7 @@ sealed class ApiConnectionsPage : TabPage
 
         var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
         bottom.Controls.Add(Make("Auto-enable free endpoints",AutoTargetFreeWorkhorses,205));
-        var note=new Label{Text="Connections and enabled endpoints are machine-local. The currently active project simply consumes that shared round-robin worker pool.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
+        var note=new Label{Text="Connections and enabled endpoints are machine-local, shared with smooth weighted round robin by default. A project may optionally restrict itself to a subset of endpoints via routing.endpoints in its .statefulclanker/config.json.",AutoSize=true,Margin=new Padding(12,11,0,0),ForeColor=Theme.Muted};
         bottom.Controls.Add(note);rows.Controls.Add(bottom,0,4);
 
         Controls.Add(rows); Theme.Apply(this); Reload();
@@ -502,9 +503,20 @@ sealed class ApiConnectionsPage : TabPage
         _models.Dock=DockStyle.Fill;_models.AllowUserToAddRows=false;_models.RowHeadersVisible=false;_models.SelectionMode=DataGridViewSelectionMode.FullRowSelect;_models.AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill;
         _models.Columns.Add(new DataGridViewCheckBoxColumn{Name="use",HeaderText="Use",Width=58,AutoSizeMode=DataGridViewAutoSizeColumnMode.None});
         _models.Columns.Add("name","Model");_models.Columns.Add("id","Model ID");_models.Columns.Add("state","Endpoint state");_models.Columns.Add("tools","Tools");_models.Columns.Add("context","Context");_models.Columns.Add("free","Free");
-        foreach(DataGridViewColumn c in _models.Columns) if(c.Name!="use") c.ReadOnly=true;
-        _models.CurrentCellDirtyStateChanged+=(_,_)=>{if(_models.IsCurrentCellDirty&&_models.CurrentCell?.ColumnIndex==0)_models.CommitEdit(DataGridViewDataErrorContexts.Commit);};
-        _models.CellValueChanged+=(_,e)=>{if(!_loadingModels&&e.RowIndex>=0&&e.ColumnIndex==0)PersistTargetSelection(_models.Rows[e.RowIndex]);};
+        _models.Columns.Add("weight","Weight");
+        foreach(DataGridViewColumn c in _models.Columns) if(c.Name!="use" && c.Name!="weight") c.ReadOnly=true;
+        _models.CurrentCellDirtyStateChanged+=(_,_)=>
+        {
+            var col=_models.CurrentCell?.OwningColumn?.Name;
+            if(_models.IsCurrentCellDirty&&(col=="use"||col=="weight"))_models.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
+        _models.CellValueChanged+=(_,e)=>
+        {
+            if(_loadingModels||e.RowIndex<0)return;
+            var col=_models.Columns[e.ColumnIndex].Name;
+            if(col=="use")PersistTargetSelection(_models.Rows[e.RowIndex]);
+            else if(col=="weight")PersistWeight(_models.Rows[e.RowIndex]);
+        };
     }
 
     string? SelectedId=>_connections.SelectedRows.Count>0?_connections.SelectedRows[0].Cells["id"].Value?.ToString():null;
@@ -550,7 +562,8 @@ sealed class ApiConnectionsPage : TabPage
                 var targeted=pool.entries.TryGetValue(TargetPoolStore.Id(id,m.id),out var entry);
                 var active=targeted&&entry!.enabled;
                 var state=!targeted?"—":active?"enabled":"disabled";
-                var rowIndex=_models.Rows.Add(active,m.displayName,m.id,state,m.supportsTools==false?"text":"native",context,free);
+                var weight=targeted?entry!.weight:1;
+                var rowIndex=_models.Rows.Add(active,m.displayName,m.id,state,m.supportsTools==false?"text":"native",context,free,weight);
                 var row=_models.Rows[rowIndex];
                 row.Tag=new ApiModelRowBinding(id,m.id);
                 if(targeted)row.Cells["state"].Style.ForeColor=entry!.enabled?Theme.Good:Theme.Muted;
@@ -574,6 +587,7 @@ sealed class ApiConnectionsPage : TabPage
                 row.Cells["use"].Value=targeted&&entry!.enabled;
                 row.Cells["state"].Value=!targeted?"—":entry!.enabled?"enabled":"disabled";
                 row.Cells["state"].Style.ForeColor=targeted&&entry!.enabled?Theme.Good:Theme.Muted;
+                row.Cells["weight"].Value=targeted?entry!.weight:1;
             }
             _summary.Text=$"{_profiles.Count} connection(s) • {enabled} enabled endpoint(s)";
             _summary.ForeColor=Theme.Muted;
@@ -665,6 +679,31 @@ sealed class ApiConnectionsPage : TabPage
             _summary.Text="Endpoint selection was not saved";
             _summary.ForeColor=Theme.Error;
             MessageBox.Show(FindForm(),ex.Message,"Could not update endpoint catalog",MessageBoxButtons.OK,MessageBoxIcon.Error);
+        }
+    }
+
+    void PersistWeight(DataGridViewRow row)
+    {
+        if(row.Tag is not ApiModelRowBinding binding)return;
+        if(!int.TryParse(Convert.ToString(row.Cells["weight"].Value),out var w)||w<0)w=1;
+        try
+        {
+            TargetPoolStore.UpdateActive(pool =>
+            {
+                var key=TargetPoolStore.Id(binding.ConnectionId,binding.ModelId);
+                if(pool.entries.TryGetValue(key,out var entry))
+                {
+                    entry.weight=w;
+                    entry.updatedAt=DateTimeOffset.UtcNow.ToString("O");
+                }
+                return 0;
+            });
+            row.Cells["weight"].Value=w;
+        }
+        catch(Exception ex)
+        {
+            RefreshEndpointSelectionMarkers();
+            MessageBox.Show(FindForm(),ex.Message,"Could not update endpoint weight",MessageBoxButtons.OK,MessageBoxIcon.Error);
         }
     }
 

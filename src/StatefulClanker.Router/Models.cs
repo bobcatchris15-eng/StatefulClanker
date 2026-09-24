@@ -23,6 +23,7 @@ public sealed class EndpointEntry
     public long? contextLength { get; set; }
     public string toolMode { get; set; } = "native";
     public int? leaseCapacity { get; set; }
+    public int weight { get; set; } = 1;
 
     // Lifecycle metadata. Existing/user-managed entries remain untouched unless
     // explicitly adopted by the free-capacity manager.
@@ -122,6 +123,7 @@ public sealed class RoundRobinDocument
 {
     public int schemaVersion { get; set; } = 1;
     public int cursor { get; set; }
+    public Dictionary<string,int> currentWeights { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public string? updatedAt { get; set; }
 }
 
@@ -161,6 +163,7 @@ public sealed class RouterRequest
     public string? endpoint { get; set; }
     public string? failureClass { get; set; }
     public string? message { get; set; }
+    public string[]? allowedEndpoints { get; set; }
 }
 
 public sealed class RouterResponse

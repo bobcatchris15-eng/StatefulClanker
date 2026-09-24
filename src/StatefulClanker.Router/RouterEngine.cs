@@ -35,13 +35,36 @@ public sealed class RouterEngine
             .ToArray();
     }
 
-    public RouterResponse Acquire(string? preferred,string? preferredConnection,bool strictPreferred,string? sessionId,bool requireTools,int ownerPid=0)
+    public RouterResponse Acquire(string? preferred,string? preferredConnection,bool strictPreferred,string? sessionId,bool requireTools,int ownerPid=0,string[]? allowedEndpoints=null)
     {
         ReapExpiredLeases();
         NormalizeExpiredCooldowns();
         var health=_store.LoadHealth();
 
-        var configured=Routes().ToList();
+        var allowSet=(allowedEndpoints??Array.Empty<string>()).Where(x=>!string.IsNullOrWhiteSpace(x)).Select(x=>x.Trim()).ToArray();
+
+        var configuredAll=Routes().ToList();
+        var configured=configuredAll;
+        if(allowSet.Length>0)
+        {
+            configured=configuredAll.Where(r=>allowSet.Any(a=>
+                string.Equals(a,r.CatalogId,StringComparison.OrdinalIgnoreCase)||
+                string.Equals(a,r.RouteName,StringComparison.OrdinalIgnoreCase)||
+                string.Equals(a,StripPoolPrefix(r.RouteName),StringComparison.OrdinalIgnoreCase))).ToList();
+            if(configured.Count==0)
+                return RouterResponse.Fail(
+                    "No allowed endpoints for this project.",
+                    new { reason="no_allowed_endpoints",configuredEndpoints=configuredAll.Count,allowlistApplied=true });
+        }
+
+        if(!string.IsNullOrWhiteSpace(preferred) && allowSet.Length>0 &&
+           !allowSet.Any(a=>string.Equals(a,preferred,StringComparison.OrdinalIgnoreCase)))
+        {
+            return RouterResponse.Fail(
+                $"Preferred endpoint '{preferred}' is outside the project's allowed endpoints.",
+                new { reason="preferred_not_allowed",allowlistApplied=true });
+        }
+
         var eligible=configured
             .Where(r=>!requireTools || (r.Endpoint.supportsTools==true && string.Equals(r.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase)))
             .Where(r=>string.IsNullOrWhiteSpace(preferredConnection) || string.Equals(r.Endpoint.connection,preferredConnection,StringComparison.OrdinalIgnoreCase))
@@ -97,18 +120,12 @@ public sealed class RouterEngine
 
         if(selected is null)
         {
-            var cursor=_store.LoadCursor().cursor;
-            cursor=((cursor%routes.Count)+routes.Count)%routes.Count;
-            for(var offset=0;offset<routes.Count;offset++)
+            var candidates=routes.Where(r=>!IsAtCapacity(r)).ToList();
+            var rotationPool=candidates.Where(r=>r.Endpoint.weight>0).ToList();
+            if(rotationPool.Count==0) rotationPool=candidates;
+            if(rotationPool.Count>0)
             {
-                var candidate=routes[(cursor+offset)%routes.Count];
-                if(!IsAtCapacity(candidate))
-                {
-                    selected=candidate;
-                    var selectedIndex=(cursor+offset)%routes.Count;
-                    _store.UpdateCursor(d=>{d.cursor=(selectedIndex+1)%routes.Count;return 0;});
-                    break;
-                }
+                selected=PickWeighted(rotationPool);
             }
         }
 
@@ -152,6 +169,8 @@ public sealed class RouterEngine
             toolMode=selected.Endpoint.toolMode,
             supportsTools=selected.Endpoint.supportsTools,
             contextLength=selected.Endpoint.contextLength,
+            weight=selected.Endpoint.weight,
+            allowlistApplied=allowSet.Length>0,
             preferredHonored=!string.IsNullOrWhiteSpace(preferred) &&
                 (string.Equals(selected.RouteName,preferred,StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(selected.CatalogId,preferred,StringComparison.OrdinalIgnoreCase)),
@@ -268,7 +287,7 @@ public sealed class RouterEngine
             routes=routes.Select(r=>new
             {
                 endpoint=r.RouteName,r.CatalogId,r.Endpoint.connection,r.Endpoint.model,
-                r.Endpoint.toolMode,r.Endpoint.supportsTools,r.Endpoint.free,
+                r.Endpoint.toolMode,r.Endpoint.supportsTools,r.Endpoint.free,r.Endpoint.weight,
                 r.Endpoint.managedBy,r.Endpoint.freeClass,r.Endpoint.retiredReason,r.Endpoint.userOverride,
                 available=Available(r,health),
                 activeLeases=leaseCounts.GetValueOrDefault(r.RouteName),
@@ -489,10 +508,41 @@ public sealed class RouterEngine
             workhorse=route.Endpoint.workhorse,
             toolMode=route.Endpoint.toolMode,
             supportsTools=route.Endpoint.supportsTools,
+            weight=route.Endpoint.weight,
             available=Available(route,health),
             atCapacity,
             health=healthState
         };
+    }
+
+    static string StripPoolPrefix(string routeName) =>
+        routeName.StartsWith("pool:",StringComparison.OrdinalIgnoreCase) ? routeName[5..] : routeName;
+
+    EndpointRoute PickWeighted(IReadOnlyList<EndpointRoute> pool)
+    {
+        var state=_store.LoadCursor();
+        var weights=new Dictionary<string,int>(state.currentWeights??new(StringComparer.OrdinalIgnoreCase),StringComparer.OrdinalIgnoreCase);
+        var total=pool.Sum(r=>r.Endpoint.weight>0?r.Endpoint.weight:1);
+
+        EndpointRoute? best=null;
+        var bestCurrent=int.MinValue;
+        foreach(var r in pool)
+        {
+            var w=r.Endpoint.weight>0?r.Endpoint.weight:1;
+            var cur=weights.TryGetValue(r.RouteName,out var c)?c:0;
+            cur+=w;
+            weights[r.RouteName]=cur;
+            if(cur>bestCurrent)
+            {
+                bestCurrent=cur;
+                best=r;
+            }
+        }
+        var selected=best!;
+        weights[selected.RouteName]-=total;
+
+        _store.UpdateCursor(d=>{d.currentWeights=weights;return 0;});
+        return selected;
     }
 
     bool Available(EndpointRoute route,RoutingHealthDocument health)

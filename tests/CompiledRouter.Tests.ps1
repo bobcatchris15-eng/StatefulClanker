@@ -163,7 +163,68 @@ try {
     } while([int]$snap.activeLeases -gt 0 -and (Get-Date) -lt $deadline)
     Assert-True ([int]$snap.activeLeases -eq 0) 'Dead worker process left a durable endpoint lease behind.'
 
-    Write-Host 'PASS: compiled router owns durable worker leases, supports connection/exact-endpoint pins, scopes failures correctly, recovers cooldowns, and notices connection changes.'
+    Write-Host '  ROUTER 8: legacy endpoint without weight loads as weight 1'
+    $legacySnap=(Call-Router @('snapshot')).data
+    $legacyRoute=@($legacySnap.routes|Where-Object{[string]$_.endpoint -eq 'pool:free-a::m1'})[0]
+    Assert-True ([int]$legacyRoute.weight -eq 1) 'Endpoint stored without a weight field did not default to weight 1.'
+
+    Write-Host '  ROUTER 9: smooth weighted round robin distributes 3:1'
+    [void](Call-Router @('success','--endpoint','pool:free-a::m1'))
+    [void](Call-Router @('success','--endpoint','pool:free-a::m2'))
+    $wEndpointDoc=Get-Content -Raw -LiteralPath (Join-Path $temp 'endpoints.json')|ConvertFrom-Json
+    $wEndpointDoc.entries.'free-a::m1'|Add-Member -NotePropertyName weight -NotePropertyValue 3 -Force
+    $wEndpointDoc.entries.'free-a::m2'|Add-Member -NotePropertyName weight -NotePropertyValue 1 -Force
+    foreach($k in @('free-b::m3','free-b::m4','auto::openrouter/free')){$wEndpointDoc.entries.$k.enabled=$false}
+    $wEndpointDoc|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $temp 'endpoints.json') -Encoding UTF8
+    Start-Sleep -Milliseconds 300
+    $counts=@{}
+    for($i=0;$i -lt 40;$i++){
+        $r=Call-Router @('acquire','--session',("w-$i"),'--owner-pid',[string]$PID)
+        $ep=[string]$r.data.endpoint
+        $counts[$ep]=([int]($counts[$ep])) + 1
+        [void](Call-Router @('release','--lease',[string]$r.data.lease))
+    }
+    $m1Count=[int]$counts['pool:free-a::m1']
+    $m2Count=[int]$counts['pool:free-a::m2']
+    Assert-True ($m1Count -gt 0 -and $m2Count -gt 0) 'Weighted round robin starved one of the two weighted endpoints.'
+    $ratio=$m1Count / [double]$m2Count
+    Assert-True ($ratio -gt 2.0 -and $ratio -lt 4.0) "Weighted round robin did not approximate a 3:1 split (got $m1Count`:$m2Count)."
+
+    Write-Host '  ROUTER 10: weight 0 endpoint is excluded from rotation'
+    $wEndpointDoc.entries.'free-a::m2'|Add-Member -NotePropertyName weight -NotePropertyValue 0 -Force
+    $wEndpointDoc|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $temp 'endpoints.json') -Encoding UTF8
+    Start-Sleep -Milliseconds 300
+    $sawZeroWeight=$false
+    for($i=0;$i -lt 15;$i++){
+        $r=Call-Router @('acquire','--session',("wz-$i"),'--owner-pid',[string]$PID)
+        if([string]$r.data.endpoint -eq 'pool:free-a::m2'){$sawZeroWeight=$true}
+        [void](Call-Router @('release','--lease',[string]$r.data.lease))
+    }
+    Assert-True (-not $sawZeroWeight) 'Weight-0 endpoint was still chosen by round robin.'
+    $explicitZero=Call-Router @('acquire','--preferred','free-a::m2','--strict-preferred','true','--session','wz-explicit','--owner-pid',[string]$PID)
+    Assert-True ([string]$explicitZero.data.catalogId -eq 'free-a::m2') 'Weight-0 endpoint could not be selected when explicitly preferred.'
+    [void](Call-Router @('release','--lease',[string]$explicitZero.data.lease))
+    foreach($k in @('free-b::m3','free-b::m4','auto::openrouter/free')){$wEndpointDoc.entries.$k.enabled=$true}
+    $wEndpointDoc.entries.'free-a::m1'|Add-Member -NotePropertyName weight -NotePropertyValue 1 -Force
+    $wEndpointDoc.entries.'free-a::m2'|Add-Member -NotePropertyName weight -NotePropertyValue 1 -Force
+    $wEndpointDoc|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $temp 'endpoints.json') -Encoding UTF8
+    Start-Sleep -Milliseconds 300
+
+    Write-Host '  ROUTER 11: project endpoint allowlist filters candidates and rejects an outside preferred pin'
+    $allowed=Call-Router @('acquire','--endpoints','free-a::m1,free-a::m2','--session','allow-1','--owner-pid',[string]$PID)
+    Assert-True (@('pool:free-a::m1','pool:free-a::m2') -contains [string]$allowed.data.endpoint) 'Allowlisted acquire returned an endpoint outside the allowlist.'
+    Assert-True ([bool]$allowed.data.allowlistApplied) 'Allowlisted acquire did not report allowlistApplied.'
+    [void](Call-Router @('release','--lease',[string]$allowed.data.lease))
+    $outsidePreferredRaw=& $router acquire --endpoints 'free-a::m1,free-a::m2' --preferred 'free-b::m3' --session allow-2 --owner-pid $PID | ConvertFrom-Json
+    Assert-True (-not [bool]$outsidePreferredRaw.ok) 'Preferred endpoint outside the allowlist was unexpectedly honored.'
+    Assert-True ([string]$outsidePreferredRaw.data.reason -eq 'preferred_not_allowed') 'Preferred-outside-allowlist failure did not report the expected reason.'
+
+    Write-Host '  ROUTER 12: an allowlist that matches nothing fails explicitly, never falls back to the global pool'
+    $noneAllowedRaw=& $router acquire --endpoints 'does-not-exist' --session allow-3 --owner-pid $PID | ConvertFrom-Json
+    Assert-True (-not [bool]$noneAllowedRaw.ok) 'Allowlist matching no endpoint unexpectedly acquired from the global pool.'
+    Assert-True ([string]$noneAllowedRaw.data.reason -eq 'no_allowed_endpoints') 'Empty-allowlist failure did not report the expected reason.'
+
+    Write-Host 'PASS: compiled router owns durable worker leases, supports connection/exact-endpoint pins, scopes failures correctly, recovers cooldowns, notices connection changes, weights rotation, and honors project allowlists.'
 }
 finally {
     if($daemon -and -not $daemon.HasExited){Stop-Process -Id $daemon.Id -Force -ErrorAction SilentlyContinue}
