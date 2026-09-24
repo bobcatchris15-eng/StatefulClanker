@@ -792,7 +792,7 @@ function Invoke-McpRpc($Request) {
         if($params -is [System.Collections.IDictionary]){if($params.Contains('arguments')){$args=$params['arguments']}}
         elseif($params -and $params.PSObject.Properties['arguments']){$args=$params.arguments}
         $hasSemanticTaskAdd = $args -and (($args -is [System.Collections.IDictionary] -and ($args.Contains('size') -or $args.Contains('source') -or $args.Contains('intentRef') -or $args.Contains('check') -or $args.Contains('judge'))) -or ($args.PSObject.Properties['size'] -or $args.PSObject.Properties['source'] -or $args.PSObject.Properties['intentRef'] -or $args.PSObject.Properties['check'] -or $args.PSObject.Properties['judge']))
-        $planningMutationNames=@('goal_set','directive_set','directive_retire','intent_apply','plan_apply','plan_import','plan_approve','task_add','task_retry','task_block','task_complete','task_repair','task_recover_complete')
+        $planningMutationNames=@('goal_set','direction_add','directive_set','directive_retire','intent_apply','plan_apply','plan_import','plan_approve','task_add','task_retry','task_block','task_complete','task_repair','task_recover_complete')
         if($planningMutationNames-contains$name){
             try{
                 $project=Get-McpProject $args;$planning=Get-McpPlanningSnapshot $project
