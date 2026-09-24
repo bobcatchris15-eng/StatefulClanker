@@ -1,0 +1,29 @@
+name: Validate OpenCode Harness Candidate
+on:
+  push:
+    branches:
+      - chatgpt/opencode-harness-validation-20260924
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build router
+        shell: pwsh
+        run: dotnet build src/StatefulClanker.Router/StatefulClanker.Router.csproj -c Debug
+      - name: Parse PowerShell changes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach($path in @('lib/StatefulClanker.WorkerRuntime.ps1','lib/StatefulClanker.CompiledRouting.ps1')){
+            $tokens=$null
+            $errors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path),[ref]$tokens,[ref]$errors)
+            if($errors.Count){ throw (($errors | ForEach-Object { "$path : $($_.Message) at $($_.Extent.Text)" }) -join [Environment]::NewLine) }
+          }
+      - name: Run compiled router integration tests
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/CompiledRouter.Tests.ps1
