@@ -7,19 +7,32 @@ using System.Text.Json;
 
 namespace StatefulClanker.Router;
 
-internal sealed record HarnessModel(string Id,string DisplayName,bool Free,bool SupportsTools,long? ContextLength,string Evidence);
+internal sealed record HarnessModel(
+    string Id,
+    string DisplayName,
+    bool Free,
+    bool SupportsTools,
+    long? ContextLength,
+    string Evidence);
 
-internal sealed class ManagedHarnessInstance
+internal sealed class ManagedHarnessHost
+{
+    public required string Adapter { get; init; }
+    public required string BaseUrl { get; init; }
+    public required string Username { get; init; }
+    public required string Password { get; init; }
+    public required Process Process { get; init; }
+    public DateTimeOffset LastUsedAt { get; set; }=DateTimeOffset.UtcNow;
+}
+
+internal sealed class ManagedHarnessRoute
 {
     public required string Adapter { get; init; }
     public required string Key { get; init; }
     public required string ManagerKey { get; init; }
     public required string ConnectionName { get; init; }
     public required string WorkingDirectory { get; init; }
-    public required string BaseUrl { get; init; }
-    public required string Username { get; init; }
-    public required string Password { get; init; }
-    public required Process Process { get; init; }
+    public required ManagedHarnessHost Host { get; init; }
     public DateTimeOffset LastUsedAt { get; set; }=DateTimeOffset.UtcNow;
     public DateTimeOffset LastDiscoveredAt { get; set; }=DateTimeOffset.MinValue;
     public HashSet<string> EndpointIds { get; }=new(StringComparer.OrdinalIgnoreCase);
@@ -28,10 +41,10 @@ internal sealed class ManagedHarnessInstance
 internal interface IHarnessAdapter
 {
     string Kind { get; }
-    Task<ManagedHarnessInstance> StartAsync(string workingDirectory,string key,string managerKey,string connectionName,CancellationToken token);
-    Task<IReadOnlyList<HarnessModel>> DiscoverAsync(ManagedHarnessInstance instance,CancellationToken token);
-    Task<bool> ProbeAsync(ManagedHarnessInstance instance,CancellationToken token);
-    Task StopAsync(ManagedHarnessInstance instance,CancellationToken token);
+    Task<ManagedHarnessHost> StartAsync(CancellationToken token);
+    Task<IReadOnlyList<HarnessModel>> DiscoverAsync(ManagedHarnessHost host,string workingDirectory,CancellationToken token);
+    Task<bool> ProbeAsync(ManagedHarnessHost host,CancellationToken token);
+    Task StopAsync(ManagedHarnessHost host,CancellationToken token);
 }
 
 internal sealed class OpenCodeHarnessAdapter : IHarnessAdapter
@@ -39,47 +52,93 @@ internal sealed class OpenCodeHarnessAdapter : IHarnessAdapter
     readonly HttpClient _http=new(){Timeout=TimeSpan.FromSeconds(8)};
     public string Kind => "opencode";
 
-    public async Task<ManagedHarnessInstance> StartAsync(string workingDirectory,string key,string managerKey,string connectionName,CancellationToken token)
+    public async Task<ManagedHarnessHost> StartAsync(CancellationToken token)
     {
         var port=FreePort();
         var password=Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
         const string username="opencode";
         var executable=ResolveExecutable();
-        var process=Process.Start(NewStartInfo(executable,workingDirectory,port,password,username))
+        var process=Process.Start(NewStartInfo(executable,port,password,username))
             ?? throw new InvalidOperationException("OpenCode process did not start.");
-        var instance=new ManagedHarnessInstance
+        var host=new ManagedHarnessHost
         {
-            Adapter=Kind,Key=key,ManagerKey=managerKey,ConnectionName=connectionName,
-            WorkingDirectory=workingDirectory,BaseUrl=$"http://127.0.0.1:{port}",
-            Username=username,Password=password,Process=process
+            Adapter=Kind,
+            BaseUrl=$"http://127.0.0.1:{port}",
+            Username=username,
+            Password=password,
+            Process=process
         };
+
         try
         {
-            var deadline=DateTimeOffset.UtcNow.AddSeconds(20);
+            var deadline=DateTimeOffset.UtcNow.AddSeconds(25);
             while(DateTimeOffset.UtcNow<deadline)
             {
                 token.ThrowIfCancellationRequested();
-                if(process.HasExited) throw new InvalidOperationException($"opencode serve exited during startup with code {process.ExitCode}.");
-                if(await ProbeAsync(instance,token)) return instance;
+                if(process.HasExited)
+                    throw new InvalidOperationException($"opencode serve exited during startup with code {process.ExitCode}.");
+                if(await ProbeAsync(host,token)) return host;
                 await Task.Delay(250,token);
             }
-            throw new TimeoutException("opencode serve did not become healthy within 20 seconds.");
+            throw new TimeoutException("opencode serve did not become healthy within 25 seconds.");
         }
         catch
         {
-            TryKill(process);process.Dispose();throw;
+            TryKill(process);
+            process.Dispose();
+            throw;
         }
     }
 
-    public async Task<IReadOnlyList<HarnessModel>> DiscoverAsync(ManagedHarnessInstance instance,CancellationToken token)
+    public async Task<IReadOnlyList<HarnessModel>> DiscoverAsync(ManagedHarnessHost host,string workingDirectory,CancellationToken token)
     {
-        using var request=Request(HttpMethod.Get,instance,"/provider");
-        using var response=await _http.SendAsync(request,HttpCompletionOption.ResponseContentRead,token);
-        response.EnsureSuccessStatusCode();
-        using var doc=JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
-        if(doc.RootElement.ValueKind!=JsonValueKind.Object ||
-           !doc.RootElement.TryGetProperty("all",out var providers) ||
-           providers.ValueKind!=JsonValueKind.Array) return Array.Empty<HarnessModel>();
+        try
+        {
+            using var request=Request(HttpMethod.Get,host,"/api/model",workingDirectory);
+            using var response=await _http.SendAsync(request,HttpCompletionOption.ResponseContentRead,token);
+            if(response.IsSuccessStatusCode)
+            {
+                using var doc=JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+                var models=ParseV2Models(doc.RootElement);
+                if(models.Count>0) return models;
+            }
+        }
+        catch(OperationCanceledException) when(token.IsCancellationRequested){throw;}
+        catch { }
+
+        // Compatibility path for OpenCode 1.x / legacy server surfaces.
+        using var legacyRequest=Request(HttpMethod.Get,host,"/provider",workingDirectory);
+        using var legacyResponse=await _http.SendAsync(legacyRequest,HttpCompletionOption.ResponseContentRead,token);
+        legacyResponse.EnsureSuccessStatusCode();
+        using var legacyDoc=JsonDocument.Parse(await legacyResponse.Content.ReadAsStringAsync(token));
+        return ParseLegacyModels(legacyDoc.RootElement);
+    }
+
+    static List<HarnessModel> ParseV2Models(JsonElement root)
+    {
+        JsonElement models;
+        if(root.ValueKind==JsonValueKind.Object && root.TryGetProperty("data",out var data)) models=data;
+        else models=root;
+        if(models.ValueKind!=JsonValueKind.Array) return [];
+
+        var output=new List<HarnessModel>();
+        foreach(var model in models.EnumerateArray())
+        {
+            if(model.ValueKind!=JsonValueKind.Object) continue;
+            var providerId=String(model,"providerID") ?? String(model,"providerId");
+            if(!string.Equals(providerId,"opencode",StringComparison.OrdinalIgnoreCase)) continue;
+            var id=String(model,"id") ?? String(model,"modelID");
+            if(string.IsNullOrWhiteSpace(id)) continue;
+            AddModel(output,providerId!,id!,model);
+        }
+        return Deduplicate(output);
+    }
+
+    static List<HarnessModel> ParseLegacyModels(JsonElement root)
+    {
+        if(root.ValueKind!=JsonValueKind.Object ||
+           !root.TryGetProperty("all",out var providers) ||
+           providers.ValueKind!=JsonValueKind.Array) return [];
 
         var output=new List<HarnessModel>();
         foreach(var provider in providers.EnumerateArray())
@@ -88,9 +147,11 @@ internal sealed class OpenCodeHarnessAdapter : IHarnessAdapter
             var providerId=String(provider,"id") ?? String(provider,"providerID");
             if(!string.Equals(providerId,"opencode",StringComparison.OrdinalIgnoreCase)) continue;
             if(!provider.TryGetProperty("models",out var models)) continue;
+
             if(models.ValueKind==JsonValueKind.Object)
             {
-                foreach(var property in models.EnumerateObject()) AddModel(output,providerId!,property.Name,property.Value);
+                foreach(var property in models.EnumerateObject())
+                    AddModel(output,providerId!,property.Name,property.Value);
             }
             else if(models.ValueKind==JsonValueKind.Array)
             {
@@ -101,8 +162,7 @@ internal sealed class OpenCodeHarnessAdapter : IHarnessAdapter
                 }
             }
         }
-        return output.GroupBy(x=>x.Id,StringComparer.OrdinalIgnoreCase).Select(x=>x.First())
-            .OrderBy(x=>x.DisplayName,StringComparer.OrdinalIgnoreCase).ToList();
+        return Deduplicate(output);
     }
 
     static void AddModel(List<HarnessModel> output,string providerId,string modelId,JsonElement model)
@@ -115,10 +175,11 @@ internal sealed class OpenCodeHarnessAdapter : IHarnessAdapter
         var zeroCost=model.TryGetProperty("cost",out var cost) && ZeroCost(cost);
         if(!explicitFree && !zeroCost) return;
 
-        var tools=true;
+        var supportsTools=true;
         if(model.TryGetProperty("capabilities",out var caps) && caps.ValueKind==JsonValueKind.Object &&
-           caps.TryGetProperty("tools",out var toolValue) && (toolValue.ValueKind==JsonValueKind.True || toolValue.ValueKind==JsonValueKind.False))
-            tools=toolValue.GetBoolean();
+           caps.TryGetProperty("tools",out var toolValue) &&
+           (toolValue.ValueKind==JsonValueKind.True || toolValue.ValueKind==JsonValueKind.False))
+            supportsTools=toolValue.GetBoolean();
 
         long? context=null;
         if(model.TryGetProperty("limit",out var limit) && limit.ValueKind==JsonValueKind.Object &&
@@ -128,9 +189,19 @@ internal sealed class OpenCodeHarnessAdapter : IHarnessAdapter
         output.Add(new HarnessModel(
             providerId+"/"+modelId,
             String(model,"name") ?? modelId,
-            true,tools,context,
-            explicitFree?"OpenCode model id explicitly selects a free route.":"OpenCode live provider catalog reports zero input/output cost."));
+            true,
+            supportsTools,
+            context,
+            explicitFree
+                ? "OpenCode model id explicitly selects a free route."
+                : "OpenCode live model catalog reports zero input/output cost."));
     }
+
+    static List<HarnessModel> Deduplicate(List<HarnessModel> models) =>
+        models.GroupBy(x=>x.Id,StringComparer.OrdinalIgnoreCase)
+              .Select(x=>x.First())
+              .OrderBy(x=>x.DisplayName,StringComparer.OrdinalIgnoreCase)
+              .ToList();
 
     static bool ZeroCost(JsonElement cost)
     {
@@ -140,7 +211,8 @@ internal sealed class OpenCodeHarnessAdapter : IHarnessAdapter
         foreach(var tier in cost.EnumerateArray())
         {
             if(tier.ValueKind!=JsonValueKind.Object) return false;
-            any=true;if(!ZeroCostObject(tier)) return false;
+            any=true;
+            if(!ZeroCostObject(tier)) return false;
         }
         return any;
     }
@@ -155,34 +227,41 @@ internal sealed class OpenCodeHarnessAdapter : IHarnessAdapter
         return true;
     }
 
-    public async Task<bool> ProbeAsync(ManagedHarnessInstance instance,CancellationToken token)
+    public async Task<bool> ProbeAsync(ManagedHarnessHost host,CancellationToken token)
+    {
+        foreach(var path in new[]{"/api/health","/global/health"})
+        {
+            try
+            {
+                using var request=Request(HttpMethod.Get,host,path,null);
+                using var response=await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,token);
+                if(response.IsSuccessStatusCode) return true;
+            }
+            catch(OperationCanceledException) when(token.IsCancellationRequested){throw;}
+            catch { }
+        }
+        return false;
+    }
+
+    public async Task StopAsync(ManagedHarnessHost host,CancellationToken token)
     {
         try
         {
-            using var request=Request(HttpMethod.Get,instance,"/global/health");
-            using var response=await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,token);
-            return response.IsSuccessStatusCode;
-        }
-        catch(OperationCanceledException) when(token.IsCancellationRequested){throw;}
-        catch{return false;}
-    }
-
-    public async Task StopAsync(ManagedHarnessInstance instance,CancellationToken token)
-    {
-        try
-        {
-            using var request=Request(HttpMethod.Post,instance,"/instance/dispose");
+            using var request=Request(HttpMethod.Post,host,"/instance/dispose",null);
             using var response=await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,token);
         }
-        catch{}
-        TryKill(instance.Process);instance.Process.Dispose();
+        catch { }
+        TryKill(host.Process);
+        host.Process.Dispose();
     }
 
-    static HttpRequestMessage Request(HttpMethod method,ManagedHarnessInstance instance,string path)
+    static HttpRequestMessage Request(HttpMethod method,ManagedHarnessHost host,string path,string? workingDirectory)
     {
-        var request=new HttpRequestMessage(method,instance.BaseUrl.TrimEnd('/')+path);
-        var raw=Convert.ToBase64String(Encoding.UTF8.GetBytes(instance.Username+":"+instance.Password));
+        var request=new HttpRequestMessage(method,host.BaseUrl.TrimEnd('/')+path);
+        var raw=Convert.ToBase64String(Encoding.UTF8.GetBytes(host.Username+":"+host.Password));
         request.Headers.Authorization=new AuthenticationHeaderValue("Basic",raw);
+        if(!string.IsNullOrWhiteSpace(workingDirectory))
+            request.Headers.TryAddWithoutValidation("x-opencode-directory",workingDirectory);
         return request;
     }
 
@@ -191,45 +270,71 @@ internal sealed class OpenCodeHarnessAdapter : IHarnessAdapter
 
     static int FreePort()
     {
-        var listener=new TcpListener(System.Net.IPAddress.Loopback,0);listener.Start();
-        try{return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;}finally{listener.Stop();}
+        var listener=new TcpListener(System.Net.IPAddress.Loopback,0);
+        listener.Start();
+        try{return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;}
+        finally{listener.Stop();}
     }
 
     static string ResolveExecutable()
     {
         var configured=Environment.GetEnvironmentVariable("SC_OPENCODE_EXE");
         if(!string.IsNullOrWhiteSpace(configured)) return configured;
+
         var path=Environment.GetEnvironmentVariable("PATH") ?? "";
         foreach(var root in path.Split(Path.PathSeparator,StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries))
-            foreach(var name in OperatingSystem.IsWindows()?new[]{"opencode.exe","opencode.cmd","opencode.bat","opencode"}:new[]{"opencode"})
+        {
+            foreach(var name in OperatingSystem.IsWindows()
+                ? new[]{"opencode.exe","opencode.cmd","opencode.bat","opencode"}
+                : new[]{"opencode"})
             {
-                try{var candidate=Path.Combine(root,name);if(File.Exists(candidate)) return candidate;}catch{}
+                try
+                {
+                    var candidate=Path.Combine(root,name);
+                    if(File.Exists(candidate)) return candidate;
+                }
+                catch { }
             }
+        }
         return "opencode";
     }
 
-    static ProcessStartInfo NewStartInfo(string executable,string workingDirectory,int port,string password,string username)
+    static ProcessStartInfo NewStartInfo(string executable,int port,string password,string username)
     {
-        var psi=new ProcessStartInfo{UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=workingDirectory};
+        var psi=new ProcessStartInfo
+        {
+            UseShellExecute=false,
+            CreateNoWindow=true,
+            WorkingDirectory=Path.GetTempPath()
+        };
         var ext=Path.GetExtension(executable);
-        if(OperatingSystem.IsWindows() && (ext.Equals(".cmd",StringComparison.OrdinalIgnoreCase)||ext.Equals(".bat",StringComparison.OrdinalIgnoreCase)))
+        if(OperatingSystem.IsWindows() &&
+           (ext.Equals(".cmd",StringComparison.OrdinalIgnoreCase) || ext.Equals(".bat",StringComparison.OrdinalIgnoreCase)))
         {
             psi.FileName=Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe";
-            psi.ArgumentList.Add("/d");psi.ArgumentList.Add("/s");psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add("/d");
+            psi.ArgumentList.Add("/s");
+            psi.ArgumentList.Add("/c");
             psi.ArgumentList.Add($"\"{executable}\" serve --hostname 127.0.0.1 --port {port}");
         }
         else
         {
             psi.FileName=executable;
-            psi.ArgumentList.Add("serve");psi.ArgumentList.Add("--hostname");psi.ArgumentList.Add("127.0.0.1");
-            psi.ArgumentList.Add("--port");psi.ArgumentList.Add(port.ToString());
+            psi.ArgumentList.Add("serve");
+            psi.ArgumentList.Add("--hostname");
+            psi.ArgumentList.Add("127.0.0.1");
+            psi.ArgumentList.Add("--port");
+            psi.ArgumentList.Add(port.ToString());
         }
         psi.Environment["OPENCODE_SERVER_PASSWORD"]=password;
         psi.Environment["OPENCODE_SERVER_USERNAME"]=username;
         return psi;
     }
 
-    internal static void TryKill(Process process){try{if(!process.HasExited) process.Kill(entireProcessTree:true);}catch{}}
+    internal static void TryKill(Process process)
+    {
+        try{if(!process.HasExited) process.Kill(entireProcessTree:true);}catch{}
+    }
 }
 
 public sealed class HarnessAdapterManager
@@ -237,80 +342,156 @@ public sealed class HarnessAdapterManager
     readonly RouterEngine _engine;
     readonly RouterStore _store;
     readonly Dictionary<string,IHarnessAdapter> _adapters;
-    readonly Dictionary<string,ManagedHarnessInstance> _instances=new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string,ManagedHarnessHost> _hosts=new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string,ManagedHarnessRoute> _routes=new(StringComparer.OrdinalIgnoreCase);
     readonly SemaphoreSlim _gate=new(1,1);
-    static readonly TimeSpan IdleTimeout=TimeSpan.FromMinutes(15);
+
+    static readonly TimeSpan RouteIdleTimeout=TimeSpan.FromMinutes(15);
     static readonly TimeSpan DiscoveryInterval=TimeSpan.FromMinutes(5);
 
     public HarnessAdapterManager(RouterEngine engine)
     {
-        _engine=engine;_store=engine.Store;
-        _adapters=new(StringComparer.OrdinalIgnoreCase){["opencode"]=new OpenCodeHarnessAdapter()};
+        _engine=engine;
+        _store=engine.Store;
+        _adapters=new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["opencode"]=new OpenCodeHarnessAdapter()
+        };
         CleanupStaleRegistrations();
     }
 
     public async Task<RouterResponse> EnsureAsync(string? adapterName,string? workingDirectory,CancellationToken token=default)
     {
-        if(string.IsNullOrWhiteSpace(adapterName)) return RouterResponse.Fail("Harness adapter name is required.");
-        if(!_adapters.TryGetValue(adapterName,out var adapter)) return RouterResponse.Fail("Unknown harness adapter: "+adapterName);
-        if(string.IsNullOrWhiteSpace(workingDirectory)) return RouterResponse.Fail("Managed harness requires --working-directory.");
+        if(string.IsNullOrWhiteSpace(adapterName))
+            return RouterResponse.Fail("Harness adapter name is required.");
+        if(!_adapters.TryGetValue(adapterName,out var adapter))
+            return RouterResponse.Fail("Unknown harness adapter: "+adapterName);
+        if(string.IsNullOrWhiteSpace(workingDirectory))
+            return RouterResponse.Fail("Managed harness requires --working-directory.");
 
         string root;
-        try{root=Path.GetFullPath(workingDirectory).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);}
-        catch(Exception ex){return RouterResponse.Fail("Invalid harness working directory: "+ex.Message);}
-        if(!Directory.Exists(root)) return RouterResponse.Fail("Harness working directory does not exist: "+root);
+        try
+        {
+            root=Path.GetFullPath(workingDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
+        }
+        catch(Exception ex)
+        {
+            return RouterResponse.Fail("Invalid harness working directory: "+ex.Message);
+        }
+        if(!Directory.Exists(root))
+            return RouterResponse.Fail("Harness working directory does not exist: "+root);
 
         await _gate.WaitAsync(token);
         try
         {
-            var hash=WorkspaceHash(root);
+            var host=await EnsureHostAsync(adapter,token);
+            if(host is null) return RouterResponse.Fail($"Could not start {adapter.Kind} harness.");
+
             var key=adapter.Kind+"|"+root.ToLowerInvariant();
+            var hash=WorkspaceHash(root);
             var managerKey="harness:"+adapter.Kind+":"+hash;
             var connectionName="internal-"+adapter.Kind+"-"+hash;
-            ManagedHarnessInstance? instance;
-            lock(_instances) _instances.TryGetValue(key,out instance);
 
-            if(instance is not null && instance.Process.HasExited){await StopInstanceAsync(instance,CancellationToken.None);instance=null;}
-            if(instance is null)
+            if(!_routes.TryGetValue(key,out var route))
             {
-                try
+                route=new ManagedHarnessRoute
                 {
-                    instance=await adapter.StartAsync(root,key,managerKey,connectionName,token);
-                    lock(_instances) _instances[key]=instance;
-                }
-                catch(Exception ex){return RouterResponse.Fail($"Could not start {adapter.Kind} harness: {ex.Message}");}
+                    Adapter=adapter.Kind,
+                    Key=key,
+                    ManagerKey=managerKey,
+                    ConnectionName=connectionName,
+                    WorkingDirectory=root,
+                    Host=host
+                };
+                _routes[key]=route;
             }
 
-            instance.LastUsedAt=DateTimeOffset.UtcNow;
-            if(instance.LastDiscoveredAt==DateTimeOffset.MinValue ||
-               DateTimeOffset.UtcNow-instance.LastDiscoveredAt>=DiscoveryInterval || instance.EndpointIds.Count==0)
+            route.LastUsedAt=DateTimeOffset.UtcNow;
+            host.LastUsedAt=route.LastUsedAt;
+
+            if(route.LastDiscoveredAt==DateTimeOffset.MinValue ||
+               DateTimeOffset.UtcNow-route.LastDiscoveredAt>=DiscoveryInterval ||
+               route.EndpointIds.Count==0)
             {
                 IReadOnlyList<HarnessModel> models;
-                try{models=await adapter.DiscoverAsync(instance,token);}
-                catch(Exception ex){return RouterResponse.Fail($"{adapter.Kind} harness catalog failed: {ex.Message}");}
-                Register(instance,models.Where(x=>x.Free).ToList());
-                instance.LastDiscoveredAt=DateTimeOffset.UtcNow;
+                try
+                {
+                    models=await adapter.DiscoverAsync(host,root,token);
+                }
+                catch(Exception ex)
+                {
+                    return RouterResponse.Fail($"{adapter.Kind} harness catalog failed: {ex.Message}");
+                }
+                Register(route,models.Where(x=>x.Free).ToList());
+                route.LastDiscoveredAt=DateTimeOffset.UtcNow;
             }
 
-            _engine.MarkHealthy("connection:"+instance.ConnectionName);
-            foreach(var endpoint in instance.EndpointIds) _engine.MarkHealthy("pool:"+endpoint);
+            _engine.MarkHealthy("connection:"+route.ConnectionName);
+            foreach(var endpoint in route.EndpointIds)
+                _engine.MarkHealthy("pool:"+endpoint);
+
             return RouterResponse.Ok(new
             {
-                adapter=instance.Adapter,connection=instance.ConnectionName,workingDirectory=instance.WorkingDirectory,
-                baseUrl=instance.BaseUrl,processId=instance.Process.Id,eligibleEndpoints=instance.EndpointIds.Count,
-                endpoints=instance.EndpointIds.OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).Select(x=>"pool:"+x).ToArray()
+                adapter=route.Adapter,
+                connection=route.ConnectionName,
+                workingDirectory=route.WorkingDirectory,
+                baseUrl=host.BaseUrl,
+                processId=host.Process.Id,
+                eligibleEndpoints=route.EndpointIds.Count,
+                endpoints=route.EndpointIds
+                    .OrderBy(x=>x,StringComparer.OrdinalIgnoreCase)
+                    .Select(x=>"pool:"+x)
+                    .ToArray()
             });
         }
-        finally{_gate.Release();}
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    async Task<ManagedHarnessHost?> EnsureHostAsync(IHarnessAdapter adapter,CancellationToken token)
+    {
+        if(_hosts.TryGetValue(adapter.Kind,out var existing))
+        {
+            if(!existing.Process.HasExited)
+            {
+                existing.LastUsedAt=DateTimeOffset.UtcNow;
+                return existing;
+            }
+
+            RemoveRoutesForHost(existing);
+            try{existing.Process.Dispose();}catch{}
+            _hosts.Remove(adapter.Kind);
+        }
+
+        try
+        {
+            var host=await adapter.StartAsync(token);
+            _hosts[adapter.Kind]=host;
+            return host;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public async Task RunAsync(CancellationToken token)
     {
         while(!token.IsCancellationRequested)
         {
-            try{await Task.Delay(TimeSpan.FromSeconds(20),token);await ReapIdleAsync(token);}
-            catch(OperationCanceledException) when(token.IsCancellationRequested){break;}
-            catch{}
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(20),token);
+                await ReapIdleAsync(token);
+            }
+            catch(OperationCanceledException) when(token.IsCancellationRequested)
+            {
+                break;
+            }
+            catch { }
         }
     }
 
@@ -319,15 +500,38 @@ public sealed class HarnessAdapterManager
         await _gate.WaitAsync(token);
         try
         {
-            ManagedHarnessInstance[] snapshot;lock(_instances) snapshot=_instances.Values.ToArray();
-            foreach(var instance in snapshot)
+            foreach(var host in _hosts.Values.Where(x=>x.Process.HasExited).ToArray())
             {
-                var leased=instance.EndpointIds.Any(id=>_engine.IsLeased("pool:"+id));
-                if(!leased && (instance.Process.HasExited || DateTimeOffset.UtcNow-instance.LastUsedAt>=IdleTimeout))
-                    await StopInstanceAsync(instance,CancellationToken.None);
+                RemoveRoutesForHost(host);
+                try{host.Process.Dispose();}catch{}
+                _hosts.Remove(host.Adapter);
+            }
+
+            foreach(var route in _routes.Values.ToArray())
+            {
+                var leased=route.EndpointIds.Any(id=>_engine.IsLeased("pool:"+id));
+                if(!leased && DateTimeOffset.UtcNow-route.LastUsedAt>=RouteIdleTimeout)
+                {
+                    Unregister(route);
+                    _routes.Remove(route.Key);
+                }
+            }
+
+            foreach(var host in _hosts.Values.ToArray())
+            {
+                var hasRoutes=_routes.Values.Any(x=>ReferenceEquals(x.Host,host));
+                if(hasRoutes) continue;
+                if(_adapters.TryGetValue(host.Adapter,out var adapter))
+                {
+                    try{await adapter.StopAsync(host,CancellationToken.None);}catch{}
+                }
+                _hosts.Remove(host.Adapter);
             }
         }
-        finally{_gate.Release();}
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async Task StopAllAsync()
@@ -335,84 +539,153 @@ public sealed class HarnessAdapterManager
         await _gate.WaitAsync();
         try
         {
-            ManagedHarnessInstance[] snapshot;lock(_instances) snapshot=_instances.Values.ToArray();
-            foreach(var instance in snapshot) await StopInstanceAsync(instance,CancellationToken.None);
+            foreach(var route in _routes.Values.ToArray())
+                Unregister(route);
+            _routes.Clear();
+
+            foreach(var host in _hosts.Values.ToArray())
+            {
+                if(_adapters.TryGetValue(host.Adapter,out var adapter))
+                {
+                    try{await adapter.StopAsync(host,CancellationToken.None);}catch{}
+                }
+            }
+            _hosts.Clear();
         }
-        finally{_gate.Release();}
-    }
-
-    public object[] Snapshot()
-    {
-        lock(_instances) return _instances.Values.Select(x=>(object)new
+        finally
         {
-            adapter=x.Adapter,connection=x.ConnectionName,workingDirectory=x.WorkingDirectory,
-            processId=x.Process.Id,baseUrl=x.BaseUrl,lastUsedAt=x.LastUsedAt.ToString("O"),endpointCount=x.EndpointIds.Count
-        }).ToArray();
+            _gate.Release();
+        }
     }
 
-    void Register(ManagedHarnessInstance instance,IReadOnlyList<HarnessModel> models)
+    public object Snapshot()
+    {
+        return new
+        {
+            hosts=_hosts.Values.Select(x=>new
+            {
+                adapter=x.Adapter,
+                processId=x.Process.Id,
+                baseUrl=x.BaseUrl,
+                lastUsedAt=x.LastUsedAt.ToString("O")
+            }).ToArray(),
+            routes=_routes.Values.Select(x=>new
+            {
+                adapter=x.Adapter,
+                connection=x.ConnectionName,
+                workingDirectory=x.WorkingDirectory,
+                lastUsedAt=x.LastUsedAt.ToString("O"),
+                endpointCount=x.EndpointIds.Count
+            }).ToArray()
+        };
+    }
+
+    void Register(ManagedHarnessRoute route,IReadOnlyList<HarnessModel> models)
     {
         var now=DateTimeOffset.UtcNow.ToString("O");
-        var protectedPassword=Protect(instance.Password);
+        var protectedPassword=Protect(route.Host.Password);
         string? startedAt=null;
-        try{startedAt=new DateTimeOffset(instance.Process.StartTime.ToUniversalTime()).ToString("O");}catch{}
+        try
+        {
+            startedAt=new DateTimeOffset(route.Host.Process.StartTime.ToUniversalTime()).ToString("O");
+        }
+        catch { }
 
         _store.UpdateConnections(doc =>
         {
-            doc.connections[instance.ConnectionName]=new ConnectionProfile
+            doc.connections[route.ConnectionName]=new ConnectionProfile
             {
-                name=instance.ConnectionName,presetId="opencode-harness",protocol="opencode-server",
-                baseUrl=instance.BaseUrl,modelsPath="/provider",discoveryKind="harness",authKind="basic",
-                username=instance.Username,apiKeyProtected=protectedPassword,transient=true,
-                managedBy=instance.ManagerKey,workingDirectory=instance.WorkingDirectory,
-                processId=instance.Process.Id,processStartedAt=startedAt
+                name=route.ConnectionName,
+                presetId="opencode-harness",
+                protocol="opencode-server",
+                baseUrl=route.Host.BaseUrl,
+                modelsPath="/api/model",
+                discoveryKind="harness",
+                authKind="basic",
+                username=route.Host.Username,
+                apiKeyProtected=protectedPassword,
+                transient=true,
+                managedBy=route.ManagerKey,
+                workingDirectory=route.WorkingDirectory,
+                processId=route.Host.Process.Id,
+                processStartedAt=startedAt,
+                headers=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["x-opencode-directory"]=route.WorkingDirectory
+                }
             };
             return 0;
         });
 
-        var desired=models.ToDictionary(m=>EndpointId(instance,m.Id),StringComparer.OrdinalIgnoreCase);
+        var desired=models.ToDictionary(m=>EndpointId(route,m.Id),StringComparer.OrdinalIgnoreCase);
         _store.UpdateEndpoints(doc =>
         {
             foreach(var kv in doc.entries.ToArray())
-                if(string.Equals(kv.Value.managedBy,instance.ManagerKey,StringComparison.OrdinalIgnoreCase)&&!desired.ContainsKey(kv.Key))
+            {
+                if(string.Equals(kv.Value.managedBy,route.ManagerKey,StringComparison.OrdinalIgnoreCase) &&
+                   !desired.ContainsKey(kv.Key))
                     doc.entries.Remove(kv.Key);
+            }
+
             foreach(var model in models)
             {
-                var id=EndpointId(instance,model.Id);
+                var id=EndpointId(route,model.Id);
                 doc.entries[id]=new EndpointEntry
                 {
-                    id=id,connection=instance.ConnectionName,model=model.Id,displayName="OpenCode · "+model.DisplayName,
-                    enabled=true,workhorse=true,free=true,supportsTools=model.SupportsTools,contextLength=model.ContextLength,
-                    toolMode="native",leaseCapacity=1,source="managed-harness",
-                    rationale="Transient OpenCode harness capacity managed by StatefulClanker Router.",
-                    managedBy=instance.ManagerKey,freeClass="confirmed_free",freeEvidence=model.Evidence,
-                    lastSeenAt=now,updatedAt=now
+                    id=id,
+                    connection=route.ConnectionName,
+                    model=model.Id,
+                    displayName="OpenCode · "+model.DisplayName,
+                    enabled=true,
+                    workhorse=true,
+                    free=true,
+                    supportsTools=model.SupportsTools,
+                    contextLength=model.ContextLength,
+                    toolMode="native",
+                    leaseCapacity=1,
+                    source="managed-harness",
+                    rationale="Transient workspace route through router-owned OpenCode.",
+                    managedBy=route.ManagerKey,
+                    freeClass="confirmed_free",
+                    freeEvidence=model.Evidence,
+                    lastSeenAt=now,
+                    updatedAt=now
                 };
             }
             return 0;
         });
-        instance.EndpointIds.Clear();foreach(var id in desired.Keys) instance.EndpointIds.Add(id);
+
+        route.EndpointIds.Clear();
+        foreach(var id in desired.Keys) route.EndpointIds.Add(id);
     }
 
-    async Task StopInstanceAsync(ManagedHarnessInstance instance,CancellationToken token)
+    void RemoveRoutesForHost(ManagedHarnessHost host)
     {
-        if(_adapters.TryGetValue(instance.Adapter,out var adapter)) try{await adapter.StopAsync(instance,token);}catch{}
-        Unregister(instance);lock(_instances) _instances.Remove(instance.Key);
+        foreach(var route in _routes.Values.Where(x=>ReferenceEquals(x.Host,host)).ToArray())
+        {
+            Unregister(route);
+            _routes.Remove(route.Key);
+        }
     }
 
-    void Unregister(ManagedHarnessInstance instance)
+    void Unregister(ManagedHarnessRoute route)
     {
         _store.UpdateEndpoints(doc =>
         {
             foreach(var kv in doc.entries.ToArray())
-                if(string.Equals(kv.Value.managedBy,instance.ManagerKey,StringComparison.OrdinalIgnoreCase)) doc.entries.Remove(kv.Key);
+            {
+                if(string.Equals(kv.Value.managedBy,route.ManagerKey,StringComparison.OrdinalIgnoreCase))
+                    doc.entries.Remove(kv.Key);
+            }
             return 0;
         });
+
         _store.UpdateConnections(doc =>
         {
-            if(doc.connections.TryGetValue(instance.ConnectionName,out var c)&&c.transient&&
-               string.Equals(c.managedBy,instance.ManagerKey,StringComparison.OrdinalIgnoreCase))
-                doc.connections.Remove(instance.ConnectionName);
+            if(doc.connections.TryGetValue(route.ConnectionName,out var connection) &&
+               connection.transient &&
+               string.Equals(connection.managedBy,route.ManagerKey,StringComparison.OrdinalIgnoreCase))
+                doc.connections.Remove(route.ConnectionName);
             return 0;
         });
     }
@@ -420,43 +693,69 @@ public sealed class HarnessAdapterManager
     void CleanupStaleRegistrations()
     {
         var stale=_store.LoadConnections().connections
-            .Where(x=>x.Value.transient&&!string.IsNullOrWhiteSpace(x.Value.managedBy)&&
-                      x.Value.managedBy.StartsWith("harness:",StringComparison.OrdinalIgnoreCase)).ToArray();
-        foreach(var kv in stale) TryKillStale(kv.Value);
+            .Where(x=>x.Value.transient &&
+                      !string.IsNullOrWhiteSpace(x.Value.managedBy) &&
+                      x.Value.managedBy.StartsWith("harness:",StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        foreach(var profile in stale.Select(x=>x.Value)
+                    .Where(x=>x.processId is not null)
+                    .GroupBy(x=>new{x.processId,x.processStartedAt})
+                    .Select(x=>x.First()))
+            TryKillStale(profile);
+
         var names=stale.Select(x=>x.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var managers=stale.Select(x=>x.Value.managedBy!).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         _store.UpdateEndpoints(doc =>
         {
             foreach(var kv in doc.entries.ToArray())
-                if(names.Contains(kv.Value.connection)||(kv.Value.managedBy is not null&&managers.Contains(kv.Value.managedBy)))
+            {
+                if(names.Contains(kv.Value.connection) ||
+                   (kv.Value.managedBy is not null && managers.Contains(kv.Value.managedBy)))
                     doc.entries.Remove(kv.Key);
+            }
             return 0;
         });
-        _store.UpdateConnections(doc =>{foreach(var name in names) doc.connections.Remove(name);return 0;});
+
+        _store.UpdateConnections(doc =>
+        {
+            foreach(var name in names) doc.connections.Remove(name);
+            return 0;
+        });
     }
 
     static void TryKillStale(ConnectionProfile profile)
     {
-        if(profile.processId is null||profile.processId<=0) return;
+        if(profile.processId is null || profile.processId<=0) return;
         try
         {
             var process=Process.GetProcessById(profile.processId.Value);
-            if(!string.IsNullOrWhiteSpace(profile.processStartedAt)&&DateTimeOffset.TryParse(profile.processStartedAt,out var expected))
+            if(!string.IsNullOrWhiteSpace(profile.processStartedAt) &&
+               DateTimeOffset.TryParse(profile.processStartedAt,out var expected))
             {
                 var actual=new DateTimeOffset(process.StartTime.ToUniversalTime());
-                if(Math.Abs((actual-expected).TotalSeconds)>2){process.Dispose();return;}
+                if(Math.Abs((actual-expected).TotalSeconds)>2)
+                {
+                    process.Dispose();
+                    return;
+                }
             }
-            OpenCodeHarnessAdapter.TryKill(process);process.Dispose();
+            OpenCodeHarnessAdapter.TryKill(process);
+            process.Dispose();
         }
-        catch{}
+        catch { }
     }
 
-    static string EndpointId(ManagedHarnessInstance instance,string model) =>
-        "harness-"+instance.Adapter+":"+WorkspaceHash(instance.WorkingDirectory)+":"+model;
+    static string EndpointId(ManagedHarnessRoute route,string model) =>
+        "harness-"+route.Adapter+":"+WorkspaceHash(route.WorkingDirectory)+":"+model;
 
     static string WorkspaceHash(string root) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(root).ToLowerInvariant()))).ToLowerInvariant()[..12];
+        Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(Path.GetFullPath(root).ToLowerInvariant())))
+            .ToLowerInvariant()[..12];
 
     static string Protect(string value) =>
-        Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(value),null,DataProtectionScope.CurrentUser));
+        Convert.ToBase64String(ProtectedData.Protect(
+            Encoding.UTF8.GetBytes(value),null,DataProtectionScope.CurrentUser));
 }
