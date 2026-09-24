@@ -409,7 +409,12 @@ function New-SCExtendedTools {
         @{name='connection_catalog';description='Read sanitized machine inference connections and their last discovered model catalogs. Secrets and custom headers are never returned. Use this before maintaining the machine endpoint catalog.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string';description='Optional connection name to inspect.'}}}},
         @{name='target_pool_list';description='Read the machine endpoint catalog used by automatic health-aware round-robin routing.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
         @{name='target_pool_upsert';description='Add or update one discovered connection/model in the machine endpoint catalog. Record a short rationale and research date when Clanker has checked current suitability/free status.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'};displayName=@{type='string'};enabled=@{type='boolean'};workhorse=@{type='boolean'};free=@{type='boolean'};supportsTools=@{type='boolean'};contextLength=@{type='integer';minimum=1};toolMode=@{type='string';enum=@('native','text')};rationale=@{type='string'};researchedAt=@{type='string';description='ISO-8601 timestamp; defaults to now when rationale is supplied.'};source=@{type='string';description='Defaults to clanker.'}};required=@('connection','model')}},
-        @{name='target_pool_remove';description='Remove one connection/model from the machine endpoint catalog without altering the machine connection or discovered catalog.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'}};required=@('connection','model')}}
+        @{name='target_pool_remove';description='Remove one connection/model from the machine endpoint catalog without altering the machine connection or discovered catalog.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'}};required=@('connection','model')}},
+        @{name='rpk_lesson_add';description='Record a control-plane Reflexive Project Knowledge lesson. RPK unavailable returns a clear tool error.';inputSchema=@{type='object';properties=@{project=@{type='string'};title=@{type='string'};body=@{type='string'};tags=@{type='array';items=@{type='string'}};paths=@{type='array';items=@{type='string'}};confidence=@{type='number'}};required=@('title','body')}},
+        @{name='rpk_lesson_confirm';description='Confirm a Reflexive Project Knowledge lesson as verified against current project evidence.';inputSchema=@{type='object';properties=@{project=@{type='string'};id=@{type='string'};note=@{type='string'}};required=@('id')}},
+        @{name='rpk_lesson_reject';description='Reject a Reflexive Project Knowledge lesson found stale or wrong.';inputSchema=@{type='object';properties=@{project=@{type='string'};id=@{type='string'};note=@{type='string'}};required=@('id')}},
+        @{name='rpk_lessons';description='List/search Reflexive Project Knowledge lessons, optionally filtered by status (e.g. needs_review).';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string'};paths=@{type='array';items=@{type='string'}};limit=@{type='integer';minimum=1};status=@{type='string'}}}},
+        @{name='rpk_status';description='Read RPK index/normalize status for the active project.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}}
     )
 }
 
@@ -582,6 +587,54 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
                 success=$true
                 output=$res.stdout
             })
+        }
+        'rpk_lesson_add' {
+            $title=Get-McpArgRequired $Arguments 'title';$body=Get-McpArgRequired $Arguments 'body'
+            $tags=@(Get-McpArgArray $Arguments 'tags');$paths=@(Get-McpArgArray $Arguments 'paths')
+            $confidence=Get-McpArgOptional $Arguments 'confidence';$conf=if($null-ne$confidence){[double]$confidence}else{.75}
+            Push-Location $project
+            try{$result=Add-SCRpkLesson $title $body $tags $paths 'control-plane' $conf}
+            catch{throw "RPK unavailable: $($_.Exception.Message)"}
+            finally{Pop-Location}
+            Push-Location $project;try{Add-SCEvent 'rpk.lesson_recorded' $title @{title=$title;source='control-plane'}}finally{Pop-Location}
+            return New-McpTextResult ([ordered]@{recorded=$true;lesson=$result})
+        }
+        'rpk_lesson_confirm' {
+            $id=Get-McpArgRequired $Arguments 'id';$note=Get-McpArgOptional $Arguments 'note';if(-not$note){$note=''}
+            Push-Location $project
+            try{$result=Confirm-SCRpkLesson $id $note}
+            catch{throw "RPK unavailable: $($_.Exception.Message)"}
+            finally{Pop-Location}
+            Push-Location $project;try{Add-SCEvent 'rpk.lesson_confirmed' $id @{id=$id;note=$note}}finally{Pop-Location}
+            return New-McpTextResult ([ordered]@{confirmed=$true;lesson=$result})
+        }
+        'rpk_lesson_reject' {
+            $id=Get-McpArgRequired $Arguments 'id';$note=Get-McpArgOptional $Arguments 'note';if(-not$note){$note=''}
+            Push-Location $project
+            try{$result=Reject-SCRpkLesson $id $note}
+            catch{throw "RPK unavailable: $($_.Exception.Message)"}
+            finally{Pop-Location}
+            Push-Location $project;try{Add-SCEvent 'rpk.lesson_rejected' $id @{id=$id;note=$note}}finally{Pop-Location}
+            return New-McpTextResult ([ordered]@{rejected=$true;lesson=$result})
+        }
+        'rpk_lessons' {
+            $text=Get-McpArgOptional $Arguments 'text';if(-not$text){$text=''}
+            $paths=@(Get-McpArgArray $Arguments 'paths')
+            $limitRaw=Get-McpArgOptional $Arguments 'limit';$limit=if($limitRaw){[int]$limitRaw}else{8}
+            $status=Get-McpArgOptional $Arguments 'status'
+            Push-Location $project
+            try{$lessons=@(Search-SCRpkLessons $text $paths $limit)}
+            catch{throw "RPK unavailable: $($_.Exception.Message)"}
+            finally{Pop-Location}
+            if($status){$lessons=@($lessons|Where-Object{[string](Get-McpObjectValue $_ 'status')-eq$status})}
+            return New-McpTextResult ([ordered]@{lessons=$lessons})
+        }
+        'rpk_status' {
+            Push-Location $project
+            try{$status=Get-SCRpkStatus}
+            catch{throw "RPK unavailable: $($_.Exception.Message)"}
+            finally{Pop-Location}
+            return New-McpTextResult ([ordered]@{status=$status})
         }
         default {throw "Unknown extended tool: $Name"}
     }
