@@ -115,6 +115,49 @@ The Planner intentionally does not call the existing additive plan import path. 
 
 Release currently requires an applied plan id that matches state.activePlanId. This prevents the Planner from reopening implementation merely because somebody generated a plan file.
 
+## Conversation entrypoints
+
+Bundled Pi now has an explicit conversation role instead of guessing from prompt wording.
+
+Normal execution/control:
+
+    pi\pi.cmd
+
+This launches the Operator role and only the Operator skill.
+
+Deliberate planning/replanning:
+
+    pi\interrogate.cmd
+
+This launches Pi with:
+
+- `STATEFULCLANKER_PI_ROLE=interrogator`;
+- the Interrogator conversation skill;
+- the decomposition specialist skill.
+
+The Pi extension no longer contains a prompt-regex "planning intent" switch. The role is selected at launch and remains stable for that conversation.
+
+Interrogator uses one MCP surface, `planning_control`, for Planner state:
+
+    status -> begin -> settle -> ask/answer -> candidate -> accept -> release
+
+The ordinary `control_snapshot` also exposes `planning.active`, `planning.phase`, session id, baseline path, and accepted handoff id when available. This makes phase ownership observable to any control-plane client without requiring Planner-specific filesystem knowledge.
+
+## Deliberately incomplete boundary
+
+The first research slice stops before **transactional plan application**.
+
+An accepted handoff is intentionally inert. The Planner does not yet replace/rewrite live tasks, because the existing `plan_apply` / `plan_import` path is additive and does not define safe semantics for:
+
+- completed tasks that remain valid;
+- pending tasks invalidated by the replan;
+- task ids that are replaced or superseded;
+- downstream invalidation;
+- Intent replacement plus graph replacement as one atomic operation;
+- rollback if applying the new graph fails halfway through.
+
+Until that transaction exists, the old import path remains compatibility machinery, not the replanning mechanism. The research flow therefore proves the phase barrier, stable baseline, question channel, candidate staging, and handoff boundary without pretending graph replacement is solved.
+
 ## Multi-agent planning shape
 
 Keep the first planning swarm simple:
