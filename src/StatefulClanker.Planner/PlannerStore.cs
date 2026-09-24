@@ -268,9 +268,11 @@ public sealed class PlannerStore
 
         var handoffDir = Path.Combine(SessionDir(control.sessionId), "handoffs");
         Directory.CreateDirectory(handoffDir);
-        WriteJson(Path.Combine(handoffDir, handoff.id + ".json"), handoff);
+        var handoffPath = Path.Combine(handoffDir, handoff.id + ".json");
+        WriteJson(handoffPath, handoff);
 
         control.acceptedHandoffId = handoff.id;
+        control.acceptedHandoffSha256 = FileHash(handoffPath);
         control.activeCandidateId = candidate.id;
         control.phase = PlannerPhases.Handoff;
         Touch(control);
