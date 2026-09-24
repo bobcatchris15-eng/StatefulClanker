@@ -319,7 +319,7 @@ function Invoke-SCReview($Task,$Run,$Compilation,[string]$Stage,[string]$Endpoin
         }
     }
     $receipt=Invoke-SCProvider $Task (New-SCReviewPrompt $Task $Run $Compilation $Stage) $Stage $reviewOverride $Run.agentId $Compilation $null $null $EndpointOverride $ConnectionOverride
-    $receipt.verdict=Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode)
+    Set-SCProperty $receipt 'verdict' (Get-SCVerdict ([string]$receipt.stdout) ([int]$receipt.exitCode))
     Set-SCTelemetryVerdict $receipt.agentId $receipt.verdict
     $dir=if($Stage-eq'critic'){'critiques'}else{'validations'}
     Write-SCJson (Get-SCPath ("{0}/{1}.json"-f$dir,$receipt.id)) $receipt
@@ -355,7 +355,17 @@ function Commit-SCProposal($Task,$Proposal,$Compilation) {
     $cfg=Get-SCConfig;$gateReasons=@();if([bool]$cfg.validatorEnabled-and[string]$Proposal.evidence.validationVerdict-ne'PASS'){$gateReasons+='required validator did not pass'}
     if($gateReasons.Count-gt 0){Reject-SCProposal $Proposal $gateReasons;$Task.status='needs_rework';$Task.blockReason='Required review gate did not pass.';Save-SCTask $Task;Add-SCProgressRecord $Task $Compilation $false 'review-gate-rejected' ($gateReasons -join '; ')|Out-Null;return $false}
     if(Stop-SCForStaleCompilation $Task $Compilation 'stale-before-commit' 'Compiled state became stale before commit.' $Proposal){return $false}
-    $Task=Get-SCTask ([string]$Task.id);$Proposal.status='committed';$Proposal.committedAt=(Get-Date).ToUniversalTime().ToString('o');Save-SCProposal $Proposal;$Task.status='complete';$Task.blockReason=$null;Save-SCTask $Task;Add-SCEvent 'state.committed' "Committed completion proposal $($Proposal.id)." @{taskId=$Task.id;proposalId=$Proposal.id;compilationId=$Compilation.id};Add-SCEvent 'task.completed' "Completed $($Task.id) after validated commit." @{taskId=$Task.id;runId=$Proposal.evidence.runId;proposalId=$Proposal.id};Add-SCProgressRecord $Task $Compilation $true 'committed' 'Validated proposal committed.'|Out-Null;Add-SCCompletedTaskCount|Out-Null;Update-SCReadiness;return $true
+    $Task=Get-SCTask ([string]$Task.id)
+    $kind=if($Task.PSObject.Properties['outputKind']){[string]$Task.outputKind}else{'change'}
+    $managedChild=Get-Variable -Name SCManagedChild -Scope Script -ErrorAction SilentlyContinue
+    $requiresMerge=($managedChild-and[bool]$managedChild.Value) -and @('research','diagnosis','answer','none','no-change') -notcontains $kind
+    if($requiresMerge){
+        $Proposal.status='validated';Save-SCProposal $Proposal
+        $Task.status='validated';$Task.blockReason=$null;Save-SCTask $Task
+        Add-SCEvent 'state.validated' "Validated $($Task.id); awaiting worktree integration." @{taskId=$Task.id;proposalId=$Proposal.id;compilationId=$Compilation.id}
+        return $true
+    }
+    $Proposal.status='committed';$Proposal.committedAt=(Get-Date).ToUniversalTime().ToString('o');Save-SCProposal $Proposal;$Task.status='complete';$Task.blockReason=$null;Save-SCTask $Task;Add-SCEvent 'state.committed' "Committed completion proposal $($Proposal.id)." @{taskId=$Task.id;proposalId=$Proposal.id;compilationId=$Compilation.id};Add-SCEvent 'task.completed' "Completed $($Task.id) after validated commit." @{taskId=$Task.id;runId=$Proposal.evidence.runId;proposalId=$Proposal.id};Add-SCProgressRecord $Task $Compilation $true 'committed' 'Validated proposal committed.'|Out-Null;Add-SCCompletedTaskCount|Out-Null;Update-SCReadiness;return $true
 }
 function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
     Assert-SCInitialized;Assert-SCNotHeld;Update-SCReadiness
@@ -520,6 +530,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
                 if($acceptanceInfrastructure){
                     $task.status='needs_rework'
                     $task.blockReason="Acceptance infrastructure error after successful worker completion: $errDetail"
+                    Set-SCProperty $task 'retryDisposition' 'acceptance-repair'
                     Set-SCProperty $task 'activeWorkerSessionId' $null
                     Set-SCProperty $task 'routingNotBefore' $null
                     Set-SCProperty $task 'lastRoutingError' $null
@@ -576,6 +587,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
 
                 $task.status='needs_rework'
                 $task.blockReason=if($reasonExcerpt){"Validator rejected worker result: $reasonExcerpt"}else{'Validator rejected worker result.'}
+                Set-SCProperty $task 'retryDisposition' 'auto'
                 Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task
                 Close-SCWorkerSession $workerSessionId 'validator-rejected-nonresumable'
                 Add-SCProgressRecord $task $compilation $false 'validator-rejected' $task.blockReason|Out-Null
@@ -592,7 +604,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
     if(Commit-SCProposal $task $proposal $compilation){
         Close-SCWorkerSession $workerSessionId 'completed'
         $task=Get-SCTask $task.id;Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task
-        Write-Host "Task complete: $($task.id)"
+        if($task.status-eq'validated'){Write-Host "Task validated, awaiting merge: $($task.id)"}else{Write-Host "Task complete: $($task.id)"}
     }else{
         Close-SCWorkerSession $workerSessionId 'not-committed'
         Write-Warning "Task not committed: $($task.id)"
@@ -606,7 +618,7 @@ function Retry-SCTask([string]$Id) {
     Advance-SCTaskControlRevision $task|Out-Null
     $task.status='ready'
     $task.blockReason=$null
-    Set-SCProperty $task 'validatorRejectCount' 0
+    Set-SCProperty $task 'retryDisposition' $null
     Save-SCTask $task
     if($was-eq'complete'-or$was-eq'stale'){Invalidate-SCDependents $Id 'upstream task retried'}
     Update-SCReadiness

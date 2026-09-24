@@ -5,12 +5,7 @@ param([string]$ProjectPath,[int]$Port=7337,[string]$Token,[switch]$NoAuth)
 Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 
-. (Join-Path $PSScriptRoot 'StatefulClanker.McpCore.ps1')
-. (Join-Path $PSScriptRoot 'StatefulClanker.McpExtensions.ps1')
-. (Join-Path $PSScriptRoot 'StatefulClanker.BackendInstructions.ps1')
-. (Join-Path $PSScriptRoot 'StatefulClanker.McpWorkerPolicy.ps1')
-. (Join-Path $PSScriptRoot 'StatefulClanker.McpProtocol.ps1')
-. (Join-Path $PSScriptRoot 'StatefulClanker.SubscriptionPump.ps1')
+. (Join-Path $PSScriptRoot 'StatefulClanker.McpBootstrap.ps1')
 if($ProjectPath-and(Test-Path -LiteralPath $ProjectPath -PathType Container)){Set-McpDefaultProject $ProjectPath}
 $tokenDir=Join-Path $env:LOCALAPPDATA 'StatefulClanker';if(-not(Test-Path -LiteralPath $tokenDir)){New-Item -ItemType Directory -Force -Path $tokenDir|Out-Null};$tokenPath=Join-Path $tokenDir 'mcp-http.json';$appSettingsPath=Join-Path $tokenDir 'app.json'
 if([string]::IsNullOrWhiteSpace($Token)){

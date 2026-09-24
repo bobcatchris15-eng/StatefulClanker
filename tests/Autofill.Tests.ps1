@@ -21,14 +21,15 @@ try {
     Write-Host '  AUTOFILL 1: resident supervisor fills two slots and replenishes them without a conversational kick'
     $log=Join-Path $temp '.statefulclanker\autofill-test.log';$argLine="-NoProfile -NonInteractive -File `"$harness`" autofill run -IntervalSeconds 1 -Provider slow"
     $proc=Start-Process -FilePath $pwshPath -ArgumentList $argLine -WorkingDirectory $temp -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WindowStyle Hidden -PassThru
-    $deadline=(Get-Date).AddSeconds(35);$maxBusy=0;$complete=0
+    # Completion now includes worktree integration, not just child validation.
+    $deadline=(Get-Date).AddSeconds(65);$maxBusy=0;$complete=0
     do {
         Start-Sleep -Milliseconds 250
         $tasks=@(Get-ChildItem (Join-Path $temp '.statefulclanker\tasks') -Filter *.json|ForEach-Object{Read-JsonRetry $_.FullName})
         $busy=@($tasks|Where-Object{@('running','reviewing','validating')-contains[string]$_.status}).Count;if($busy-gt$maxBusy){$maxBusy=$busy}
         $complete=@($tasks|Where-Object{$_.status-eq'complete'}).Count
     } while($complete-lt4-and(Get-Date)-lt$deadline)
-    Assert-True ($complete-eq4) "Expected all four tasks to finish without another dispatch call; got $complete. STDOUT: $(if(Test-Path $log){Get-Content -Raw $log}) STDERR: $(if(Test-Path "$log.err"){Get-Content -Raw "$log.err"})"
+    Assert-True ($complete-eq4) "Expected all four tasks to finish without another dispatch call; got $complete. Task states: $((@($tasks|ForEach-Object{"$($_.id)=$($_.status) [$($_.blockReason)]"})) -join '; '). Supervisor: $(if(Test-Path (Join-Path $temp '.statefulclanker\autofill\supervisor.json')){Get-Content -Raw (Join-Path $temp '.statefulclanker\autofill\supervisor.json')}). STDOUT: $(if(Test-Path $log){Get-Content -Raw $log}) STDERR: $(if(Test-Path "$log.err"){Get-Content -Raw "$log.err"})"
     $mergeDeadline=(Get-Date).AddSeconds(12)
     do {
         $allMerged=$true;foreach($i in 1..4){if(-not(Test-Path (Join-Path $temp "out-a$i.txt"))){$allMerged=$false;break}}

@@ -611,9 +611,6 @@ function Get-McpResourceReadResult([string]$Uri) {
 
 function Invoke-McpRpc($Request) {
     $method=[string]$Request.method
-    if($method-eq'server/discover') {
-        return [ordered]@{jsonrpc='2.0';id=$Request.id;result=[ordered]@{resultType='complete';supportedVersions=@('2026-07-28','2025-06-18');capabilities=[ordered]@{tools=@{};resources=[ordered]@{subscribe=$true;listChanged=$false}};serverInfo=[ordered]@{name='statefulclanker';version=$script:McpVersion};instructions=Get-SCControlPlaneInstructions;_meta=@{'io.modelcontextprotocol/serverInfo'=@{name='statefulclanker';version=$script:McpVersion}}}}
-    }
     if($method-eq'initialize') {
         $response=& $script:SCBaseInvokeMcpRpc $Request
         if($response-and$response.result){$response.result['instructions']=Get-SCControlPlaneInstructions;$response.result.capabilities['resources']=@{subscribe=$true;listChanged=$false}}

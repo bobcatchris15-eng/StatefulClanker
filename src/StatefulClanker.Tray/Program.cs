@@ -2102,6 +2102,7 @@ sealed class MainForm : Form
         _tabs.TabPages.Add(BuildActivity());
         _tabs.TabPages.Add(BuildIntegrations());
         _tabs.TabPages.Add(BuildMcpImport());
+        _tabs.TabPages.Add(BuildProviders());
         center.Controls.Add(_tabs, 0, 1);
         workspace.Panel1.Controls.Add(center);
 

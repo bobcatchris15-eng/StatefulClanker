@@ -22,6 +22,7 @@ Assert-True (-not$overview.Contains('AutoScroll = true')) 'Overview reintroduced
 Assert-True ($program.Contains('SplitterWidth = 1')) 'Quiet splitter is not a precision 1px seam.'
 Assert-True ($program.Contains('FillRectangle(brush, SplitterRectangle)')) 'Splitter is not explicitly dark-painted.'
 Assert-True ($program.Contains('sealed class PrecisionTabControl')) 'Native tab chrome was not replaced by the precision-painted tab strip.'
+Assert-True ($program.Contains('_tabs.TabPages.Add(BuildProviders())')) 'CLI Backends page exists but is not exposed in the main tab strip.'
 Assert-True ($program.Contains('const int Cols = 16')) 'Blinkenlight bank is not using the dense square-lamp grid.'
 Assert-True ($program.Contains('g.FillRectangle(fill, rect)')) 'Blinkenlights are not square filled lamps.'
 $bankStart=$program.IndexOf('sealed class AgentBlinkenBank')
@@ -36,7 +37,7 @@ Assert-True ($widgets.Contains('NEXT ENDPOINT IN QUEUE')) 'Next endpoint readout
 Assert-True ($widgets.Contains('RoutingQueueInspector')) 'Next endpoint does not read live machine routing state.'
 
 Assert-True ($terminal.Contains('IsReadOnly = false')) 'Terminal became read-only.'
-Assert-True ($terminal.Contains('Win32InputMode = true')) 'Terminal lost Win32 key-record mode.'
+Assert-True ($terminal.Contains('Win32InputMode = false')) 'Terminal must use VT text input for interactive TUIs.'
 Assert-True ($terminal.Contains('INPUT_CAPTURE.TabKey | EasyTerminalControl.INPUT_CAPTURE.DirectionKeys')) 'Terminal lost Tab/arrow capture.'
 Assert-True ($terminal.Contains('PreviewMouseDown += (_, _) => FocusTerminal()')) 'Terminal click-to-focus hook is missing.'
 Assert-True ($terminal.Contains('ConsoleHasKeyboardFocus')) 'Terminal keyboard-focus diagnostic is missing.'

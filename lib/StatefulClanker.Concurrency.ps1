@@ -56,7 +56,12 @@ function Get-SCRetryableTasks {
     foreach($t in $tasks){ if($t.id){ $map[[string]$t.id] = $t } }
     $retryable = @()
     foreach($t in $tasks){
-        if(@('needs_rework','stale','failed') -notcontains [string]$t.status){ continue }
+        # A generic failure is not an instruction to rerun the worker. Only
+        # invalidated context and explicitly classified retries enter autofill.
+        if([string]$t.status-ne'stale'){
+            if([string]$t.status-ne'needs_rework'){continue}
+            if(-not$t.PSObject.Properties['retryDisposition'] -or [string]$t.retryDisposition-ne'auto'){continue}
+        }
         if([bool]$t.humanGate){ continue }
         $attempts = if ($t.PSObject.Properties['attemptCount']) { [int]$t.attemptCount } else { 0 }
         if($attempts -ge $maxAttempts){ continue }
@@ -183,6 +188,33 @@ function Get-SCParallelChildOutput($Run) {
     return [ordered]@{ stdout=[string]$stdout; stderr=[string]$stderr }
 }
 
+function Complete-SCMergedTask([string]$TaskId) {
+    $task=Get-SCTask $TaskId
+    if(@('validated','complete') -notcontains [string]$task.status){throw "Task $TaskId is not awaiting integration."}
+    $proposal=Read-SCJson (Get-SCPath ("proposals/{0}.json"-f$task.latestProposalId))
+    if($null-eq$proposal-or@('validated','committed') -notcontains [string]$proposal.status-or[string]$proposal.taskId-ne$TaskId){throw "Task $TaskId has no matching validated proposal."}
+    if([string]$task.status-eq'complete' -and [string]$proposal.status-eq'committed'){return}
+    if([string]$proposal.status-ne'committed'){$proposal.status='committed';$proposal.committedAt=[datetimeoffset]::UtcNow.ToString('o');Write-SCJson (Get-SCPath ("proposals/{0}.json"-f$proposal.id)) $proposal}
+    $task.status='complete';$task.blockReason=$null;Save-SCTask $task
+    Add-SCEvent 'state.committed' "Committed completion proposal $($proposal.id) after merge." @{taskId=$TaskId;proposalId=$proposal.id}
+    Add-SCEvent 'task.completed' "Completed $TaskId after validation and merge." @{taskId=$TaskId;proposalId=$proposal.id;runId=$proposal.evidence.runId}
+    Add-SCProgressRecord $task $null $true 'merged-committed' 'Validated worktree merged into the project.'|Out-Null
+    Add-SCCompletedTaskCount|Out-Null
+    Update-SCReadiness
+}
+
+function Stop-SCUnintegratedTask([string]$TaskId,[string]$Reason) {
+    $task=Get-SCTask $TaskId
+    if([string]$task.status-eq'validated'){
+        $task.status='needs_rework';$task.blockReason=$Reason;Set-SCProperty $task 'retryDisposition' 'integration-repair';Save-SCTask $task
+        if($task.PSObject.Properties['latestProposalId'] -and $task.latestProposalId){
+            $proposal=Read-SCJson (Get-SCPath ("proposals/{0}.json"-f$task.latestProposalId))
+            if($proposal -and [string]$proposal.status-eq'validated'){Reject-SCProposal $proposal @($Reason)}
+        }
+        Add-SCEvent 'merge.integration_failed' $Reason @{taskId=$TaskId;proposalId=$task.latestProposalId}
+    }
+}
+
 function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
     $task = Get-SCTask $Run.taskId
     $child=$null
@@ -219,13 +251,13 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
             return $entry
         }
 
-        if (@('running','reviewing','validating') -contains $task.status) {
+        if (@('running','reviewing','validating','validated') -contains $task.status) {
             $workerSessionId=if($task.PSObject.Properties['activeWorkerSessionId']){[string]$task.activeWorkerSessionId}else{$null}
             $detail=@(([string]$child.stderr -split "\r?\n")+([string]$child.stdout -split "\r?\n") |
                 Where-Object{-not[string]::IsNullOrWhiteSpace($_)} | Select-Object -Last 4) -join ' | '
             if($detail.Length-gt320){$detail=$detail.Substring(0,317)+'...'}
 
-            if(@('reviewing','validating')-contains[string]$task.status){
+            if(@('reviewing','validating','validated')-contains[string]$task.status){
                 $stage=[string]$task.status
                 $task.status='needs_rework'
                 $task.blockReason="Post-worker acceptance infrastructure crashed during $stage with exit code $($Run.process.ExitCode)"+$(if($detail){": $detail"}else{''})
@@ -255,7 +287,7 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
             Save-SCTask $task
         }
     }
-    if ($task.status -ne 'complete') {
+    if (@('complete','validated') -notcontains [string]$task.status) {
         if (-not $child) { $child=Get-SCParallelChildOutput $Run }
         $entry.reason = if ($task.blockReason) { [string]$task.blockReason } else { "cycle ended as '$($task.status)'" }
         $preservedBranch = $null
@@ -278,16 +310,26 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
         }
         return $entry
     }
+    if([string]$task.status-eq'complete'){
+        # Evidence-only tasks have no integration artifact. Their validated result
+        # is the deliverable; do not misreport a missing Git commit as a failure.
+        $entry.reason='validated evidence-only task; no merge required'
+        Remove-SCWorktree $StateRoot $Run.taskId
+        return $entry
+    }
     try {
         $entry.committed = Save-SCWorktreeWork $Run.worktree "$($Run.taskId): $($task.title)"
         if (-not $entry.committed) {
             $entry.reason = 'validated but changed no files - check the provider could actually write'
+            Stop-SCUnintegratedTask $Run.taskId $entry.reason
+            $entry.status='needs_rework'
             Remove-SCWorktree $StateRoot $Run.taskId
             return $entry
         }
     } catch {
-        $entry.reason = $_.Exception.Message
-        Remove-SCWorktree $StateRoot $Run.taskId
+        $entry.reason = "Integration commit failed; worktree kept at $($Run.worktree.path): $($_.Exception.Message)"
+        Stop-SCUnintegratedTask $Run.taskId $entry.reason
+        $entry.status='needs_rework'
         return $entry
     }
     if ($NoMerge) {
@@ -299,13 +341,14 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
     $entry.merged = $merge.merged
     if (-not $merge.merged) {
         $entry.reason = "$($merge.reason) - work kept on branch $($Run.worktree.branch)"
+        Stop-SCUnintegratedTask $Run.taskId "Merge conflict against the main tree; work preserved on $($Run.worktree.branch)."
         $current = Get-SCTask $Run.taskId
-        $current.status = 'needs_rework'
-        $current.blockReason = "Merge conflict against the main tree; work preserved on $($Run.worktree.branch)."
-        Save-SCTask $current
+        $entry.status='needs_rework'
         Add-SCEvent 'merge.conflict' $current.blockReason @{ taskId = $Run.taskId; branch = $Run.worktree.branch }
         Remove-SCWorktree $StateRoot $Run.taskId -KeepBranch
     } else {
+        Complete-SCMergedTask $Run.taskId
+        $entry.status='complete'
         Add-SCEvent 'merge.completed' "Merged $($Run.worktree.branch)." @{ taskId = $Run.taskId; branch = $Run.worktree.branch }
         Remove-SCWorktree $StateRoot $Run.taskId
     }
@@ -360,82 +403,15 @@ function Invoke-SCParallel([int]$Limit=0, [string]$Provider, [string]$Endpoint=$
 
     Write-Host 'Waiting for cycles to finish...'
     foreach ($r in $running) { $r.process.WaitForExit() }
-    foreach ($r in $running) {
-        if ($r.process.ExitCode -ne 0) {
-            $child=Get-SCParallelChildOutput $r
-            Write-Warning "parallel child $($r.taskId) exited $($r.process.ExitCode). STDOUT: $($child.stdout) STDERR: $($child.stderr)"
-        }
-    }
-
     $results = @()
     foreach ($r in $running) {
-        $task = Get-SCTask $r.taskId
-        $entry = [ordered]@{ taskId = $r.taskId; status = $task.status; committed = $false; merged = $false; reason = $null; logPath = $r.logPath }
-        if ($task.status -ne 'complete') {
-            $child=Get-SCParallelChildOutput $r
-            $entry.reason = if ($task.blockReason) { [string]$task.blockReason } else { "cycle ended as '$($task.status)'" }
-            Write-Warning "parallel child $($r.taskId) exited $($r.process.ExitCode) without completing task. STDOUT: $($child.stdout) STDERR: $($child.stderr)"
-            $preservedBranch = $null
-            try {
-                $hasWork = Save-SCWorktreeWork $r.worktree "failed $($r.taskId) attempt: $($entry.reason)"
-                if ($hasWork) {
-                    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
-                    $slug = ($r.taskId -replace '[^A-Za-z0-9_.-]', '-')
-                    $failBranch = "failed/$slug/$stamp"
-                    & git -C $stateRoot branch $failBranch $r.worktree.branch 2>$null | Out-Null
-                    $preservedBranch = $failBranch
-                    Add-SCEvent 'worktree.failed.preserved' "Preserved worktree snapshot for failed $($r.taskId)." @{ taskId = $r.taskId; branch = $failBranch }
-                }
-            } catch {}
-            if ($preservedBranch) {
-                $entry.reason = if ($entry.reason) { "$($entry.reason) (work preserved on $preservedBranch)" } else { "work preserved on $preservedBranch" }
-                Remove-SCWorktree $stateRoot $r.taskId -KeepBranch
-            } else {
-                Remove-SCWorktree $stateRoot $r.taskId
-            }
-            $results += $entry
-            continue
-        }
-        try {
-            $entry.committed = Save-SCWorktreeWork $r.worktree "$($r.taskId): $($task.title)"
-            if (-not $entry.committed) {
-                $entry.reason = 'validated but changed no files - check the provider could actually write'
-                Remove-SCWorktree $stateRoot $r.taskId
-                $results += $entry
-                continue
-            }
-        } catch {
-            $entry.reason = $_.Exception.Message
-            Remove-SCWorktree $stateRoot $r.taskId
-            $results += $entry
-            continue
-        }
-        if ($NoMerge) {
-            $entry.reason = "left on branch $($r.worktree.branch)"
-            Remove-SCWorktree $stateRoot $r.taskId -KeepBranch
-            $results += $entry
-            continue
-        }
-        $merge = Merge-SCWorktreeBranch $stateRoot $r.worktree
-        $entry.merged = $merge.merged
-        if (-not $merge.merged) {
-            $entry.reason = "$($merge.reason) - work kept on branch $($r.worktree.branch)"
-            $current = Get-SCTask $r.taskId
-            $current.status = 'needs_rework'
-            $current.blockReason = "Merge conflict against the main tree; work preserved on $($r.worktree.branch)."
-            Save-SCTask $current
-            Add-SCEvent 'merge.conflict' $current.blockReason @{ taskId = $r.taskId; branch = $r.worktree.branch }
-            Remove-SCWorktree $stateRoot $r.taskId -KeepBranch
-        } else {
-            Add-SCEvent 'merge.completed' "Merged $($r.worktree.branch)." @{ taskId = $r.taskId; branch = $r.worktree.branch }
-            Remove-SCWorktree $stateRoot $r.taskId
-        }
-        $results += $entry
+        try { $results += ,(Complete-SCParallelChild $stateRoot $r -NoMerge:$NoMerge) }
+        finally { try { $r.process.Dispose() } catch {} }
     }
 
     Write-Host ''
     foreach ($e in $results) {
-        $flag = if ($e.merged) { 'MERGED  ' } elseif ($e.status -eq 'complete') { 'HELD    ' } else { 'FAILED  ' }
+        $flag = if ($e.merged) { 'MERGED  ' } elseif (@('complete','validated')-contains[string]$e.status) { 'HELD    ' } else { 'FAILED  ' }
         $suffix = if ($e.reason) { " - $($e.reason)" } else { '' }
         Write-Host "$flag $($e.taskId) [$($e.status)]$suffix"
     }

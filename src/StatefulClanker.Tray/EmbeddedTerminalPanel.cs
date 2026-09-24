@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Windows.Forms.Integration;
 using EasyWindowsTerminalControl;
 using Microsoft.Terminal.Wpf;
@@ -16,6 +18,7 @@ sealed class EmbeddedTerminalPanel : UserControl
     readonly TableLayoutPanel _layout = new();
     readonly FlowLayoutPanel _toolbar = new();
     readonly ComboBox _preset = new();
+    readonly ComboBox _piEndpoint = new();
     readonly TextBox _custom = new();
     readonly Button _start = new();
     readonly Button _restart = new();
@@ -59,6 +62,10 @@ sealed class EmbeddedTerminalPanel : UserControl
     EasyTerminalControl? _terminal;
     string? _projectPath;
     string _currentCommand = "";
+    sealed record PiEndpoint(string Provider, string Model, string Display)
+    {
+        public override string ToString() => Display;
+    }
 
     static readonly (string name, string command)[] Presets =
     {
@@ -101,6 +108,12 @@ sealed class EmbeddedTerminalPanel : UserControl
         _custom.PlaceholderText = "command + arguments";
         _custom.Visible = false;
 
+        _piEndpoint.DropDownStyle = ComboBoxStyle.DropDownList;
+        _piEndpoint.Width = 250;
+        _piEndpoint.Margin = new Padding(0, 2, 6, 0);
+        _piEndpoint.Visible = false;
+        _piEndpoint.DropDown += (_, _) => RefreshPiEndpoints();
+
         _start.Text = "Start";
         _start.Width = 72;
         _start.Height = 28;
@@ -122,7 +135,7 @@ sealed class EmbeddedTerminalPanel : UserControl
         _toolbar.Controls.AddRange(new Control[]
         {
             new Label { Text = "TUI / CONSOLE", AutoSize = true, ForeColor = Theme.Accent, Font = new Font("Cascadia Mono", 7.5f, FontStyle.Bold), Margin = new Padding(0, 9, 9, 0) },
-            _preset, _custom, _start, _restart, _stop
+            _preset, _custom, _piEndpoint, _start, _restart, _stop
         });
 
         _status.Dock = DockStyle.Fill;
@@ -183,11 +196,12 @@ sealed class EmbeddedTerminalPanel : UserControl
 
     static string QuoteIfNeeded(string s) => s.Contains(' ') && !s.StartsWith('"') ? $"\"{s}\"" : s;
 
-    static string BundledPiInvocation()
+    static string BundledPiInvocation(PiEndpoint endpoint)
     {
         var path = System.IO.Path.Combine(Runtime.FindRoot(), "pi", "pi.cmd");
-        if (!File.Exists(path)) return "pi";
-        return "& '" + path.Replace("'", "''") + "'";
+        var executable = File.Exists(path) ? "& '" + path.Replace("'", "''") + "'" : "pi";
+        var model = (endpoint.Provider + "/" + endpoint.Model).Replace("'", "''");
+        return executable + " --model '" + model + "'";
     }
 
 
@@ -197,7 +211,8 @@ sealed class EmbeddedTerminalPanel : UserControl
         var selected = Presets[_preset.SelectedIndex];
         if (selected.name == "PowerShell") return ShellCommand();
         if (selected.name == "Custom") return ToolViaShell(_custom.Text.Trim());
-        if (selected.command == "__STATEFULCLANKER_PI__") return ToolViaShell(BundledPiInvocation());
+        if (selected.command == "__STATEFULCLANKER_PI__")
+            return _piEndpoint.SelectedItem is PiEndpoint endpoint ? ToolViaShell(BundledPiInvocation(endpoint)) : "";
         return ToolViaShell(selected.command);
     }
 
@@ -215,12 +230,68 @@ sealed class EmbeddedTerminalPanel : UserControl
     void UpdateCustomVisibility()
     {
         _custom.Visible = _preset.SelectedItem?.ToString() == "Custom";
+        var isPi = _preset.SelectedItem?.ToString() == "Pi (bundled)";
+        _piEndpoint.Visible = isPi;
+        if (isPi)
+        {
+            RefreshPiEndpoints();
+            if (_piEndpoint.SelectedItem is null)
+                _status.Text = "Select a Pi endpoint, then press Start.";
+        }
+    }
+
+    void RefreshPiEndpoints()
+    {
+        var selected = (_piEndpoint.SelectedItem as PiEndpoint) is { } current
+            ? current.Provider + "/" + current.Model : null;
+        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "StatefulClanker", "endpoints.json");
+        var options = new List<PiEndpoint>();
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            foreach (var entry in document.RootElement.GetProperty("entries").EnumerateObject())
+            {
+                var value = entry.Value;
+                if (value.TryGetProperty("enabled", out var enabled) && enabled.ValueKind == JsonValueKind.False) continue;
+                if (!value.TryGetProperty("connection", out var connectionElement) ||
+                    !value.TryGetProperty("model", out var modelElement)) continue;
+                var connection = connectionElement.GetString();
+                var model = modelElement.GetString();
+                if (string.IsNullOrWhiteSpace(connection) || string.IsNullOrWhiteSpace(model)) continue;
+                var provider = "sc-" + Regex.Replace(connection.ToLowerInvariant(), "[^a-z0-9._-]+", "-").Trim('-');
+                var displayName = value.TryGetProperty("displayName", out var displayElement)
+                    ? displayElement.GetString() : null;
+                options.Add(new PiEndpoint(provider, model,
+                    connection + " / " + (string.IsNullOrWhiteSpace(displayName) ? model : displayName)));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException)
+        {
+            _status.Text = "Pi endpoints unavailable: " + ex.Message;
+            _status.ForeColor = Theme.Error;
+        }
+        _piEndpoint.BeginUpdate();
+        try
+        {
+            _piEndpoint.Items.Clear();
+            foreach (var option in options.OrderBy(o => o.Display, StringComparer.OrdinalIgnoreCase))
+                _piEndpoint.Items.Add(option);
+            if (selected is not null)
+                _piEndpoint.SelectedItem = options.FirstOrDefault(o => o.Provider + "/" + o.Model == selected);
+        }
+        finally { _piEndpoint.EndUpdate(); }
     }
 
     async Task StartSelectedAsync(bool forceRestart)
     {
         var command = SelectedCommand();
-        if (string.IsNullOrWhiteSpace(command)) return;
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            _status.Text = "Select a Pi endpoint, then press Start.";
+            _status.ForeColor = Theme.Accent;
+            return;
+        }
         await StartCommandAsync(command, forceRestart);
     }
 
@@ -246,7 +317,9 @@ sealed class EmbeddedTerminalPanel : UserControl
                 IsCursorVisible = true,
                 FontFamilyWhenSettingTheme = new System.Windows.Media.FontFamily("Cascadia Mono"),
                 FontSizeWhenSettingTheme = 11,
-                Win32InputMode = true,
+                // The native renderer can report focus while Win32 key-record mode
+                // leaves the ConPTY application without usable text input.
+                Win32InputMode = false,
                 InputCapture = EasyTerminalControl.INPUT_CAPTURE.TabKey | EasyTerminalControl.INPUT_CAPTURE.DirectionKeys,
                 Theme = BuildTerminalTheme()
             };
@@ -328,7 +401,7 @@ sealed class EmbeddedTerminalPanel : UserControl
     public void StartBundledPi()
     {
         _preset.SelectedItem = "Pi (bundled)";
-        _ = StartCommandAsync(ToolViaShell(BundledPiInvocation()), true);
+        if (_piEndpoint.SelectedItem is PiEndpoint) _ = StartSelectedAsync(true);
     }
 
     public bool ConsoleHasKeyboardFocus =>

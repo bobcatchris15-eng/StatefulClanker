@@ -109,6 +109,9 @@ if($LASTEXITCODE-ne0){throw "npm install for Pi failed with exit code $LASTEXITC
 Copy-Item -LiteralPath $nodePath -Destination (Join-Path $piRuntimeDir 'node.exe') -Force
 $piCli=Join-Path $piRuntimeDir 'node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js'
 if(-not(Test-Path -LiteralPath $piCli)){throw "Pi package installed but CLI was not found at $piCli"}
+& (Join-Path $installDir 'Trim-PiRuntime.ps1') -RuntimeDir $piRuntimeDir
+& (Join-Path $piRuntimeDir 'node.exe') $piCli --version
+if($LASTEXITCODE-ne0){throw "Trimmed Pi runtime failed its startup check with exit code $LASTEXITCODE"}
 Write-Host "  Pi runtime: $piRuntimeDir"
 
 function Find-Iscc {

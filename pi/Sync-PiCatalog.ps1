@@ -4,6 +4,18 @@ $connectionsPath=Join-Path $machineRoot 'connections.json'
 $endpointsPath=Join-Path $machineRoot 'endpoints.json'
 $piDir=Join-Path $machineRoot 'pi'
 New-Item -ItemType Directory -Force -Path $piDir|Out-Null
+function Write-AtomicUtf8([string]$Path,[string]$Text){
+    $temporary=Join-Path (Split-Path -Parent $Path) ('.'+[IO.Path]::GetFileName($Path)+'.'+[guid]::NewGuid().ToString('N')+'.tmp')
+    $backup=Join-Path (Split-Path -Parent $Path) ('.'+[IO.Path]::GetFileName($Path)+'.'+[guid]::NewGuid().ToString('N')+'.bak')
+    try{
+        [IO.File]::WriteAllText($temporary,$Text,(New-Object Text.UTF8Encoding($false)))
+        if(Test-Path -LiteralPath $Path){[IO.File]::Replace($temporary,$Path,$backup)}
+        else{[IO.File]::Move($temporary,$Path)}
+    }finally{
+        if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force}
+        if(Test-Path -LiteralPath $backup){Remove-Item -LiteralPath $backup -Force}
+    }
+}
 $settingsPath=Join-Path $piDir 'settings.json'
 $settings=if(Test-Path -LiteralPath $settingsPath){
     try{Get-Content -Raw -LiteralPath $settingsPath|ConvertFrom-Json}catch{[pscustomobject]@{}}
@@ -14,7 +26,7 @@ if(-not$settings.PSObject.Properties['compaction']){
 $settings.compaction|Add-Member -NotePropertyName enabled -NotePropertyValue $true -Force
 $settings.compaction|Add-Member -NotePropertyName keepRecentTokens -NotePropertyValue 12000 -Force
 $settingsJson=$settings|ConvertTo-Json -Depth 30
-[IO.File]::WriteAllText($settingsPath,$settingsJson,(New-Object Text.UTF8Encoding($false)))
+Write-AtomicUtf8 $settingsPath $settingsJson
 if(-not(Test-Path -LiteralPath $connectionsPath)-or-not(Test-Path -LiteralPath $endpointsPath)){exit 0}
 $connections=(Get-Content -Raw -LiteralPath $connectionsPath|ConvertFrom-Json).connections
 $endpointDoc=Get-Content -Raw -LiteralPath $endpointsPath|ConvertFrom-Json
@@ -101,4 +113,4 @@ foreach($connectionName in $groups.Keys){
 }
 $out=[ordered]@{providers=$providers}
 $json=$out|ConvertTo-Json -Depth 30
-[IO.File]::WriteAllText((Join-Path $piDir 'models.json'),$json,(New-Object Text.UTF8Encoding($false)))
+Write-AtomicUtf8 (Join-Path $piDir 'models.json') $json

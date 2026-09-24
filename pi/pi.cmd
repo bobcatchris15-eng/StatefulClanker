@@ -1,7 +1,8 @@
 @echo off
 setlocal
 set "PI_CODING_AGENT_DIR=%LOCALAPPDATA%\StatefulClanker\pi"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Sync-PiCatalog.ps1" >nul 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Sync-PiCatalog.ps1"
+if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 if exist "%~dp0runtime\node.exe" (
   "%~dp0runtime\node.exe" "%~dp0runtime\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js" --extension "%~dp0extensions\statefulclanker.ts" --skill "%~dp0..\skills\statefulclanker-planner\SKILL.md" %*
   exit /b %ERRORLEVEL%

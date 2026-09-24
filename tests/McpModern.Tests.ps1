@@ -10,7 +10,7 @@ $temp=Join-Path ([IO.Path]::GetTempPath()) ('statefulclanker-mcp-modern-'+[Guid]
 $oldLocal=$env:LOCALAPPDATA;$env:LOCALAPPDATA=Join-Path $temp 'local';New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA|Out-Null
 try {
     Push-Location $temp;& $harness init|Out-Null;& $harness goal -Message 'Exercise dual-era MCP intent and event flow.'|Out-Null;Pop-Location
-    . (Join-Path $repo 'mcp\StatefulClanker.McpCore.ps1');. (Join-Path $repo 'mcp\StatefulClanker.McpExtensions.ps1');. (Join-Path $repo 'mcp\StatefulClanker.BackendInstructions.ps1');. (Join-Path $repo 'mcp\StatefulClanker.McpWorkerPolicy.ps1');. (Join-Path $repo 'mcp\StatefulClanker.McpProtocol.ps1');Set-McpDefaultProject $temp
+    . (Join-Path $repo 'mcp\StatefulClanker.McpBootstrap.ps1');Set-McpDefaultProject $temp
 
     Write-Host '  MCP MODERN 1: server/discover advertises the modern era without legacy handshake state'
     $discover=Invoke-McpRpc ([pscustomobject]@{jsonrpc='2.0';id='d1';method='server/discover';params=[pscustomobject]@{_meta=New-ModernMeta}})

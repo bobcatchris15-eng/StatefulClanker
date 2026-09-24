@@ -71,7 +71,9 @@ Source: "{#RepoRoot}\skills\*";                    DestDir: "{app}\skills";   Fl
 Source: "{#RepoRoot}\examples\*";                  DestDir: "{app}\examples"; Flags: ignoreversion recursesubdirs
 Source: "{#RepoRoot}\tests\*";                     DestDir: "{app}\tests";    Flags: ignoreversion recursesubdirs
 Source: "{#RepoRoot}\install\StatefulClanker.ico"; DestDir: "{app}\install";  Flags: ignoreversion
-Source: "{#RepoRoot}\pi\*";                       DestDir: "{app}\pi";       Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#RepoRoot}\pi\*.cmd";                   DestDir: "{app}\pi";       Flags: ignoreversion
+Source: "{#RepoRoot}\pi\*.ps1";                   DestDir: "{app}\pi";       Flags: ignoreversion
+Source: "{#RepoRoot}\pi\extensions\*";           DestDir: "{app}\pi\extensions"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#RepoRoot}\install\pi-runtime\*";      DestDir: "{app}\pi\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
