@@ -4,7 +4,7 @@ namespace StatefulClanker.Planner;
 
 internal static class Program
 {
-    static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+    static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
 
     static int Main(string[] args)
     {
