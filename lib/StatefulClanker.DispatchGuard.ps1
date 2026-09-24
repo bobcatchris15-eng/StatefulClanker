@@ -26,14 +26,14 @@ function Assert-SCNoAutofillConflict {
     }
 }
 
-function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride) {
+function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
     Assert-SCDispatchAuthority
     Assert-SCNoAutofillConflict
-    return (& $script:SCDispatchGuardTaskBase $RequestedTaskId $ProviderOverride)
+    return (& $script:SCDispatchGuardTaskBase $RequestedTaskId $ProviderOverride $EndpointOverride $ConnectionOverride)
 }
 
-function Invoke-SCParallel([int]$MaxConcurrent,[string]$ProviderOverride,[string]$HarnessPath,[switch]$NoMerge) {
+function Invoke-SCParallel([int]$MaxConcurrent,[string]$ProviderOverride,[string]$HarnessPath,[switch]$NoMerge,[string]$Endpoint=$null,[string]$Connection=$null) {
     Assert-SCDispatchAuthority
     Assert-SCNoAutofillConflict
-    return (& $script:SCDispatchGuardParallelBase $MaxConcurrent $ProviderOverride $HarnessPath -NoMerge:$NoMerge)
+    return (& $script:SCDispatchGuardParallelBase $MaxConcurrent $ProviderOverride $HarnessPath -NoMerge:$NoMerge -Endpoint:$Endpoint -Connection:$Connection)
 }

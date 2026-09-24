@@ -155,6 +155,9 @@ if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Pi compaction tes
 Write-Host 'STEP 8ac: atomic plan import and approval gate'
 & (Join-Path $PSScriptRoot 'PlanStartupGuard.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Plan startup guard tests failed (exit $LASTEXITCODE)." }
+Write-Host 'STEP 8ad: Pi startup guidance delivery'
+& (Join-Path $PSScriptRoot 'PiStartupDelivery.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Pi startup delivery tests failed (exit $LASTEXITCODE)." }
 
 Write-Host 'STEP 8b: prompt delivery'
 & (Join-Path $PSScriptRoot 'Prompt.Tests.ps1')

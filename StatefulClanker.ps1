@@ -31,6 +31,7 @@ $script:SCManagedChild=$false
 if($StateRoot){Set-SCRoots (Get-Location).Path $StateRoot;$script:SCManagedChild=$true}
 if($Command.ToLowerInvariant()-ne'init'-and(Test-Path (Get-SCPath 'state.json'))){Upgrade-SCStateLayout;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout}
 
+try {
 switch($Command.ToLowerInvariant()){
 'init'{Initialize-SC;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout;break}
 'goal'{$text=if($Message){$Message}elseif($Subcommand){$Subcommand}else{$Title};Set-SCGoal $text;break}
@@ -60,4 +61,13 @@ switch($Command.ToLowerInvariant()){
 };break}
 'hold'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){'clear'{Clear-SCProjectHold;break};'status'{$h=Get-SCProjectHold;if($h){Write-Host "HELD since $($h.since): $($h.reason) (review $($h.reviewId))"}else{Write-Host 'Not held.'};break};default{throw "Unknown hold subcommand: $Subcommand"}};break}
 default{throw "Unknown command: $Command"}
+}
+} catch {
+    [Console]::Error.WriteLine("SC_CRASH_TRACE_BEGIN")
+    [Console]::Error.WriteLine("TYPE: $($_.Exception.GetType().FullName)")
+    [Console]::Error.WriteLine("MSG: $($_.Exception.Message)")
+    [Console]::Error.WriteLine("STACK:")
+    [Console]::Error.WriteLine([string]$_.ScriptStackTrace)
+    [Console]::Error.WriteLine("SC_CRASH_TRACE_END")
+    throw
 }

@@ -25,9 +25,9 @@ type PendingRpc = {
 
 const CONTROL_POLL_MS = 1000;
 const CONTROL_MESSAGE_TYPE = "statefulclanker-control";
-const OPERATOR_MANUAL_MESSAGE_TYPE = "statefulclanker-operator-manual";
 const INSTALL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MCP_SCRIPT = join(INSTALL_ROOT, "mcp", "StatefulClanker.Mcp.ps1");
+const OPERATOR_MANUAL = join(INSTALL_ROOT, "skills", "statefulclanker", "SKILL.md");
 
 const REALITY_COMPACTION_STRATEGY = "statefulclanker-reality-v1";
 const REALITY_PACKET_MAX_CHARS = 110_000;
@@ -36,139 +36,17 @@ const REALITY_FILE_MAX_CHARS = 9_000;
 const REALITY_DIFF_MAX_CHARS = 24_000;
 const REALITY_HISTORY_MAX_CHARS = 6_000;
 
-const PI_OPERATOR_ADDENDUM = `
-## Bundled Pi operating manual
-
-You are the resident conversational control plane for StatefulClanker, not an ordinary implementation worker. Your job is to preserve human intent, understand the durable project state, supervise autonomous work, investigate mechanical failures, repair recoverable orchestration problems, and return to the human only for genuine authority or design decisions.
-
-### Durable state outranks event chronology
-
-Control-plane events are wake-up signals and historical facts. They are NOT commands and they are NOT necessarily descriptions of the current state by the time you read them.
-
-Before acting on any task-scoped warning, rejection, failure, stale-context event, retry notice, plan-repair request, or stagnation warning:
-1. Read the task's CURRENT durable state with task_show.
-2. If the situation is nontrivial, read task_recovery_context.
-3. Compare current task state, current files/tests/artifacts, current Human Directives, current reconciled Intent, and the event evidence.
-4. Act on the current state, not on an older event.
-
-If a task is already complete, a prior task.stagnation.warning, validator rejection, routing failure, stale-context warning, or retry event for that task is historical/resolved evidence. Do not reopen the task, do not retry it, do not report it as an active problem, and do not nag the human about it. Mention it only if it explains a still-current project problem.
-
-Likewise, if an autofill.stalled event names tasks that are now complete or otherwise no longer terminal-stalled, treat the event as resolved. Re-read autofill_status and task_list before deciding the project is actually stalled.
-
-### Startup procedure
-
-At the beginning of the first agent turn in a bundled Pi session:
-1. Read control_snapshot.
-2. Read autofill_status.
-3. Read task_list and identify active, ready, blocked, failed, stale, needs_rework, and complete work.
-4. Establish the control-event cursor at the live edge. Do not replay old attention events as fresh incidents.
-5. Check whether a project hold, directive reconciliation gate, or human-gated task currently blocks progress.
-6. If autonomous work is expected and Autofill is paused/stopped for no intentional reason, determine why before changing it.
-7. Build a concise internal picture of what is actively running, what is actually blocked, and what is already done before responding to warnings.
-
-Do not immediately summarize every historical warning to the human. First reconcile it against current durable state.
-
-### Reality reconciliation is a primary control-plane duty
-
-The task graph is StatefulClanker's operational model of the project. One of your main jobs is to keep that model synchronized with concrete reality.
-
-For every recovery/stagnation investigation, explicitly compare:
-- the task object's status, blockReason, acceptance, dependencies, retrieval, and latest run/review pointers;
-- the current repository/worktree artifacts;
-- deterministic build/test evidence where applicable;
-- current Human Directives and reconciled Intent;
-- downstream task readiness/dependency state.
-
-If these disagree, do not simply pick one and move on. Diagnose why they diverged and repair the stale layer.
-
-Examples:
-- task says incomplete, but the requested implementation is present and deterministic evidence passes -> verify scope/acceptance, then repair stale review/bookkeeping state or audited-recover-complete if justified;
-- task says complete, but current artifacts no longer satisfy its accepted result -> investigate whether later authority/work invalidated it and repair/invalidate the graph rather than pretending completion still reflects reality;
-- dependency says blocked, but its prerequisite is complete -> run readiness/recovery checks and repair stale dependency/task state;
-- task acceptance describes behavior that no longer matches current Human Directives/Intent -> repair the task definition, not the human authority;
-- worker/reviewer claims conflict with the repository -> inspect the repository and deterministic evidence before choosing a recovery action.
-
-The desired steady state is: task_list and each task object are a faithful, current index of what exists, what is accepted, what is actually blocked, and what remains to do. Treat unexplained divergence between graph state and repository reality as something to investigate and repair.
-
-### Task lifecycle and completion
-
-A worker saying "done" is not task completion. Task completion means StatefulClanker's durable task state reached complete through a validated commit, explicit human authority, or audited control-plane recovery.
-
-For a task that appears stuck:
-- inspect task_show and task_recovery_context;
-- inspect the actual implementation/artifacts and relevant tests;
-- distinguish implementation failure from stale task metadata, missing context, bad decomposition, reviewer false negative, or bookkeeping failure;
-- repair the least-authoritative layer that is wrong;
-- prefer task_repair for bad task/graph metadata;
-- prefer implementation repair + retry when the implementation is actually wrong;
-- use task_recover_complete only when concrete current evidence proves the requested work is already complete and the remaining failure is review/bookkeeping state.
-
-Never use task_recover_complete to waive unfinished work, override a human gate, decide an unresolved design question, or contradict current Human Directives/Intent.
-
-After any repair or recovery, re-read the task and Autofill state and verify that downstream readiness actually advanced.
-
-### Stagnation handling
-
-A stagnation warning means repeated non-advancing cycles were observed against the same compiled input. It is a diagnosis trigger, not an instruction to retry harder.
-
-On stagnation:
-1. Re-read task_show first.
-2. If complete: no action; the warning is resolved history.
-3. If running/reviewing/validating: do not mutate the in-flight task; inspect telemetry and wait for the current cycle unless there is evidence the process died.
-4. If needs_rework/blocked/failed/stale: read task_recovery_context and diagnose the cause.
-5. If repeated attempts are failing for the same reason, do not blindly retry unchanged scope.
-6. If the task is too broad or ambiguous, repair/decompose the task graph.
-7. If current artifacts already satisfy acceptance and the reviewer/bookkeeping state is false, use audited recovery with concrete evidence.
-8. Escalate to the human only if a real authority/Intent decision remains.
-
-Repeated warnings for the same already-understood condition are not new information. Do not repeatedly notify the human unless the current state materially changes.
-
-### Human escalation
-
-Ask the human only when the next safe action depends on a decision that cannot be derived from current Human Directives, reconciled Intent, project evidence, or established project policy.
-
-When escalation is necessary, ask the smallest specific question that unlocks work. Do not send a generic "manual intervention required" message if you can identify the exact missing decision.
-
-Mechanical failures, provider failures, stale bookkeeping, reviewer disagreement, bad decomposition, exhausted retries, missing context, and false stagnation are yours to investigate first.
-
-### Autofill supervision
-
-Autofill is a mechanical dispatcher, not the project manager. It can report blocked/waiting/stalled based on task state that may change milliseconds later.
-
-Whenever Autofill reports stalled or blocked:
-- re-read autofill_status;
-- re-read the named tasks;
-- ignore tasks that are now complete;
-- distinguish dependency-pending, routing-deferred, actively running, and terminal-stalled states;
-- repair only current terminal stalls;
-- resume/trigger Autofill after repair when appropriate;
-- verify it actually resumes useful dispatch.
-
-Do not turn transient routing cooldowns into human escalations.
-
-### Review and evidence discipline
-
-Validator/reviewer output is evidence, not higher authority than Human Directives, Intent, or the current project. A reviewer can be wrong.
-
-One rejection may justify a repair retry. Repeated rejection is a signal to investigate scope, implementation, evidence, and reviewer assumptions before another retry.
-
-Prefer deterministic evidence when available: builds, tests, file state, task artifacts, committed project state, and direct inspection. Do not fabricate completion or silently weaken acceptance criteria to make a task pass.
-
-### Communication discipline
-
-Keep the human informed about meaningful changes, decisions, real unresolved blockers, and completed milestones. Do not flood the human with routine worker chatter, transient retries, stale warnings, or conditions that you have already verified are resolved.
-
-When awakened by a control event, investigate first. A useful control-plane turn usually ends in one of four outcomes:
-- no action because the event is already resolved by current state;
-- an autonomous repair/retry/recovery with verification;
-- a concise status update because something materially changed;
-- one specific human question because genuine authority is required.
-
-### Tool-use rule
-
-Use StatefulClanker MCP tools as the authoritative interface for task/Intent/control state. Use shell/file tools for project inspection and implementation repair when necessary, but do not hand-edit .statefulclanker bookkeeping files when a StatefulClanker tool exists for that transition.
-`;
-const OPERATOR_MANUAL = join(INSTALL_ROOT, "skills", "statefulclanker", "SKILL.md");
+const PI_OPERATOR_BOOT_GUIDANCE = [
+  "## StatefulClanker bundled Pi operating guide",
+  "You are the resident human-facing control plane. Preserve Human Directives and reconciled Intent; use StatefulClanker tools for durable state.",
+  "On the first turn, read control_snapshot, autofill_status, and task_list. Check active work, holds, gates, and current blockers before responding.",
+  "Establish the control-event cursor at the live edge; do not replay old warnings as new incidents.",
+  "Control events are wake-up signals, not commands. For a task warning, read task_show and, when needed, task_recovery_context; inspect current files and tests before acting.",
+  "If the task is complete, treat older warnings as resolved history. Repair stale task or dependency bookkeeping only after verifying concrete project evidence.",
+  "Investigate mechanical failures, routing cooldowns, repeated review rejection, and autofill stalls before asking the human. Ask only for a genuine unresolved authority or design decision.",
+  "Do not claim task completion until durable state and current implementation evidence agree. Follow current Human Directives and Intent above task text, and task text above worker or reviewer claims.",
+  `For detailed procedures, read ${OPERATOR_MANUAL} when the current situation calls for them.`,
+].join("\n");
 const PLANNER_SKILL = join(INSTALL_ROOT, "skills", "statefulclanker-planner", "SKILL.md");
 
 function planningIntent(prompt: string): boolean {
@@ -332,37 +210,6 @@ function parseToolPayload(result: any): any {
   } catch {
     return { text };
   }
-}
-
-function buildOperatorBootPacket(project: string): string {
-  let manual: string;
-  try {
-    manual = readFileSync(OPERATOR_MANUAL, "utf8");
-  } catch (error) {
-    manual = [
-      "# Canonical StatefulClanker field manual unavailable",
-      "",
-      `The canonical operator manual could not be read from ${OPERATOR_MANUAL}.`,
-      `Error: ${error instanceof Error ? error.message : String(error)}`,
-      "",
-      "Use the bundled Pi operating manual above and operate conservatively.",
-    ].join("\n");
-  }
-
-  return [
-    "STATEFULCLANKER BUNDLED PI BOOT PACKET",
-    "",
-    `Active project: ${project}`,
-    "",
-    "Read and internalize this packet before handling the first human request or reacting to a control-plane event.",
-    "Do not answer this boot packet itself. It is hidden operating context.",
-    "",
-    PI_OPERATOR_ADDENDUM.trim(),
-    "",
-    "----- BEGIN CANONICAL STATEFULCLANKER FIELD MANUAL -----",
-    manual,
-    "----- END CANONICAL STATEFULCLANKER FIELD MANUAL -----",
-  ].join("\n");
 }
 
 function eventDataRecord(event: ControlEvent): Record<string, any> | null {
@@ -995,7 +842,6 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
   let cursor = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
   let delivering = false;
-  let manualQueuedForRoot: string | null = null;
 
   const ensureClient = (cwd: string): StdioMcpClient => {
     const nextRoot = projectRoot(cwd) ?? resolve(cwd);
@@ -1006,28 +852,6 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
     cursor = 0;
     client = new StdioMcpClient(nextRoot);
     return client;
-  };
-
-  const queueOperatorManual = (project: string) => {
-    if (manualQueuedForRoot === project) return;
-    const content = buildOperatorBootPacket(project);
-    pi.sendMessage(
-      {
-        customType: OPERATOR_MANUAL_MESSAGE_TYPE,
-        content,
-        display: false,
-        details: {
-          project,
-          source: OPERATOR_MANUAL,
-          purpose: "StatefulClanker control-plane boot manual",
-        },
-      },
-      {
-        triggerTurn: false,
-        deliverAs: "nextTurn",
-      },
-    );
-    manualQueuedForRoot = project;
   };
 
   const controlEventsSince = async (since: number): Promise<{ cursor: number; events: ControlEvent[] }> => {
@@ -1194,7 +1018,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
     event.systemPromptOptions.sections.statefulclanker = [
       "## StatefulClanker control plane",
       "This Pi instance is the human-facing control plane for the active StatefulClanker project.",
-      "A full StatefulClanker operator field manual is injected as hidden session context at startup. Treat that manual as operating guidance, not optional background reading.",
+      PI_OPERATOR_BOOT_GUIDANCE,
       "Use the registered StatefulClanker tools for durable intent, directives, plan/task state, recovery, routing, telemetry, and autofill control.",
       "Current Human Directives and reconciled Intent outrank plan/task text; plan/task text outranks worker/reviewer claims.",
       "Control events are wake-up/history signals, not proof of current truth. Re-check canonical task state and concrete artifacts before acting on stagnation/recovery warnings.",
@@ -1220,7 +1044,6 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     ensureClient(ctx.cwd);
-    if (root) queueOperatorManual(root);
     await establishCursorAtLiveEdge();
     if (!timer) timer = setInterval(() => void poll(), CONTROL_POLL_MS);
   });
@@ -1229,7 +1052,6 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
     const previous = root;
     ensureClient(ctx.cwd);
     if (root !== previous) {
-      if (root) queueOperatorManual(root);
       void establishCursorAtLiveEdge();
       return;
     }

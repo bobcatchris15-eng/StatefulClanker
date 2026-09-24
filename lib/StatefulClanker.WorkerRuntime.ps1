@@ -1,4 +1,4 @@
-﻿# StatefulClanker-owned minimal worker harness for direct inference backends.
+# StatefulClanker-owned minimal worker harness for direct inference backends.
 # CLI providers continue through the existing provider harness path. API providers
 # use machine-local connection profiles and this bounded coding/tool loop.
 
@@ -416,7 +416,12 @@ function ConvertTo-SCGeminiMessages($Messages) {
                 if($id){$callNames[$id]=$name}
                 $raw=Get-SCField $fn 'arguments'
                 $args=try{if([string]::IsNullOrWhiteSpace([string]$raw)){[pscustomobject]@{}}else{[string]$raw|ConvertFrom-Json}}catch{[pscustomobject]@{}}
-                $parts+=,[ordered]@{functionCall=[ordered]@{name=$name;args=$args}}
+                $part=[ordered]@{functionCall=[ordered]@{name=$name;args=$args}}
+                $sig=Get-SCField $call 'thought_signature'
+                if(-not[string]::IsNullOrWhiteSpace([string]$sig)){
+                    $part['thoughtSignature']=[string]$sig
+                }
+                $parts+=,$part
             }
             if($parts.Count-gt0){$contents+=,[ordered]@{role='model';parts=@($parts)}}
             continue
@@ -522,7 +527,7 @@ function Get-SCResponseDiagnostic($Response,[int]$MaximumLength=240) {
         try{$detail=$Response|ConvertTo-Json -Depth 6 -Compress -ErrorAction Stop}catch{$detail=$Response.GetType().FullName}
     }
     $detail=($detail -replace '[\r\n\t]+',' ').Trim()
-    if($detail.Length-gt$MaximumLength){$detail=$detail.Substring(0,$MaximumLength)+'â€¦'}
+    if($detail.Length-gt$MaximumLength){$detail=$detail.Substring(0,$MaximumLength)+'…'}
     return $detail
 }
 function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
@@ -537,7 +542,12 @@ function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
             $fc=Get-SCField $part 'functionCall'
             if($fc){
                 $n++;$args=Get-SCField $fc 'args';if($null-eq$args){$args=[pscustomobject]@{}}
-                $calls+=,[pscustomobject]@{id=('gemini-{0}-{1}'-f$n,[string](Get-SCField $fc 'name'));type='function';function=[pscustomobject]@{name=[string](Get-SCField $fc 'name');arguments=($args|ConvertTo-Json -Depth 30 -Compress)}}
+                $call=[pscustomobject]@{id=('gemini-{0}-{1}'-f$n,[string](Get-SCField $fc 'name'));type='function';function=[pscustomobject]@{name=[string](Get-SCField $fc 'name');arguments=($args|ConvertTo-Json -Depth 30 -Compress)}}
+                $sig=Get-SCField $part 'thoughtSignature'
+                if([string]::IsNullOrWhiteSpace([string]$sig)){$sig=Get-SCField $part 'thought_signature'}
+                if([string]::IsNullOrWhiteSpace([string]$sig)){$sig=Get-SCField $fc 'thought_signature'}
+                if(-not[string]::IsNullOrWhiteSpace([string]$sig)){$call|Add-Member -NotePropertyName thought_signature -NotePropertyValue ([string]$sig)}
+                $calls+=,$call
             }
         }
         return [pscustomobject]@{content=($texts-join[Environment]::NewLine);tool_calls=@($calls)}
@@ -563,7 +573,11 @@ function Get-SCAssistantMessage($Response,[string]$Protocol='openai-chat') {
     if($null-eq$choices-or@($choices).Count-eq0){throw ('Inference endpoint returned no choices. Diagnostic: '+(Get-SCResponseDiagnostic $Response))}
     $message=Get-SCField (@($choices)[0]) 'message'
     if($null-eq$message){throw ('Inference endpoint returned no choice message. Diagnostic: '+(Get-SCResponseDiagnostic $Response))}
-    return $message
+    $content=$null
+    if($message.PSObject.Properties['content']){$content=[string]$message.content}
+    $calls=@()
+    if($message.PSObject.Properties['tool_calls']-and$message.tool_calls){$calls=@($message.tool_calls)}
+    return [pscustomobject]@{content=$content;tool_calls=@($calls)}
 }
 function Get-SCApiUsageValue($Usage,[string[]]$Names) {
     if($null-eq$Usage){return 0L}
@@ -824,6 +838,26 @@ function Close-SCWorkerSession([string]$SessionId,[string]$Status) {
     }catch{}
 }
 
+function Clear-SCGeminiTranscriptFunctionCalls($Messages) {
+    $out=@();$drop=@{}
+    foreach($m in @($Messages)){
+        $role=[string](Get-SCField $m 'role')
+        $calls=@(Get-SCField $m 'tool_calls'|Where-Object{$null-ne$_})
+        if($role-eq'assistant' -and $calls.Count-gt0){
+            $signed=@($calls|Where-Object{-not[string]::IsNullOrWhiteSpace([string](Get-SCField $_ 'thought_signature'))})
+            if($signed.Count-eq0){
+                foreach($call in $calls){$id=[string](Get-SCField $call 'id');if($id){$drop[$id]=$true}}
+                continue
+            }
+        }
+        if($role-eq'tool'){
+            $id=[string](Get-SCField $m 'tool_call_id')
+            if($id-and$drop.ContainsKey($id)){continue}
+        }
+        $out+=,$m
+    }
+    return $out
+}
 function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$Stage='worker',$UsageAccumulator=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,$ProviderRecord=$null,$Compilation=$null) {
     $toolMode=Get-SCEffectiveWorkerToolMode $Connection;if(@('native','text')-notcontains$toolMode){throw "Unsupported toolMode '$toolMode'."}
     $maxSteps=Get-SCWorkerMaxSteps $Connection $Task $Stage
@@ -843,6 +877,15 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
         if($ProviderRecord){Add-SCWorkerSessionProvider $WorkerSessionId ([string]$ProviderRecord.name) ([string]$ProviderRecord.config.connection) ([string]$ProviderRecord.config.model)}
         $session=Get-SCWorkerSession $WorkerSessionId
         $messages=@($session.messages)
+        $protocol=Get-SCConnectionProtocol $Connection
+        if($protocol-eq'gemini-native'){
+            $sanitized=Clear-SCGeminiTranscriptFunctionCalls $messages
+            if(@($sanitized).Count-ne@($messages).Count){
+                Add-SCEvent 'worker.gemini_transcript_purged' "Purged pre-fix function-call turns from resuming gemini-native worker session $WorkerSessionId (those functionCall parts carry no thought_signature and cannot be replayed to Gemini)." @{sessionId=$WorkerSessionId;taskId=$Task.id;before=@($messages).Count;after=@($sanitized).Count}
+                $messages=$sanitized
+                Set-SCProperty $session 'messages' @($sanitized);Save-SCWorkerSession $session
+            }
+        }
     }else{
         $messages=@(@{role='system';content=New-SCDirectWorkerSystemPrompt $toolMode $registry},@{role='user';content=$Prompt})
     }
