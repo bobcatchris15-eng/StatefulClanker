@@ -30,14 +30,17 @@ main is 5 behind with uncommitted edits to DispatchGuard.ps1/WorkerRuntime.ps1 â
 | id | targets | status | attempts | last return line |
 |----|---------|--------|----------|------------------|
 | t0 | RPK args, commit freshness, validator-off gate | DONE | 1 | 3f5f684 |
-| t1 | Tray Program.cs, EndpointsRoutingUi.cs, tray tests | RUNNING | 0 | |
+| t1 | Tray Program.cs, EndpointsRoutingUi.cs | DONE (unmerged) | 1 | PASS; 82c71db on task/t1-tray-refresh; build clean, smoke green |
 | t2 | mcp/StatefulClanker.SubscriptionPump.ps1 | RUNNING | 0 | |
 | t6 | Tray ReflexiveProjectKnowledge.cs (code graph) | RUNNING | 0 | |
 | t3 | Context.ps1 packet: RPK lessons, graph neighbours, attempt history | QUEUED w2 | 0 | |
-| t8 | Router: per-project allowlist + weights | QUEUED w2 | 0 | |
+| t8 | Router: per-project allowlist + weights | RUNNING | 0 | |
 | t9 | WorkerRuntime boundary-violation event + escalation | QUEUED w2 | 0 | |
 | t4+t5 | validation/repair/merge checkpoints; evidence-based failure + stagnation | QUEUED w3 | 0 | |
 | t7 | Lesson log/confirm/reject via MCP + worker tool | QUEUED w3 | 0 | |
 
 ## Unverified assumptions
+- 4 tray tests (OverviewUi, TrayRefreshStability, TraySplitterVisibility, TrayTargetPoolLayout)
+  fail on pristine origin/main (stale source-string contracts). Tray changes are gated by
+  build + smoke only; t1 needs a visual/interactive check by the user.
 - LifecycleIntegration.Tests.ps1 fails "Not initialized" on pristine origin/main â€” pre-existing, not ours.
