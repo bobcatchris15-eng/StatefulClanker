@@ -25,6 +25,23 @@ Planning and implementation are mutually exclusive for one project.
 - Operator resumes and supervises accepted implementation work. It does not casually redesign the plan while workers are active.
 - Workers/reviewers implement and prove bounded accepted tasks. They may report plan pressure but do not rewrite Intent.
 
+## Planner control surface
+
+Use the single `planning_control` tool as the durable planning-session authority.
+
+Core actions:
+
+- `status` — inspect whether planning currently owns the project.
+- `begin` — establish the execution barrier and enter quiescing.
+- `settle` — capture the stable baseline only after active implementation work is gone.
+- `ask` / `answer` / `questions` — persist structured uncertainty and decisions.
+- `candidate` — stage and hash a complete SCPLAN plus optional Intent candidate.
+- `accept` — create an inert accepted handoff after blocking questions are resolved.
+- `release` — drop the barrier only after execution reports the applied active plan id.
+- `cancel` — abandon a planning session and restore execution ownership.
+
+Do not call the ordinary additive `plan_apply` path as a substitute for the future transactional handoff apply step when replanning an existing graph.
+
 ## Entering planning
 
 Do not infer planning merely because the app opened.
