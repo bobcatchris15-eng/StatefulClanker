@@ -43,6 +43,7 @@ public sealed class PlannerBaseline
     public string capturedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public string projectRoot { get; set; } = "";
     public string? gitHead { get; set; }
+    public string? projectGoal { get; set; }
     public List<string> dirtyPaths { get; set; } = new();
     public List<PlannerDirtyFile> dirtyFiles { get; set; } = new();
     public string? snapshotPath { get; set; }
@@ -76,6 +77,7 @@ public sealed class PlannerCandidate
     public string id { get; set; } = "";
     public string createdAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public string summary { get; set; } = "";
+    public string? projectGoal { get; set; }
     public string planPath { get; set; } = "";
     public string planSha256 { get; set; } = "";
     public string? intentPath { get; set; }
@@ -92,6 +94,7 @@ public sealed class PlannerHandoff
     public string candidateId { get; set; } = "";
     public string acceptedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public string status { get; set; } = "accepted";
+    public string? projectGoal { get; set; }
     public string planPath { get; set; } = "";
     public string planSha256 { get; set; } = "";
     public string? intentPath { get; set; }
