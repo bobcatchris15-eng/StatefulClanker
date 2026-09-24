@@ -337,6 +337,7 @@ sealed class TaskBoardEntry
     public string? BlockReason;
     public string? LastRoutingError;
     public string? RoutingNotBefore;
+    public string? RetryDisposition;
     public int AttemptCount;
     public string? LatestRunId;
     public string? LatestCritiqueId;
@@ -465,6 +466,7 @@ static class Inspector
                 var blockReason = root.TryGetProperty("blockReason", out var brProp) && brProp.ValueKind == JsonValueKind.String ? brProp.GetString() : null;
                 var lastRoutingError = root.TryGetProperty("lastRoutingError", out var lreProp) && lreProp.ValueKind == JsonValueKind.String ? lreProp.GetString() : null;
                 var routingNotBefore = root.TryGetProperty("routingNotBefore", out var rnbProp) && rnbProp.ValueKind == JsonValueKind.String ? rnbProp.GetString() : null;
+                var retryDisposition = root.TryGetProperty("retryDisposition", out var rdProp) && rdProp.ValueKind == JsonValueKind.String ? rdProp.GetString() : null;
                 var attemptCount = root.TryGetProperty("attemptCount", out var acProp) && acProp.TryGetInt32(out var ac) ? ac : 0;
                 var latestRunId = root.TryGetProperty("latestRunId", out var lriProp) && lriProp.ValueKind == JsonValueKind.String ? lriProp.GetString() : null;
                 var latestCritiqueId = root.TryGetProperty("latestCritiqueId", out var lciProp) && lciProp.ValueKind == JsonValueKind.String ? lciProp.GetString() : null;
@@ -491,6 +493,7 @@ static class Inspector
                     BlockReason = blockReason,
                     LastRoutingError = lastRoutingError,
                     RoutingNotBefore = routingNotBefore,
+                    RetryDisposition = retryDisposition,
                     AttemptCount = attemptCount,
                     LatestRunId = latestRunId,
                     LatestCritiqueId = latestCritiqueId,
@@ -1635,7 +1638,7 @@ sealed class TaskDetailDialog : Form
         // Header
         var header = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface, Padding = new Padding(8, 6, 8, 6) };
         var topRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 26, WrapContents = false };
-        var (statusColor, statusLabel) = StatusVisual(_task.Status);
+        var (statusColor, statusLabel) = StatusVisual(_task.Status, _task.RetryDisposition);
         _headerStatus.Text = $"[{statusLabel}]";
         _headerStatus.ForeColor = statusColor;
         _taskId.Text = _task.Id;
@@ -1658,8 +1661,9 @@ sealed class TaskDetailDialog : Form
 
         // Section label
         var isFailure = _task.Status is "failed" or "needs_rework";
+        var isHarnessIssue = _task.RetryDisposition is "acceptance-repair" or "diagnose-request";
         var isBlocked = _task.Status is "blocked" or "stale";
-        var sectionColor = isFailure ? Theme.Error : (isBlocked ? Theme.Warn : Theme.Accent);
+        var sectionColor = isHarnessIssue ? Theme.Warn : (isFailure ? Theme.Error : (isBlocked ? Theme.Warn : Theme.Accent));
         var secLabel = new Label
         {
             Text = isFailure ? "⚠ FAILURE DIAGNOSTICS & LOG OUTPUT" : (isBlocked ? "⚠ BLOCKER & REASON DETAILS" : "TASK DETAILS & EXECUTION HISTORY"),
@@ -1778,13 +1782,16 @@ sealed class TaskDetailDialog : Form
         }
     }
 
-    static (Color, string) StatusVisual(string status) => status switch
+    static (Color, string) StatusVisual(string status, string? retryDisposition = null) => status switch
     {
         "complete" => (Color.FromArgb(65, 235, 95), "DONE"),
+        "validated" => (Color.FromArgb(110, 215, 140), "VALIDATED"),
         "running" => (Color.FromArgb(70, 150, 255), "RUNNING"),
         "reviewing" => (Color.FromArgb(255, 220, 70), "CRITIC"),
         "validating" => (Color.FromArgb(255, 220, 70), "VALIDATOR"),
-        "needs_rework" => (Color.FromArgb(240, 60, 60), "REJECTED"),
+        "needs_rework" when retryDisposition == "acceptance-repair" => (Color.FromArgb(255, 170, 70), "HARNESS"),
+        "needs_rework" when retryDisposition == "diagnose-request" => (Color.FromArgb(255, 170, 70), "REQUEST"),
+        "needs_rework" => (Color.FromArgb(240, 90, 75), "REWORK"),
         "failed" => (Color.FromArgb(240, 60, 60), "FAILED"),
         "stale" => (Color.FromArgb(255, 140, 50), "STALE"),
         "blocked" => (Color.FromArgb(180, 70, 70), "BLOCKED"),
@@ -1864,12 +1871,14 @@ sealed class TaskBoardRow : TableLayoutPanel
     {
         _entry = t;
         _title.Text = string.IsNullOrEmpty(t.Title) ? t.Id : t.Title;
-        var (color, label) = StatusVisual(t.Status);
+        var (color, label) = StatusVisual(t.Status, t.RetryDisposition);
         Led.OnColor = color;
         _status.Text = label;
         _status.ForeColor = color;
 
-        if (t.Status is "failed" or "needs_rework")
+        if (t.RetryDisposition is "acceptance-repair" or "diagnose-request")
+            _defaultBg = Color.FromArgb(37, 27, 16);
+        else if (t.Status is "failed" or "needs_rework")
             _defaultBg = Color.FromArgb(38, 16, 20);
         else if (t.Status == "blocked")
             _defaultBg = Color.FromArgb(28, 20, 22);
@@ -1893,13 +1902,16 @@ sealed class TaskBoardRow : TableLayoutPanel
         Led.Invalidate();
     }
 
-    static (Color, string) StatusVisual(string status) => status switch
+    static (Color, string) StatusVisual(string status, string? retryDisposition = null) => status switch
     {
         "complete" => (Color.FromArgb(65, 235, 95), "DONE"),
+        "validated" => (Color.FromArgb(110, 215, 140), "VALIDATED"),
         "running" => (Color.FromArgb(70, 150, 255), "RUNNING"),
         "reviewing" => (Color.FromArgb(255, 220, 70), "CRITIC"),
         "validating" => (Color.FromArgb(255, 220, 70), "VALIDATOR"),
-        "needs_rework" => (Color.FromArgb(240, 60, 60), "REJECTED"),
+        "needs_rework" when retryDisposition == "acceptance-repair" => (Color.FromArgb(255, 170, 70), "HARNESS"),
+        "needs_rework" when retryDisposition == "diagnose-request" => (Color.FromArgb(255, 170, 70), "REQUEST"),
+        "needs_rework" => (Color.FromArgb(240, 90, 75), "REWORK"),
         "failed" => (Color.FromArgb(240, 60, 60), "FAILED"),
         "stale" => (Color.FromArgb(255, 140, 50), "STALE"),
         "blocked" => (Color.FromArgb(180, 70, 70), "BLOCKED"),
