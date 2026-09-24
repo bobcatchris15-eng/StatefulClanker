@@ -105,6 +105,10 @@ end
         $baseline=Read-Json $baselinePath
         Assert-True (-not[string]::IsNullOrWhiteSpace([string]$baseline.snapshotPath)) 'Frozen baseline snapshot was not recorded.'
 
+        $cliBlocked=$false
+        try{& $harness directive set -DirectiveId 'behavior-selection' -Message 'This must not mutate live planning state.'|Out-Null}catch{$cliBlocked=$_.Exception.Message -match 'planning owns the project'}
+        Assert-True $cliBlocked 'Direct CLI semantic mutation bypassed the planning freeze.'
+
         $newIntent=[pscustomobject]@{
             objective='Exercise transactional replanning.'
             requirements=@(
