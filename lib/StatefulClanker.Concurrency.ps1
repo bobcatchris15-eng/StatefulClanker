@@ -255,6 +255,36 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
             return $entry
         }
 
+        # Evidence-based classification: a nonzero exit is not automatically a
+        # total failure. Gather elapsed time and diff evidence from the worktree
+        # before deciding whether this crashed with real, salvageable work
+        # (route to validation/acceptance) or produced nothing at all fast
+        # (a routing/harness no-op, safe to retry without burning a worker attempt).
+        $evidence=$null;$failureKind='total-failure'
+        try{
+            if(Get-Command Get-SCRunEvidence -ErrorAction SilentlyContinue){
+                $fakeRun=[pscustomobject][ordered]@{startedAt=$Run.startedAt;endedAt=(Get-Date)}
+                $sessionIdForEvidence=if($task.PSObject.Properties['latestWorkerSessionId']){[string]$task.latestWorkerSessionId}else{$null}
+                $evidence=Get-SCRunEvidence $fakeRun $sessionIdForEvidence $Run.worktree.path
+                if($evidence){
+                    $materialAndCandidate=[bool]$evidence.materialChange -and [bool]$evidence.candidateSubmitted
+                    $longRuntimeCoherentDiff=([double]$evidence.elapsedSeconds -gt 20) -and [bool]$evidence.materialChange
+                    $fastNoChange=([double]$evidence.elapsedSeconds -lt 20) -and -not[bool]$evidence.materialChange
+                    if($materialAndCandidate -or $longRuntimeCoherentDiff){$failureKind='completed-with-error'}
+                    elseif($fastNoChange){$failureKind='no-op-failure'}
+                }
+            }
+        }catch{}
+
+        if ($failureKind -eq 'no-op-failure' -and @('running') -contains $task.status) {
+            $task.status='ready';$task.blockReason=$null;Save-SCTask $task
+            Add-SCEvent 'task.retried.no_op_failure' "Retrying task $($task.id): fast exit with no material change; routing/harness suspect." @{taskId=$task.id;exitCode=[int]$Run.process.ExitCode;evidence=$evidence}
+            $entry.reason='no-op failure, task requeued without counting as a worker attempt'
+            $entry.status='ready'
+            Remove-SCWorktree $StateRoot $Run.taskId
+            return $entry
+        }
+
         if (@('running','reviewing','validating','validated') -contains $task.status) {
             $workerSessionId=if($task.PSObject.Properties['activeWorkerSessionId']){[string]$task.activeWorkerSessionId}else{$null}
             $detail=@(([string]$child.stderr -split "\r?\n")+([string]$child.stdout -split "\r?\n") |
@@ -274,6 +304,24 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
                     workerSessionId=$workerSessionId
                     logPath=$Run.logPath
                     detail=$detail
+                }
+            }elseif($failureKind-eq'completed-with-error'){
+                # Nonzero exit but material, candidate-bearing change: route back
+                # through validation/acceptance instead of discarding as a total
+                # failure. retryDisposition 'auto' lets the normal autofill loop
+                # pick this up and re-run through the accept path.
+                $task.status = 'needs_rework'
+                $task.blockReason = "Worker exited $($Run.process.ExitCode) but produced material change; routed for validation."+$(if($detail){": $detail"}else{''})
+                Set-SCProperty $task 'retryDisposition' 'auto'
+                Close-SCFailedTaskWorkerSession $task 'completed-with-error'
+                Add-SCEvent 'run.completed_with_error' $task.blockReason @{
+                    taskId=$task.id
+                    exitCode=[int]$Run.process.ExitCode
+                    provider=$Run.provider
+                    workerSessionId=$workerSessionId
+                    logPath=$Run.logPath
+                    detail=$detail
+                    evidence=$evidence
                 }
             }else{
                 $task.status = 'failed'
@@ -354,6 +402,14 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
         Complete-SCMergedTask $Run.taskId
         $entry.status='complete'
         Add-SCEvent 'merge.completed' "Merged $($Run.worktree.branch)." @{ taskId = $Run.taskId; branch = $Run.worktree.branch }
+        try{
+            $mergedTask=Get-SCTask $Run.taskId
+            $mergeSessionId=if($mergedTask.PSObject.Properties['latestWorkerSessionId']){[string]$mergedTask.latestWorkerSessionId}else{$null}
+            if($mergeSessionId -and (Get-Command New-SCMergeCheckpoint -ErrorAction SilentlyContinue)){
+                $mergeCommit=([string](& git -C $StateRoot rev-parse HEAD 2>$null|Select-Object -First 1)).Trim()
+                New-SCMergeCheckpoint $mergeSessionId $mergeCommit ([string]$Run.worktree.branch)|Out-Null
+            }
+        }catch{}
         Remove-SCWorktree $StateRoot $Run.taskId
     }
     return $entry
