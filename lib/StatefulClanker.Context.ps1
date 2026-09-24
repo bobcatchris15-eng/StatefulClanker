@@ -33,10 +33,69 @@ function Get-SCRetrievalPacket($Task) {
     }
     return [ordered]@{budgetChars=$budget;usedChars=($budget-$remaining);remainingChars=$remaining;budgetExhausted=($remaining-le 0);unmatchedSelectors=@($unmatched);items=@($items)}
 }
+function Add-SCPacketContextFault($ContextFaults,[string]$Source,[string]$Reason,[string]$TaskId,[string]$CompilationId) {
+    $record=[ordered]@{ts=(Get-Date).ToUniversalTime().ToString('o');taskId=$TaskId;compilationId=$CompilationId;source=$Source;reason=$Reason}
+    try{
+        $path=Get-SCPath 'telemetry/context-faults.jsonl';$dir=Split-Path -Parent $path
+        if($dir-and-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
+        ((ConvertTo-SCJson $record 8) -replace "`r?`n",'')|Add-Content -LiteralPath $path -Encoding UTF8
+    }catch{}
+    [void]$ContextFaults.Add($record)
+    return $record
+}
+function Get-SCPacketProjectLessons($Task,[string[]]$Paths,[int]$Limit,$ContextFaults,[string]$CompilationId) {
+    $out=@();$cmd=Get-Command Search-SCRpkLessons -ErrorAction SilentlyContinue
+    if($null-eq$cmd){Add-SCPacketContextFault $ContextFaults 'projectLessons' 'Search-SCRpkLessons unavailable' $Task.id $CompilationId|Out-Null;return @()}
+    $query=(([string]$Task.title)+' '+([string]$Task.instruction)+' '+(@($Task.acceptance)-join' '))
+    try{$lessons=@(Search-SCRpkLessons $query $Paths ($Limit*4))}catch{Add-SCPacketContextFault $ContextFaults 'projectLessons' ("Search-SCRpkLessons failed: {0}"-f$_.Exception.Message) $Task.id $CompilationId|Out-Null;return @()}
+    foreach($l in $lessons){
+        if($null-eq$l){continue};$status=if($l.PSObject.Properties['status']){[string]$l.status}else{$null}
+        if($status-eq'rejected'){continue}
+        $body=if($l.PSObject.Properties['body']){[string]$l.body}else{''};$take=[Math]::Min($body.Length,600)
+        $out+=[ordered]@{id=$(if($l.PSObject.Properties['id']){$l.id}else{$null});title=$(if($l.PSObject.Properties['title']){$l.title}else{$null});body=$(if($take-gt 0){$body.Substring(0,$take)}else{''});bodyTruncated=($body.Length-gt$take);status=$status;unverified=($status-eq'needs_review')}
+        if(@($out).Count-ge$Limit){break}
+    }
+    return @($out)
+}
+function Get-SCPacketCodeNeighbours([string[]]$Paths,[int]$MaxPathsToQuery,[int]$Cap,$ContextFaults,[string]$TaskId,[string]$CompilationId) {
+    $out=@();$seen=@{};$cmd=Get-Command Get-SCRpkNeighbors -ErrorAction SilentlyContinue
+    if($null-eq$cmd){Add-SCPacketContextFault $ContextFaults 'codeNeighbours' 'Get-SCRpkNeighbors unavailable' $TaskId $CompilationId|Out-Null;return @()}
+    $queried=@($Paths|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|Select-Object -Unique -First $MaxPathsToQuery)
+    foreach($p in $queried){
+        try{$r=Get-SCRpkNeighbors $p 1 $Cap}catch{Add-SCPacketContextFault $ContextFaults 'codeNeighbours' ("Get-SCRpkNeighbors failed for {0}: {1}"-f$p,$_.Exception.Message) $TaskId $CompilationId|Out-Null;continue}
+        if($null-eq$r){continue}
+        $neighbors=if($r.PSObject.Properties['neighbors']){@($r.neighbors)}else{@($r)}
+        foreach($n in $neighbors){
+            if($null-eq$n){continue};$key=if($n.PSObject.Properties['path']){[string]$n.path}else{ConvertTo-SCJson $n 4}
+            if($seen.ContainsKey($key)){continue};$seen[$key]=$true;$out+=$n
+            if(@($out).Count-ge$Cap){return @($out)}
+        }
+    }
+    return @($out)
+}
+function Get-SCPacketAttemptHistory($Task,[int]$Limit=3) {
+    $out=@()
+    try{
+        $dir=Get-SCPath 'progress';if(-not(Test-Path -LiteralPath $dir)){return @()}
+        $files=@(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File -ErrorAction SilentlyContinue);$records=@()
+        foreach($f in $files){$r=$null;try{$r=Read-SCJson $f.FullName}catch{$r=$null};if($null-eq$r){continue};if(-not$r.PSObject.Properties['taskId']-or[string]$r.taskId-ne[string]$Task.id){continue};$records+=$r}
+        $records=@($records|Sort-Object {[string]$_.ts} -Descending|Select-Object -First $Limit)
+        foreach($r in $records){
+            $reason=if($r.PSObject.Properties['reason']){[string]$r.reason}else{''};$take=[Math]::Min($reason.Length,300)
+            $out+=[ordered]@{outcome=$(if($r.PSObject.Properties['outcome']){$r.outcome}else{$null});advanced=$(if($r.PSObject.Properties['advanced']){[bool]$r.advanced}else{$null});ts=$(if($r.PSObject.Properties['ts']){$r.ts}else{$null});reason=$(if($take-gt 0){$reason.Substring(0,$take)}else{''});reasonTruncated=($reason.Length-gt$take)}
+        }
+    }catch{}
+    return @($out)
+}
 function New-SCCompilation($Task) {
     $state=Get-SCState;$cfg=Get-SCConfig;$compilationId=New-SCId 'compile';$retrieved=Get-SCRetrievalPacket $Task;$dependencies=@(Get-SCDependencySummary $Task);$eventCount=if($cfg.PSObject.Properties['recentEventCount']){[int]$cfg.recentEventCount}else{12};$eventBudget=if($cfg.PSObject.Properties['recentEventBudgetChars']){[int]$cfg.recentEventBudgetChars}else{4000};$taskControlRevision=Get-SCTaskControlRevision $Task;$policyHash=Get-SCExecutionPolicyHash
     $intent=Get-SCIntentContract;$intentHash=Get-SCIntentHash $intent;$planIntent=Get-SCActivePlanIntent $state;$planIntentHash=Get-SCHashString (ConvertTo-SCJson $planIntent 8)
-    $readSet=[ordered]@{projectGoalHash=Get-SCHashString ([string]$state.goal);activePlanId=$state.activePlanId;planIntentHash=$planIntentHash;directionRevision=$state.directionRevision;intentRevision=[int]$intent.revision;intentHash=$intentHash;executionPolicyHash=$policyHash;taskId=$Task.id;taskControlRevision=$taskControlRevision;taskDefinitionHash=Get-SCTaskDefinitionHash $Task;dependencies=@($dependencies|ForEach-Object{[ordered]@{id=$_.id;status=$_.status;definitionHash=$_.definitionHash;latestRunId=$_.latestRunId;latestValidationId=$_.latestValidationId}});files=@($retrieved.items|ForEach-Object{[ordered]@{path=$_.path;sha256=$_.sha256;authority=$_.authority}})}
+    $contextFaults=New-Object Collections.ArrayList
+    $readSetPaths=@($retrieved.items|ForEach-Object{[string]$_.path});if(@($readSetPaths).Count-eq 0){$readSetPaths=@(@($Task.evidence)+@($Task.retrieval)|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})}
+    $projectLessons=@(Get-SCPacketProjectLessons $Task $readSetPaths 5 $contextFaults $compilationId)
+    $codeNeighbours=@(Get-SCPacketCodeNeighbours $readSetPaths 5 40 $contextFaults $Task.id $compilationId)
+    $attemptHistory=@(Get-SCPacketAttemptHistory $Task 3)
+    $readSet=[ordered]@{projectGoalHash=Get-SCHashString ([string]$state.goal);activePlanId=$state.activePlanId;planIntentHash=$planIntentHash;directionRevision=$state.directionRevision;intentRevision=[int]$intent.revision;intentHash=$intentHash;executionPolicyHash=$policyHash;taskId=$Task.id;taskControlRevision=$taskControlRevision;taskDefinitionHash=Get-SCTaskDefinitionHash $Task;dependencies=@($dependencies|ForEach-Object{[ordered]@{id=$_.id;status=$_.status;definitionHash=$_.definitionHash;latestRunId=$_.latestRunId;latestValidationId=$_.latestValidationId}});files=@($retrieved.items|ForEach-Object{[ordered]@{path=$_.path;sha256=$_.sha256;authority=$_.authority}});projectLessonsHash=Get-SCHashString (ConvertTo-SCJson $projectLessons 12);codeNeighboursHash=Get-SCHashString (ConvertTo-SCJson $codeNeighbours 12);attemptHistoryHash=Get-SCHashString (ConvertTo-SCJson $attemptHistory 12)}
     $inputFingerprint=Get-SCHashString (ConvertTo-SCJson $readSet 20)
     $contract=@('Perform only this bounded task.','The authoritative intent contract is read-only to workers. Never edit, replace, reinterpret away, or weaken it.','If task instructions conflict with the intent contract, emit INTENT_CONFLICT: <specific conflict> and stop rather than choosing your own interpretation.','If the intent contract is ambiguous or insufficient for a material choice, emit INTENT_QUESTION: <specific question> and stop rather than guessing.','Treat durable state and project files as authoritative.','If task.checks are present, run those exact mechanical acceptance commands before submitting when your capabilities permit; the harness will rerun them independently after submission.','Report files changed, commands run, failures, and unresolved risks.','Do not claim verification you did not perform.','If required state or evidence is missing, emit CONTEXT_REQUEST: <specific missing state> rather than guessing.')
     $latestFeedback = $null
@@ -55,11 +114,16 @@ function New-SCCompilation($Task) {
     $taskChecks=@();if($Task.PSObject.Properties['checks']){$taskChecks=@($Task.checks)}
     $taskSemantic=@();if($Task.PSObject.Properties['semanticAcceptance']){$taskSemantic=@($Task.semanticAcceptance)}
     $taskRelations=@();if($Task.PSObject.Properties['relations']){$taskRelations=@($Task.relations)}
-    $ir=[ordered]@{schemaVersion=2;compilationId=$compilationId;compiledAt=(Get-Date).ToUniversalTime().ToString('o');project=[ordered]@{goal=$state.goal;root=Get-SCRoot;activePlan=$planIntent;directionRevision=$state.directionRevision;stateRevision=$state.revision;executionPolicyHash=$policyHash;intent=[ordered]@{revision=[int]$intent.revision;hash=$intentHash;authority='orchestrator-owned; worker read-only';contract=$intent}};task=[ordered]@{id=$Task.id;title=$Task.title;instruction=$Task.instruction;role=$taskRole;outputKind=if($Task.PSObject.Properties['outputKind']){[string]$Task.outputKind}else{'change'};controlRevision=$taskControlRevision;acceptance=@($Task.acceptance);checks=$taskChecks;semanticAcceptance=$taskSemantic;dependsOn=@($Task.dependsOn);relations=$taskRelations;latestFeedback=$latestFeedback};dependencies=$dependencies;sources=[ordered]@{retrieved=$retrieved;recentEvents=@(Get-SCRecentEvents $eventCount $eventBudget)};outputContract=$contract}
+    $sources=[ordered]@{retrieved=$retrieved;recentEvents=@(Get-SCRecentEvents $eventCount $eventBudget)}
+    if(@($projectLessons).Count-gt 0){$sources['projectLessons']=[ordered]@{authority='candidate project-local working knowledge; verify against current files and human/intent authority';items=@($projectLessons)}}
+    if(@($codeNeighbours).Count-gt 0){$sources['codeNeighbours']=[ordered]@{authority='candidate code-graph neighbours; verify against current files';items=@($codeNeighbours)}}
+    if(@($attemptHistory).Count-gt 0){$sources['attemptHistory']=[ordered]@{authority='prior attempts for this task, newest first';items=@($attemptHistory)}}
+    $ir=[ordered]@{schemaVersion=2;compilationId=$compilationId;compiledAt=(Get-Date).ToUniversalTime().ToString('o');project=[ordered]@{goal=$state.goal;root=Get-SCRoot;activePlan=$planIntent;directionRevision=$state.directionRevision;stateRevision=$state.revision;executionPolicyHash=$policyHash;intent=[ordered]@{revision=[int]$intent.revision;hash=$intentHash;authority='orchestrator-owned; worker read-only';contract=$intent}};task=[ordered]@{id=$Task.id;title=$Task.title;instruction=$Task.instruction;role=$taskRole;outputKind=if($Task.PSObject.Properties['outputKind']){[string]$Task.outputKind}else{'change'};controlRevision=$taskControlRevision;acceptance=@($Task.acceptance);checks=$taskChecks;semanticAcceptance=$taskSemantic;dependsOn=@($Task.dependsOn);relations=$taskRelations;latestFeedback=$latestFeedback};dependencies=$dependencies;sources=$sources;outputContract=$contract}
     $contextFingerprint=Get-SCHashString (ConvertTo-SCJson $ir 24)
-    $receipt=[ordered]@{schemaVersion=2;id=$compilationId;taskId=$Task.id;compiledAt=$ir.compiledAt;inputFingerprint=$inputFingerprint;contextFingerprint=$contextFingerprint;readSet=$readSet;retrievalStats=[ordered]@{budgetChars=$retrieved.budgetChars;usedChars=$retrieved.usedChars;budgetExhausted=$retrieved.budgetExhausted;unmatchedSelectors=@($retrieved.unmatchedSelectors);itemCount=@($retrieved.items).Count;truncatedCount=@($retrieved.items|Where-Object{$_.truncated}).Count};ir=$ir}
+    $receipt=[ordered]@{schemaVersion=2;id=$compilationId;taskId=$Task.id;compiledAt=$ir.compiledAt;inputFingerprint=$inputFingerprint;contextFingerprint=$contextFingerprint;readSet=$readSet;retrievalStats=[ordered]@{budgetChars=$retrieved.budgetChars;usedChars=$retrieved.usedChars;budgetExhausted=$retrieved.budgetExhausted;unmatchedSelectors=@($retrieved.unmatchedSelectors);itemCount=@($retrieved.items).Count;truncatedCount=@($retrieved.items|Where-Object{$_.truncated}).Count};contextFaults=@($contextFaults);ir=$ir}
     Write-SCJson (Get-SCPath ("compilations/{0}.json"-f$compilationId)) $receipt;Set-SCProperty $Task 'latestCompilationId' $compilationId;Save-SCTask $Task
     if($receipt.retrievalStats.unmatchedSelectors.Count-gt 0){Add-SCEvent 'context.selector_unmatched' "Compilation $compilationId had unmatched selectors." @{taskId=$Task.id;compilationId=$compilationId;selectors=@($receipt.retrievalStats.unmatchedSelectors)}}
+    if(@($receipt.contextFaults).Count-gt 0){Add-SCEvent 'context.fault' "Compilation $compilationId had $(@($receipt.contextFaults).Count) context source fault(s)." @{taskId=$Task.id;compilationId=$compilationId;faults=@($receipt.contextFaults)}}
     return $receipt
 }
 function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit') {
