@@ -103,5 +103,6 @@ public sealed class PlannerHandoff
     public string? directiveChangesSha256 { get; set; }
     public string? baselinePath { get; set; }
     public string? appliedPlanId { get; set; }
+    public string? appliedTransactionId { get; set; }
     public string? releasedAt { get; set; }
 }
