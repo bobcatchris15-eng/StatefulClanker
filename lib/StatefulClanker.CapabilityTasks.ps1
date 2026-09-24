@@ -248,3 +248,637 @@ function Complete-SCTaskFromRecovery([string]$Id,[string]$PayloadPath,[string]$W
     Write-Host "Task recovery-completed: $Id"
     return (Get-SCTask $Id)
 }
+
+
+# ---------------------------------------------------------------------------
+# Transactional planning handoff application.
+# ---------------------------------------------------------------------------
+
+function Resolve-SCPlanningArtifactPath([string]$PathValue) {
+    if([string]::IsNullOrWhiteSpace($PathValue)){return $null}
+    $stateDir=[IO.Path]::GetFullPath((Get-SCDir))
+    $root=[IO.Path]::GetFullPath((Get-SCStateRoot))
+    $text=[string]$PathValue
+    if([IO.Path]::IsPathRooted($text)){$full=[IO.Path]::GetFullPath($text)}
+    elseif($text -match '^\.statefulclanker[/\\](.+)$'){$full=[IO.Path]::GetFullPath((Join-Path $stateDir $Matches[1]))}
+    else{$full=[IO.Path]::GetFullPath((Join-Path $root $text))}
+    if(-not($full.StartsWith($stateDir,[StringComparison]::OrdinalIgnoreCase))){throw "Planning artifact escaped .statefulclanker: $PathValue"}
+    return $full
+}
+
+function Get-SCPlanningActiveRecord {
+    $path=Get-SCPath 'planning/active.json'
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return $null}
+    return Read-SCJson $path
+}
+
+function Get-SCPlanningTransactionRoot { Get-SCPath 'transactions' }
+
+function Copy-SCPathTree([string]$Source,[string]$Destination) {
+    if(Test-Path -LiteralPath $Destination){Remove-Item -LiteralPath $Destination -Recurse -Force}
+    if(Test-Path -LiteralPath $Source -PathType Container){
+        New-Item -ItemType Directory -Force -Path $Destination|Out-Null
+        foreach($item in @(Get-ChildItem -LiteralPath $Source -Force -ErrorAction SilentlyContinue)){
+            Copy-Item -LiteralPath $item.FullName -Destination $Destination -Recurse -Force -ErrorAction Stop
+        }
+        return
+    }
+    if(Test-Path -LiteralPath $Source -PathType Leaf){
+        $parent=Split-Path -Parent $Destination
+        if($parent-and-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null}
+        Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
+    }
+}
+
+function Restore-SCTransactionBackup($Journal) {
+    foreach($target in @($Journal.targets)){
+        $live=[string]$target.livePath
+        $backup=[string]$target.backupPath
+        $existed=[bool]$target.existed
+        if(Test-Path -LiteralPath $live){Remove-Item -LiteralPath $live -Recurse -Force -ErrorAction Stop}
+        if($existed){
+            if(-not(Test-Path -LiteralPath $backup)){throw "Transaction backup is missing: $backup"}
+            Copy-SCPathTree $backup $live
+        }
+    }
+}
+
+function Recover-SCInterruptedPlanTransactions {
+    $root=Get-SCPlanningTransactionRoot
+    if(-not(Test-Path -LiteralPath $root -PathType Container)){return @()}
+    $recovered=@()
+    foreach($dir in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue|Sort-Object Name)){
+        $journalPath=Join-Path $dir.FullName 'journal.json'
+        if(-not(Test-Path -LiteralPath $journalPath -PathType Leaf)){continue}
+        try{$journal=Read-SCJson $journalPath}catch{continue}
+        if($null-eq$journal){continue}
+        $status=[string]$journal.status
+        if($status-eq'committing'){
+            Invoke-SCLocked {
+                Restore-SCTransactionBackup $journal
+                $journal.status='rolled_back'
+                Set-SCProperty $journal 'rolledBackAt' ((Get-Date).ToUniversalTime().ToString('o'))
+                Set-SCProperty $journal 'rollbackReason' 'Recovered an interrupted planning transaction during startup.'
+                Write-SCJson $journalPath $journal
+            }|Out-Null
+            $recovered+=,[string]$journal.id
+        } elseif(@('staging','prepared')-contains$status) {
+            $journal.status='abandoned'
+            Set-SCProperty $journal 'closedAt' ((Get-Date).ToUniversalTime().ToString('o'))
+            Set-SCProperty $journal 'closeReason' 'Transaction never entered commit; no live state required restoration.'
+            Write-SCJson $journalPath $journal
+        }
+    }
+    return @($recovered)
+}
+
+function Get-SCFileSetAggregateHash([string]$Directory) {
+    $files=if(Test-Path -LiteralPath $Directory -PathType Container){@(Get-ChildItem -LiteralPath $Directory -Filter '*.json' -File|Sort-Object Name)}else{@()}
+    $inc=[Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
+    try{
+        foreach($file in $files){
+            $name=[Text.Encoding]::UTF8.GetBytes($file.Name.ToLowerInvariant()+[char]10)
+            $inc.AppendData($name)
+            $inc.AppendData([IO.File]::ReadAllBytes($file.FullName))
+        }
+        return ([BitConverter]::ToString($inc.GetHashAndReset())).Replace('-','').ToLowerInvariant()
+    }finally{$inc.Dispose()}
+}
+
+function Get-SCPlanningDirtyFiles {
+    $root=Get-SCStateRoot
+    $old=$ErrorActionPreference
+    try{$ErrorActionPreference='Continue';$raw=& git -C $root status --porcelain --untracked-files=all 2>$null|Out-String}finally{$ErrorActionPreference=$old}
+    $paths=@()
+    foreach($line in @($raw -split '\r?\n')){
+        if([string]::IsNullOrWhiteSpace($line)){continue}
+        $path=if($line.Length-gt3){$line.Substring(3).Trim().Trim('"')}else{$line.Trim()}
+        if($path -match ' -> '){$path=($path -split ' -> ',2)[1].Trim().Trim('"')}
+        if([string]::IsNullOrWhiteSpace($path)){continue}
+        $paths+=,$path.Replace('\','/')
+    }
+    $out=@()
+    foreach($path in @($paths|Sort-Object -Unique)){
+        $full=Join-Path $root ($path.Replace('/',[IO.Path]::DirectorySeparatorChar))
+        $hash=if(Test-Path -LiteralPath $full -PathType Leaf){Get-SCFileHashValue $full}else{'<missing>'}
+        $out+=,[ordered]@{path=$path;sha256=$hash}
+    }
+    return @($out)
+}
+
+function Assert-SCPlanningBaselineFresh($Baseline) {
+    if($null-eq$Baseline){throw 'Planning baseline is missing.'}
+    $busy=@(Get-SCTasks|Where-Object{@('running','reviewing','validating')-contains[string]$_.status}|ForEach-Object{[string]$_.id})
+    if($busy.Count-gt0){throw "Planning handoff cannot apply while tasks are active: $($busy -join ', ')"}
+
+    $state=Get-SCState
+    if([string]$state.activePlanId-ne[string]$Baseline.activePlanId){throw "Planning baseline drift: activePlanId changed from '$($Baseline.activePlanId)' to '$($state.activePlanId)'."}
+
+    $taskHash=Get-SCFileSetAggregateHash (Get-SCPath 'tasks')
+    if([string]$taskHash-ne[string]$Baseline.taskGraphHash){throw 'Planning baseline drift: active task graph changed after settle. Re-settle/replan against current reality.'}
+
+    $intentPath=Get-SCPath 'intent/contract.json'
+    $intentHash=if(Test-Path -LiteralPath $intentPath -PathType Leaf){Get-SCFileHashValue $intentPath}else{$null}
+    if([string]$intentHash-ne[string]$Baseline.intentHash){throw 'Planning baseline drift: Intent changed after settle.'}
+
+    $directiveHash=Get-SCFileSetAggregateHash (Get-SCPath 'directives/current')
+    if([string]$directiveHash-ne[string]$Baseline.directiveHash){throw 'Planning baseline drift: current human directives changed after settle. Stage directive changes in the handoff instead of mutating live authority during planning.'}
+
+    if($Baseline.PSObject.Properties['gitHead']-and$Baseline.gitHead){
+        $old=$ErrorActionPreference
+        try{$ErrorActionPreference='Continue';$head=(& git -C (Get-SCStateRoot) rev-parse HEAD 2>$null|Out-String).Trim()}finally{$ErrorActionPreference=$old}
+        if([string]$head-ne[string]$Baseline.gitHead){throw "Planning baseline drift: Git HEAD changed from $($Baseline.gitHead) to $head."}
+    }
+
+    $expected=@{}
+    foreach($item in @($Baseline.dirtyFiles)){if($item.path){$expected[[string]$item.path]=[string]$item.sha256}}
+    $current=@{}
+    foreach($item in @(Get-SCPlanningDirtyFiles)){$current[[string]$item.path]=[string]$item.sha256}
+    if($expected.Count-ne$current.Count){throw 'Planning baseline drift: dirty/untracked file set changed after settle.'}
+    foreach($key in $expected.Keys){
+        if(-not$current.ContainsKey($key)-or[string]$current[$key]-ne[string]$expected[$key]){throw "Planning baseline drift: worktree content changed for '$key'."}
+    }
+}
+
+function New-SCTaskFromPlanItem($Item) {
+    if($null-eq$Item){throw 'Plan task is empty.'}
+    $id=if($Item.PSObject.Properties['id']-and$Item.id){[string]$Item.id}else{throw 'Every transactional plan task requires a stable id.'}
+    $accept=if($Item.PSObject.Properties['acceptance']){@($Item.acceptance)}else{@()}
+    $depends=if($Item.PSObject.Properties['dependsOn']){@($Item.dependsOn)}else{@()}
+    $relations=if($Item.PSObject.Properties['relations']){@($Item.relations)}else{@()}
+    $retrieval=if($Item.PSObject.Properties['retrieval']){@($Item.retrieval)}else{@()}
+    $evidence=if($Item.PSObject.Properties['evidence']){@($Item.evidence)}else{@()}
+    $provider=if($Item.PSObject.Properties['provider']){[string]$Item.provider}else{$null}
+    $role=if($Item.PSObject.Properties['role']-and$Item.role){[string]$Item.role}else{'worker'}
+    $human=if($Item.PSObject.Properties['humanGate']){[bool]$Item.humanGate}else{$false}
+    $task=New-SCTaskObject $id ([string]$Item.title) ([string]$Item.instruction) $accept $depends $relations $retrieval $evidence $provider $role $human
+    Set-SCProperty $task 'size' $(if($Item.PSObject.Properties['size']){[string]$Item.size}else{'small'})
+    Set-SCProperty $task 'outputKind' $(if($Item.PSObject.Properties['outputKind']-and$Item.outputKind){[string]$Item.outputKind}else{'change'})
+    Set-SCProperty $task 'sources' $(if($Item.PSObject.Properties['sources']){@($Item.sources)}else{@()})
+    Set-SCProperty $task 'intentRefs' $(if($Item.PSObject.Properties['intentRefs']){@($Item.intentRefs)}else{@()})
+    Set-SCProperty $task 'capabilityProfile' $(if($Item.PSObject.Properties['capabilityProfile']-and$Item.capabilityProfile){[string]$Item.capabilityProfile}else{$null})
+    Set-SCProperty $task 'toolPolicy' $(if($Item.PSObject.Properties['toolPolicy']){$Item.toolPolicy}else{$null})
+    Set-SCProperty $task 'checks' $(if($Item.PSObject.Properties['checks']){@($Item.checks)}else{@()})
+    Set-SCProperty $task 'semanticAcceptance' $(if($Item.PSObject.Properties['semanticAcceptance']){@($Item.semanticAcceptance)}else{@()})
+    Set-SCProperty $task 'implications' $(if($Item.PSObject.Properties['implications']){@($Item.implications)}else{@()})
+    Set-SCProperty $task 'proofObligations' $(if($Item.PSObject.Properties['proofObligations']){@($Item.proofObligations)}else{@()})
+    Set-SCProperty $task 'refinementStatus' $(if($Item.PSObject.Properties['refinementStatus']-and$Item.refinementStatus){[string]$Item.refinementStatus}else{'pending'})
+    Set-SCProperty $task 'refinementDepth' $(if($Item.PSObject.Properties['refinementDepth']){[int]$Item.refinementDepth}else{0})
+    Set-SCProperty $task 'parentTaskId' $(if($Item.PSObject.Properties['parentTaskId']-and$Item.parentTaskId){[string]$Item.parentTaskId}else{$null})
+    Set-SCProperty $task 'childTaskIds' $(if($Item.PSObject.Properties['childTaskIds']){@($Item.childTaskIds)}else{@()})
+    return $task
+}
+
+function Assert-SCReplacementPlanGraph($Tasks) {
+    $items=@($Tasks);$map=@{}
+    foreach($task in $items){
+        $id=[string]$task.id
+        if([string]::IsNullOrWhiteSpace($id)){throw 'Replacement plan contains a task without id.'}
+        if($map.ContainsKey($id)){throw "Replacement plan contains duplicate task id '$id'."}
+        $map[$id]=$task
+    }
+    foreach($task in $items){
+        foreach($dep in @($task.dependsOn)){
+            $id=[string]$dep
+            if([string]::IsNullOrWhiteSpace($id)){continue}
+            if($id-eq[string]$task.id){throw "Task '$($task.id)' depends on itself."}
+            if(-not$map.ContainsKey($id)){throw "Task '$($task.id)' depends on '$id', which is absent from the replacement graph. Include preserved completed prerequisites explicitly."}
+        }
+    }
+    $indegree=@{};$children=@{}
+    foreach($task in $items){$indegree[[string]$task.id]=0;$children[[string]$task.id]=@()}
+    foreach($task in $items){
+        foreach($dep in @($task.dependsOn)){
+            if([string]::IsNullOrWhiteSpace([string]$dep)){continue}
+            $indegree[[string]$task.id]=[int]$indegree[[string]$task.id]+1
+            $children[[string]$dep]=@($children[[string]$dep])+[string]$task.id
+        }
+    }
+    $queue=New-Object Collections.Queue
+    foreach($id in $indegree.Keys){if([int]$indegree[$id]-eq0){$queue.Enqueue($id)}}
+    $seen=0
+    while($queue.Count-gt0){
+        $id=[string]$queue.Dequeue();$seen++
+        foreach($child in @($children[$id])){
+            $indegree[$child]=[int]$indegree[$child]-1
+            if([int]$indegree[$child]-eq0){$queue.Enqueue($child)}
+        }
+    }
+    if($seen-ne$items.Count){
+        $cycle=@($indegree.Keys|Where-Object{[int]$indegree[$_]-gt0}|Sort-Object)
+        throw "Replacement task graph contains a dependency cycle involving: $($cycle -join ', ')"
+    }
+}
+
+function Get-SCIntentSemanticHash($Intent) {
+    if($null-eq$Intent){return $null}
+    $projection=[ordered]@{}
+    foreach($name in @('objective','requirements','constraints','invariants','nonGoals','decisions','preferences','openQuestions','successDefinition')){
+        $projection[$name]=if($Intent.PSObject.Properties[$name]){$Intent.$name}else{$null}
+    }
+    return Get-SCHashString (ConvertTo-SCJson $projection 24)
+}
+
+function Find-SCIntentRefValue($Intent,[string]$Ref) {
+    if($null-eq$Intent-or[string]::IsNullOrWhiteSpace($Ref)){return $null}
+    foreach($field in @('requirements','constraints','invariants','nonGoals','decisions','preferences','openQuestions')){
+        if(-not$Intent.PSObject.Properties[$field]){continue}
+        foreach($item in @($Intent.$field)){
+            if($item-is[string]){
+                $text=[string]$item
+                if($text-eq$Ref-or$text-match('^\s*'+[regex]::Escape($Ref)+'(?:\s*[:\-]\s*|\s*$)')){return [ordered]@{field=$field;value=$text}}
+            } elseif($null-ne$item) {
+                foreach($key in @('id','ref','key','name')){
+                    if($item.PSObject.Properties[$key]-and[string]$item.$key-eq$Ref){return [ordered]@{field=$field;value=$item}}
+                }
+            }
+        }
+    }
+    return $null
+}
+
+function Test-SCTaskIntentCompatible($Task,$OldIntent,$NewIntent) {
+    $refs=if($Task.PSObject.Properties['intentRefs']){@($Task.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})}else{@()}
+    if($refs.Count-eq0){return ([string](Get-SCIntentSemanticHash $OldIntent)-eq[string](Get-SCIntentSemanticHash $NewIntent))}
+    foreach($ref in $refs){
+        $old=Find-SCIntentRefValue $OldIntent $ref
+        $new=Find-SCIntentRefValue $NewIntent $ref
+        if($null-eq$old-or$null-eq$new){return $false}
+        if((Get-SCHashString (ConvertTo-SCJson $old 16))-ne(Get-SCHashString (ConvertTo-SCJson $new 16))){return $false}
+    }
+    return $true
+}
+
+function Copy-SCCompletedTaskRuntime($OldTask,$FreshTask) {
+    $definition=@('schemaVersion','id','title','instruction','size','sources','intentRefs','capabilityProfile','toolPolicy','acceptance','checks','semanticAcceptance','implications','proofObligations','parentTaskId','childTaskIds','refinementStatus','refinementDepth','dependsOn','relations','retrieval','evidence','provider','role','outputKind','humanGate')
+    foreach($p in $OldTask.PSObject.Properties){
+        if($definition -contains [string]$p.Name){continue}
+        Set-SCProperty $FreshTask ([string]$p.Name) $p.Value
+    }
+    $FreshTask.status='complete'
+    Set-SCProperty $FreshTask 'activeWorkerSessionId' $null
+    Set-SCProperty $FreshTask 'blockReason' $null
+}
+
+function Reset-SCReplannedTaskRuntime($Task) {
+    $Task.status='pending';$Task.stateRevision=0;$Task.controlRevision=0;$Task.attemptCount=0;$Task.criticRejectCount=0;$Task.validatorRejectCount=0
+    foreach($name in @('activeWorkerSessionId','latestWorkerSessionId','latestRunId','latestCompilationId','latestProposalId','latestCritiqueId','latestValidationId','blockReason','routingNotBefore')){Set-SCProperty $Task $name $null}
+    Set-SCProperty $Task 'updatedAt' ((Get-Date).ToUniversalTime().ToString('o'))
+}
+
+function Get-SCStagedDirectiveRecords([string]$StageDirectives) {
+    $dir=Join-Path $StageDirectives 'current'
+    if(-not(Test-Path -LiteralPath $dir -PathType Container)){return @()}
+    return @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File|Sort-Object Name|ForEach-Object{Read-SCJson $_.FullName}|Where-Object{$null-ne$_})
+}
+
+function New-SCStagedHumanSource([string]$StageInput,[string]$Text,[string]$DirectiveId) {
+    $id=New-SCId 'h'
+    $txt=Join-Path $StageInput ("{0}.txt"-f$id)
+    $meta=Join-Path $StageInput ("{0}.meta.json"-f$id)
+    if(-not(Test-Path -LiteralPath $StageInput)){New-Item -ItemType Directory -Force -Path $StageInput|Out-Null}
+    [IO.File]::WriteAllText($txt,$Text,(New-Object Text.UTF8Encoding($false)))
+    $lines=if($Text.Length-eq0){0}else{@($Text -split '\r?\n').Count}
+    Write-SCJson $meta ([ordered]@{schemaVersion=1;id=$id;ref="human:$id";kind='directive';origin=$DirectiveId;createdAt=(Get-Date).ToUniversalTime().ToString('o');lineCount=$lines;sha256=Get-SCFileHashValue $txt})
+    return "human:$id"
+}
+
+function Apply-SCStagedDirectiveChanges([string]$ChangesPath,[string]$StageDirectives,[string]$StageInput,[int]$StartingRevision) {
+    if([string]::IsNullOrWhiteSpace($ChangesPath)){
+        return [ordered]@{revision=$StartingRevision;hash=(Get-SCDirectiveHash (Get-SCStagedDirectiveRecords $StageDirectives));changes=@()}
+    }
+    $raw=Read-SCJson $ChangesPath
+    $changes=if($raw-is[System.Collections.IEnumerable]-and-not($raw-is[string])-and-not$raw.PSObject.Properties['changes']){@($raw)}elseif($raw.PSObject.Properties['changes']){@($raw.changes)}else{@($raw)}
+    $global=$StartingRevision;$events=@()
+    foreach($change in $changes){
+        if($null-eq$change){continue}
+        $action=if($change.PSObject.Properties['action']){([string]$change.action).ToLowerInvariant()}else{'set'}
+        $id=if($change.PSObject.Properties['id']){[string]$change.id}else{''}
+        Assert-SCDirectiveId $id
+        $currentDir=Join-Path $StageDirectives 'current'
+        $historyRoot=Join-Path $StageDirectives 'history'
+        if(-not(Test-Path -LiteralPath $currentDir)){New-Item -ItemType Directory -Force -Path $currentDir|Out-Null}
+        if(-not(Test-Path -LiteralPath $historyRoot)){New-Item -ItemType Directory -Force -Path $historyRoot|Out-Null}
+        $path=Join-Path $currentDir ("{0}.json"-f$id)
+        $previous=Read-SCJson $path
+        if($action-eq'set'){
+            $text=if($change.PSObject.Properties['text']){[string]$change.text}else{''}
+            if([string]::IsNullOrWhiteSpace($text)){throw "Directive change '$id' requires text."}
+            $scope=if($change.PSObject.Properties['scope']-and$change.scope){[string]$change.scope}else{$id}
+            foreach($other in @(Get-SCStagedDirectiveRecords $StageDirectives)){
+                if([string]$other.id-ne$id-and[string]$other.scope-eq$scope){throw "Directive scope '$scope' is already owned by '$($other.id)'."}
+            }
+            $sourceRef=if($change.PSObject.Properties['sourceRef']-and$change.sourceRef){[string]$change.sourceRef}else{$null}
+            if($sourceRef){
+                if($sourceRef -notmatch '^human:([^#]+)'){throw "Staged directive '$id' sourceRef must be a human: source."}
+                $sourceId=$Matches[1]
+                $sourcePath=Join-Path $StageInput ("{0}.txt"-f$sourceId)
+                if(-not(Test-Path -LiteralPath $sourcePath -PathType Leaf)){throw "Staged directive '$id' sourceRef not found: $sourceRef"}
+                if(([string](Get-Content -Raw -LiteralPath $sourcePath)).TrimEnd()-ne$text.TrimEnd()){throw "Staged directive '$id' text does not match sourceRef verbatim."}
+            }else{$sourceRef=New-SCStagedHumanSource $StageInput $text $id}
+            $next=1
+            if($previous){
+                $next=[int]$previous.revision+1
+                $history=Join-Path $historyRoot $id
+                if(-not(Test-Path -LiteralPath $history)){New-Item -ItemType Directory -Force -Path $history|Out-Null}
+                Write-SCJson (Join-Path $history ("revision-{0:d4}.json"-f[int]$previous.revision)) $previous
+            }
+            $record=[ordered]@{
+                schemaVersion=1;id=$id;scope=$scope;revision=$next;text=$text;sourceRef=$sourceRef
+                intentRefs=if($change.PSObject.Properties['intentRefs']){@($change.intentRefs|Where-Object{$_}|ForEach-Object{[string]$_})}else{@()}
+                updatedAt=(Get-Date).ToUniversalTime().ToString('o')
+                reason=if($change.PSObject.Properties['reason']){[string]$change.reason}else{$null}
+                authority='latest direct human word for this directive scope'
+            }
+            Write-SCJson $path $record;$global++
+            $events+=,[ordered]@{action='set';id=$id;record=$record}
+        } elseif($action-eq'retire'){
+            if($null-eq$previous){throw "Cannot retire unknown current directive '$id'."}
+            $history=Join-Path $historyRoot $id
+            if(-not(Test-Path -LiteralPath $history)){New-Item -ItemType Directory -Force -Path $history|Out-Null}
+            Set-SCProperty $previous 'retiredAt' ((Get-Date).ToUniversalTime().ToString('o'))
+            Set-SCProperty $previous 'retireReason' $(if($change.PSObject.Properties['reason']){[string]$change.reason}else{$null})
+            Write-SCJson (Join-Path $history ("revision-{0:d4}-retired.json"-f[int]$previous.revision)) $previous
+            Remove-Item -LiteralPath $path -Force
+            $global++
+            $events+=,[ordered]@{action='retire';id=$id;record=$previous}
+        }else{throw "Unknown staged directive action '$action' for '$id'."}
+    }
+    $records=Get-SCStagedDirectiveRecords $StageDirectives
+    return [ordered]@{revision=$global;hash=(Get-SCDirectiveHash $records);changes=@($events)}
+}
+
+function Set-SCStagedTaskReadiness([string]$StageTasks) {
+    $files=@(Get-ChildItem -LiteralPath $StageTasks -Filter '*.json' -File -ErrorAction SilentlyContinue)
+    $map=@{}
+    foreach($file in $files){$task=Read-SCJson $file.FullName;$map[[string]$task.id]=[ordered]@{task=$task;path=$file.FullName}}
+    foreach($entry in $map.Values){
+        $task=$entry.task
+        if([string]$task.status-eq'complete'){continue}
+        $ready=$true
+        foreach($dep in @($task.dependsOn)){
+            if([string]::IsNullOrWhiteSpace([string]$dep)){continue}
+            if(-not$map.ContainsKey([string]$dep)-or[string]$map[[string]$dep].task.status-ne'complete'){$ready=$false;break}
+        }
+        $task.status=if($ready){'ready'}else{'pending'}
+        Write-SCJson $entry.path $task
+    }
+}
+
+function Find-SCCommittedPlanningTransaction([string]$HandoffId) {
+    $root=Get-SCPlanningTransactionRoot
+    if(-not(Test-Path -LiteralPath $root -PathType Container)){return $null}
+    foreach($dir in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue|Sort-Object Name -Descending)){
+        $path=Join-Path $dir.FullName 'journal.json'
+        if(-not(Test-Path -LiteralPath $path -PathType Leaf)){continue}
+        $j=Read-SCJson $path
+        if($j-and[string]$j.handoffId-eq$HandoffId-and[string]$j.status-eq'committed'){return $j}
+    }
+    return $null
+}
+
+function Apply-SCPlanningHandoff([string]$HandoffPath) {
+    Assert-SCInitialized
+    Recover-SCInterruptedPlanTransactions|Out-Null
+    if([string]::IsNullOrWhiteSpace($HandoffPath)-or-not(Test-Path -LiteralPath $HandoffPath -PathType Leaf)){throw '-Path to accepted planning handoff is required.'}
+    $handoff=Read-SCJson (Resolve-Path -LiteralPath $HandoffPath).Path
+    if($null-eq$handoff){throw 'Planning handoff is empty.'}
+
+    $already=Find-SCCommittedPlanningTransaction ([string]$handoff.id)
+    if($already){return $already.result}
+
+    $active=Get-SCPlanningActiveRecord
+    if($null-eq$active){throw 'No active planning session owns this project.'}
+    if([string]$active.phase-ne'handoff'){throw "Planning session is '$($active.phase)', not handoff."}
+    if([string]$active.sessionId-ne[string]$handoff.sessionId-or[string]$active.acceptedHandoffId-ne[string]$handoff.id){throw 'Handoff does not match the active accepted planning handoff.'}
+
+    $planPath=Resolve-SCPlanningArtifactPath ([string]$handoff.planPath)
+    if(-not(Test-Path -LiteralPath $planPath -PathType Leaf)){throw "Handoff plan artifact is missing: $($handoff.planPath)"}
+    if((Get-SCFileHashValue $planPath)-ne[string]$handoff.planSha256){throw 'Handoff plan hash mismatch.'}
+    $intentPath=if($handoff.PSObject.Properties['intentPath']-and$handoff.intentPath){Resolve-SCPlanningArtifactPath ([string]$handoff.intentPath)}else{$null}
+    if($intentPath-and(Get-SCFileHashValue $intentPath)-ne[string]$handoff.intentSha256){throw 'Handoff Intent hash mismatch.'}
+    $directiveChangesPath=if($handoff.PSObject.Properties['directiveChangesPath']-and$handoff.directiveChangesPath){Resolve-SCPlanningArtifactPath ([string]$handoff.directiveChangesPath)}else{$null}
+    if($directiveChangesPath-and(Get-SCFileHashValue $directiveChangesPath)-ne[string]$handoff.directiveChangesSha256){throw 'Handoff directive-change hash mismatch.'}
+
+    $baselinePath=Resolve-SCPlanningArtifactPath ([string]$handoff.baselinePath)
+    $baseline=Read-SCJson $baselinePath
+    if($null-eq$baseline-or-not$baseline.PSObject.Properties['snapshotPath']-or-not$baseline.snapshotPath){throw 'Planning handoff baseline does not contain a frozen state snapshot.'}
+    $snapshot=Resolve-SCPlanningArtifactPath ([string]$baseline.snapshotPath)
+    if(-not(Test-Path -LiteralPath $snapshot -PathType Container)){throw "Planning baseline snapshot is missing: $($baseline.snapshotPath)"}
+
+    $input=Get-SCPlanInput $planPath
+    $plan=$input.plan
+    if($null-eq$plan-or$null-eq$plan.tasks-or@($plan.tasks).Count-eq0){throw 'Replacement handoff plan contains no tasks.'}
+
+    $transactionId=New-SCId 'replan'
+    $transactionDir=Join-Path (Get-SCPlanningTransactionRoot) $transactionId
+    $stage=Join-Path $transactionDir 'stage'
+    $backup=Join-Path $transactionDir 'backup'
+    New-Item -ItemType Directory -Force -Path $stage,$backup|Out-Null
+    $journalPath=Join-Path $transactionDir 'journal.json'
+    $journal=[ordered]@{schemaVersion=1;id=$transactionId;handoffId=[string]$handoff.id;sessionId=[string]$handoff.sessionId;status='staging';createdAt=(Get-Date).ToUniversalTime().ToString('o');targets=@();result=$null}
+    Write-SCJson $journalPath $journal
+
+    try {
+        $result=Invoke-SCLocked {
+            Assert-SCPlanningBaselineFresh $baseline
+
+            $liveState=Get-SCState
+            $cfg=Get-SCConfig
+            $baselineTasksDir=Join-Path $snapshot 'tasks'
+            $baselineIntent=Read-SCJson (Join-Path $snapshot 'intent/contract.json')
+            $oldTasks=@{}
+            if(Test-Path -LiteralPath $baselineTasksDir){
+                foreach($file in @(Get-ChildItem -LiteralPath $baselineTasksDir -Filter '*.json' -File)){
+                    try{$t=Read-SCJson $file.FullName;if($t){$oldTasks[[string]$t.id]=$t}}catch{}
+                }
+            }
+
+            $stageTasks=Join-Path $stage 'tasks'
+            $stagePlans=Join-Path $stage 'plans'
+            $stageIntent=Join-Path $stage 'intent'
+            $stageDirectives=Join-Path $stage 'directives'
+            $stageInput=Join-Path $stage 'input'
+            New-Item -ItemType Directory -Force -Path $stageTasks|Out-Null
+            Copy-SCPathTree (Get-SCPath 'plans') $stagePlans
+            Copy-SCPathTree (Get-SCPath 'intent') $stageIntent
+            Copy-SCPathTree (Get-SCPath 'directives') $stageDirectives
+            Copy-SCPathTree (Get-SCPath 'input') $stageInput
+            foreach($dir in @($stagePlans,$stageIntent,$stageDirectives,$stageInput)){if(-not(Test-Path -LiteralPath $dir)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}}
+
+            $startingDirectiveRevision=if($liveState.PSObject.Properties['directiveRevision']){[int]$liveState.directiveRevision}else{0}
+            $directiveResult=Apply-SCStagedDirectiveChanges $directiveChangesPath $stageDirectives $stageInput $startingDirectiveRevision
+            if(@($directiveResult.changes).Count-gt0-and-not$intentPath){throw 'A handoff that changes human directives must include a reconciled Intent candidate.'}
+            if(-not$intentPath-and$liveState.PSObject.Properties['directiveReconciliationRequired']-and[bool]$liveState.directiveReconciliationRequired){throw 'Live directives require reconciliation, but the handoff contains no Intent candidate.'}
+
+            $newIntent=Read-SCJson (Join-Path $stageIntent 'contract.json')
+            $intentChanged=$false
+            if($intentPath){
+                $newIntent=Read-SCJson $intentPath
+                Assert-SCIntentShape $newIntent
+                $currentIntent=Read-SCJson (Get-SCPath 'intent/contract.json')
+                $next=[int]$currentIntent.revision+1
+                Set-SCProperty $newIntent 'schemaVersion' 2
+                Set-SCProperty $newIntent 'revision' $next
+                Set-SCProperty $newIntent 'updatedAt' ((Get-Date).ToUniversalTime().ToString('o'))
+                Set-SCProperty $newIntent 'directiveRevision' ([int]$directiveResult.revision)
+                Set-SCProperty $newIntent 'directiveHash' ([string]$directiveResult.hash)
+                Set-SCProperty $newIntent 'authority' ([ordered]@{owner='orchestrator';workers='read-only';humanDirectives='latest direct human word wins within each directive scope'})
+                $history=Join-Path $stageIntent 'history'
+                if(-not(Test-Path -LiteralPath $history)){New-Item -ItemType Directory -Force -Path $history|Out-Null}
+                Write-SCJson (Join-Path $history ("revision-{0:d4}.json"-f$next)) $newIntent
+                Write-SCJson (Join-Path $stageIntent 'contract.json') $newIntent
+                $intentChanged=$true
+            }
+
+            $freshTasks=@()
+            foreach($item in @($plan.tasks)){$freshTasks+=,(New-SCTaskFromPlanItem $item)}
+            Assert-SCReplacementPlanGraph $freshTasks
+
+            $dispositions=@()
+            $candidateIds=@{}
+            foreach($fresh in $freshTasks){
+                $id=[string]$fresh.id
+                $candidateIds[$id]=$true
+                $old=if($oldTasks.ContainsKey($id)){$oldTasks[$id]}else{$null}
+                $newHash=Get-SCTaskDefinitionHash $fresh
+                if($old){
+                    $oldHash=Get-SCTaskDefinitionHash $old
+                    $intentCompatible=Test-SCTaskIntentCompatible $fresh $baselineIntent $newIntent
+                    if($oldHash-eq$newHash-and$intentCompatible-and[string]$old.status-eq'complete'){
+                        Copy-SCCompletedTaskRuntime $old $fresh
+                        Set-SCProperty $fresh 'replanDisposition' 'preserved-complete'
+                        Set-SCProperty $fresh 'carriedFromPlanId' ([string]$baseline.activePlanId)
+                        $dispositions+=,[ordered]@{taskId=$id;action='preserved-complete';previousStatus=[string]$old.status;definitionChanged=$false;intentCompatible=$true}
+                    } elseif($oldHash-eq$newHash-and$intentCompatible){
+                        Reset-SCReplannedTaskRuntime $fresh
+                        Set-SCProperty $fresh 'replanDisposition' 'carried-reset'
+                        Set-SCProperty $fresh 'replannedFromStatus' ([string]$old.status)
+                        $dispositions+=,[ordered]@{taskId=$id;action='carried-reset';previousStatus=[string]$old.status;definitionChanged=$false;intentCompatible=$true}
+                    } else {
+                        Reset-SCReplannedTaskRuntime $fresh
+                        Set-SCProperty $fresh 'replanDisposition' 'replaced'
+                        Set-SCProperty $fresh 'replannedFromStatus' ([string]$old.status)
+                        Set-SCProperty $fresh 'replacesDefinitionHash' $oldHash
+                        $dispositions+=,[ordered]@{taskId=$id;action='replaced';previousStatus=[string]$old.status;definitionChanged=($oldHash-ne$newHash);intentCompatible=$intentCompatible}
+                    }
+                } else {
+                    Reset-SCReplannedTaskRuntime $fresh
+                    Set-SCProperty $fresh 'replanDisposition' 'new'
+                    $dispositions+=,[ordered]@{taskId=$id;action='new';previousStatus=$null;definitionChanged=$true;intentCompatible=$false}
+                }
+                Write-SCJson (Join-Path $stageTasks ("{0}.json"-f$id)) $fresh
+            }
+
+            foreach($oldId in $oldTasks.Keys){
+                if($candidateIds.ContainsKey($oldId)){continue}
+                $old=$oldTasks[$oldId]
+                $action=if([string]$old.status-eq'complete'){'retired-complete'}else{'invalidated-removed'}
+                $dispositions+=,[ordered]@{taskId=$oldId;action=$action;previousStatus=[string]$old.status;definitionChanged=$true;intentCompatible=$false}
+            }
+            Set-SCStagedTaskReadiness $stageTasks
+
+            $planId=New-SCId 'plan'
+            $name=if($plan.PSObject.Properties['name']){[string]$plan.name}else{'Planning handoff'}
+            $summary=if($plan.PSObject.Properties['summary']){[string]$plan.summary}else{''}
+            $planRecord=[ordered]@{
+                schemaVersion=5;id=$planId;name=$name;summary=$summary;format=$input.format;source=$planPath
+                sourceRefs=if($plan.PSObject.Properties['sources']){@($plan.sources)}else{@()}
+                intentRefs=if($plan.PSObject.Properties['intent']){@($plan.intent)}else{@()}
+                importedAt=(Get-Date).ToUniversalTime().ToString('o')
+                transactionId=$transactionId;handoffId=[string]$handoff.id;replacesPlanId=[string]$baseline.activePlanId
+                intentRevision=if($newIntent.PSObject.Properties['revision']){[int]$newIntent.revision}else{$null}
+                directiveRevision=[int]$directiveResult.revision
+                taskDispositions=@($dispositions)
+                tasks=@($plan.tasks)
+            }
+            Write-SCJson (Join-Path $stagePlans ("{0}.json"-f$planId)) $planRecord
+            if($input.format-eq'scplan'){Copy-Item -LiteralPath $planPath -Destination (Join-Path $stagePlans ("{0}.scplan"-f$planId)) -Force}
+
+            $nextState=(ConvertTo-SCJson $liveState 30)|ConvertFrom-Json
+            $nextState.activePlanId=$planId
+            $nextState.planApproved=-not[bool]$cfg.requireHumanApprovalForPlan
+            if($intentChanged){
+                $direction=if($nextState.PSObject.Properties['directionRevision']){[int]$nextState.directionRevision}else{0}
+                Set-SCProperty $nextState 'directionRevision' ($direction+1)
+                Set-SCProperty $nextState 'intentRevision' ([int]$newIntent.revision)
+            }
+            Set-SCProperty $nextState 'directiveRevision' ([int]$directiveResult.revision)
+            Set-SCProperty $nextState 'directiveReconciledRevision' ([int]$directiveResult.revision)
+            Set-SCProperty $nextState 'directiveReconciliationRequired' $false
+            Set-SCProperty $nextState 'pendingDirectiveIds' @()
+            $rev=if($nextState.PSObject.Properties['revision']){[int]$nextState.revision}else{0}
+            Set-SCProperty $nextState 'revision' ($rev+1)
+            Set-SCProperty $nextState 'updatedAt' ((Get-Date).ToUniversalTime().ToString('o'))
+            Write-SCJson (Join-Path $stage 'state.json') $nextState
+
+            $targets=@(
+                [ordered]@{name='tasks';livePath=(Get-SCPath 'tasks');stagePath=$stageTasks;backupPath=(Join-Path $backup 'tasks')},
+                [ordered]@{name='plans';livePath=(Get-SCPath 'plans');stagePath=$stagePlans;backupPath=(Join-Path $backup 'plans')},
+                [ordered]@{name='intent';livePath=(Get-SCPath 'intent');stagePath=$stageIntent;backupPath=(Join-Path $backup 'intent')},
+                [ordered]@{name='directives';livePath=(Get-SCPath 'directives');stagePath=$stageDirectives;backupPath=(Join-Path $backup 'directives')},
+                [ordered]@{name='input';livePath=(Get-SCPath 'input');stagePath=$stageInput;backupPath=(Join-Path $backup 'input')},
+                [ordered]@{name='state';livePath=(Get-SCPath 'state.json');stagePath=(Join-Path $stage 'state.json');backupPath=(Join-Path $backup 'state.json')}
+            )
+            foreach($target in $targets){
+                $target['existed']=Test-Path -LiteralPath $target.livePath
+                if($target.existed){Copy-SCPathTree $target.livePath $target.backupPath}
+            }
+
+            $journal.targets=@($targets)
+            $journal.status='prepared'
+            Write-SCJson $journalPath $journal
+            $journal.status='committing'
+            Set-SCProperty $journal 'commitStartedAt' ((Get-Date).ToUniversalTime().ToString('o'))
+            Write-SCJson $journalPath $journal
+
+            try {
+                foreach($target in $targets){
+                    if(Test-Path -LiteralPath $target.livePath){Remove-Item -LiteralPath $target.livePath -Recurse -Force -ErrorAction Stop}
+                    Copy-SCPathTree $target.stagePath $target.livePath
+                }
+            } catch {
+                Restore-SCTransactionBackup $journal
+                $journal.status='rolled_back'
+                Set-SCProperty $journal 'rolledBackAt' ((Get-Date).ToUniversalTime().ToString('o'))
+                Set-SCProperty $journal 'rollbackReason' $_.Exception.Message
+                Write-SCJson $journalPath $journal
+                throw
+            }
+
+            $summary=[ordered]@{
+                transactionId=$transactionId;handoffId=[string]$handoff.id;appliedPlanId=$planId;replacedPlanId=[string]$baseline.activePlanId
+                intentRevision=if($newIntent.PSObject.Properties['revision']){[int]$newIntent.revision}else{$null}
+                directiveRevision=[int]$directiveResult.revision
+                preservedComplete=@($dispositions|Where-Object{$_.action-eq'preserved-complete'}|ForEach-Object{$_.taskId})
+                resetTasks=@($dispositions|Where-Object{$_.action-eq'carried-reset'}|ForEach-Object{$_.taskId})
+                replacedTasks=@($dispositions|Where-Object{$_.action-eq'replaced'}|ForEach-Object{$_.taskId})
+                newTasks=@($dispositions|Where-Object{$_.action-eq'new'}|ForEach-Object{$_.taskId})
+                retiredTasks=@($dispositions|Where-Object{@('retired-complete','invalidated-removed')-contains$_.action}|ForEach-Object{$_.taskId})
+                taskDispositions=@($dispositions)
+            }
+            $journal.result=$summary
+            $journal.status='committed'
+            Set-SCProperty $journal 'committedAt' ((Get-Date).ToUniversalTime().ToString('o'))
+            Write-SCJson $journalPath $journal
+            return $summary
+        }
+
+        Add-SCEvent 'planning.handoff_applied' "Applied planning handoff $($handoff.id) as plan $($result.appliedPlanId)." $result
+        if($intentPath){Add-SCEvent 'intent.revised' "Intent contract revised transactionally to $($result.intentRevision)." @{revision=$result.intentRevision;transactionId=$result.transactionId;handoffId=$handoff.id}}
+        return $result
+    } catch {
+        if(Test-Path -LiteralPath $journalPath -PathType Leaf){
+            try{
+                $latest=Read-SCJson $journalPath
+                if($latest-and[string]$latest.status-eq'staging'){
+                    $latest.status='failed'
+                    Set-SCProperty $latest 'failedAt' ((Get-Date).ToUniversalTime().ToString('o'))
+                    Set-SCProperty $latest 'failure' $_.Exception.Message
+                    Write-SCJson $journalPath $latest
+                }
+            }catch{}
+        }
+        throw
+    }
+}
