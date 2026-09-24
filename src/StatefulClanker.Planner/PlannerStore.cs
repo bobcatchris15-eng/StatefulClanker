@@ -26,7 +26,7 @@ public sealed class PlannerStore
         _activePath = Path.Combine(_planningRoot, "active.json");
     }
 
-    public object Status() => WithLock(() =>
+    public object Status() => WithLock<object>(() =>
     {
         EnsureProject();
         var active = ReadJson<PlannerControl>(_activePath);
@@ -83,7 +83,7 @@ public sealed class PlannerStore
         return control;
     });
 
-    public object Settle() => WithLock(() =>
+    public object Settle() => WithLock<object>(() =>
     {
         EnsureProject();
         var control = RequireActive();
@@ -521,7 +521,10 @@ public sealed class PlannerStore
             .ToLowerInvariant()[..24];
 
     static string NewId(string prefix)
-        => $"{prefix}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid().ToString("N")[..8]}";
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        return $"{prefix}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{suffix}";
+    }
 
     static JsonElement ReadElement(string path)
     {
