@@ -845,17 +845,100 @@ function New-SCWorkerGitSnapshot([string]$SessionId,[int]$Sequence,[string]$Kind
         Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     }
 }
-function New-SCWorkerCheckpoint([string]$SessionId,[string]$Kind,[string]$Endpoint,[string]$Model) {
+function New-SCWorkerCheckpoint([string]$SessionId,[string]$Kind,[string]$Endpoint,[string]$Model,$Metadata=$null) {
     $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return $null}
     $seq=@($s.checkpoints).Count
     $git=New-SCWorkerGitSnapshot $SessionId $seq $Kind
     $cp=[pscustomobject][ordered]@{
         id="$SessionId-cp-$seq";sequence=$seq;kind=$Kind;createdAt=[datetimeoffset]::UtcNow.ToString('o');
         endpoint=$Endpoint;model=$Model;git=($null-ne$git);
-        commit=if($git){$git.commit}else{$null};tree=if($git){$git.tree}else{$null};ref=if($git){$git.ref}else{$null}
+        commit=if($git){$git.commit}else{$null};tree=if($git){$git.tree}else{$null};ref=if($git){$git.ref}else{$null};
+        metadata=$Metadata
     }
     $points=@($s.checkpoints)+$cp;Set-SCProperty $s 'checkpoints' @($points);Set-SCProperty $s 'latestCheckpointId' ([string]$cp.id);Save-SCWorkerSession $s
     return $cp
+}
+<# Records a durable Git snapshot at a recovery-relevant moment: after a
+   validation verdict lands, before validator feedback is handed back to the
+   same worker session for a repair turn, and after a parallel worktree
+   merges. A failure to snapshot never fails the caller -- these are best-effort
+   recovery breadcrumbs, not gates. #>
+function New-SCValidationCheckpoint([string]$SessionId,[string]$ValidationId,[string]$Verdict) {
+    if([string]::IsNullOrWhiteSpace($SessionId)){return $null}
+    try{return New-SCWorkerCheckpoint $SessionId 'validation' $null $null ([ordered]@{validationId=$ValidationId;verdict=$Verdict})}catch{return $null}
+}
+function New-SCRepairCheckpoint([string]$SessionId,[string]$ValidationId,[int]$RejectCount) {
+    if([string]::IsNullOrWhiteSpace($SessionId)){return $null}
+    try{return New-SCWorkerCheckpoint $SessionId 'repair' $null $null ([ordered]@{validationId=$ValidationId;rejectCount=$RejectCount})}catch{return $null}
+}
+function New-SCMergeCheckpoint([string]$SessionId,[string]$MergeCommit,[string]$Branch) {
+    if([string]::IsNullOrWhiteSpace($SessionId)){return $null}
+    try{return New-SCWorkerCheckpoint $SessionId 'merge' $null $null ([ordered]@{mergeCommit=$MergeCommit;branch=$Branch})}catch{return $null}
+}
+<# Gathers evidence about a finished run so callers can distinguish a fast
+   harness failure with zero effect from a genuine worker crash mid-work:
+   elapsed seconds, changed-file count / diff line size versus the tracked
+   baseline (session baseline commit when known, else HEAD in the worktree),
+   whether expected artifacts exist, and whether a candidate was submitted. #>
+function Get-SCRunEvidence($Run,[string]$SessionId=$null,[string]$WorkRoot=$null) {
+    $elapsedSeconds=0.0
+    try{
+        if($Run -and $Run.PSObject.Properties['startedAt'] -and $Run.startedAt){
+            $started=[datetimeoffset]::Parse([string]$Run.startedAt)
+            $ended=if($Run.PSObject.Properties['endedAt'] -and $Run.endedAt){[datetimeoffset]::Parse([string]$Run.endedAt)}else{[datetimeoffset]::UtcNow}
+            $elapsedSeconds=[math]::Round(($ended-$started).TotalSeconds,3)
+        }elseif($Run -and $Run.PSObject.Properties['startedAt'] -and $Run.startedAt -is [datetime]){
+            $elapsedSeconds=[math]::Round(((Get-Date)-$Run.startedAt).TotalSeconds,3)
+        }
+    }catch{}
+    $root=if($WorkRoot){$WorkRoot}else{Get-SCRoot}
+    $filesChanged=0;$linesChanged=0;$diffAvailable=$false
+    try{
+        if(Test-SCWorkerGitRepo -or (Test-Path -LiteralPath (Join-Path $root '.git'))){
+            $baseRef=$null
+            if($SessionId){
+                $s=Get-SCWorkerSession $SessionId
+                if($s -and $s.PSObject.Properties['baselineCheckpointId'] -and $s.baselineCheckpointId){
+                    $baseline=@($s.checkpoints|Where-Object{[string]$_.id-eq[string]$s.baselineCheckpointId}|Select-Object -First 1)
+                    if($baseline.Count-gt0 -and $baseline[0].commit){$baseRef=[string]$baseline[0].commit}
+                }
+            }
+            if(-not$baseRef){$baseRef='HEAD'}
+            $numstat=& git -C $root diff --numstat $baseRef -- . 2>$null
+            if($LASTEXITCODE-eq0 -and $numstat){
+                $diffAvailable=$true
+                foreach($line in @($numstat)){
+                    $parts=[string]$line -split "`t"
+                    if($parts.Count-ge2){
+                        $filesChanged++
+                        $added=0;$removed=0
+                        [void][int]::TryParse($parts[0],[ref]$added)
+                        [void][int]::TryParse($parts[1],[ref]$removed)
+                        $linesChanged+=($added+$removed)
+                    }
+                }
+            }
+        }
+    }catch{}
+    $candidateSubmitted=$false
+    try{
+        if($SessionId){
+            $s=Get-SCWorkerSession $SessionId
+            if($s -and $s.PSObject.Properties['candidateClaim'] -and $s.candidateClaim){$candidateSubmitted=$true}
+        }
+        if(-not$candidateSubmitted -and $Run -and $Run.PSObject.Properties['candidateClaim'] -and $Run.candidateClaim){$candidateSubmitted=$true}
+    }catch{}
+    $artifactPresent=$true
+    try{
+        if($Run -and $Run.PSObject.Properties['candidatePreflight'] -and $Run.candidatePreflight){
+            $artifactPresent=[bool]$Run.candidatePreflight.material
+        }
+    }catch{}
+    return [pscustomobject][ordered]@{
+        elapsedSeconds=$elapsedSeconds;filesChanged=$filesChanged;linesChanged=$linesChanged;
+        diffAvailable=$diffAvailable;candidateSubmitted=$candidateSubmitted;artifactPresent=$artifactPresent;
+        materialChange=($diffAvailable -and ($filesChanged-gt0))
+    }
 }
 function Restore-SCWorkerCheckpoint([string]$SessionId,[string]$CheckpointId) {
     $s=Get-SCWorkerSession $SessionId;if($null-eq$s){throw "Unknown worker session: $SessionId"}
