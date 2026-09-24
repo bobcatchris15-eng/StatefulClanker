@@ -45,6 +45,10 @@ try {
     Assert-True ([bool]$blockedApply.result.isError) 'plan_apply was not blocked by active planning ownership.'
     $blockedImport=Call-Tool 215 'plan_import' ([pscustomobject]@{path='does-not-matter.scplan'})
     Assert-True ([bool]$blockedImport.result.isError) 'plan_import was not blocked by active planning ownership.'
+    $blockedDirective=Call-Tool 216 'directive_set' ([pscustomobject]@{id='blocked-during-planning';text='must stage this instead'})
+    Assert-True ([bool]$blockedDirective.result.isError) 'directive_set mutated live authority while planning owned the project.'
+    $blockedIntent=Call-Tool 217 'intent_apply' ([pscustomobject]@{contract=[pscustomobject]@{objective='blocked';requirements=@();constraints=@();invariants=@();nonGoals=@();decisions=@();preferences=@();openQuestions=@();successDefinition='blocked'}})
+    Assert-True ([bool]$blockedIntent.result.isError) 'intent_apply mutated live Intent while planning owned the project.'
     Remove-Item -LiteralPath (Join-Path $planningDir 'active.json') -Force
     Write-Host '  MCP MODERN 3b: target-pool writes preserve disabled state and normalize tool capability'
     $machineDir=Join-Path $env:LOCALAPPDATA 'StatefulClanker';New-Item -ItemType Directory -Force -Path $machineDir|Out-Null
