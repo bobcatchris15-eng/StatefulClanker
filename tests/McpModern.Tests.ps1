@@ -35,6 +35,13 @@ try {
     Assert-True ($null-ne$tools.result._meta.'io.modelcontextprotocol/serverInfo') 'Modern tools/list lacks serverInfo response metadata.'
     $task=@($tools.result.tools|Where-Object { $_.name -eq 'task_add' }|Select-Object -First 1)[0];Assert-True ($null-ne$task.inputSchema.properties.capabilityProfile) 'task_add lacks capabilityProfile.';Assert-True ($null-ne$task.inputSchema.properties.toolAllow) 'task_add lacks toolAllow.'
     $wp=Get-ToolPayload (Call-Tool 21 'worker_policy_get' ([pscustomobject]@{}));Assert-True ($null-ne$wp.machine) 'worker_policy_get did not return machine policy.'
+    Write-Host '  MCP MODERN 3a: control snapshot exposes planning ownership'
+    $planningDir=Join-Path $temp '.statefulclanker\planning';New-Item -ItemType Directory -Force -Path $planningDir|Out-Null
+    [pscustomobject]@{schemaVersion=1;sessionId='planning-test';phase='planning';reason='snapshot test'}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $planningDir 'active.json') -Encoding UTF8
+    $planningSnapshot=Get-ToolPayload (Call-Tool 210 'control_snapshot' ([pscustomobject]@{}))
+    Assert-True ([bool]$planningSnapshot.planning.active) 'Snapshot did not expose active planning ownership.'
+    Assert-True ([string]$planningSnapshot.planning.phase-eq'planning') 'Snapshot planning phase is wrong.'
+    Remove-Item -LiteralPath (Join-Path $planningDir 'active.json') -Force
     Write-Host '  MCP MODERN 3b: target-pool writes preserve disabled state and normalize tool capability'
     $machineDir=Join-Path $env:LOCALAPPDATA 'StatefulClanker';New-Item -ItemType Directory -Force -Path $machineDir|Out-Null
     [pscustomobject]@{connections=[pscustomobject]@{test=[pscustomobject]@{models=@([pscustomobject]@{id='unknown-tools'},[pscustomobject]@{id='native-tools';supportsTools=$true})}}}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $machineDir 'connections.json') -Encoding UTF8
