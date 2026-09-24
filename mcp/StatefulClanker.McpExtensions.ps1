@@ -475,7 +475,7 @@ function Invoke-McpPlanningControl([string]$Project,$Arguments) {
         'candidate' {
             $planText=Get-McpArgRequired $Arguments 'planText'
             $planTemp=Join-Path ([IO.Path]::GetTempPath()) ("statefulclanker-planning-{0}.scplan"-f[Guid]::NewGuid().ToString('N'))
-            $intentTemp=$null
+            $intentTemp=$null;$directiveTemp=$null
             try {
                 [IO.File]::WriteAllText($planTemp,$planText,(New-Object Text.UTF8Encoding($false)))
                 $cli=@('candidate','--plan',$planTemp)
@@ -488,15 +488,38 @@ function Invoke-McpPlanningControl([string]$Project,$Arguments) {
                         $cli+=@('--intent',$intentTemp)
                     }
                 }
+                if(Test-McpArgumentPresent $Arguments 'directiveChanges'){
+                    $changes=Get-McpRawArgument $Arguments 'directiveChanges'
+                    if($null-ne$changes){
+                        $directiveTemp=Join-Path ([IO.Path]::GetTempPath()) ("statefulclanker-planning-directives-{0}.json"-f[Guid]::NewGuid().ToString('N'))
+                        [IO.File]::WriteAllText($directiveTemp,($changes|ConvertTo-Json -Depth 30),(New-Object Text.UTF8Encoding($false)))
+                        $cli+=@('--directives',$directiveTemp)
+                    }
+                }
                 return Invoke-McpPlannerCommand $Project $cli
             } finally {
                 Remove-Item -LiteralPath $planTemp -Force -ErrorAction SilentlyContinue
                 if($intentTemp){Remove-Item -LiteralPath $intentTemp -Force -ErrorAction SilentlyContinue}
+                if($directiveTemp){Remove-Item -LiteralPath $directiveTemp -Force -ErrorAction SilentlyContinue}
             }
         }
         'accept' {
             $id=Get-McpArgRequired $Arguments 'candidateId'
             return Invoke-McpPlannerCommand $Project @('accept','--candidate',$id)
+        }
+        'apply' {
+            $status=Invoke-McpPlannerCommand $Project @('status')
+            if(-not[bool]$status.active){throw 'No active planning session to apply.'}
+            if([string]$status.control.phase-ne'handoff'){throw "Planning phase is '$($status.control.phase)', not handoff."}
+            $session=[string]$status.control.sessionId;$handoff=[string]$status.control.acceptedHandoffId
+            if([string]::IsNullOrWhiteSpace($session)-or[string]::IsNullOrWhiteSpace($handoff)){throw 'Active planning session has no accepted handoff.'}
+            $handoffPath=Join-Path (Get-McpStateDir $Project) ("planning\sessions\{0}\handoffs\{1}.json"-f$session,$handoff)
+            $apply=Invoke-McpHarness $Project @('plan','apply-handoff','-Path',$handoffPath)
+            $lines=@(([string]$apply.stdout) -split [Environment]::NewLine|Where-Object{-not[string]::IsNullOrWhiteSpace($_)})
+            if($lines.Count-eq0){throw 'Handoff apply returned no transaction result.'}
+            try{$transaction=$lines[-1]|ConvertFrom-Json -ErrorAction Stop}catch{throw "Handoff apply returned malformed transaction JSON: $($apply.stdout)"}
+            $released=Invoke-McpPlannerCommand $Project @('release','--handoff',$handoff,'--applied-plan-id',[string]$transaction.appliedPlanId)
+            return [ordered]@{applied=$true;transaction=$transaction;release=$released}
         }
         'release' {
             $handoff=Get-McpArgRequired $Arguments 'handoffId';$plan=Get-McpArgRequired $Arguments 'appliedPlanId'
@@ -512,7 +535,7 @@ function Invoke-McpPlanningControl([string]$Project,$Arguments) {
 
 function New-SCExtendedTools {
     @(
-        @{name='planning_control';description='Operate the isolated Planner session. Planning owns the project while active and blocks implementation dispatch. Actions: status, begin, settle, ask, answer, questions, candidate, accept, release, cancel.';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('status','begin','settle','ask','answer','questions','candidate','accept','release','cancel')};reason=@{type='string'};executionTokenEstimate=@{type='integer';minimum=1};text=@{type='string'};why=@{type='string'};impact=@{type='string';enum=@('low','medium','high')};owner=@{type='string';enum=@('human','system')};blocking=@{type='boolean'};questionId=@{type='string'};planText=@{type='string';description='Complete candidate SCPLAN 1 text.'};intentContract=@{type='object';description='Optional staged normalized Intent candidate.'};summary=@{type='string'};candidateId=@{type='string'};handoffId=@{type='string'};appliedPlanId=@{type='string'}};required=@('action')}},
+        @{name='planning_control';description='Operate the isolated Planner session. Planning owns the project while active and blocks implementation dispatch. Actions: status, begin, settle, ask, answer, questions, candidate, accept, apply, release, cancel.';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('status','begin','settle','ask','answer','questions','candidate','accept','apply','release','cancel')};reason=@{type='string'};executionTokenEstimate=@{type='integer';minimum=1};text=@{type='string'};why=@{type='string'};impact=@{type='string';enum=@('low','medium','high')};owner=@{type='string';enum=@('human','system')};blocking=@{type='boolean'};questionId=@{type='string'};planText=@{type='string';description='Complete candidate SCPLAN 1 text.'};intentContract=@{type='object';description='Optional staged normalized Intent candidate.'};directiveChanges=@{type='array';description='Optional staged directive set/retire changes applied atomically with Intent and plan.';items=@{type='object'}};summary=@{type='string'};candidateId=@{type='string'};handoffId=@{type='string'};appliedPlanId=@{type='string'}};required=@('action')}},
         @{name='plan_apply';description='LEGACY ADDITIVE IMPORT: apply SCPLAN 1 directly from text only when no isolated planning session is active. Replanning must stage a planning_control candidate/handoff instead.';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string';description='Complete SCPLAN 1 document.'}};required=@('text')}},
         @{name='source_add';description='Persist verbatim source/background text as a durable human:<id> artifact. For material current human direction use directive_set instead.';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string'}};required=@('text')}},
         @{name='source_get';description='Read a durable source by reference, including optional #Lx-Ly ranges.';inputSchema=@{type='object';properties=@{project=@{type='string'};sourceRef=@{type='string'}};required=@('sourceRef')}},
@@ -769,6 +792,13 @@ function Invoke-McpRpc($Request) {
         if($params -is [System.Collections.IDictionary]){if($params.Contains('arguments')){$args=$params['arguments']}}
         elseif($params -and $params.PSObject.Properties['arguments']){$args=$params.arguments}
         $hasSemanticTaskAdd = $args -and (($args -is [System.Collections.IDictionary] -and ($args.Contains('size') -or $args.Contains('source') -or $args.Contains('intentRef') -or $args.Contains('check') -or $args.Contains('judge'))) -or ($args.PSObject.Properties['size'] -or $args.PSObject.Properties['source'] -or $args.PSObject.Properties['intentRef'] -or $args.PSObject.Properties['check'] -or $args.PSObject.Properties['judge']))
+        $planningMutationNames=@('goal_set','directive_set','directive_retire','intent_apply','plan_apply','plan_import','plan_approve','task_add','task_retry','task_block','task_complete','task_repair','task_recover_complete')
+        if($planningMutationNames-contains$name){
+            try{
+                $project=Get-McpProject $args;$planning=Get-McpPlanningSnapshot $project
+                if([bool]$planning.active){throw "Tool '$name' cannot mutate live semantic/task state while isolated planning owns the project (phase: $($planning.phase)). Stage semantic changes in planning_control candidate and apply the accepted handoff transactionally."}
+            }catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool '{0}' failed: {1}"-f$name,$_.Exception.Message)})}}}}
+        }
         if(@('directive_set','directive_list','directive_get','directive_history','directive_retire')-contains$name){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCDirectiveTool $name $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool '{0}' failed: {1}"-f$name,$_.Exception.Message)})}}}}
         if($name-eq'direction_add'){try{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=(Invoke-SCDirectionAdd $args)}}catch{return [ordered]@{jsonrpc='2.0';id=$Request.id;result=@{isError=$true;content=@(@{type='text';text=("Tool 'direction_add' failed: {0}"-f$_.Exception.Message)})}}}}
         if($name-eq'plan_import'){
