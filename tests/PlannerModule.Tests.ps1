@@ -96,6 +96,8 @@ end'|Set-Content -LiteralPath (Join-Path $temp 'candidate.scplan') -Encoding UTF
 
         $state=Get-Content -Raw -LiteralPath (Join-Path $stateRoot 'state.json')|ConvertFrom-Json
         $state.activePlanId='plan-applied'
+        $state|Add-Member -NotePropertyName lastPlanningHandoffId -NotePropertyValue ([string]$handoff.id) -Force
+        $state|Add-Member -NotePropertyName lastPlanningTransactionId -NotePropertyValue 'replan-test' -Force
         $state|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $stateRoot 'state.json') -Encoding UTF8
 
         $released=Invoke-Planner @(
