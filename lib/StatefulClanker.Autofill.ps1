@@ -113,7 +113,8 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
             if(-not$stopRequested-and-not$reason-and$slots-gt0){
                 $lastDispatch=$now
                 $dispatched=0
-                foreach($task in @($readyCandidates|Select-Object -First $slots)){
+                $dispatchWave=if(Get-Command Select-SCCooperativeDispatchWave -ErrorAction SilentlyContinue){@(Select-SCCooperativeDispatchWave $readyCandidates $slots)}else{@($readyCandidates|Select-Object -First $slots)}
+                foreach($task in @($dispatchWave)){
                     try{
                         $wt=New-SCWorktree (Get-SCStateRoot) $task.id
                         $run=Start-SCCycleProcess (Get-SCStateRoot) $wt $task.id $Provider $HarnessPath $Endpoint $Connection
