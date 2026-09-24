@@ -115,7 +115,7 @@ Normal completion is now `planning_control apply`. The execution runtime validat
 
 The old `plan_apply` / `plan_import` paths remain additive compatibility machinery outside planning. They are blocked while isolated planning owns the project.
 
-Low-level Planner `release` still verifies that state.activePlanId equals the applied plan id. This is retained as a recovery seam if the graph transaction committed but the normal combined apply/release call was interrupted.
+Low-level Planner `release` still exists as a recovery seam if the graph transaction committed but normal combined apply/release was interrupted. It verifies the active plan plus the exact `lastPlanningHandoffId` / `lastPlanningTransactionId` lineage before removing the barrier.
 
 ## Conversation entrypoints
 
@@ -164,15 +164,16 @@ A complete replacement graph is staged and validated. Missing dependency targets
 
 Prior tasks receive one transaction disposition:
 
-- `preserved-complete`: same stable id, identical definition, and compatible governing Intent;
+- `preserved-complete`: same stable id, identical definition, and compatible governing semantics;
 - `carried-reset`: identical/compatible incomplete work, with runtime attempt/review state reset;
-- `replaced`: same id but changed definition or governing Intent;
+- `replaced`: same id but changed definition or governing semantics;
+- `dependency-invalidated`: the task itself still matched, but one of its prerequisites did not remain complete; this invalidation propagates transitively;
 - `new`: new id;
 - `retired-complete` / `invalidated-removed`: old id omitted from the replacement graph.
 
 The active task directory contains only the new graph. Historical/tombstoned nodes do not remain active merely to preserve provenance; the transaction backup and plan record preserve the old graph and disposition table.
 
-Intent compatibility is deliberately conservative. Explicit task Intent refs are compared clause-by-clause. Tasks with no Intent refs only preserve completion when the whole semantic Intent is unchanged.
+Reuse is deliberately conservative. Explicit task Intent refs are compared clause-by-clause. Governing staged directive changes invalidate tasks that cite the old directive source or overlap the task's Intent refs. Untraced directive changes invalidate untraced completion. A changed project goal invalidates untraced completion. Finally, preserved-complete tasks are closed over dependencies: if any prerequisite becomes fresh, every completed dependent becomes fresh transitively.
 
 Commit uses a write-ahead journal under `.statefulclanker/transactions/<id>/` plus full backups. Journal state advances:
 
@@ -181,6 +182,24 @@ Commit uses a write-ahead journal under `.statefulclanker/transactions/<id>/` pl
 If startup finds a journal stuck in `committing`, it restores every backed-up target and marks the transaction `rolled_back`. A crash after all file copies but before the final committed marker therefore rolls back rather than guessing that the transaction was complete.
 
 A committed handoff is idempotent: retrying apply before Planner release returns the existing committed transaction.
+
+## Research test
+
+On a Windows development checkout with the .NET SDK:
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\PlanningHandoffTransaction.Tests.ps1
+
+This integration test exercises:
+
+- stable completed-task preservation;
+- Intent/directive invalidation;
+- transitive downstream invalidation;
+- omitted-task retirement;
+- staged project-goal replacement;
+- baseline-drift refusal before mutation;
+- idempotent handoff application;
+- the real MCP `planning_control apply` combined apply/release path;
+- startup rollback when a synthetic crash removes `state.json` during `committing`.
 
 ## Multi-agent planning shape
 
