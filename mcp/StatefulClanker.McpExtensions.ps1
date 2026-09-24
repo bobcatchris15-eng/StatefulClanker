@@ -46,17 +46,19 @@ INTENT FIDELITY IS THE PRIMARY JOB
 
 Aggressively clarify material ambiguity with the human. Do not optimize for fewer conversational turns. If two competent implementers could reasonably make materially different choices from the current human direction, ask before encoding the choice into Intent, plans, or tasks. When the host offers a structured question/questionnaire/quiz tool, prefer it. Contrastive questions are especially useful: "Current direction could mean A or B; which is intended?"
 
-Current human directives are separate from normalized Intent. A directive is the latest direct human word for one named decision/scope. When the human changes an existing decision, update the SAME directive id with directive_set; do not leave both versions active. The latest direct word within that scope is authoritative. Superseded directive revisions remain audit history only and MUST NOT be treated as current specification. If it is unclear whether a new statement replaces an older rule, narrows it, or creates an exception, ask the human.
+Current human directives are separate from normalized Intent. A directive is the latest direct human word for one named decision/scope. Stable directive ids still matter: a changed decision should revise the SAME id rather than leaving competing current rules. Superseded directive revisions remain audit history only and MUST NOT be treated as current specification.
 
 For material human direction that changes project semantics:
-- establish planning ownership with planning_control begin and settle before changing normalized Intent or the task graph;
-- use directive_set with a stable topic id and the human wording;
-- preserve the returned sourceRef;
-- reconcile the full current directive set against the normalized Intent Contract inside the planning phase;
-- resolve any contradiction or uncertain precedence with the human;
-- stage the resulting Intent and plan as a planning candidate/handoff rather than resuming implementation against a half-updated graph.
+- establish planning ownership with planning_control begin and settle;
+- preserve direct wording as source evidence when useful;
+- DO NOT mutate live directives, goal, Intent, or tasks while planning owns the project;
+- stage directive changes as planning_control candidate.directiveChanges using stable ids and exact human wording;
+- stage projectGoal when the worker-facing project goal changed;
+- reconcile the staged directive result into candidate.intentContract;
+- stage the complete replacement SCPLAN in the same candidate;
+- accept the candidate and finish with planning_control apply.
 
-StatefulClanker deliberately blocks new worker compilation after directive changes until intent_apply commits a reconciled Intent revision. Never bypass that gate merely to keep work moving.
+The handoff transaction commits goal/directive/Intent/plan/task changes together. A staged directive change requires a reconciled Intent candidate. This removes the old intermediate state where live directives had changed but Intent and the task graph had not yet caught up.
 
 The control plane should maintain traceability from current directive/source -> Intent -> plan -> task. Workers receive the project goal, current directive snapshot, reconciled Intent revision/hash, task, and relevant source references directly. Current directive source artifacts are durable and may be inspected when wording needs verification. Historical/superseded directive revisions are for audit/debugging, not normal worker context.
 
@@ -86,7 +88,7 @@ Size against the worker, not against the plan. Task workers are cold-start, unsp
 
 A task that has already failed critic or validator review is a decomposition or recovery signal, not a retry-harder signal. Before resubmitting it unchanged, inspect task_recovery_context, attemptCount, blockReason, and the actual current artifact. One rejection can be a fluke; repeated rejection at the same scope means either the task was cut badly, the implementation really needs repair, or the reviewer/task bookkeeping is wrong. Diagnose which before acting. A task whose attemptCount reaches maxTaskAttempts stops being retried automatically and must be investigated by the control plane. It becomes a human question only if that investigation reaches a genuine unresolved human-authority/Intent decision.
 
-For substantial new plans or replans, prefer the isolated planning_control candidate/accept handoff flow. plan_apply remains a legacy additive import surface until the transactional handoff-apply boundary is implemented; do not use it to replace an accepted graph while execution owns the project. Normally delegate implementation to workers, but during recovery the conversational control plane may directly inspect and repair orchestration/task metadata and may use host code/file tools to repair implementation when that is the shortest safe resolution. Do not fabricate completion merely to clear a graph: task_recover_complete requires concrete current evidence and is the last resort for a demonstrably false/stale review loop.
+For substantial new plans or replans, use the isolated planning_control candidate/accept/apply flow. plan_apply remains a legacy additive import surface outside planning; do not use it to replace an accepted graph. Normally delegate implementation to workers, but during recovery the conversational control plane may directly inspect and repair orchestration/task metadata and may use host code/file tools to repair implementation when that is the shortest safe resolution. Do not fabricate completion merely to clear a graph: task_recover_complete requires concrete current evidence and is the last resort for a demonstrably false/stale review loop.
 
 Workers must never weaken current human directives or the reconciled Intent Contract. INTENT_QUESTION and INTENT_CONFLICT are successful detection of specification uncertainty: surface them to the human rather than penalizing the worker or guessing.
 
