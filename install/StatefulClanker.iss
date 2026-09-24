@@ -15,6 +15,9 @@
 #ifndef RouterPublishDir
   #define RouterPublishDir "router-publish"
 #endif
+#ifndef PlannerPublishDir
+  #define PlannerPublishDir "planner-publish"
+#endif
 
 #define MyAppName "StatefulClanker"
 #define MyAppPublisher "StatefulClanker"
@@ -57,6 +60,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 ; need a separate .NET runtime.
 Source: "{#PublishDir}\*";                         DestDir: "{app}";          Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#RouterPublishDir}\*";                   DestDir: "{app}\router";   Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PlannerPublishDir}\*";                  DestDir: "{app}\planner";  Flags: ignoreversion recursesubdirs createallsubdirs
 ; Runtime / MCP / docs remain ordinary files beside the app so provider CLI and
 ; PowerShell users can inspect, grep and invoke them directly.
 Source: "{#RepoRoot}\StatefulClanker.ps1";         DestDir: "{app}";          Flags: ignoreversion
