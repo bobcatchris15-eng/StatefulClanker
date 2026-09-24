@@ -7,8 +7,8 @@ function Get-SCRpkHost {
     # the tray project and caused parallel workers to launch competing NuGet builds.
     $candidates=@(
         (Join-Path $script:StatefulClankerHome 'StatefulClanker.exe'),
-        (Join-Path $script:StatefulClankerHome 'src\StatefulClanker.Tray\bin\Release\net8.0-windows\StatefulClanker.exe'),
-        (Join-Path $script:StatefulClankerHome 'src\StatefulClanker.Tray\bin\Debug\net8.0-windows\StatefulClanker.exe')
+        (Join-Path $script:StatefulClankerHome 'src\StatefulClanker.Tray\bin\Release\net8.0-windows\win-x64\StatefulClanker.exe'),
+        (Join-Path $script:StatefulClankerHome 'src\StatefulClanker.Tray\bin\Debug\net8.0-windows\win-x64\StatefulClanker.exe')
     )
     foreach($candidate in $candidates){
         if(Test-Path -LiteralPath $candidate -PathType Leaf){

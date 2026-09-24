@@ -36,4 +36,8 @@ Assert-True ($execution.Contains('routing.request_diagnosis_required')) 'Endpoin
 Assert-True ($execution.Contains('validator.request_diagnosis_required')) 'Validator request fault event is missing.'
 $ui=Get-Content -Raw -LiteralPath (Join-Path $repo 'src\StatefulClanker.Tray\Program.cs')
 Assert-True ($ui.Contains('[LATEST ENDPOINT / HARNESS ERROR]')) 'Task detail does not expose the latest routing error.'
+Write-Host '  FAILURE DIAGNOSTICS 4: RPK subprocess selects the current win-x64 build'
+$rpk=Get-Content -Raw -LiteralPath (Join-Path $repo 'lib\StatefulClanker.ReflexiveKnowledge.ps1')
+Assert-True ($rpk.Contains('Release\net8.0-windows\win-x64\StatefulClanker.exe')) 'RPK host does not prefer the current release build.'
+Assert-True (-not $rpk.Contains("Release\net8.0-windows\StatefulClanker.exe'")) 'RPK host can still select a stale non-RID executable.'
 Write-Host 'PASS: malformed tool output gets bounded repair and request faults surface for investigation.'
