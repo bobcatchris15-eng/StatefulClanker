@@ -29,14 +29,14 @@ foreach($name in $runtimeNames){. (Join-Path $runtimeLib $name)}
 
 $script:SCManagedChild=$false
 if($StateRoot){Set-SCRoots (Get-Location).Path $StateRoot;$script:SCManagedChild=$true}
-if($Command.ToLowerInvariant()-ne'init'-and(Test-Path (Get-SCPath 'state.json'))){Upgrade-SCStateLayout;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout}
+if($Command.ToLowerInvariant()-ne'init'-and(Test-Path (Get-SCPath 'state.json'))){Recover-SCInterruptedPlanTransactions|Out-Null;Upgrade-SCStateLayout;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout}
 
 switch($Command.ToLowerInvariant()){
 'init'{Initialize-SC;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout;break}
 'goal'{$text=if($Message){$Message}elseif($Subcommand){$Subcommand}else{$Title};Set-SCGoal $text;break}
 'status'{Show-SCStatus;break}
 'task'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};switch($Subcommand.ToLowerInvariant()){'add'{Add-SCTask;break};'set'{[void](Set-SCTaskSize $TaskId $Size $Provider);break};'list'{Update-SCReadiness;Get-SCTasks|Sort-Object createdAt|Select-Object id,status,size,capabilityProfile,attemptCount,role,humanGate,title|Format-Table -AutoSize;break};'show'{if(-not$TaskId){throw '-TaskId required.'};Get-SCTask $TaskId|ConvertTo-SCJson -Depth 18|Write-Output;break};'retry'{Retry-SCTask $TaskId;break};'repair'{[void](Repair-SCTaskFromRecovery $TaskId $Path $Reason);break};'recover'{[void](Complete-SCTaskFromRecovery $TaskId $Path $Reason);break};default{throw "Unknown task subcommand: $Subcommand"}};break}
-'plan'{if($null-eq$Subcommand){$Subcommand=''};switch($Subcommand.ToLowerInvariant()){'import'{if(-not$Path){throw '-Path required.'};Import-SCPlan $Path;break};'approve'{Approve-SCPlan;break};default{throw "Unknown plan subcommand: $Subcommand"}};break}
+'plan'{if($null-eq$Subcommand){$Subcommand=''};switch($Subcommand.ToLowerInvariant()){'import'{if(-not$Path){throw '-Path required.'};Import-SCPlan $Path;break};'apply-handoff'{if(-not$Path){throw '-Path required.'};$applied=Apply-SCPlanningHandoff $Path;$applied|ConvertTo-Json -Depth 30 -Compress|Write-Output;break};'approve'{Approve-SCPlan;break};default{throw "Unknown plan subcommand: $Subcommand"}};break}
 'source'{Show-SCSources $Subcommand $SourceRef $Message;break}
 'directive'{Show-SCDirectives $Subcommand $DirectiveId $Message $Scope $IntentRef $SourceRef $Reason;break}
 'events'{Get-SCControlEventsSince $Since $Limit $MinimumLevel|ConvertTo-SCJson -Depth 16|Write-Host;break}
