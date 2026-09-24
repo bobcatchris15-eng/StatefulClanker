@@ -342,7 +342,7 @@ function Add-SCProgressRecord($Task,$Compilation,[bool]$Advanced,[string]$Outcom
     return $record
 }
 function Stop-SCForStaleCompilation($Task,$Compilation,[string]$Outcome,[string]$Message,$Proposal=$null) {
-    $fresh=Test-SCCompilationFreshness $Compilation 'commit';if($fresh.fresh){return $false}
+    $fresh=Test-SCCompilationFreshness $Compilation 'commit' $Proposal;if($fresh.fresh){return $false}
     if($Proposal-and[string]$Proposal.status-eq'pending'){Reject-SCProposal $Proposal @($fresh.reasons)}
     $current=Get-SCTask ([string]$Task.id)
     if(@('running','reviewing','validating')-contains[string]$current.status){$current.status='needs_rework';$current.blockReason=$Message;Save-SCTask $current}
@@ -353,6 +353,12 @@ function Stop-SCForStaleCompilation($Task,$Compilation,[string]$Outcome,[string]
 }
 function Commit-SCProposal($Task,$Proposal,$Compilation) {
     $cfg=Get-SCConfig;$gateReasons=@();if([bool]$cfg.validatorEnabled-and[string]$Proposal.evidence.validationVerdict-ne'PASS'){$gateReasons+='required validator did not pass'}
+    if(-not[bool]$cfg.validatorEnabled){
+        # Disabling the validator skips semantic judgment only; configured mechanical checks still gate the commit.
+        $mechanical=Invoke-SCMechanicalAcceptance $Task
+        Set-SCProperty $Proposal.evidence 'mechanicalAcceptance' $mechanical;Save-SCProposal $Proposal
+        if($mechanical.configured -and -not$mechanical.passed){$gateReasons+=@($mechanical.checks|Where-Object{-not[bool]$_.passed}|ForEach-Object{"mechanical check $($_.index) failed (exit=$($_.exitCode) timedOut=$($_.timedOut)): $($_.command)"})}
+    }
     if($gateReasons.Count-gt 0){Reject-SCProposal $Proposal $gateReasons;$Task.status='needs_rework';$Task.blockReason='Required review gate did not pass.';Save-SCTask $Task;Add-SCProgressRecord $Task $Compilation $false 'review-gate-rejected' ($gateReasons -join '; ')|Out-Null;return $false}
     if(Stop-SCForStaleCompilation $Task $Compilation 'stale-before-commit' 'Compiled state became stale before commit.' $Proposal){return $false}
     $Task=Get-SCTask ([string]$Task.id)

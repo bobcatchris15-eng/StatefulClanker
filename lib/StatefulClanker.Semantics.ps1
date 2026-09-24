@@ -38,12 +38,44 @@ function New-SCCompilation($Task) {
     Write-SCJson (Get-SCPath ("compilations/{0}.json"-f$receipt.id)) $receipt;return $receipt
 }
 
-function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit') {
+function Get-SCProposalCandidateSnapshot($Proposal) {
+    if($null-eq$Proposal-or$null-eq$Proposal.evidence){return $null}
+    $ev=$Proposal.evidence
+    if(-not($ev.PSObject.Properties['workerSessionId'] -and $ev.workerSessionId -and $ev.PSObject.Properties['candidateCheckpointId'] -and $ev.candidateCheckpointId)){return $null}
+    if(-not(Get-Command Get-SCWorkerSession -ErrorAction SilentlyContinue)){return $null}
+    $s=Get-SCWorkerSession ([string]$ev.workerSessionId);if($null-eq$s){return $null}
+    $cp=@($s.checkpoints|Where-Object{[string]$_.id-eq[string]$ev.candidateCheckpointId}|Select-Object -First 1)
+    if($cp.Count-eq0-or-not$cp[0].tree){return $null}
+    $root=if($s.PSObject.Properties['workRoot'] -and $s.workRoot){[string]$s.workRoot}else{Get-SCRoot}
+    return [pscustomobject]@{tree=[string]$cp[0].tree;root=$root}
+}
+function Test-SCFileMatchesCandidate($Snapshot,[string]$Relative,[string]$FullPath) {
+    # The worker's own edit is not staleness: the file must still hold exactly what the candidate snapshot recorded.
+    $gitPath=$Relative -replace '\\','/'
+    $expected="$(& git -C $Snapshot.root rev-parse --verify --quiet ("{0}:{1}"-f$Snapshot.tree,$gitPath) 2>$null|Select-Object -First 1)".Trim()
+    $exists=Test-Path -LiteralPath $FullPath -PathType Leaf
+    if(-not$expected){return (-not$exists)}
+    if(-not$exists){return $false}
+    $actual="$(& git -C $Snapshot.root hash-object --path $gitPath -- $FullPath 2>$null|Select-Object -First 1)".Trim()
+    return ($actual-eq$expected)
+}
+function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit',$Proposal=$null) {
     $base = & $script:SCBaseCompilationFreshness $Compilation 'commit';$reasons=@($base.reasons)
     if($Compilation.readSet.PSObject.Properties['directiveRevision']) {$directives=Get-SCCurrentDirectiveSnapshot;if([int]$directives.revision-ne[int]$Compilation.readSet.directiveRevision-or[string]$directives.hash-ne[string]$Compilation.readSet.directiveHash){$reasons+='current human directives changed'}}
     if(-not(Test-SCDirectivesReconciled)){$reasons+='current human directives are awaiting intent reconciliation'}
     if($Mode-eq'dispatch') {
         foreach($fileRead in @($Compilation.readSet.files)) {$relative=[string]$fileRead.path;$full=if($relative -match '^[.]statefulclanker[\\/]'){Join-Path (Get-SCStateRoot) $relative}else{Join-Path (Get-SCRoot) $relative};$current=Get-SCFileHashValue $full;if([string]$current-ne[string]$fileRead.sha256){$reasons+="context file changed before dispatch: $relative"}}
+    }elseif($Mode-eq'commit') {
+        # Without a candidate snapshot the worker's own edits are indistinguishable from outside ones, so only direct sessions are checked.
+        $snapshot=Get-SCProposalCandidateSnapshot $Proposal
+        if($snapshot){
+            foreach($fileRead in @($Compilation.readSet.files)) {
+                $relative=[string]$fileRead.path;if($relative -match '^[.]statefulclanker[\\/]'){continue}
+                $full=Join-Path (Get-SCRoot) $relative;$current=Get-SCFileHashValue $full
+                if([string]$current-eq[string]$fileRead.sha256){continue}
+                if(-not(Test-SCFileMatchesCandidate $snapshot $relative $full)){$reasons+="context file changed underneath worker before commit: $relative"}
+            }
+        }
     }
     return [ordered]@{fresh=($reasons.Count-eq0);mode=$Mode;checkedAt=(Get-Date).ToUniversalTime().ToString('o');reasons=@($reasons)}
 }
