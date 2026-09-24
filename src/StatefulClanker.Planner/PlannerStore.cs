@@ -181,7 +181,7 @@ public sealed class PlannerStore
             .ToList();
     }
 
-    public PlannerCandidate AddCandidate(string planFile, string? intentFile, string? directiveChangesFile, string summary) => WithLock(() =>
+    public PlannerCandidate AddCandidate(string planFile, string? intentFile, string? directiveChangesFile, string? projectGoal, string summary) => WithLock(() =>
     {
         var control = RequireActive();
         RequirePlanningPhase(control);
@@ -196,7 +196,8 @@ public sealed class PlannerStore
         var candidate = new PlannerCandidate
         {
             id = NewId("candidate"),
-            summary = summary ?? ""
+            summary = summary ?? "",
+            projectGoal = string.IsNullOrWhiteSpace(projectGoal) ? null : projectGoal
         };
 
         var dir = Path.Combine(SessionDir(control.sessionId), "candidates", candidate.id);
@@ -255,6 +256,7 @@ public sealed class PlannerStore
             id = NewId("handoff"),
             sessionId = control.sessionId,
             candidateId = candidate.id,
+            projectGoal = candidate.projectGoal,
             planPath = candidate.planPath,
             planSha256 = candidate.planSha256,
             intentPath = candidate.intentPath,
@@ -405,6 +407,7 @@ public sealed class PlannerStore
         {
             projectRoot = _root,
             gitHead = Git("rev-parse", "HEAD"),
+            projectGoal = TryString(state, "goal"),
             dirtyPaths = dirtyPaths,
             dirtyFiles = dirtyFiles,
             stateRevision = TryLong(state, "revision"),
