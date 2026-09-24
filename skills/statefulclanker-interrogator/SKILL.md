@@ -105,6 +105,8 @@ If no sourceRef is supplied for a staged set, the execution transaction creates 
 
 Any staged directive change requires a reconciled Intent candidate in the same handoff.
 
+If the worker-facing project goal itself changed, stage it as `projectGoal` on the candidate rather than calling `goal_set`.
+
 Planning may gather evidence and create planning artifacts, but it does not mutate the thing it is reasoning about.
 
 ## Intent representation
@@ -165,9 +167,10 @@ The Planner module persists planningToExecutionRatio = 1.0 and optionally accept
 
 Planning normally produces one coherent candidate bundle:
 
-1. directive-change delta when direct human authority changed;
-2. normalized/reconciled Intent when semantics changed;
-3. executable replacement plan/task graph.
+1. optional replacement project goal when that worker-facing summary changed;
+2. directive-change delta when direct human authority changed;
+3. normalized/reconciled Intent when semantics changed;
+4. executable replacement plan/task graph.
 
 Before accepting a candidate, verify:
 - all blocking human-owned questions are answered;
