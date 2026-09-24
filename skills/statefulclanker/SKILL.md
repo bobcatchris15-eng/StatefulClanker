@@ -14,7 +14,7 @@ Priorities, in order:
 
 1. **Preserve human intent with minimal semantic loss.**
 2. **Keep the human accurately informed about meaningful project-state changes.**
-3. **Create or revise durable semantic work structure.**
+3. **Keep durable execution state truthful without changing accepted plan semantics.**
 4. **Delegate implementation and review to StatefulClanker workers.**
 5. **Diagnose and actively recover orchestration failures before escalating to the human.**
 
@@ -205,7 +205,7 @@ A lost subscription does not imply no project changes occurred.
 
 Inspect `autofill_status`.
 
-If resident autofill is active, normally **do not call `run_start` or `run_parallel` after every planning turn**. Build correct ready work and let autofill own dispatch.
+If resident autofill is active, normally **do not call `run_start` or `run_parallel` after every conversational turn**. Let autofill own dispatch of the already accepted ready graph.
 
 If autofill is stopped, disabled, or absent in headless operation, manual run tools may be appropriate.
 
@@ -272,128 +272,28 @@ The Operator does not perform deliberate planning or replanning while implementa
 
 When the human wants to change project direction, or execution discovers a structural plan problem:
 
-1. request/enter the Planner's quiescing barrier;
+1. establish the Planner's quiescing barrier;
 2. allow already-started implementation cycles to settle;
 3. hand the human conversation to the `statefulclanker-interrogator` skill;
 4. return to Operator only after an accepted planning handoff has been transactionally applied and the Planner releases the barrier.
 
-The `statefulclanker-planner` skill remains the decomposition specialist inside that separate planning phase.
+The `statefulclanker-planner` skill owns decomposition inside that separate planning phase.
 
-The Operator may repair mechanical task bookkeeping and execution failures without invoking planning. It must not use "repair" as cover for changing product intent, architecture, or accepted plan semantics.
+The Operator may repair mechanical task bookkeeping and execution failures without invoking planning. It must not use "repair" as cover for changing product intent, architecture, acceptance semantics, dependencies for design reasons, or the accepted future state.
 
-## 6.1 Existing task semantics
+Workers can surface planning pressure such as missing dependencies, invalid assumptions, or human-owned decisions. Treat those as evidence that planning may need to resume, not as permission to edit the plan while workers continue.
 
-## 6.1 Semantic decomposition only
+## 6.1 Execution-side graph discipline
 
-Do not decompose work by:
+While execution owns the project:
 
-- regex;
-- line count;
-- file count;
-- folder boundaries;
-- arbitrary token/context limits;
-- one-task-per-file;
-- provider quota shape.
-
-Those can affect retrieval or routing, but not semantic work boundaries.
-
-Prefer tasks that are:
-
-- understandable by a cold-start worker;
-- centered on one primary outcome;
-- independently verifiable;
-- explicit about governing Intent/source;
-- explicit about prerequisites;
-- bounded in retrieval;
-- narrow enough that failure yields a useful diagnosis.
-
-Do not split tightly coupled work merely to make every task small.
-
-## 6.2 Semantic sizes
-
-Use:
-
-- `tiny` — mechanical/local change or bounded inspection;
-- `small` — one bounded concern suitable for disposable fast workers;
-- `medium` — coherent multi-file or nontrivial reasoning;
-- `large` — tightly coupled work that resisted useful decomposition.
-
-Size is a routing hint, not a vendor/model name.
-
-## 6.3 Dependencies vs semantic relations
-
-Use `depends` only when another task must be accepted first.
-
-Use relations for non-blocking graph meaning, such as:
-
-- `derived_from`;
-- `evidence_for`;
-- `supersedes`;
-- `invalidated_by`;
-- `conflicts_with`;
-- `related`;
-- `discovered_from`.
-
-Do not serialize execution merely because two tasks are conceptually related.
-
-## 6.4 Acceptance criteria
-
-Each implementation task should have observable pass conditions.
-
-Good criteria:
-
-- a named test or command passes;
-- an interface/schema exists;
-- a reproduction no longer fails;
-- exact specified behavior changes;
-- an invariant/non-goal remains preserved;
-- an artifact matches a defined format.
-
-Bad criteria:
-
-- looks good;
-- be robust;
-- finish it;
-- understand the code;
-- make sure everything works.
-
-When a task changes public behavior, include regression/compatibility criteria where relevant.
-
-When a task is investigative, acceptance should require a durable finding/artifact sufficient for dependent tasks.
-
-## 6.5 Implications and proof obligations
-
-The current task record supports first-class `implications` and `proofObligations`. In `SCPLAN 1`, author these with repeatable:
-
-```text
-imply <consequence that follows from doing this task correctly>
-prove <observable evidence required to demonstrate that consequence>
-```
-
-Use these fields when the explicit task instruction has consequences that a worker or validator could otherwise miss.
-
-Think in two passes:
-
-1. **Implication pass:** "If this task is implemented as intended, what else must be true?"
-2. **Proof pass:** "What evidence would demonstrate each important implication rather than merely assert it?"
-
-Examples:
-
-- changing persistence semantics implies restart/reload behavior must preserve the new state;
-- changing a protocol implies old/unsupported protocol behavior must fail predictably;
-- adding a permission boundary implies denied operations must actually be unavailable;
-- changing a parser implies malformed, duplicate, and unknown inputs need defined behavior;
-- introducing parallel work implies stale/upstream invalidation must not permit unsafe acceptance.
-
-Do not duplicate ordinary `accept` criteria mechanically. Use `accept` for the task's direct pass conditions and `imply`/`prove` to capture second-order consequences and evidence obligations.
-
-These fields participate in the task-definition hash. Changing them makes older compiled work stale.
-
-The runtime also persists refinement lineage/status metadata such as `refinementStatus`, `refinementDepth`, `parentTaskId`, and `childTaskIds`. Treat those as orchestration metadata, not fields to hand-edit in project state.
-
-**Important current boundary:** the present implementation persists implication/proof/refinement metadata, but there is no generic automatic task-fanout/refinement MCP surface to assume. Do not hallucinate one. If the conversational harness or a future specialist pass performs refinement, it should preserve parent/child lineage and re-apply the resulting task graph through supported plan/task operations.
-
-When a task is too coarse, implication analysis reveals multiple independently implementable or independently verifiable outcomes, or proof obligations require materially different work, split the task semantically. Do not split merely because the implication list is long.
+- run only accepted tasks;
+- preserve task/Intent traceability already present in the graph;
+- use dependencies as execution gates and relations as non-blocking meaning;
+- treat task-definition changes that alter intended behavior as replanning;
+- allow mechanical repairs that restore the accepted graph to what it already meant;
+- never silently broaden acceptance criteria or product scope to get a worker unstuck;
+- if a fix would change what success means, cross the planning barrier instead.
 
 ---
 
