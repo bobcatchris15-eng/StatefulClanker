@@ -28,6 +28,10 @@ const CONTROL_MESSAGE_TYPE = "statefulclanker-control";
 const OPERATOR_MANUAL_MESSAGE_TYPE = "statefulclanker-operator-manual";
 const INSTALL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MCP_SCRIPT = join(INSTALL_ROOT, "mcp", "StatefulClanker.Mcp.ps1");
+const CONVERSATION_ROLE =
+  String(process.env.STATEFULCLANKER_PI_ROLE ?? "operator").toLowerCase() === "interrogator"
+    ? "interrogator"
+    : "operator";
 
 const REALITY_COMPACTION_STRATEGY = "statefulclanker-reality-v1";
 const REALITY_PACKET_MAX_CHARS = 110_000;
@@ -173,30 +177,8 @@ When awakened by a control event, investigate first. A useful control-plane turn
 Use StatefulClanker MCP tools as the authoritative interface for task/Intent/control state. Use shell/file tools for project inspection and implementation repair when necessary, but do not hand-edit .statefulclanker bookkeeping files when a StatefulClanker tool exists for that transition.
 `;
 const OPERATOR_MANUAL = join(INSTALL_ROOT, "skills", "statefulclanker", "SKILL.md");
+const INTERROGATOR_MANUAL = join(INSTALL_ROOT, "skills", "statefulclanker-interrogator", "SKILL.md");
 const PLANNER_SKILL = join(INSTALL_ROOT, "skills", "statefulclanker-planner", "SKILL.md");
-
-function planningIntent(prompt: string): boolean {
-  const text = prompt.trim().toLowerCase();
-  if (!text) return false;
-
-  const explicit = [
-    /\bplanning\b/,
-    /^\s*plan\b/,
-    /\b(?:build|create|make|write|draft|generate|construct|design|prepare|revise|update|rework|repair|redo)\b.{0,100}\bplan\b/,
-    /\bplan\b.{0,100}\b(?:this|it|out|for|implementation|project|feature|work)\b/,
-    /\bdecompos(?:e|ing|ition)\b/,
-    /\bbreak\s+(?:this|it|work|the\s+work)\s+(?:down|up)\b/,
-    /\btask\s+(?:list|graph|breakdown|decomposition)\b/,
-    /\bscplan\b/,
-    /\bimplementation\s+plan\b/,
-    /\bproject\s+plan\b/,
-    /\bwork\s+plan\b/,
-    /\bmilestones?\b.*\btasks?\b/,
-    /\bturn\s+.+\s+into\s+(?:a\s+)?(?:plan|tasks?|task\s+graph)\b/,
-    /\bmap\s+out\b.*\b(?:work|tasks?|implementation)\b/,
-  ];
-  return explicit.some((pattern) => pattern.test(text));
-}
 
 function readPlannerSkill(): string {
   try {
@@ -339,6 +321,37 @@ function parseToolPayload(result: any): any {
 }
 
 function buildOperatorBootPacket(project: string): string {
+  if (CONVERSATION_ROLE === "interrogator") {
+    let interrogator: string;
+    try {
+      interrogator = readFileSync(INTERROGATOR_MANUAL, "utf8");
+    } catch (error) {
+      interrogator = [
+        "# StatefulClanker Interrogator manual unavailable",
+        "",
+        `The Interrogator manual could not be read from ${INTERROGATOR_MANUAL}.`,
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
+      ].join("\n");
+    }
+
+    return [
+      "STATEFULCLANKER BUNDLED PI INTERROGATOR BOOT PACKET",
+      "",
+      `Active project: ${project}`,
+      "",
+      "This session was explicitly launched for planning/replanning. Do not act as the execution Operator.",
+      "Establish/observe the Planner barrier before revising project semantics. Work against the settled planning baseline.",
+      "",
+      "----- BEGIN STATEFULCLANKER INTERROGATOR MANUAL -----",
+      interrogator,
+      "----- END STATEFULCLANKER INTERROGATOR MANUAL -----",
+      "",
+      "----- BEGIN STATEFULCLANKER DECOMPOSITION SPECIALIST SKILL -----",
+      readPlannerSkill(),
+      "----- END STATEFULCLANKER DECOMPOSITION SPECIALIST SKILL -----",
+    ].join("\n");
+  }
+
   let manual: string;
   try {
     manual = readFileSync(OPERATOR_MANUAL, "utf8");
@@ -1024,8 +1037,11 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
         display: false,
         details: {
           project,
-          source: OPERATOR_MANUAL,
-          purpose: "StatefulClanker control-plane boot manual",
+          source: CONVERSATION_ROLE === "interrogator" ? INTERROGATOR_MANUAL : OPERATOR_MANUAL,
+          purpose:
+            CONVERSATION_ROLE === "interrogator"
+              ? "StatefulClanker planning/interrogation boot manual"
+              : "StatefulClanker execution control-plane boot manual",
         },
       },
       {
@@ -1246,38 +1262,43 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (event) => {
+    delete event.systemPromptOptions.sections.statefulclankerPlanner;
+
+    if (CONVERSATION_ROLE === "interrogator") {
+      event.systemPromptOptions.sections.statefulclanker = [
+        "## StatefulClanker Interrogator",
+        "This Pi session was explicitly launched as the human-facing planning/replanning conversation.",
+        "Do not dispatch implementation workers or resume Autofill while planning owns the project.",
+        "Use the durable Planner barrier/session as the phase authority; planning and implementation are mutually exclusive.",
+        "Work against the settled planning baseline, persist material questions/answers, preserve provenance, and produce an accepted Intent + plan handoff.",
+        "Use heterogeneous models for distinct planning jobs rather than several complete-plan votes.",
+        "The decomposition specialist skill is available for the task-graph pass after Intent is sufficiently constrained.",
+        "Initial planning inference policy targets roughly 1.0x the expected implementation token budget.",
+      ].join("\n");
+      return;
+    }
+
     event.systemPromptOptions.sections.statefulclanker = [
-      "## StatefulClanker control plane",
-      "This Pi instance is the human-facing control plane for the active StatefulClanker project.",
-      "A full StatefulClanker operator field manual is injected as hidden session context at startup. Treat that manual as operating guidance, not optional background reading.",
-      "Use the registered StatefulClanker tools for durable intent, directives, plan/task state, recovery, routing, telemetry, and autofill control.",
+      "## StatefulClanker Operator",
+      "This Pi instance is the human-facing execution control plane for the active StatefulClanker project.",
+      "A full StatefulClanker Operator field manual is injected as hidden session context at startup.",
+      "Deliberate planning/replanning belongs to a separately launched Interrogator session; do not infer a planning role from ordinary user phrasing.",
+      "Use the registered StatefulClanker tools for durable intent, directives, accepted plan/task state, recovery, routing, telemetry, and autofill control.",
       "Current Human Directives and reconciled Intent outrank plan/task text; plan/task text outranks worker/reviewer claims.",
       "Control events are wake-up/history signals, not proof of current truth. Re-check canonical task state and concrete artifacts before acting on stagnation/recovery warnings.",
       "Never reopen or redo a task that is already canonically complete merely because an older stagnation warning arrives.",
       "Mechanical stalls and repeated validator/reviewer failures are recovery requests first: investigate and repair the actual broken layer before escalating to the human.",
-      "Pi compaction is reality-first: old conversational bulk is replaced with a mechanically rebuilt checkpoint from current git/project/task state while Pi retains its normal recent raw tail. Treat archival carryover as low-authority evidence.",
-      "Reality compaction is intentionally proactive and frequent: the bundled Pi refreshes its working context well before the provider context window is close to full.",
+      "If a requested change alters desired behavior, architecture, acceptance semantics, constraints, or other accepted planning assumptions, enter the Planner barrier and transfer to Interrogator rather than changing the future while workers run.",
     ].join("\n");
-
-    if (planningIntent(event.prompt)) {
-      event.systemPromptOptions.sections.statefulclankerPlanner = [
-        "## MANDATORY STATEFULCLANKER PLANNING MODE",
-        "The current human turn requests planning, plan construction/revision, decomposition, a task list/task graph, or SCPLAN.",
-        "Apply the following planner skill in full before creating or materially revising the plan.",
-        "Do not substitute ad-hoc decomposition for this methodology.",
-        "",
-        readPlannerSkill(),
-      ].join("\n");
-    } else {
-      delete event.systemPromptOptions.sections.statefulclankerPlanner;
-    }
   });
 
   pi.on("session_start", async (_event, ctx) => {
     ensureClient(ctx.cwd);
     if (root) queueOperatorManual(root);
-    await establishCursorAtLiveEdge();
-    if (!timer) timer = setInterval(() => void poll(), CONTROL_POLL_MS);
+    if (CONVERSATION_ROLE === "operator") {
+      await establishCursorAtLiveEdge();
+      if (!timer) timer = setInterval(() => void poll(), CONTROL_POLL_MS);
+    }
   });
 
   pi.on("agent_settled", (_event, ctx) => {
@@ -1285,10 +1306,10 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
     ensureClient(ctx.cwd);
     if (root !== previous) {
       if (root) queueOperatorManual(root);
-      void establishCursorAtLiveEdge();
+      if (CONVERSATION_ROLE === "operator") void establishCursorAtLiveEdge();
       return;
     }
-    void poll();
+    if (CONVERSATION_ROLE === "operator") void poll();
   });
 
   process.once("exit", () => client?.close());
