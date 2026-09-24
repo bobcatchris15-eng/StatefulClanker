@@ -309,6 +309,7 @@ public sealed class PlannerStore
 
         handoff.status = "applied";
         handoff.appliedPlanId = appliedPlanId;
+        handoff.appliedTransactionId = transactionId;
         handoff.releasedAt = DateTimeOffset.UtcNow.ToString("O");
         WriteJson(handoffPath, handoff);
 
