@@ -1,4 +1,4 @@
-﻿# StatefulClanker-owned minimal worker harness for direct inference backends.
+# StatefulClanker-owned minimal worker harness for direct inference backends.
 # CLI providers continue through the existing provider harness path. API providers
 # use machine-local connection profiles and this bounded coding/tool loop.
 
@@ -330,6 +330,7 @@ function Get-SCIntrinsicWorkerToolRecords($Task,[string]$Stage='worker') {
       (New-SCWorkerToolRecord 'builtin.git_diff' 'git_diff' 'Return git status and diff for the worker checkout.' @{type='object';properties=@{}}),
       (New-SCWorkerToolRecord 'intent.human.read' 'read_human_intent' 'Read an authoritative durable human/source artifact by human:<id> reference. Read-only.' @{type='object';properties=@{sourceRef=@{type='string';description='human:<id> optionally with #Lx-Ly'}};required=@('sourceRef')}),
       (New-SCWorkerToolRecord 'intent.normalized.read' 'read_normalized_intent' 'Read the current orchestrator-owned normalized Intent Contract plus current direct human directives. Read-only.' @{type='object';properties=@{}}),
+      (New-SCWorkerToolRecord 'rpk.record_lesson' 'record_lesson' 'Record a durable Reflexive Project Knowledge lesson (trap, correction, file relationship, API quirk, or process rule) for future workers. Do not store guesses or generic advice. Limited to a few calls per session.' @{type='object';properties=@{title=@{type='string'};body=@{type='string';description='Capped to ~1500 characters.'};paths=@{type='array';items=@{type='string'};description='Project-relative paths this lesson concerns, must resolve inside the worker root.'};tags=@{type='array';items=@{type='string'}}};required=@('title','body')}),
       (New-SCWorkerToolRecord 'builtin.finish' 'finish' 'Submit the current work as a completion candidate. summary is required; expectedArtifacts and verification are claims for the harness to verify independently. Reviews may still use VERDICT lines in summary.' @{type='object';properties=@{summary=@{type='string'};expectedArtifacts=@{type='array';description='Exact project-relative paths that should exist in the submitted candidate; paths only, not prose.';items=@{type='string'}};verification=@{type='array';description='Commands/checks actually performed, stated compactly. Do not claim checks you did not run.';items=@{type='string'}}};required=@('summary')})
     )
     return @($candidates|Where-Object{Test-SCWorkerCapabilityAllowed ([string]$_.capability) $Task $Stage})
@@ -346,6 +347,33 @@ function Write-SCWorkerToolFailure($Task,[string]$Stage,[string]$ToolName,[strin
     if(-not$Result.StartsWith('TOOL_ERROR:')){return}
     Add-SCEvent 'worker.tool_error' $Result @{taskId=$Task.id;stage=$Stage;tool=$ToolName;step=$Step;error=$Result}
 }
+$script:SCRecordLessonRateLimit=@{}
+function Get-SCRecordLessonRateLimitKey($Task) {
+    if($Task -and $Task.PSObject.Properties['id'] -and $Task.id){return [string]$Task.id}
+    return 'unknown-task'
+}
+function Invoke-SCWorkerRecordLesson($ToolArgs,$Task) {
+    $key=Get-SCRecordLessonRateLimitKey $Task
+    $count=if($script:SCRecordLessonRateLimit.ContainsKey($key)){[int]$script:SCRecordLessonRateLimit[$key]}else{0}
+    if($count-ge5){throw 'record_lesson rate limit reached for this session (max 5 per session).'}
+    $title=[string](Get-SCArgValue $ToolArgs 'title');if([string]::IsNullOrWhiteSpace($title)){throw 'title required'}
+    $body=[string](Get-SCArgValue $ToolArgs 'body');if([string]::IsNullOrWhiteSpace($body)){throw 'body required'}
+    if($body.Length-gt1500){$body=$body.Substring(0,1500)}
+    $tags=@(Get-SCArgValue $ToolArgs 'tags' @())
+    $rawPaths=@(Get-SCArgValue $ToolArgs 'paths' @())
+    $paths=@()
+    foreach($p in $rawPaths){
+        $resolved=Resolve-SCWorkerToolPath ([string]$p) $Task 'record_lesson' -AllowMissing
+        $root=[IO.Path]::GetFullPath((Get-SCRoot)).TrimEnd([char[]]'\/')
+        $relative=if($resolved.Length-gt$root.Length){$resolved.Substring($root.Length).TrimStart([char[]]'\/')}else{''}
+        $paths+=,$relative
+    }
+    $source="worker:$key"
+    $result=Add-SCRpkLesson $title $body $tags $paths $source .6
+    $script:SCRecordLessonRateLimit[$key]=$count+1
+    Add-SCEvent 'rpk.lesson_recorded' $title @{title=$title;source=$source;taskId=$key}
+    return ConvertTo-SCModelText ([ordered]@{recorded=$true;lesson=$result}) 10
+}
 function Invoke-SCWorkerTool([string]$Name,$ToolArgs,$Task,[string]$Stage,$Registry,[string]$WorkerSessionId=$null) {
     $record=@($Registry|Where-Object{[string]$_.wireName-eq$Name}|Select-Object -First 1)
     if($record.Count-eq0){throw "Tool '$Name' is not authorized for this worker."}
@@ -360,6 +388,7 @@ function Invoke-SCWorkerTool([string]$Name,$ToolArgs,$Task,[string]$Stage,$Regis
       'git_diff' { return ConvertTo-SCModelText ([ordered]@{status=(Invoke-SCBoundedCommand 'git status --short' 30).stdout;diff=(Invoke-SCBoundedCommand 'git diff --no-ext-diff' 60).stdout}) 6 }
       'read_human_intent' { return ConvertTo-SCModelText (Resolve-SCHumanIntentArtifact ([string](Get-SCArgValue $ToolArgs 'sourceRef'))) 20 }
       'read_normalized_intent' { return ConvertTo-SCModelText (Get-SCNormalizedIntentView) 30 }
+      'record_lesson' { return Invoke-SCWorkerRecordLesson $ToolArgs $Task }
       'finish' { return [string](Get-SCArgValue $ToolArgs 'summary') }
       default { throw "Unknown worker tool: $Name" }
     }
