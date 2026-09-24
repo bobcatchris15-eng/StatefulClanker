@@ -616,6 +616,40 @@ function Apply-SCStagedDirectiveChanges([string]$ChangesPath,[string]$StageDirec
     return [ordered]@{revision=$global;hash=(Get-SCDirectiveHash $records);changes=@($events)}
 }
 
+function Invalidate-SCStagedCompletedDependents([string]$StageTasks,$Dispositions) {
+    $files=@(Get-ChildItem -LiteralPath $StageTasks -Filter '*.json' -File -ErrorAction SilentlyContinue)
+    $map=@{}
+    foreach($file in $files){$task=Read-SCJson $file.FullName;$map[[string]$task.id]=[ordered]@{task=$task;path=$file.FullName}}
+    $dispositionMap=@{}
+    foreach($item in @($Dispositions)){$dispositionMap[[string]$item.taskId]=$item}
+
+    $changed=$true
+    while($changed){
+        $changed=$false
+        foreach($entry in $map.Values){
+            $task=$entry.task
+            if([string]$task.status-ne'complete'){continue}
+            $invalid=@()
+            foreach($dep in @($task.dependsOn)){
+                $id=[string]$dep
+                if([string]::IsNullOrWhiteSpace($id)){continue}
+                if(-not$map.ContainsKey($id)-or[string]$map[$id].task.status-ne'complete'){$invalid+=,$id}
+            }
+            if($invalid.Count-eq0){continue}
+
+            Reset-SCReplannedTaskRuntime $task
+            Write-SCJson $entry.path $task
+            if($dispositionMap.ContainsKey([string]$task.id)){
+                $disp=$dispositionMap[[string]$task.id]
+                $disp['action']='dependency-invalidated'
+                $disp['dependencyInvalidatedBy']=@($invalid)
+                $disp['intentCompatible']=$true
+            }
+            $changed=$true
+        }
+    }
+}
+
 function Set-SCStagedTaskReadiness([string]$StageTasks) {
     $files=@(Get-ChildItem -LiteralPath $StageTasks -Filter '*.json' -File -ErrorAction SilentlyContinue)
     $map=@{}
@@ -779,6 +813,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                 $action=if([string]$old.status-eq'complete'){'retired-complete'}else{'invalidated-removed'}
                 $dispositions+=,[ordered]@{taskId=$oldId;action=$action;previousStatus=[string]$old.status;definitionChanged=$true;intentCompatible=$false}
             }
+            Invalidate-SCStagedCompletedDependents $stageTasks $dispositions
             Set-SCStagedTaskReadiness $stageTasks
 
             $planId=New-SCId 'plan'
@@ -859,6 +894,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                 preservedComplete=@($dispositions|Where-Object{$_.action-eq'preserved-complete'}|ForEach-Object{$_.taskId})
                 resetTasks=@($dispositions|Where-Object{$_.action-eq'carried-reset'}|ForEach-Object{$_.taskId})
                 replacedTasks=@($dispositions|Where-Object{$_.action-eq'replaced'}|ForEach-Object{$_.taskId})
+                dependencyInvalidated=@($dispositions|Where-Object{$_.action-eq'dependency-invalidated'}|ForEach-Object{$_.taskId})
                 newTasks=@($dispositions|Where-Object{$_.action-eq'new'}|ForEach-Object{$_.taskId})
                 retiredTasks=@($dispositions|Where-Object{@('retired-complete','invalidated-removed')-contains$_.action}|ForEach-Object{$_.taskId})
                 taskDispositions=@($dispositions)
@@ -871,7 +907,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
         }
 
         Add-SCEvent 'planning.handoff_applied' "Applied planning handoff $($handoff.id) as plan $($result.appliedPlanId)." $result
-        Add-SCEvent 'plan.replaced' "Active plan replaced transactionally: $($result.replacedPlanId) -> $($result.appliedPlanId)." @{transactionId=$result.transactionId;handoffId=$handoff.id;previousPlanId=$result.replacedPlanId;activePlanId=$result.appliedPlanId;preservedComplete=@($result.preservedComplete);resetTasks=@($result.resetTasks);replacedTasks=@($result.replacedTasks);newTasks=@($result.newTasks);retiredTasks=@($result.retiredTasks)}
+        Add-SCEvent 'plan.replaced' "Active plan replaced transactionally: $($result.replacedPlanId) -> $($result.appliedPlanId)." @{transactionId=$result.transactionId;handoffId=$handoff.id;previousPlanId=$result.replacedPlanId;activePlanId=$result.appliedPlanId;preservedComplete=@($result.preservedComplete);resetTasks=@($result.resetTasks);replacedTasks=@($result.replacedTasks);dependencyInvalidated=@($result.dependencyInvalidated);newTasks=@($result.newTasks);retiredTasks=@($result.retiredTasks)}
         if([bool]$result.goalChanged){Add-SCEvent 'goal.changed' ([string]$result.projectGoal) @{transactionId=$result.transactionId;handoffId=$handoff.id;previousGoal=$result.previousGoal}}
         if($intentPath){Add-SCEvent 'intent.revised' "Intent contract revised transactionally to $($result.intentRevision)." @{revision=$result.intentRevision;transactionId=$result.transactionId;handoffId=$handoff.id}}
         foreach($change in @($result.directiveChanges)){
