@@ -41,6 +41,10 @@ try {
     $planningSnapshot=Get-ToolPayload (Call-Tool 210 'control_snapshot' ([pscustomobject]@{}))
     Assert-True ([bool]$planningSnapshot.planning.active) 'Snapshot did not expose active planning ownership.'
     Assert-True ([string]$planningSnapshot.planning.phase-eq'planning') 'Snapshot planning phase is wrong.'
+    $blockedApply=Call-Tool 214 'plan_apply' ([pscustomobject]@{text='ignored because planning barrier should reject first'})
+    Assert-True ([bool]$blockedApply.result.isError) 'plan_apply was not blocked by active planning ownership.'
+    $blockedImport=Call-Tool 215 'plan_import' ([pscustomobject]@{path='does-not-matter.scplan'})
+    Assert-True ([bool]$blockedImport.result.isError) 'plan_import was not blocked by active planning ownership.'
     Remove-Item -LiteralPath (Join-Path $planningDir 'active.json') -Force
     Write-Host '  MCP MODERN 3b: target-pool writes preserve disabled state and normalize tool capability'
     $machineDir=Join-Path $env:LOCALAPPDATA 'StatefulClanker';New-Item -ItemType Directory -Force -Path $machineDir|Out-Null
