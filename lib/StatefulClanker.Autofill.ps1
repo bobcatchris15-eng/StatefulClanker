@@ -113,7 +113,10 @@ function Invoke-SCAutofillSupervisor([int]$IntervalSeconds=0,[string]$Provider,[
             if(-not$stopRequested-and-not$reason-and$slots-gt0){
                 $lastDispatch=$now
                 $dispatched=0
-                $dispatchWave=if(Get-Command Select-SCCooperativeDispatchWave -ErrorAction SilentlyContinue){@(Select-SCCooperativeDispatchWave $readyCandidates $slots)}else{@($readyCandidates|Select-Object -First $slots)}
+                $dispatchPlan=if(Get-Command Select-SCImplementationDispatchPlan -ErrorAction SilentlyContinue){Select-SCImplementationDispatchPlan $readyCandidates $slots $all}else{[pscustomobject]@{tasks=@($readyCandidates|Select-Object -First $slots);formations=@();deferred=@()}}
+                $dispatchWave=@($dispatchPlan.tasks)
+                foreach($formation in @($dispatchPlan.formations)){Add-SCEvent 'dispatch.formation' "Dispatch selected $($formation.kind) formation $($formation.id)." @{formationId=$formation.id;kind=$formation.kind;state=$formation.state;launched=@($formation.launched);members=@($formation.members);slots=$slots}}
+                foreach($deferredFormation in @($dispatchPlan.deferred)){Add-SCEvent 'dispatch.formation_deferred' "Deferred formation $($deferredFormation.formationId): $($deferredFormation.reason)" @{formationId=$deferredFormation.formationId;taskIds=@($deferredFormation.taskIds);reason=$deferredFormation.reason;slots=$slots}}
                 foreach($task in @($dispatchWave)){
                     try{
                         $wt=New-SCWorktree (Get-SCStateRoot) $task.id
