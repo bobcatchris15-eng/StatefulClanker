@@ -548,7 +548,11 @@ function Apply-SCStagedDirectiveChanges([string]$ChangesPath,[string]$StageDirec
         return [ordered]@{revision=$StartingRevision;hash=(Get-SCDirectiveHash (Get-SCStagedDirectiveRecords $StageDirectives));changes=@()}
     }
     $raw=Read-SCJson $ChangesPath
-    $changes=if($raw-is[System.Collections.IEnumerable]-and-not($raw-is[string])-and-not$raw.PSObject.Properties['changes']){@($raw)}elseif($raw.PSObject.Properties['changes']){@($raw.changes)}else{@($raw)}
+    if($null-eq$raw){throw 'Directive changes artifact is empty.'}
+    $hasChangesProperty=$null-ne$raw.PSObject.Properties['changes']
+    if($hasChangesProperty){$changes=@($raw.changes)}
+    elseif($raw-is[System.Collections.IEnumerable]-and-not($raw-is[string])){$changes=@($raw)}
+    else{$changes=@($raw)}
     $global=$StartingRevision;$events=@()
     foreach($change in $changes){
         if($null-eq$change){continue}
@@ -747,24 +751,16 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                     $intentCompatible=Test-SCTaskIntentCompatible $fresh $baselineIntent $newIntent
                     if($oldHash-eq$newHash-and$intentCompatible-and[string]$old.status-eq'complete'){
                         Copy-SCCompletedTaskRuntime $old $fresh
-                        Set-SCProperty $fresh 'replanDisposition' 'preserved-complete'
-                        Set-SCProperty $fresh 'carriedFromPlanId' ([string]$baseline.activePlanId)
                         $dispositions+=,[ordered]@{taskId=$id;action='preserved-complete';previousStatus=[string]$old.status;definitionChanged=$false;intentCompatible=$true}
                     } elseif($oldHash-eq$newHash-and$intentCompatible){
                         Reset-SCReplannedTaskRuntime $fresh
-                        Set-SCProperty $fresh 'replanDisposition' 'carried-reset'
-                        Set-SCProperty $fresh 'replannedFromStatus' ([string]$old.status)
                         $dispositions+=,[ordered]@{taskId=$id;action='carried-reset';previousStatus=[string]$old.status;definitionChanged=$false;intentCompatible=$true}
                     } else {
                         Reset-SCReplannedTaskRuntime $fresh
-                        Set-SCProperty $fresh 'replanDisposition' 'replaced'
-                        Set-SCProperty $fresh 'replannedFromStatus' ([string]$old.status)
-                        Set-SCProperty $fresh 'replacesDefinitionHash' $oldHash
                         $dispositions+=,[ordered]@{taskId=$id;action='replaced';previousStatus=[string]$old.status;definitionChanged=($oldHash-ne$newHash);intentCompatible=$intentCompatible}
                     }
                 } else {
                     Reset-SCReplannedTaskRuntime $fresh
-                    Set-SCProperty $fresh 'replanDisposition' 'new'
                     $dispositions+=,[ordered]@{taskId=$id;action='new';previousStatus=$null;definitionChanged=$true;intentCompatible=$false}
                 }
                 Write-SCJson (Join-Path $stageTasks ("{0}.json"-f$id)) $fresh
@@ -850,6 +846,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                 transactionId=$transactionId;handoffId=[string]$handoff.id;appliedPlanId=$planId;replacedPlanId=[string]$baseline.activePlanId
                 intentRevision=if($newIntent.PSObject.Properties['revision']){[int]$newIntent.revision}else{$null}
                 directiveRevision=[int]$directiveResult.revision
+                directiveChanges=@($directiveResult.changes)
                 preservedComplete=@($dispositions|Where-Object{$_.action-eq'preserved-complete'}|ForEach-Object{$_.taskId})
                 resetTasks=@($dispositions|Where-Object{$_.action-eq'carried-reset'}|ForEach-Object{$_.taskId})
                 replacedTasks=@($dispositions|Where-Object{$_.action-eq'replaced'}|ForEach-Object{$_.taskId})
@@ -865,7 +862,15 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
         }
 
         Add-SCEvent 'planning.handoff_applied' "Applied planning handoff $($handoff.id) as plan $($result.appliedPlanId)." $result
+        Add-SCEvent 'plan.replaced' "Active plan replaced transactionally: $($result.replacedPlanId) -> $($result.appliedPlanId)." @{transactionId=$result.transactionId;handoffId=$handoff.id;previousPlanId=$result.replacedPlanId;activePlanId=$result.appliedPlanId;preservedComplete=@($result.preservedComplete);resetTasks=@($result.resetTasks);replacedTasks=@($result.replacedTasks);newTasks=@($result.newTasks);retiredTasks=@($result.retiredTasks)}
         if($intentPath){Add-SCEvent 'intent.revised' "Intent contract revised transactionally to $($result.intentRevision)." @{revision=$result.intentRevision;transactionId=$result.transactionId;handoffId=$handoff.id}}
+        foreach($change in @($result.directiveChanges)){
+            if([string]$change.action-eq'set'){
+                Add-SCEvent 'directive.revised' "Human directive '$($change.id)' revised transactionally." @{directiveId=$change.id;transactionId=$result.transactionId;handoffId=$handoff.id;directiveRevision=$result.directiveRevision;sourceRef=$change.record.sourceRef;intentRefs=@($change.record.intentRefs)}
+            } elseif([string]$change.action-eq'retire'){
+                Add-SCEvent 'directive.retired' "Human directive '$($change.id)' retired transactionally." @{directiveId=$change.id;transactionId=$result.transactionId;handoffId=$handoff.id;directiveRevision=$result.directiveRevision}
+            }
+        }
         return $result
     } catch {
         if(Test-Path -LiteralPath $journalPath -PathType Leaf){
