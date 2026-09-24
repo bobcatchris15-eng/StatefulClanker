@@ -44,6 +44,10 @@ Write-Host 'STEP 1d: headless RPK entrypoint'
 & (Join-Path $PSScriptRoot 'HeadlessRpk.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Headless RPK tests failed (exit $LASTEXITCODE)." }
 
+Write-Host 'STEP 1e: planning dispatch barrier'
+& (Join-Path $PSScriptRoot 'PlanningBarrier.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Planning barrier tests failed (exit $LASTEXITCODE)." }
+
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('statefulclanker-smoke-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
 Push-Location $temp
