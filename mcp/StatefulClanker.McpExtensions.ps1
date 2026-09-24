@@ -439,8 +439,8 @@ function Get-McpPlannerExecutable {
 function Invoke-McpPlannerCommand([string]$Project,[string[]]$PlannerArgs) {
     $exe=Get-McpPlannerExecutable
     if(-not$exe){throw 'StatefulClanker.Planner is not built/installed. Build the research Planner module or reinstall a package containing planner\StatefulClanker.Planner.exe.'}
-    $args=@($PlannerArgs+@('--project',$Project))
-    $raw=& $exe @args 2>&1|Out-String
+    $cliArgs=@($PlannerArgs+@('--project',$Project))
+    $raw=& $exe @cliArgs 2>&1|Out-String
     $code=$LASTEXITCODE
     $lines=@($raw -split [Environment]::NewLine|Where-Object{-not[string]::IsNullOrWhiteSpace($_)})
     if($lines.Count-eq0){throw "Planner returned no response (exit $code)."}
