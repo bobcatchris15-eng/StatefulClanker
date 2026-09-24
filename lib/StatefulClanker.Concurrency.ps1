@@ -342,7 +342,7 @@ function Invoke-SCParallel([int]$Limit=0, [string]$Provider, [string]$Endpoint=$
     $limit = if ($Limit -gt 0) { $Limit } else { Get-SCMaxConcurrent }
     $HarnessPath = Join-Path $script:StatefulClankerHome 'StatefulClanker.ps1'
 
-    $batch = @($candidates | Select-Object -First $limit)
+    $batch = if(Get-Command Select-SCCooperativeDispatchWave -ErrorAction SilentlyContinue){@(Select-SCCooperativeDispatchWave $candidates $limit)}else{@($candidates | Select-Object -First $limit)}
     Write-Host "Dispatching $($batch.Count) of $($candidates.Count) ready task(s), limit $limit."
 
     $running = @()
