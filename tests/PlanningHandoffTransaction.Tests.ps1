@@ -82,6 +82,15 @@ depends t-keep
 accept selected behavior exists
 end
 
+task t-downstream
+title Completed downstream task
+instruction Integrate the selected behavior into the stable surface.
+size small
+intent REQ-KEEP
+depends t-change
+accept integration exists
+end
+
 task t-drop
 title Obsolete pending task
 instruction Implement behavior that the replan will remove.
@@ -91,6 +100,8 @@ end
 '@|Set-Content -LiteralPath $oldPlanPath -Encoding UTF8
         & $harness plan import -Path $oldPlanPath|Out-Null
         & $harness complete -TaskId 't-keep'|Out-Null
+        & $harness complete -TaskId 't-change'|Out-Null
+        & $harness complete -TaskId 't-downstream'|Out-Null
 
         $oldState=Read-Json (Join-Path $stateRoot 'state.json')
         $oldPlanId=[string]$oldState.activePlanId
@@ -163,6 +174,15 @@ depends t-keep
 accept selected behavior exists
 end
 
+task t-downstream
+title Completed downstream task
+instruction Integrate the selected behavior into the stable surface.
+size small
+intent REQ-KEEP
+depends t-change
+accept integration exists
+end
+
 task t-new
 title Newly required task
 instruction Implement the newly required behavior.
@@ -199,6 +219,7 @@ end
         Assert-True ([string]$result.replacedPlanId-eq$oldPlanId) 'Transaction did not identify replaced plan.'
         Assert-True (@($result.preservedComplete)-contains't-keep') 'Still-valid completed task was not preserved.'
         Assert-True (@($result.replacedTasks)-contains't-change') 'Intent-invalidated task was not replaced.'
+        Assert-True (@($result.dependencyInvalidated)-contains't-downstream') 'Completed downstream task survived an invalidated prerequisite.'
         Assert-True (@($result.newTasks)-contains't-new') 'New task was not classified as new.'
         Assert-True (@($result.retiredTasks)-contains't-drop') 'Omitted old task was not retired from active graph.'
         Assert-True ([bool]$result.goalChanged) 'Staged project goal was not part of the transaction.'
@@ -213,10 +234,13 @@ end
 
         $keepNow=Read-Json (Join-Path $stateRoot 'tasks\t-keep.json')
         $changeNow=Read-Json (Join-Path $stateRoot 'tasks\t-change.json')
+        $downstreamNow=Read-Json (Join-Path $stateRoot 'tasks\t-downstream.json')
         $newNow=Read-Json (Join-Path $stateRoot 'tasks\t-new.json')
         Assert-True ([string]$keepNow.status-eq'complete') 'Preserved completion lost complete status.'
         Assert-True ([string]$changeNow.status-eq'ready') 'Changed task should be ready because preserved prerequisite is complete.'
         Assert-True ([int]$changeNow.attemptCount-eq0) 'Changed task inherited attempts from obsolete execution history.'
+        Assert-True ([string]$downstreamNow.status-eq'pending') 'Downstream completion was not invalidated by its fresh prerequisite.'
+        Assert-True ([int]$downstreamNow.attemptCount-eq0) 'Dependency-invalidated task inherited obsolete execution attempts.'
         Assert-True ([string]$newNow.status-eq'ready') 'New task should be ready because preserved prerequisite is complete.'
         Assert-True (-not(Test-Path -LiteralPath (Join-Path $stateRoot 'tasks\t-drop.json'))) 'Omitted task remained in active graph.'
 
