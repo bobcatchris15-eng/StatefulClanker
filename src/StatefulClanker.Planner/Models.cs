@@ -27,6 +27,7 @@ public sealed class PlannerControl
     public string? baselinePath { get; set; }
     public string? activeCandidateId { get; set; }
     public string? acceptedHandoffId { get; set; }
+    public string? acceptedHandoffSha256 { get; set; }
     public bool autofillWasPaused { get; set; }
     public PlanningBudgetPolicy budget { get; set; } = new();
 }
