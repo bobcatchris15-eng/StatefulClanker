@@ -38,6 +38,7 @@ sealed class AppSettings
     public string? ActiveProjectPath { get; set; }
     public int HttpPort { get; set; } = 7337;
     public string? McpToken { get; set; }
+    public bool HttpBridgeEnabled { get; set; } = false;
 
     // Cockpit geometry is operator state, not project state. Keep splitter positions
     // here so every major pane is actually draggable without snapping back on restart.
@@ -204,6 +205,7 @@ sealed class McpHost : IDisposable
     {
         try { if (_owned is { HasExited: false }) _owned.Kill(entireProcessTree: true); } catch { }
         _owned?.Dispose();
+        _owned = null;
     }
 }
 
@@ -212,6 +214,9 @@ sealed class AutofillHost : IDisposable
     readonly string _root;
     Process? _owned;
     string? _project;
+    readonly List<DateTimeOffset> _restartAttempts = new();
+    const int MaxRestartsPerWindow = 3;
+    static readonly TimeSpan RestartWindow = TimeSpan.FromMinutes(10);
     public AutofillHost(string root) { _root = root; }
 
     public static string StateDir(string project) => System.IO.Path.Combine(project, ".statefulclanker", "autofill");
@@ -288,13 +293,39 @@ sealed class AutofillHost : IDisposable
         if (!Enabled(project)) { RequestStop(project); return; }
         if (_owned is { HasExited: false } || ExistingAlive(project)) return;
         var harness = System.IO.Path.Combine(_root, "StatefulClanker.ps1"); if (!File.Exists(harness)) return;
+        StartProcess(project, harness);
+    }
+
+    void StartProcess(string project, string harness)
+    {
         try
         {
             var psi = new ProcessStartInfo(Runtime.FindPowerShell()) { WorkingDirectory = project, UseShellExecute = false, CreateNoWindow = true };
             foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", harness, "autofill", "run" }) psi.ArgumentList.Add(arg);
-            _owned = Process.Start(psi);
+            psi.UseShellExecute = false;
+            var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+            proc.Exited += (_, _) => OnProcessExited(project, harness, proc);
+            proc.Start();
+            _owned = proc;
         }
         catch { _owned = null; }
+    }
+
+    void OnProcessExited(string project, string harness, Process proc)
+    {
+        // Never resurrect from a timer tick or background poll. Only reachable via
+        // the process's own unexpected exit event, and only if autofill is still
+        // enabled and no stop/pause request is in flight for this project.
+        if (!string.Equals(_project, project, StringComparison.OrdinalIgnoreCase)) return;
+        if (!Enabled(project)) return;
+        if (File.Exists(StopPath(project)) || File.Exists(PausePath(project))) return;
+
+        var now = DateTimeOffset.UtcNow;
+        _restartAttempts.RemoveAll(t => now - t > RestartWindow);
+        if (_restartAttempts.Count >= MaxRestartsPerWindow) return;
+        _restartAttempts.Add(now);
+
+        if (ReferenceEquals(_owned, proc)) StartProcess(project, harness);
     }
 
     public void Dispose()
@@ -2009,14 +2040,20 @@ sealed class MainForm : Form
     readonly EmbeddedTerminalPanel _terminal = new();
     readonly DataGridView _integrations = new(), _providers = new(), _mcpImport = new();
     readonly Button _btnMcpDiscover = Btn("Discover", 100);
+    readonly Button _btnHttpBridgeToggle = Btn("Start HTTP bridge", 140);
     readonly Label _autofillStatus = new();
     readonly Button _btnAutofillToggle = Btn("Start Autofill", 115);
     readonly Button _btnAutofillPause = Btn("Pause", 80);
     readonly Button _btnAutofillTrigger = Btn("Trigger Now", 95);
     readonly NumericUpDown _numMaxConcurrent = new() { Minimum = 1, Maximum = 16, Value = 3, Width = 55, Margin = new Padding(0, 4, 8, 0), Font = new Font("Segoe UI", 9) };
     bool _updatingAutofillUi;
-    readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
+    // Safety net only: the primary refresh trigger is the FileSystemWatcher below.
+    // This slow timer exists purely in case a watcher event is dropped/coalesced
+    // away and never mutates configuration surfaces (refreshConfiguration:false).
+    readonly System.Windows.Forms.Timer _timer = new() { Interval = 30000 };
     readonly System.Windows.Forms.Timer _layoutSaveTimer = new() { Interval = 450 };
+    readonly System.Windows.Forms.Timer _watcherDebounce = new() { Interval = 400 };
+    FileSystemWatcher? _projectWatcher;
     readonly ProjectRefreshQueue _refreshQueue=new();
     int _mcpDiscoveryRunning;
     int _targetPoolRefreshQueued;
@@ -2029,12 +2066,42 @@ sealed class MainForm : Form
     {
         Text = "StatefulClanker"; Width = 1160; Height = 740; MinimumSize = new Size(920, 590); StartPosition = FormStartPosition.CenterScreen;
         try { using var s = typeof(MainForm).Assembly.GetManifestResourceStream("StatefulClanker.ico"); if (s is not null) Icon = new Icon(s); } catch { }
-        _mcp = new McpHost(_root, _settings.HttpPort, _settings.McpToken); _mcp.EnsureStarted(); _autofill = new AutofillHost(_root);
+        _mcp = new McpHost(_root, _settings.HttpPort, _settings.McpToken); if (_settings.HttpBridgeEnabled) _mcp.EnsureStarted(); _autofill = new AutofillHost(_root);
         var menu = new ContextMenuStrip(); menu.Items.Add("Open StatefulClanker", null, (_, _) => ShowFromTray()); menu.Items.Add("Exit", null, (_, _) => { _reallyExit = true; Close(); });
         _notify = new NotifyIcon { Text = "StatefulClanker", Icon = Icon ?? SystemIcons.Application, Visible = true, ContextMenuStrip = menu }; _notify.DoubleClick += (_, _) => ShowFromTray();
         BuildUi(); RestoreProjects(); Theme.Apply(this); TargetPoolStore.Changed += HandleTargetPoolChanged; FormClosed += (_, _) => TargetPoolStore.Changed -= HandleTargetPoolChanged; _ = RefreshAllAsync(true);
+        if (_settings.ActiveProjectPath is { } activeAtStartup && Directory.Exists(activeAtStartup) && AutofillHost.Enabled(activeAtStartup)) _autofill.EnsureStarted(activeAtStartup);
         _layoutSaveTimer.Tick += (_, _) => { _layoutSaveTimer.Stop(); AppStore.Save(_settings); };
+        _watcherDebounce.Tick += async (_, _) => { _watcherDebounce.Stop(); await RefreshAllAsync(false); };
         _timer.Tick += async (_, _) => { await RefreshAllAsync(false); }; _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
+        RetargetProjectWatcher(_settings.ActiveProjectPath);
+    }
+
+    void RetargetProjectWatcher(string? projectPath)
+    {
+        if (_projectWatcher is not null) { try { _projectWatcher.EnableRaisingEvents = false; } catch { } _projectWatcher.Dispose(); _projectWatcher = null; }
+        if (string.IsNullOrWhiteSpace(projectPath) || !Directory.Exists(projectPath)) return;
+        var stateDir = System.IO.Path.Combine(projectPath, ".statefulclanker");
+        try { Directory.CreateDirectory(stateDir); } catch { return; }
+        try
+        {
+            var watcher = new FileSystemWatcher(stateDir) { IncludeSubdirectories = true, EnableRaisingEvents = false };
+            watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName;
+            FileSystemEventHandler onChange = (_, _) => QueueWatcherRefresh();
+            RenamedEventHandler onRename = (_, _) => QueueWatcherRefresh();
+            watcher.Changed += onChange; watcher.Created += onChange; watcher.Deleted += onChange; watcher.Renamed += onRename;
+            watcher.EnableRaisingEvents = true;
+            _projectWatcher = watcher;
+        }
+        catch { _projectWatcher = null; }
+    }
+
+    void QueueWatcherRefresh()
+    {
+        // FileSystemWatcher events arrive off the UI thread. Marshal onto it and
+        // coalesce bursts of changes into a single debounced refresh.
+        if (IsDisposed || Disposing) return;
+        try { BeginInvoke(new Action(() => { _watcherDebounce.Stop(); _watcherDebounce.Start(); })); } catch { }
     }
 
     static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 30, Margin = new Padding(0, 2, 5, 0) };
@@ -2294,7 +2361,10 @@ sealed class MainForm : Form
         var p = Page("Integrations"); var rows = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 7, ColumnCount = 1 }; rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 28)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 50)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 28)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 50)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); rows.RowStyles.Add(new RowStyle(SizeType.Absolute, 28)); rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         rows.Controls.Add(Section("RESIDENT STREAMABLE MCP"), 0, 0); _endpoint.Dock = DockStyle.Fill; _endpoint.ReadOnly = true; _endpoint.Font = new Font("Cascadia Mono", 9); rows.Controls.Add(_endpoint, 0, 1);
         rows.Controls.Add(Section("STDIO BRIDGE"), 0, 2); _stdio.Dock = DockStyle.Fill; _stdio.ReadOnly = true; _stdio.Font = new Font("Cascadia Mono", 9); rows.Controls.Add(_stdio, 0, 3);
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill }; var copyEndpoint = Btn("Copy endpoint"); copyEndpoint.Click += (_, _) => Copy(_endpoint.Text); var copyToken = Btn("Copy token"); copyToken.Click += (_, _) => Copy(_mcp.Details()?.token ?? ""); var register = Btn("Register selected"); register.Click += (_, _) => RegisterSelected(); var remove = Btn("Remove selected"); remove.Click += (_, _) => UnregisterSelected(); bar.Controls.AddRange(new Control[] { copyEndpoint, copyToken, register, remove }); rows.Controls.Add(bar, 0, 4);
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Fill }; var copyEndpoint = Btn("Copy endpoint"); copyEndpoint.Click += (_, _) => Copy(_endpoint.Text); var copyToken = Btn("Copy token"); copyToken.Click += (_, _) => Copy(_mcp.Details()?.token ?? ""); var register = Btn("Register selected"); register.Click += (_, _) => RegisterSelected(); var remove = Btn("Remove selected"); remove.Click += (_, _) => UnregisterSelected();
+        _btnHttpBridgeToggle.Click += (_, _) => ToggleHttpBridge();
+        bar.Controls.AddRange(new Control[] { _btnHttpBridgeToggle, copyEndpoint, copyToken, register, remove }); rows.Controls.Add(bar, 0, 4);
+        UpdateHttpBridgeToggleText();
         rows.Controls.Add(Section("CLIENT INTEGRATIONS"), 0, 5); _integrations.Dock = DockStyle.Fill; _integrations.ReadOnly = true; _integrations.AllowUserToAddRows = false; _integrations.RowHeadersVisible = false; _integrations.SelectionMode = DataGridViewSelectionMode.FullRowSelect; _integrations.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill; _integrations.Columns.Add("client", "Client"); _integrations.Columns.Add("installed", "Installed"); _integrations.Columns.Add("registered", "Registered"); _integrations.Columns.Add("verified", "Path verified"); _integrations.Columns.Add("note", "Note"); rows.Controls.Add(_integrations, 0, 6);
         p.Controls.Add(rows); return p;
     }
@@ -2463,6 +2533,20 @@ sealed class MainForm : Form
     ProjectEntry? SelectedProject => _projects.SelectedNode?.Tag as ProjectEntry;
     void SelectProject() { var p = SelectedProject; SetActiveProject(p is not null && Directory.Exists(p.Path) ? p.Path : null); }
 
+    void UpdateHttpBridgeToggleText()
+    {
+        _btnHttpBridgeToggle.Text = _settings.HttpBridgeEnabled ? "Stop HTTP bridge" : "Start HTTP bridge";
+    }
+
+    void ToggleHttpBridge()
+    {
+        _settings.HttpBridgeEnabled = !_settings.HttpBridgeEnabled;
+        AppStore.Save(_settings);
+        if (_settings.HttpBridgeEnabled) _mcp.EnsureStarted(); else _mcp.Dispose();
+        UpdateHttpBridgeToggleText();
+        _ = RefreshAllAsync();
+    }
+
     void SetActiveProject(string? path)
     {
         _settings.ActiveProjectPath = path;
@@ -2471,6 +2555,8 @@ sealed class MainForm : Form
         _header.Text = path is null ? "No active project" : (SelectedProject?.Name ?? new DirectoryInfo(path).Name);
         Text = path is null ? "StatefulClanker" : $"StatefulClanker — {_header.Text}";
         _terminal.SetProject(path);
+        RetargetProjectWatcher(path);
+        if (path is not null && Directory.Exists(path) && AutofillHost.Enabled(path)) _autofill.EnsureStarted(path);
         _ = RefreshAllAsync();
     }
 
@@ -2511,7 +2597,10 @@ sealed class MainForm : Form
 
     UiSnapshot BuildSnapshot(string? projectPath, bool refreshConfiguration)
     {
-        _mcp.EnsureStarted(); _autofill.EnsureStarted(projectPath);
+        // Read-only: snapshot building must never resurrect the HTTP bridge or the
+        // autofill host. Those are started explicitly on project activation / when
+        // autofill is enabled, and restarted only from AutofillHost's own
+        // Process.Exited handler — never from a refresh tick.
         var snapshot = new UiSnapshot { Mcp = _mcp.Details(), HasProject = !string.IsNullOrWhiteSpace(projectPath) && Directory.Exists(projectPath), NextEndpoint = RoutingQueueInspector.Snapshot() };
         if (snapshot.HasProject)
         {
@@ -2526,9 +2615,20 @@ sealed class MainForm : Form
     void ApplySnapshot(UiSnapshot snapshot, bool refreshConfiguration)
     {
         var d = snapshot.Mcp;
-        _mcpState.Text = d is null ? "MCP  STOPPED" : "MCP  RUNNING";
-        _mcpState.ForeColor = d is null ? Theme.Warn : Theme.Good; _mcpState.BackColor = Theme.Surface;
-        _endpoint.Text = d?.url ?? $"http://127.0.0.1:{_settings.HttpPort}/mcp (starting...)";
+        if (!_settings.HttpBridgeEnabled)
+        {
+            _mcpState.Text = "MCP  STDIO ONLY";
+            _mcpState.ForeColor = Theme.Muted;
+        }
+        else
+        {
+            _mcpState.Text = d is null ? "MCP  STOPPED" : "MCP  RUNNING";
+            _mcpState.ForeColor = d is null ? Theme.Warn : Theme.Good;
+        }
+        _mcpState.BackColor = Theme.Surface;
+        _endpoint.Text = !_settings.HttpBridgeEnabled
+            ? "HTTP bridge is off (stdio is primary). Enable it on the Integrations tab to expose the loopback endpoint."
+            : d?.url ?? $"http://127.0.0.1:{_settings.HttpPort}/mcp (starting...)";
         var stdioScript = System.IO.Path.Combine(_root, "mcp", "StatefulClanker.Mcp.ps1");
         _stdio.Text = $"{Runtime.FindPowerShell()} -NoProfile -File \"{stdioScript}\"";
         if (snapshot.HasProject)
@@ -2932,6 +3032,8 @@ sealed class MainForm : Form
         AppStore.Save(_settings);
         if (!_reallyExit) { e.Cancel = true; Hide(); return; }
         _timer.Stop();
+        _watcherDebounce.Stop();
+        if (_projectWatcher is not null) { try { _projectWatcher.EnableRaisingEvents = false; } catch { } _projectWatcher.Dispose(); _projectWatcher = null; }
         _terminal.StopSession();
         _autofill.Dispose();
         _mcp.Dispose();

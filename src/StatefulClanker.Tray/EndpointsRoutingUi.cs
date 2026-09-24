@@ -59,7 +59,8 @@ sealed class EndpointsRoutingPanel : UserControl
         rows.Controls.Add(new Label{Text="MACHINE ENDPOINTS — fixed models use one lease; provider auto-routing pools may use up to five",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,ForeColor=Theme.Muted,Font=new Font("Segoe UI Semibold",8,FontStyle.Bold)},0,1);
         ConfigureGrid();rows.Controls.Add(_grid,0,2);
         rows.Controls.Add(new Label{Text="The dispatcher submits tasks without choosing a model. The router walks healthy endpoint capacity round-robin; fixed models take one lease, while recognized provider auto-routing pools take up to five. The project worker cap remains the overall limit. Configure provider accounts and select models on Connections.",Dock=DockStyle.Fill,ForeColor=Theme.Muted,Font=new Font("Segoe UI",8.25f),TextAlign=ContentAlignment.MiddleLeft},0,3);
-        Controls.Add(rows);Theme.Apply(this);Reload();_timer.Tick+=(_,_)=>Reload();_timer.Start();
+        Controls.Add(rows);Theme.Apply(this);Reload();_timer.Tick+=(_,_)=>Reload();
+        VisibleChanged+=(_,_)=>{if(Visible)_timer.Start();else _timer.Stop();};
     }
 
     static Button Btn(string text,EventHandler click,int width){var b=new Button{Text=text,Width=width,Height=32,Margin=new Padding(0,4,8,0)};b.Click+=click;return b;}
