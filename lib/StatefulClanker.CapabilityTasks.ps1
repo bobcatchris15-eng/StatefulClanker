@@ -513,7 +513,16 @@ function Assert-SCStagedDirectiveIntentRefs($DirectiveResult,$Intent) {
 
 function Test-SCTaskIntentCompatible($Task,$OldIntent,$NewIntent,[string]$OldGoal,[string]$NewGoal,$DirectiveChanges) {
     $refs=if($Task.PSObject.Properties['intentRefs']){@($Task.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})}else{@()}
+    $sources=if($Task.PSObject.Properties['sources']){@($Task.sources|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})}else{@()}
     $changes=@($DirectiveChanges)
+
+    foreach($change in $changes){
+        $previousSource=if($change.PSObject.Properties['previousSourceRef']){[string]$change.previousSourceRef}else{$null}
+        if([string]::IsNullOrWhiteSpace($previousSource)){continue}
+        foreach($source in $sources){
+            if($source-eq$previousSource-or$source.StartsWith($previousSource+'#',[StringComparison]::OrdinalIgnoreCase)){return $false}
+        }
+    }
 
     if($changes.Count-gt0){
         if($refs.Count-eq0){return $false}
@@ -623,7 +632,11 @@ function Apply-SCStagedDirectiveChanges([string]$ChangesPath,[string]$StageDirec
                 authority='latest direct human word for this directive scope'
             }
             Write-SCJson $path $record;$global++
-            $events+=,[ordered]@{action='set';id=$id;record=$record}
+            $events+=,[ordered]@{
+                action='set';id=$id;record=$record
+                previousSourceRef=if($previous-and$previous.PSObject.Properties['sourceRef']){[string]$previous.sourceRef}else{$null}
+                previousRevision=if($previous-and$previous.PSObject.Properties['revision']){[int]$previous.revision}else{$null}
+            }
         } elseif($action-eq'retire'){
             if($null-eq$previous){throw "Cannot retire unknown current directive '$id'."}
             $history=Join-Path $historyRoot $id
@@ -633,7 +646,11 @@ function Apply-SCStagedDirectiveChanges([string]$ChangesPath,[string]$StageDirec
             Write-SCJson (Join-Path $history ("revision-{0:d4}-retired.json"-f[int]$previous.revision)) $previous
             Remove-Item -LiteralPath $path -Force
             $global++
-            $events+=,[ordered]@{action='retire';id=$id;record=$previous}
+            $events+=,[ordered]@{
+                action='retire';id=$id;record=$previous
+                previousSourceRef=if($previous.PSObject.Properties['sourceRef']){[string]$previous.sourceRef}else{$null}
+                previousRevision=if($previous.PSObject.Properties['revision']){[int]$previous.revision}else{$null}
+            }
         }else{throw "Unknown staged directive action '$action' for '$id'."}
     }
     $records=Get-SCStagedDirectiveRecords $StageDirectives
