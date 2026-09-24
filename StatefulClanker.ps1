@@ -29,7 +29,10 @@ foreach($name in $runtimeNames){. (Join-Path $runtimeLib $name)}
 
 $script:SCManagedChild=$false
 if($StateRoot){Set-SCRoots (Get-Location).Path $StateRoot;$script:SCManagedChild=$true}
-if($Command.ToLowerInvariant()-ne'init'-and(Test-Path (Get-SCPath 'state.json'))){Recover-SCInterruptedPlanTransactions|Out-Null;Upgrade-SCStateLayout;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout}
+if($Command.ToLowerInvariant()-ne'init'){
+    if(Test-Path -LiteralPath (Get-SCPath 'transactions') -PathType Container){Recover-SCInterruptedPlanTransactions|Out-Null}
+    if(Test-Path (Get-SCPath 'state.json')){Upgrade-SCStateLayout;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout}
+}
 
 switch($Command.ToLowerInvariant()){
 'init'{Initialize-SC;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout;break}
