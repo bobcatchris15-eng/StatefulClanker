@@ -83,11 +83,15 @@ internal static class Program
             lease=Get(map,"lease"),
             endpoint=Get(map,"endpoint"),
             failureClass=Get(map,"class"),
-            message=Get(map,"message")
+            message=Get(map,"message"),
+            allowedEndpoints=ParseList(Get(map,"endpoints"))
         };
     }
 
     static string? Get(Dictionary<string,string?> map,string key) => map.TryGetValue(key,out var v)?v:null;
+
+    static string[]? ParseList(string? raw) =>
+        string.IsNullOrWhiteSpace(raw)?null:raw.Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
 
     static async Task<RouterResponse> SendWithDaemonAsync(string pipeName,RouterRequest request)
     {

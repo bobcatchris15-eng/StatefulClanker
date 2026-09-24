@@ -337,12 +337,48 @@ function Add-SCProgressRecord($Task,$Compilation,[bool]$Advanced,[string]$Outcom
     Write-SCJson (Get-SCPath ("progress/{0}.json"-f$record.id)) $record
     if(-not$Advanced-and$Compilation){
         $cfg=Get-SCConfig;$threshold=if($cfg.PSObject.Properties['stagnationWarningThreshold']){[int]$cfg.stagnationWarningThreshold}else{2};$same=@(Get-ChildItem -LiteralPath (Get-SCPath 'progress') -Filter '*.json' -File|ForEach-Object{Read-SCJson $_.FullName}|Where-Object{$_.taskId-eq$Task.id-and-not[bool]$_.advanced-and$_.inputFingerprint-eq$Compilation.inputFingerprint})
-        if($same.Count-eq$threshold){Add-SCEvent 'task.stagnation.warning' "Task $($Task.id) reached $($same.Count) non-advancing attempts against the same compiled input." @{taskId=$Task.id;inputFingerprint=$Compilation.inputFingerprint;count=$same.Count;thresholdCrossed=$true}}
+        if($same.Count-eq$threshold){
+            # Reconcile against reality before crying wolf: the non-advancing
+            # progress records may predate a validation PASS, a commit, or a
+            # merged worktree that git can see even though the progress log
+            # never got an 'advanced' record for it.
+            $reconciled=$false;$reconcileReason=$null
+            $current=Get-SCTask ([string]$Task.id)
+            if($current){
+                if($current.PSObject.Properties['latestValidationId'] -and $current.latestValidationId){
+                    try{
+                        $latestValidation=Read-SCJson (Get-SCPath ("validations/{0}.json"-f$current.latestValidationId))
+                        if($latestValidation -and [string]$latestValidation.verdict-eq'PASS'){$reconciled=$true;$reconcileReason='latest validation verdict is PASS'}
+                    }catch{}
+                }
+                if(-not$reconciled -and @('validated','complete')-contains[string]$current.status){$reconciled=$true;$reconcileReason="task status is '$($current.status)'"}
+                if(-not$reconciled -and $current.PSObject.Properties['latestProposalId'] -and $current.latestProposalId){
+                    try{
+                        $latestProposal=Read-SCJson (Get-SCPath ("proposals/{0}.json"-f$current.latestProposalId))
+                        if($latestProposal -and @('validated','committed')-contains[string]$latestProposal.status){$reconciled=$true;$reconcileReason="latest proposal status is '$($latestProposal.status)'"}
+                    }catch{}
+                }
+                if(-not$reconciled){
+                    try{
+                        $slug=([string]$current.id) -replace '[^A-Za-z0-9_.-]','-'
+                        $branch="sc/task/$slug"
+                        $root=Get-SCRoot
+                        $merged=& git -C $root branch --merged HEAD --list $branch 2>$null
+                        if($merged -and ([string]$merged).Trim()){$reconciled=$true;$reconcileReason="branch $branch has merged commits into HEAD"}
+                    }catch{}
+                }
+            }
+            if($reconciled){
+                Add-SCEvent 'task.stagnation.reconciled' "Task $($Task.id) looked non-advancing but reality shows progress: $reconcileReason." @{taskId=$Task.id;inputFingerprint=$Compilation.inputFingerprint;count=$same.Count;reason=$reconcileReason;fyi=$true}
+            }else{
+                Add-SCEvent 'task.stagnation.warning' "Task $($Task.id) reached $($same.Count) non-advancing attempts against the same compiled input." @{taskId=$Task.id;inputFingerprint=$Compilation.inputFingerprint;count=$same.Count;thresholdCrossed=$true}
+            }
+        }
     }
     return $record
 }
 function Stop-SCForStaleCompilation($Task,$Compilation,[string]$Outcome,[string]$Message,$Proposal=$null) {
-    $fresh=Test-SCCompilationFreshness $Compilation 'commit';if($fresh.fresh){return $false}
+    $fresh=Test-SCCompilationFreshness $Compilation 'commit' $Proposal;if($fresh.fresh){return $false}
     if($Proposal-and[string]$Proposal.status-eq'pending'){Reject-SCProposal $Proposal @($fresh.reasons)}
     $current=Get-SCTask ([string]$Task.id)
     if(@('running','reviewing','validating')-contains[string]$current.status){$current.status='needs_rework';$current.blockReason=$Message;Save-SCTask $current}
@@ -353,6 +389,12 @@ function Stop-SCForStaleCompilation($Task,$Compilation,[string]$Outcome,[string]
 }
 function Commit-SCProposal($Task,$Proposal,$Compilation) {
     $cfg=Get-SCConfig;$gateReasons=@();if([bool]$cfg.validatorEnabled-and[string]$Proposal.evidence.validationVerdict-ne'PASS'){$gateReasons+='required validator did not pass'}
+    if(-not[bool]$cfg.validatorEnabled){
+        # Disabling the validator skips semantic judgment only; configured mechanical checks still gate the commit.
+        $mechanical=Invoke-SCMechanicalAcceptance $Task
+        Set-SCProperty $Proposal.evidence 'mechanicalAcceptance' $mechanical;Save-SCProposal $Proposal
+        if($mechanical.configured -and -not$mechanical.passed){$gateReasons+=@($mechanical.checks|Where-Object{-not[bool]$_.passed}|ForEach-Object{"mechanical check $($_.index) failed (exit=$($_.exitCode) timedOut=$($_.timedOut)): $($_.command)"})}
+    }
     if($gateReasons.Count-gt 0){Reject-SCProposal $Proposal $gateReasons;$Task.status='needs_rework';$Task.blockReason='Required review gate did not pass.';Save-SCTask $Task;Add-SCProgressRecord $Task $Compilation $false 'review-gate-rejected' ($gateReasons -join '; ')|Out-Null;return $false}
     if(Stop-SCForStaleCompilation $Task $Compilation 'stale-before-commit' 'Compiled state became stale before commit.' $Proposal){return $false}
     $Task=Get-SCTask ([string]$Task.id)
@@ -527,6 +569,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
                 Add-SCEvent 'rpk.normalize_failed' 'RPK normalization failed after validator; review continues without mutating canonical project state.' @{taskId=$task.id;validationId=$validation.id;error=$_.Exception.Message}
             }
             $task=Get-SCTask $task.id;$task.latestValidationId=$validation.id;Save-SCTask $task
+            if($workerSessionId){New-SCValidationCheckpoint $workerSessionId ([string]$validation.id) ([string]$validation.verdict)|Out-Null}
 
             if($validation.verdict-eq'ERROR'){
                 $errDetail=if($validation.stderr){$validation.stderr.Trim()}elseif($validation.stdout){$validation.stdout.Trim()}else{'Validator review encountered an infrastructure error.'}
@@ -584,6 +627,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
 
                 if($resumable){
                     if(Stop-SCForStaleCompilation $task $compilation 'stale-after-validator' 'Compiled state became stale during validator review.' $proposal){Close-SCWorkerSession $workerSessionId 'stale';return}
+                    New-SCRepairCheckpoint $workerSessionId ([string]$validation.id) $validatorRejectCount|Out-Null
                     $feedback=[string]$validation.stdout
                     if($feedback.Length-gt6000){$feedback=$feedback.Substring(0,6000)}
                     $continuation="VALIDATOR REJECTED CANDIDATE $validatorRejectCount. Repair the existing work in this same worker session; do not restart from the task description and do not discard correct work. Validator feedback follows:"+[Environment]::NewLine+$feedback+[Environment]::NewLine+"Inspect the current worktree, address the specific validation failures, run appropriate verification, and submit a replacement candidate."

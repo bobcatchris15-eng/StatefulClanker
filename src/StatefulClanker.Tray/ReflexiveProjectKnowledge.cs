@@ -8,6 +8,7 @@ namespace StatefulClanker.Tray;
 
 static class ReflexiveProjectKnowledge
 {
+    const string SchemaVersion = "3";
     static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
     static readonly HashSet<string> IgnoredDirs = new(StringComparer.OrdinalIgnoreCase)
         { ".git", ".statefulclanker", "bin", "obj", ".vs", "node_modules", "packages", "install\\output", "install\\publish" };
@@ -61,16 +62,17 @@ static class ReflexiveProjectKnowledge
     {
         var c=new SqliteConnection($"Data Source={DbPath(project)};Mode=ReadWriteCreate;Cache=Shared"); c.Open();
         using var pragma=c.CreateCommand(); pragma.CommandText="PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;"; pragma.ExecuteNonQuery();
-        Ensure(c); return c;
+        Ensure(c); MigrateSchema(c); return c;
     }
     static void Ensure(SqliteConnection c)
     {
         using var q=c.CreateCommand(); q.CommandText=@"
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,sha256 TEXT NOT NULL,size INTEGER NOT NULL,mtime_utc TEXT NOT NULL,language TEXT,updated_utc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS symbols(id INTEGER PRIMARY KEY AUTOINCREMENT,path TEXT NOT NULL,name TEXT NOT NULL,kind TEXT NOT NULL,line INTEGER NOT NULL,signature TEXT,UNIQUE(path,name,kind,line));
+CREATE TABLE IF NOT EXISTS symbols(id TEXT PRIMARY KEY,path TEXT NOT NULL,name TEXT NOT NULL,kind TEXT NOT NULL,line INTEGER NOT NULL,signature TEXT);
 CREATE INDEX IF NOT EXISTS ix_symbols_name ON symbols(name);
-CREATE TABLE IF NOT EXISTS edges(src TEXT NOT NULL,dst TEXT NOT NULL,kind TEXT NOT NULL,weight REAL NOT NULL DEFAULT 1,provenance TEXT,updated_utc TEXT NOT NULL,PRIMARY KEY(src,dst,kind));
+CREATE INDEX IF NOT EXISTS ix_symbols_path ON symbols(path);
+CREATE TABLE IF NOT EXISTS edges(src TEXT NOT NULL,dst TEXT NOT NULL,kind TEXT NOT NULL,weight REAL NOT NULL DEFAULT 1,provenance TEXT,dst_resolved TEXT,updated_utc TEXT NOT NULL,PRIMARY KEY(src,dst,kind));
 CREATE INDEX IF NOT EXISTS ix_edges_dst ON edges(dst);
 CREATE TABLE IF NOT EXISTS lessons(id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',confidence REAL NOT NULL DEFAULT .75,source TEXT,created_utc TEXT NOT NULL,updated_utc TEXT NOT NULL,last_confirmed_utc TEXT,normalization_note TEXT);
 CREATE TABLE IF NOT EXISTS lesson_tags(lesson_id TEXT NOT NULL,tag TEXT NOT NULL,PRIMARY KEY(lesson_id,tag),FOREIGN KEY(lesson_id) REFERENCES lessons(id) ON DELETE CASCADE);
@@ -79,6 +81,37 @@ CREATE TABLE IF NOT EXISTS lesson_paths(lesson_id TEXT NOT NULL,path TEXT NOT NU
 CREATE INDEX IF NOT EXISTS ix_lesson_paths_path ON lesson_paths(path);
 "; q.ExecuteNonQuery();
     }
+
+    // Migrates older RPK databases in place: converts autoincrement symbol ids to stable
+    // content-derived ids and adds edge resolution columns. Never touches lesson* tables.
+    static void MigrateSchema(SqliteConnection c)
+    {
+        string version="1";
+        using(var g=c.CreateCommand()){g.CommandText="SELECT value FROM meta WHERE key='schema_version'";var v=g.ExecuteScalar() as string; if(v!=null)version=v;}
+        if(version==SchemaVersion) return;
+        using var tx=c.BeginTransaction();
+        bool symbolsNeedMigration=false;
+        using(var pi=c.CreateCommand()){pi.Transaction=tx;pi.CommandText="PRAGMA table_info(symbols)";using var r=pi.ExecuteReader();while(r.Read()){if(string.Equals(r.GetString(1),"id",StringComparison.OrdinalIgnoreCase)&&r.GetString(2).Contains("INT",StringComparison.OrdinalIgnoreCase))symbolsNeedMigration=true;}}
+        if(symbolsNeedMigration)
+        {
+            using(var create=c.CreateCommand()){create.Transaction=tx;create.CommandText="CREATE TABLE symbols_v3(id TEXT PRIMARY KEY,path TEXT NOT NULL,name TEXT NOT NULL,kind TEXT NOT NULL,line INTEGER NOT NULL,signature TEXT)";create.ExecuteNonQuery();}
+            var rows=new List<(string path,string name,string kind,int line,string? sig)>();
+            using(var sel=c.CreateCommand()){sel.Transaction=tx;sel.CommandText="SELECT path,name,kind,line,signature FROM symbols";using var r=sel.ExecuteReader();while(r.Read())rows.Add((r.GetString(0),r.GetString(1),r.GetString(2),r.GetInt32(3),r.IsDBNull(4)?null:r.GetString(4)));}
+            foreach(var row in rows)
+            {
+                var id=SymbolId(row.path,row.kind,row.name);
+                using var ins=c.CreateCommand();ins.Transaction=tx;ins.CommandText="INSERT OR REPLACE INTO symbols_v3(id,path,name,kind,line,signature) VALUES($i,$p,$n,$k,$l,$s)";
+                ins.Parameters.AddWithValue("$i",id);ins.Parameters.AddWithValue("$p",row.path);ins.Parameters.AddWithValue("$n",row.name);ins.Parameters.AddWithValue("$k",row.kind);ins.Parameters.AddWithValue("$l",row.line);ins.Parameters.AddWithValue("$s",(object?)row.sig??DBNull.Value);ins.ExecuteNonQuery();
+            }
+            using(var drop=c.CreateCommand()){drop.Transaction=tx;drop.CommandText="DROP TABLE symbols; ALTER TABLE symbols_v3 RENAME TO symbols; CREATE INDEX IF NOT EXISTS ix_symbols_name ON symbols(name); CREATE INDEX IF NOT EXISTS ix_symbols_path ON symbols(path);";drop.ExecuteNonQuery();}
+        }
+        bool hasResolved=false;
+        using(var pi=c.CreateCommand()){pi.Transaction=tx;pi.CommandText="PRAGMA table_info(edges)";using var r=pi.ExecuteReader();while(r.Read()){if(string.Equals(r.GetString(1),"dst_resolved",StringComparison.OrdinalIgnoreCase))hasResolved=true;}}
+        if(!hasResolved){using var alter=c.CreateCommand();alter.Transaction=tx;alter.CommandText="ALTER TABLE edges ADD COLUMN dst_resolved TEXT";alter.ExecuteNonQuery();}
+        using(var set=c.CreateCommand()){set.Transaction=tx;set.CommandText="INSERT INTO meta(key,value) VALUES('schema_version',$v) ON CONFLICT(key) DO UPDATE SET value=excluded.value";set.Parameters.AddWithValue("$v",SchemaVersion);set.ExecuteNonQuery();}
+        tx.Commit();
+    }
+
     static int Init(string project){using var c=Open(project);return Emit(new{ok=true,project,db=DbPath(project)});}
     static string Rel(string root,string full)=>Path.GetRelativePath(root,full).Replace('\\','/');
     static bool Ignored(string root,string full)
@@ -87,6 +120,16 @@ CREATE INDEX IF NOT EXISTS ix_lesson_paths_path ON lesson_paths(path);
     }
     static string Sha(string path){using var s=File.OpenRead(path);return Convert.ToHexString(SHA256.HashData(s)).ToLowerInvariant();}
     static string Lang(string path)=>Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+
+    // Stable symbol id derived from (relative path, kind, qualified name). Independent of
+    // line number so a symbol keeps its identity — and any lessons/anchors pointed at it —
+    // across pure line-shift edits.
+    static string SymbolId(string path,string kind,string name)
+    {
+        var bytes=SHA256.HashData(Encoding.UTF8.GetBytes(path+"#"+kind+":"+name));
+        return Convert.ToHexString(bytes)[..16].ToLowerInvariant();
+    }
+
     static IEnumerable<(string name,string kind,int line,string sig)> ExtractSymbols(string path)
     {
         var ext=Path.GetExtension(path).ToLowerInvariant(); string[] lines; try{lines=File.ReadAllLines(path);}catch{yield break;}
@@ -104,23 +147,106 @@ CREATE INDEX IF NOT EXISTS ix_lesson_paths_path ON lesson_paths(path);
         string text;try{text=File.ReadAllText(path);}catch{yield break;}
         foreach(Match m in Regex.Matches(text,@"(?im)^\s*(?:using|import|from|require\s*\(|\.\s*)\s*['""]?([A-Za-z0-9_./\\-]+)")) if(m.Groups[1].Success)yield return m.Groups[1].Value;
     }
+
+    // Typed, kind-classified edges: 'imports' for using/Import-Module statements, and
+    // 'dot-sources' for PowerShell dot-sourcing. Falls back to the legacy generic
+    // 'references' scan for everything (kept for back-compat with older callers/tests).
+    static IEnumerable<(string raw,string kind)> ExtractEdges(string path)
+    {
+        var ext=Path.GetExtension(path).ToLowerInvariant();
+        string text; try{text=File.ReadAllText(path);}catch{yield break;}
+        if(ext==".ps1"||ext==".psm1")
+        {
+            foreach(Match m in Regex.Matches(text,@"(?im)^\s*\.\s+['""]?([^'""\r\n]+\.ps(?:1|m1))['""]?\s*$"))
+                if(m.Groups[1].Success) yield return (m.Groups[1].Value.Trim(),"dot-sources");
+            foreach(Match m in Regex.Matches(text,@"(?im)Import-Module\s+['""]?([^\s'""]+)"))
+                if(m.Groups[1].Success) yield return (m.Groups[1].Value.Trim(),"imports");
+        }
+        else if(ext==".cs")
+        {
+            foreach(Match m in Regex.Matches(text,@"(?m)^\s*using\s+([A-Za-z0-9_.]+)\s*;"))
+                if(m.Groups[1].Success) yield return (m.Groups[1].Value,"imports");
+        }
+        foreach(var r in ExtractRefs(path)) yield return (r,"references");
+    }
+
+    // Resolves a raw import/dot-source target to an indexed project-relative file path,
+    // trying the source file's own directory first, then the project root.
+    static string? ResolveTarget(string projectRoot,string sourceRelPath,string raw)
+    {
+        var cleaned=raw.Replace("$PSScriptRoot",".",StringComparison.OrdinalIgnoreCase).Trim().Trim('\'','"');
+        if(cleaned.Length==0) return null;
+        var srcDir=Path.GetDirectoryName(Path.Combine(projectRoot,sourceRelPath))??projectRoot;
+        var candidates=new List<string>();
+        try{candidates.Add(Path.GetFullPath(Path.Combine(srcDir,cleaned)));}catch{}
+        try{candidates.Add(Path.GetFullPath(Path.Combine(projectRoot,cleaned.TrimStart('.','/','\\'))));}catch{}
+        foreach(var cand in candidates)
+        {
+            if(File.Exists(cand))
+            {
+                var rel=Rel(projectRoot,cand);
+                if(!Ignored(projectRoot,cand)) return rel;
+            }
+        }
+        return null;
+    }
+
     static int Index(string project)
     {
-        using var c=Open(project); using var tx=c.BeginTransaction(); var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);int changed=0,symbols=0,edges=0;
+        using var c=Open(project); using var tx=c.BeginTransaction();
+        var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int changed=0,symbolCount=0,edgeCount=0,unchangedSkipped=0;
+        var known=new Dictionary<string,(long size,string mtime,string sha)>(StringComparer.OrdinalIgnoreCase);
+        using(var q=c.CreateCommand()){q.Transaction=tx;q.CommandText="SELECT path,size,mtime_utc,sha256 FROM files";using var r=q.ExecuteReader();while(r.Read())known[r.GetString(0)]=(r.GetInt64(1),r.GetString(2),r.GetString(3));}
+
         foreach(var full in Directory.EnumerateFiles(project,"*",SearchOption.AllDirectories))
         {
             if(Ignored(project,full)||!TextExt.Contains(Path.GetExtension(full)))continue;
-            var fi=new FileInfo(full);if(fi.Length>2_000_000)continue;var rel=Rel(project,full);seen.Add(rel);var sha=Sha(full);
-            using(var chk=c.CreateCommand()){chk.Transaction=tx;chk.CommandText="SELECT sha256 FROM files WHERE path=$p";chk.Parameters.AddWithValue("$p",rel);var old=chk.ExecuteScalar() as string;if(old==sha)continue;}
+            var fi=new FileInfo(full);if(fi.Length>2_000_000)continue;
+            var rel=Rel(project,full); seen.Add(rel);
+            var mtime=fi.LastWriteTimeUtc.ToString("O");
+
+            if(known.TryGetValue(rel,out var prev) && prev.size==fi.Length && prev.mtime==mtime)
+            {
+                // Size+mtime match the stored row: skip re-reading/hashing entirely.
+                unchangedSkipped++; continue;
+            }
+
+            var sha=Sha(full);
+            if(known.TryGetValue(rel,out var prev2) && prev2.sha==sha)
+            {
+                // Content is unchanged (mtime bumped without a real edit): refresh metadata only.
+                using var up0=c.CreateCommand();up0.Transaction=tx;up0.CommandText="UPDATE files SET size=$s,mtime_utc=$m,updated_utc=$u WHERE path=$p";
+                up0.Parameters.AddWithValue("$s",fi.Length);up0.Parameters.AddWithValue("$m",mtime);up0.Parameters.AddWithValue("$u",DateTimeOffset.UtcNow.ToString("O"));up0.Parameters.AddWithValue("$p",rel);up0.ExecuteNonQuery();
+                continue;
+            }
+
             changed++;
-            using(var up=c.CreateCommand()){up.Transaction=tx;up.CommandText="INSERT INTO files(path,sha256,size,mtime_utc,language,updated_utc) VALUES($p,$h,$s,$m,$l,$u) ON CONFLICT(path) DO UPDATE SET sha256=excluded.sha256,size=excluded.size,mtime_utc=excluded.mtime_utc,language=excluded.language,updated_utc=excluded.updated_utc";up.Parameters.AddWithValue("$p",rel);up.Parameters.AddWithValue("$h",sha);up.Parameters.AddWithValue("$s",fi.Length);up.Parameters.AddWithValue("$m",fi.LastWriteTimeUtc.ToString("O"));up.Parameters.AddWithValue("$l",Lang(full));up.Parameters.AddWithValue("$u",DateTimeOffset.UtcNow.ToString("O"));up.ExecuteNonQuery();}
-            using(var del=c.CreateCommand()){del.Transaction=tx;del.CommandText="DELETE FROM symbols WHERE path=$p; DELETE FROM edges WHERE src=$p AND kind='references';";del.Parameters.AddWithValue("$p",rel);del.ExecuteNonQuery();}
-            foreach(var s in ExtractSymbols(full)){using var ins=c.CreateCommand();ins.Transaction=tx;ins.CommandText="INSERT OR IGNORE INTO symbols(path,name,kind,line,signature) VALUES($p,$n,$k,$l,$s)";ins.Parameters.AddWithValue("$p",rel);ins.Parameters.AddWithValue("$n",s.name);ins.Parameters.AddWithValue("$k",s.kind);ins.Parameters.AddWithValue("$l",s.line);ins.Parameters.AddWithValue("$s",s.sig);symbols+=ins.ExecuteNonQuery();}
-            foreach(var r in ExtractRefs(full).Distinct(StringComparer.OrdinalIgnoreCase)){using var e=c.CreateCommand();e.Transaction=tx;e.CommandText="INSERT INTO edges(src,dst,kind,weight,provenance,updated_utc) VALUES($s,$d,'references',1,'static-scan',$u) ON CONFLICT(src,dst,kind) DO UPDATE SET updated_utc=excluded.updated_utc";e.Parameters.AddWithValue("$s",rel);e.Parameters.AddWithValue("$d",r.Replace('\\','/'));e.Parameters.AddWithValue("$u",DateTimeOffset.UtcNow.ToString("O"));edges+=e.ExecuteNonQuery();}
+            using(var up=c.CreateCommand()){up.Transaction=tx;up.CommandText="INSERT INTO files(path,sha256,size,mtime_utc,language,updated_utc) VALUES($p,$h,$s,$m,$l,$u) ON CONFLICT(path) DO UPDATE SET sha256=excluded.sha256,size=excluded.size,mtime_utc=excluded.mtime_utc,language=excluded.language,updated_utc=excluded.updated_utc";up.Parameters.AddWithValue("$p",rel);up.Parameters.AddWithValue("$h",sha);up.Parameters.AddWithValue("$s",fi.Length);up.Parameters.AddWithValue("$m",mtime);up.Parameters.AddWithValue("$l",Lang(full));up.Parameters.AddWithValue("$u",DateTimeOffset.UtcNow.ToString("O"));up.ExecuteNonQuery();}
+            using(var del=c.CreateCommand()){del.Transaction=tx;del.CommandText="DELETE FROM symbols WHERE path=$p; DELETE FROM edges WHERE src=$p;";del.Parameters.AddWithValue("$p",rel);del.ExecuteNonQuery();}
+
+            var now=DateTimeOffset.UtcNow.ToString("O");
+            foreach(var s in ExtractSymbols(full))
+            {
+                var id=SymbolId(rel,s.kind,s.name);
+                using(var ins=c.CreateCommand()){ins.Transaction=tx;ins.CommandText="INSERT OR REPLACE INTO symbols(id,path,name,kind,line,signature) VALUES($i,$p,$n,$k,$l,$s)";ins.Parameters.AddWithValue("$i",id);ins.Parameters.AddWithValue("$p",rel);ins.Parameters.AddWithValue("$n",s.name);ins.Parameters.AddWithValue("$k",s.kind);ins.Parameters.AddWithValue("$l",s.line);ins.Parameters.AddWithValue("$s",s.sig);ins.ExecuteNonQuery();symbolCount++;}
+                using(var e=c.CreateCommand()){e.Transaction=tx;e.CommandText="INSERT INTO edges(src,dst,kind,weight,provenance,dst_resolved,updated_utc) VALUES($s,$d,'defines',1,'static-scan:resolved',$d,$u) ON CONFLICT(src,dst,kind) DO UPDATE SET updated_utc=excluded.updated_utc,dst_resolved=excluded.dst_resolved";e.Parameters.AddWithValue("$s",rel);e.Parameters.AddWithValue("$d",id);e.Parameters.AddWithValue("$u",now);edgeCount+=e.ExecuteNonQuery();}
+            }
+            foreach(var (raw,kind) in ExtractEdges(full).Distinct())
+            {
+                var target=raw.Replace('\\','/');
+                var resolved=(kind=="imports"||kind=="dot-sources")?ResolveTarget(project,rel,target):null;
+                var provenance=resolved!=null?"static-scan:resolved":"static-scan:unresolved";
+                var dst=resolved??target;
+                using var e=c.CreateCommand();e.Transaction=tx;e.CommandText="INSERT INTO edges(src,dst,kind,weight,provenance,dst_resolved,updated_utc) VALUES($s,$d,$k,1,$pv,$r,$u) ON CONFLICT(src,dst,kind) DO UPDATE SET provenance=excluded.provenance,dst_resolved=excluded.dst_resolved,updated_utc=excluded.updated_utc";
+                e.Parameters.AddWithValue("$s",rel);e.Parameters.AddWithValue("$d",dst);e.Parameters.AddWithValue("$k",kind);e.Parameters.AddWithValue("$pv",provenance);e.Parameters.AddWithValue("$r",(object?)resolved??DBNull.Value);e.Parameters.AddWithValue("$u",now);
+                edgeCount+=e.ExecuteNonQuery();
+            }
         }
         var existing=new List<string>();using(var q=c.CreateCommand()){q.Transaction=tx;q.CommandText="SELECT path FROM files";using var r=q.ExecuteReader();while(r.Read())existing.Add(r.GetString(0));}
         foreach(var p in existing.Where(p=>!seen.Contains(p))){using var d=c.CreateCommand();d.Transaction=tx;d.CommandText="DELETE FROM files WHERE path=$p;DELETE FROM symbols WHERE path=$p;DELETE FROM edges WHERE src=$p OR dst=$p";d.Parameters.AddWithValue("$p",p);d.ExecuteNonQuery();}
-        tx.Commit(); NormalizeInternal(c); return Emit(new{ok=true,files=seen.Count,changed,symbols,edges,db=DbPath(project)});
+        tx.Commit(); NormalizeInternal(c);
+        return Emit(new{ok=true,files=seen.Count,changed,unchangedSkipped,symbols=symbolCount,edges=edgeCount,db=DbPath(project)});
     }
     static string[] Split(string s)=>s.Split(new[]{',',';','\n','\r'},StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     static int AddLesson(string project,string title,string body,string tags,string paths,string source,double confidence)
@@ -156,12 +282,12 @@ CREATE INDEX IF NOT EXISTS ix_lesson_paths_path ON lesson_paths(path);
     static int Neighbors(string project,string path,int depth,int limit)
     {
         using var c=Open(project);var frontier=new HashSet<string>(StringComparer.OrdinalIgnoreCase){path.Replace('\\','/')};var all=new HashSet<string>(frontier,StringComparer.OrdinalIgnoreCase);var outEdges=new List<object>();
-        for(int d=0;d<Math.Clamp(depth,1,4);d++){var next=new HashSet<string>(StringComparer.OrdinalIgnoreCase);foreach(var n in frontier){using var q=c.CreateCommand();q.CommandText="SELECT src,dst,kind,weight FROM edges WHERE src=$n OR dst=$n LIMIT $l";q.Parameters.AddWithValue("$n",n);q.Parameters.AddWithValue("$l",limit);using var r=q.ExecuteReader();while(r.Read()){var s=r.GetString(0);var t=r.GetString(1);outEdges.Add(new{src=s,dst=t,kind=r.GetString(2),weight=r.GetDouble(3)});if(all.Add(s))next.Add(s);if(all.Add(t))next.Add(t);}}frontier=next;if(frontier.Count==0)break;}
+        for(int d=0;d<Math.Clamp(depth,1,4);d++){var next=new HashSet<string>(StringComparer.OrdinalIgnoreCase);foreach(var n in frontier){using var q=c.CreateCommand();q.CommandText="SELECT src,dst,kind,weight,provenance,dst_resolved FROM edges WHERE src=$n OR dst=$n LIMIT $l";q.Parameters.AddWithValue("$n",n);q.Parameters.AddWithValue("$l",limit);using var r=q.ExecuteReader();while(r.Read()){var s=r.GetString(0);var t=r.GetString(1);outEdges.Add(new{src=s,dst=t,kind=r.GetString(2),weight=r.GetDouble(3),provenance=r.IsDBNull(4)?null:r.GetString(4),resolved=r.IsDBNull(5)?null:r.GetString(5)});if(all.Add(s))next.Add(s);if(all.Add(t))next.Add(t);}}frontier=next;if(frontier.Count==0)break;}
         return Emit(new{ok=true,nodes=all.Take(limit),edges=outEdges.Take(limit)});
     }
     static int Status(string project)
     {
         using var c=Open(project);long Count(string table){using var q=c.CreateCommand();q.CommandText=$"SELECT count(*) FROM {table}";return Convert.ToInt64(q.ExecuteScalar());}
-        using var stale=c.CreateCommand();stale.CommandText="SELECT count(*) FROM lessons WHERE status='needs_review'";return Emit(new{ok=true,db=DbPath(project),files=Count("files"),symbols=Count("symbols"),edges=Count("edges"),lessons=Count("lessons"),needsReview=Convert.ToInt64(stale.ExecuteScalar())});
+        using var stale=c.CreateCommand();stale.CommandText="SELECT count(*) FROM lessons WHERE status='needs_review'";return Emit(new{ok=true,db=DbPath(project),files=Count("files"),symbols=Count("symbols"),edges=Count("edges"),lessons=Count("lessons"),needsReview=Convert.ToInt64(stale.ExecuteScalar()),schemaVersion=SchemaVersion});
     }
 }

@@ -681,7 +681,7 @@ async function buildRealityCompaction(
 }
 
 function isProblemEvent(event: ControlEvent): boolean {
-  return /(stagnation|failed|failure|error|crash|abandoned|blocked|invalidated|stale|conflict|fault|retry|rejected|warning|plan_repair|required|failover_stopped)/i.test(
+  return /(stagnation|failed|failure|error|crash|abandoned|blocked|invalidated|stale|conflict|fault|retry|rejected|warning|plan_repair|required|failover_stopped|boundary_violation|boundary_escalated)/i.test(
     event.type ?? "",
   );
 }

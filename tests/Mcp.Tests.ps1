@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $mcpStdio = Join-Path $repo 'mcp\StatefulClanker.Mcp.ps1'
 $mockCmd = Join-Path $PSScriptRoot 'MockProvider.cmd'
+$subscriptionPump = Join-Path $repo 'mcp\StatefulClanker.SubscriptionPump.ps1'
 
 function Get-PwshPath {
     $self = (Get-Process -Id $PID).Path
@@ -201,6 +202,53 @@ try {
     Assert-True ([bool]$importResult.applied) 'File plan was not imported.'
     $next=Get-ToolPayload (Invoke-McpLines $temp @((New-McpCall 10 'task_show' @{taskId='mcp-next'})))[0]
     Assert-True ($next.id -eq 'mcp-next') 'Imported file did not create its task.'
+
+    Write-Host '  MCP 10: subscription notifications are event-driven (FileSystemWatcher), not slow-polled'
+    $subProject = Join-Path ([IO.Path]::GetTempPath()) ('statefulclanker-sub-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path (Join-Path $subProject '.statefulclanker\control') | Out-Null
+    $controlState = Join-Path $subProject '.statefulclanker\control\state.json'
+    '{"lastSequence":1}' | Set-Content -LiteralPath $controlState -Encoding UTF8
+    $activeProjectFile = Join-Path ([IO.Path]::GetTempPath()) ('active-project-' + [Guid]::NewGuid().ToString('N') + '.txt')
+    $subProject | Set-Content -LiteralPath $activeProjectFile -Encoding UTF8 -NoNewline
+
+    $subOut = Join-Path ([IO.Path]::GetTempPath()) ('sub-out-' + [Guid]::NewGuid().ToString('N') + '.txt')
+    $driverScript = Join-Path ([IO.Path]::GetTempPath()) ('sub-driver-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+    @"
+. '$subscriptionPump'
+`$script:SCActiveProjectFile = '$activeProjectFile'
+`$rpc = [pscustomobject]@{ id = 'sub-test'; params = [pscustomobject]@{ notifications = [pscustomobject]@{ resourceSubscriptions = @(`$script:SCControlEventsResource) } } }
+Start-SCStdioControlSubscription `$rpc | Out-Null
+Start-Sleep -Seconds 25
+"@ | Set-Content -LiteralPath $driverScript -Encoding UTF8
+
+    $pwsh = Get-PwshPath
+    $proc = Start-Process -FilePath $pwsh -ArgumentList @('-NoProfile', '-File', $driverScript) -PassThru -RedirectStandardOutput $subOut -WindowStyle Hidden
+    try {
+        # Wait for the subscriber's ack (not a fixed sleep): Add-Type's first-run JIT
+        # compile time varies, and writing the state change before the watcher is
+        # actually attached would just get absorbed into the subscriber's initial
+        # cursor read instead of being detected as a change.
+        $ackDeadline = (Get-Date).AddSeconds(20)
+        $acked = $false
+        while ((Get-Date) -lt $ackDeadline) {
+            if ((Test-Path -LiteralPath $subOut) -and ((Get-Content -LiteralPath $subOut -Raw -ErrorAction SilentlyContinue) -match 'notifications/subscriptions/acknowledged')) { $acked = $true; break }
+            Start-Sleep -Milliseconds 100
+        }
+        Assert-True $acked 'Subscriber never acknowledged the subscription.'
+        Start-Sleep -Milliseconds 100
+        '{"lastSequence":2}' | Set-Content -LiteralPath $controlState -Encoding UTF8
+        $deadline = (Get-Date).AddSeconds(2)
+        $notified = $false
+        while ((Get-Date) -lt $deadline) {
+            if ((Get-Content -LiteralPath $subOut -Raw -ErrorAction SilentlyContinue) -match 'notifications/resources/updated') { $notified = $true; break }
+            Start-Sleep -Milliseconds 100
+        }
+        Assert-True $notified 'Subscription did not deliver a change notification within 2s of the write: expected FileSystemWatcher-driven push, not the old slow poll.'
+    } finally {
+        Stop-Process -InputObject $proc -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $driverScript, $subOut, $activeProjectFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force -LiteralPath $subProject -ErrorAction SilentlyContinue
+    }
 
     Write-Host 'PASS: MCP control plane (handshake, id echo, arg fidelity, gating, async run, polling, file plan import)'
 } finally {

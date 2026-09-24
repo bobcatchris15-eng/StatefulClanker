@@ -32,7 +32,7 @@ function Get-SCControlEventLevel([string]$Type,$Data=$null) {
     # scheduler and task status own their handling; waking an orchestrator for
     # each one creates noise and duplicate recovery work.
     if($Type -match '^(task\.(completed|complete|retried)|state\.(committed|proposal_rejected)|run\.(finished|failed)|validator\.(finished|error)|worker\.session_repair|routing\.deferred)'){return 'fyi'}
-    if($Type -match '^(context\.fault|context\.stale|task\.(blocked|stagnation\.warning)|project\.review)'){return 'attention'}
+    if($Type -match '^(context\.fault|context\.stale|task\.(blocked|stagnation\.warning)|project\.review|worker\.boundary_(violation|escalated))'){return 'attention'}
     return 'fyi'
 }
 

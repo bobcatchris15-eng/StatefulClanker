@@ -29,8 +29,18 @@ function Get-SCMachineEndpointRecord([string]$Endpoint) {
     }
 }
 
+function Get-SCProjectRoutingAllowlist {
+    $cfg=Get-SCConfig
+    if(-not($cfg.PSObject.Properties['routing'] -and $cfg.routing)){return @()}
+    if(-not $cfg.routing.PSObject.Properties['endpoints']){return @()}
+    $raw=$cfg.routing.endpoints
+    if(-not $raw){return @()}
+    return @($raw|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})
+}
+
 function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
     $history=@()
+    $allowlist=Get-SCProjectRoutingAllowlist
     $routeSnapshot=Get-SCRouteSnapshotReceipt
     Set-SCProperty $routeSnapshot 'router' 'compiled'
     $preferred=$EndpointOverride
@@ -51,6 +61,7 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
         if($preferred){$acquireArgs+=@('--preferred',$preferred)}
         if($ConnectionOverride){$acquireArgs+=@('--connection',$ConnectionOverride)}
         if($EndpointOverride){$acquireArgs+=@('--strict-preferred','true')}
+        if($allowlist.Count-gt0){$acquireArgs+=@('--endpoints',($allowlist -join ','))}
         $acquire=Invoke-SCCompiledRouterCommand $acquireArgs
 
         if(-not[bool]$acquire.ok){

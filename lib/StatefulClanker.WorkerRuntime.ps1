@@ -136,15 +136,71 @@ function Resolve-SCWorkerPath([string]$Path,[switch]$AllowMissing) {
 # state through a generic worker tool, or terminate StatefulClanker itself.
 # Ordinary failures, rejected work, and hallucinated tool names do not halt
 # subsequent worker operations.
-function Resolve-SCWorkerToolPath([string]$Path,$Task,[string]$ToolName,[switch]$AllowMissing) {
+function Get-SCWorkerBoundaryViolationLimit() {
+    $cfg=try{Get-SCConfig}catch{$null}
+    if($cfg -and $cfg.PSObject.Properties['workerBoundaryViolationLimit'] -and [int]$cfg.workerBoundaryViolationLimit -gt 0){
+        return [int]$cfg.workerBoundaryViolationLimit
+    }
+    return 3
+}
+# Per-session boundary violation counters. Keyed by worker session id when one
+# exists, otherwise by task id, so escalation is scoped to the running worker
+# rather than accumulating across unrelated tasks.
+$script:SCWorkerBoundaryViolationCounts=@{}
+function Get-SCWorkerBoundaryKey($Task,[string]$WorkerSessionId) {
+    if(-not[string]::IsNullOrWhiteSpace($WorkerSessionId)){return $WorkerSessionId}
+    if($Task -and $Task.PSObject.Properties['id']){return [string]$Task.id}
+    return 'unknown'
+}
+function Reset-SCWorkerBoundaryViolationCount($Task,[string]$WorkerSessionId) {
+    $key=Get-SCWorkerBoundaryKey $Task $WorkerSessionId
+    if($script:SCWorkerBoundaryViolationCounts.ContainsKey($key)){$script:SCWorkerBoundaryViolationCounts.Remove($key)}
+}
+# Records a blocked boundary escape as a first-class control-plane event
+# (rather than a generic worker.tool_error) and returns the running count for
+# this session/task so the caller can decide whether to escalate. The access
+# itself is still blocked by the guard that calls this; this never authorizes it.
+function Add-SCWorkerBoundaryViolation($Task,[string]$WorkerSessionId,[string]$Stage,[string]$ToolName,[string]$Kind,[string]$Attempted) {
+    $key=Get-SCWorkerBoundaryKey $Task $WorkerSessionId
+    $text=[string]$Attempted
+    $truncated=if($text.Length-gt200){$text.Substring(0,200)+'...'}else{$text}
+    $count=if($script:SCWorkerBoundaryViolationCounts.ContainsKey($key)){[int]$script:SCWorkerBoundaryViolationCounts[$key]+1}else{1}
+    $script:SCWorkerBoundaryViolationCounts[$key]=$count
+    $taskId=if($Task -and $Task.PSObject.Properties['id']){[string]$Task.id}else{$null}
+    Add-SCEvent 'worker.boundary_violation' "Worker attempted a boundary-violating $Kind via $ToolName." @{taskId=$taskId;sessionId=$WorkerSessionId;stage=$Stage;tool=$ToolName;kind=$Kind;attempted=$truncated;count=$count}
+    return $count
+}
+# Ends the worker turn loop and marks the task needs_rework once violations hit
+# the configured (or default) threshold. Below threshold, work continues.
+function Test-SCWorkerBoundaryEscalation($Task,[string]$WorkerSessionId,[string]$Stage,[int]$Count) {
+    $limit=Get-SCWorkerBoundaryViolationLimit
+    if($Count-lt$limit){return $false}
+    $taskId=if($Task -and $Task.PSObject.Properties['id']){[string]$Task.id}else{$null}
+    $reason="Worker boundary violations reached limit ($Count/$limit) in this session."
+    Add-SCEvent 'worker.boundary_escalated' $reason @{taskId=$taskId;sessionId=$WorkerSessionId;stage=$Stage;count=$Count;limit=$limit}
+    if($taskId){
+        try{
+            $t=Get-SCTask $taskId
+            if($t){$t.status='needs_rework';$t.blockReason=$reason;Save-SCTask $t}
+        }catch{}
+    }
+    Reset-SCWorkerBoundaryViolationCount $Task $WorkerSessionId
+    return $true
+}
+function Resolve-SCWorkerToolPath([string]$Path,$Task,[string]$ToolName,[switch]$AllowMissing,[string]$Stage='worker',[string]$WorkerSessionId=$null) {
     try {
         if($AllowMissing){return Resolve-SCWorkerPath $Path -AllowMissing}
         return Resolve-SCWorkerPath $Path
     } catch {
+        if($_.Exception.Message -match '^Path escapes worker root'){
+            $kind=if($ToolName-in@('read_file','search_text','git_diff')){'read'}else{'write'}
+            $count=Add-SCWorkerBoundaryViolation $Task $WorkerSessionId $Stage $ToolName $kind $Path
+            if(Test-SCWorkerBoundaryEscalation $Task $WorkerSessionId $Stage $count){throw ("BOUNDARY_ESCALATED: "+$_.Exception.Message)}
+        }
         throw
     }
 }
-function Assert-SCWorkerMutablePath([string]$ResolvedPath,$Task,[string]$ToolName) {
+function Assert-SCWorkerMutablePath([string]$ResolvedPath,$Task,[string]$ToolName,[string]$Stage='worker',[string]$WorkerSessionId=$null) {
     $root=[IO.Path]::GetFullPath((Get-SCRoot)).TrimEnd([char[]]'\/')
     $relative=if($ResolvedPath.Length-gt$root.Length){$ResolvedPath.Substring($root.Length).TrimStart([char[]]'\/')}else{''}
     $protected=(
@@ -154,6 +210,8 @@ function Assert-SCWorkerMutablePath([string]$ResolvedPath,$Task,[string]$ToolNam
         $relative.StartsWith('.git'+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)
     )
     if($protected){
+        $count=Add-SCWorkerBoundaryViolation $Task $WorkerSessionId $Stage $ToolName 'control-state' $relative
+        if(Test-SCWorkerBoundaryEscalation $Task $WorkerSessionId $Stage $count){throw "BOUNDARY_ESCALATED: Worker mutation of control state is forbidden: $relative"}
         throw "Worker mutation of control state is forbidden: $relative"
     }
 }
@@ -190,7 +248,7 @@ function Test-SCWorkerCommandPathToken([string]$Token) {
         return $null
     }
 }
-function Assert-SCWorkerCommandSafe([string]$Command,$Task) {
+function Assert-SCWorkerCommandSafe([string]$Command,$Task,[string]$Stage='worker',[string]$WorkerSessionId=$null) {
     if([string]::IsNullOrWhiteSpace($Command)){throw 'command required'}
 
     $tokens=$null
@@ -222,6 +280,8 @@ function Assert-SCWorkerCommandSafe([string]$Command,$Task) {
             }
             $check=Test-SCWorkerCommandPathToken $value
             if($check-and$check.outside){
+                $count=Add-SCWorkerBoundaryViolation $Task $WorkerSessionId $Stage 'run_command' 'command' $Command
+                if(Test-SCWorkerBoundaryEscalation $Task $WorkerSessionId $Stage $count){throw "BOUNDARY_ESCALATED: run_command path escapes worker root: $($check.token)"}
                 throw "run_command path escapes worker root: $($check.token)"
             }
         }
@@ -230,6 +290,8 @@ function Assert-SCWorkerCommandSafe([string]$Command,$Task) {
             if($raw -eq '/dev/null'){throw 'run_command uses PowerShell on Windows: /dev/null is not a valid redirection target. Use Out-Null or a file inside the worker root.'}
             $check=Test-SCWorkerCommandPathToken $raw
             if($check-and$check.outside){
+                $count=Add-SCWorkerBoundaryViolation $Task $WorkerSessionId $Stage 'run_command' 'command' $Command
+                if(Test-SCWorkerBoundaryEscalation $Task $WorkerSessionId $Stage $count){throw "BOUNDARY_ESCALATED: run_command redirection escapes worker root: $($check.token)"}
                 throw "run_command redirection escapes worker root: $($check.token)"
             }
         }
@@ -238,6 +300,8 @@ function Assert-SCWorkerCommandSafe([string]$Command,$Task) {
     $mutates='(?i)(Set-Content|Add-Content|Out-File|Remove-Item|Move-Item|Copy-Item|Rename-Item|New-Item|Clear-Content|Set-Item(?:Property)?|Remove-ItemProperty|\[IO\.File\]::(?:Write|Delete|Move|Copy)|(?:^|[;&|])\s*(?:del|erase|rm|rmdir|rd|move|copy)\b|(?:^|\s)\d*>>?\s*)'
     $control='(?i)(?:^|[\\/"\s])\.(?:statefulclanker|git)(?:[\\/"\s]|$)'
     if($Command-match$mutates-and$Command-match$control){
+        $count=Add-SCWorkerBoundaryViolation $Task $WorkerSessionId $Stage 'run_command' 'control-state' $Command
+        if(Test-SCWorkerBoundaryEscalation $Task $WorkerSessionId $Stage $count){throw 'BOUNDARY_ESCALATED: run_command may not mutate .statefulclanker or .git control state.'}
         throw 'run_command may not mutate .statefulclanker or .git control state.'
     }
 
@@ -266,6 +330,7 @@ function Get-SCIntrinsicWorkerToolRecords($Task,[string]$Stage='worker') {
       (New-SCWorkerToolRecord 'builtin.git_diff' 'git_diff' 'Return git status and diff for the worker checkout.' @{type='object';properties=@{}}),
       (New-SCWorkerToolRecord 'intent.human.read' 'read_human_intent' 'Read an authoritative durable human/source artifact by human:<id> reference. Read-only.' @{type='object';properties=@{sourceRef=@{type='string';description='human:<id> optionally with #Lx-Ly'}};required=@('sourceRef')}),
       (New-SCWorkerToolRecord 'intent.normalized.read' 'read_normalized_intent' 'Read the current orchestrator-owned normalized Intent Contract plus current direct human directives. Read-only.' @{type='object';properties=@{}}),
+      (New-SCWorkerToolRecord 'rpk.record_lesson' 'record_lesson' 'Record a durable Reflexive Project Knowledge lesson (trap, correction, file relationship, API quirk, or process rule) for future workers. Do not store guesses or generic advice. Limited to a few calls per session.' @{type='object';properties=@{title=@{type='string'};body=@{type='string';description='Capped to ~1500 characters.'};paths=@{type='array';items=@{type='string'};description='Project-relative paths this lesson concerns, must resolve inside the worker root.'};tags=@{type='array';items=@{type='string'}}};required=@('title','body')}),
       (New-SCWorkerToolRecord 'builtin.finish' 'finish' 'Submit the current work as a completion candidate. summary is required; expectedArtifacts and verification are claims for the harness to verify independently. Reviews may still use VERDICT lines in summary.' @{type='object';properties=@{summary=@{type='string'};expectedArtifacts=@{type='array';description='Exact project-relative paths that should exist in the submitted candidate; paths only, not prose.';items=@{type='string'}};verification=@{type='array';description='Commands/checks actually performed, stated compactly. Do not claim checks you did not run.';items=@{type='string'}}};required=@('summary')})
     )
     return @($candidates|Where-Object{Test-SCWorkerCapabilityAllowed ([string]$_.capability) $Task $Stage})
@@ -282,20 +347,48 @@ function Write-SCWorkerToolFailure($Task,[string]$Stage,[string]$ToolName,[strin
     if(-not$Result.StartsWith('TOOL_ERROR:')){return}
     Add-SCEvent 'worker.tool_error' $Result @{taskId=$Task.id;stage=$Stage;tool=$ToolName;step=$Step;error=$Result}
 }
-function Invoke-SCWorkerTool([string]$Name,$ToolArgs,$Task,[string]$Stage,$Registry) {
+$script:SCRecordLessonRateLimit=@{}
+function Get-SCRecordLessonRateLimitKey($Task) {
+    if($Task -and $Task.PSObject.Properties['id'] -and $Task.id){return [string]$Task.id}
+    return 'unknown-task'
+}
+function Invoke-SCWorkerRecordLesson($ToolArgs,$Task) {
+    $key=Get-SCRecordLessonRateLimitKey $Task
+    $count=if($script:SCRecordLessonRateLimit.ContainsKey($key)){[int]$script:SCRecordLessonRateLimit[$key]}else{0}
+    if($count-ge5){throw 'record_lesson rate limit reached for this session (max 5 per session).'}
+    $title=[string](Get-SCArgValue $ToolArgs 'title');if([string]::IsNullOrWhiteSpace($title)){throw 'title required'}
+    $body=[string](Get-SCArgValue $ToolArgs 'body');if([string]::IsNullOrWhiteSpace($body)){throw 'body required'}
+    if($body.Length-gt1500){$body=$body.Substring(0,1500)}
+    $tags=@(Get-SCArgValue $ToolArgs 'tags' @())
+    $rawPaths=@(Get-SCArgValue $ToolArgs 'paths' @())
+    $paths=@()
+    foreach($p in $rawPaths){
+        $resolved=Resolve-SCWorkerToolPath ([string]$p) $Task 'record_lesson' -AllowMissing
+        $root=[IO.Path]::GetFullPath((Get-SCRoot)).TrimEnd([char[]]'\/')
+        $relative=if($resolved.Length-gt$root.Length){$resolved.Substring($root.Length).TrimStart([char[]]'\/')}else{''}
+        $paths+=,$relative
+    }
+    $source="worker:$key"
+    $result=Add-SCRpkLesson $title $body $tags $paths $source .6
+    $script:SCRecordLessonRateLimit[$key]=$count+1
+    Add-SCEvent 'rpk.lesson_recorded' $title @{title=$title;source=$source;taskId=$key}
+    return ConvertTo-SCModelText ([ordered]@{recorded=$true;lesson=$result}) 10
+}
+function Invoke-SCWorkerTool([string]$Name,$ToolArgs,$Task,[string]$Stage,$Registry,[string]$WorkerSessionId=$null) {
     $record=@($Registry|Where-Object{[string]$_.wireName-eq$Name}|Select-Object -First 1)
     if($record.Count-eq0){throw "Tool '$Name' is not authorized for this worker."}
     $record=$record[0];if(-not(Test-SCWorkerCapabilityAllowed ([string]$record.capability) $Task $Stage)){throw "Capability '$($record.capability)' is no longer authorized."}
     if([string]$record.kind-eq'mcp'){return Invoke-SCMcpSourceTool ([string]$record.source) ([string]$record.externalTool) $ToolArgs}
     switch($Name){
-      'read_file' { $path=Resolve-SCWorkerToolPath ([string](Get-SCArgValue $ToolArgs 'path')) $Task 'read_file';$start=[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'startLine' 1));$max=[Math]::Min(2000,[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'maxLines' 400)));$lines=@(Get-Content -LiteralPath $path -Encoding UTF8);$slice=@($lines|Select-Object -Skip ($start-1) -First $max);return (($slice|ForEach-Object -Begin{$n=$start} -Process{"{0,5}: {1}"-f$n,$_ ;$n++})-join"`n") }
-      'search_text' { $pattern=[string](Get-SCArgValue $ToolArgs 'pattern');$rel=[string](Get-SCArgValue $ToolArgs 'path' '.');$root=Resolve-SCWorkerToolPath $rel $Task 'search_text';$max=[Math]::Min(500,[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'maxResults' 100)));$files=if(Test-Path -LiteralPath $root -PathType Leaf){@((Get-Item -LiteralPath $root))}else{@(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue|Where-Object{$_.FullName -notmatch '[\\/]\.git[\\/]|[\\/]\.statefulclanker[\\/]'} )};$hits=@();foreach($f in $files){try{foreach($m in @(Select-String -LiteralPath $f.FullName -Pattern $pattern -SimpleMatch -ErrorAction Stop)){ $hits+=("{0}:{1}: {2}"-f($f.FullName.Substring((Get-SCRoot).Length).TrimStart([char[]]'\/')),$m.LineNumber,$m.Line.Trim());if($hits.Count-ge$max){break}}}catch{};if($hits.Count-ge$max){break}};return ($hits-join"`n") }
-      'write_file' { $path=Resolve-SCWorkerToolPath ([string](Get-SCArgValue $ToolArgs 'path')) $Task 'write_file' -AllowMissing;Assert-SCWorkerMutablePath $path $Task 'write_file';$parent=Split-Path -Parent $path;if($parent-and-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null};[IO.File]::WriteAllText($path,[string](Get-SCArgValue $ToolArgs 'content'),(New-Object Text.UTF8Encoding($false)));return 'written' }
-      'replace_text' { $path=Resolve-SCWorkerToolPath ([string](Get-SCArgValue $ToolArgs 'path')) $Task 'replace_text';Assert-SCWorkerMutablePath $path $Task 'replace_text';$old=[string](Get-SCArgValue $ToolArgs 'old');$new=[string](Get-SCArgValue $ToolArgs 'new');$text=[IO.File]::ReadAllText($path);$first=$text.IndexOf($old,[StringComparison]::Ordinal);if($first-lt0){throw 'old text not found'};$second=$text.IndexOf($old,$first+$old.Length,[StringComparison]::Ordinal);if($second-ge0){throw 'old text occurs more than once'};$updated=$text.Substring(0,$first)+$new+$text.Substring($first+$old.Length);[IO.File]::WriteAllText($path,$updated,(New-Object Text.UTF8Encoding($false)));return 'replaced' }
-      'run_command' { $command=[string](Get-SCArgValue $ToolArgs 'command');Assert-SCWorkerCommandSafe $command $Task;$timeout=[int](Get-SCArgValue $ToolArgs 'timeoutSeconds' 120);return ConvertTo-SCModelText (Invoke-SCBoundedCommand $command $timeout) 6 }
+      'read_file' { $path=Resolve-SCWorkerToolPath ([string](Get-SCArgValue $ToolArgs 'path')) $Task 'read_file' -Stage $Stage -WorkerSessionId $WorkerSessionId;$start=[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'startLine' 1));$max=[Math]::Min(2000,[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'maxLines' 400)));$lines=@(Get-Content -LiteralPath $path -Encoding UTF8);$slice=@($lines|Select-Object -Skip ($start-1) -First $max);return (($slice|ForEach-Object -Begin{$n=$start} -Process{"{0,5}: {1}"-f$n,$_ ;$n++})-join"`n") }
+      'search_text' { $pattern=[string](Get-SCArgValue $ToolArgs 'pattern');$rel=[string](Get-SCArgValue $ToolArgs 'path' '.');$root=Resolve-SCWorkerToolPath $rel $Task 'search_text' -Stage $Stage -WorkerSessionId $WorkerSessionId;$max=[Math]::Min(500,[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'maxResults' 100)));$files=if(Test-Path -LiteralPath $root -PathType Leaf){@((Get-Item -LiteralPath $root))}else{@(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue|Where-Object{$_.FullName -notmatch '[\\/]\.git[\\/]|[\\/]\.statefulclanker[\\/]'} )};$hits=@();foreach($f in $files){try{foreach($m in @(Select-String -LiteralPath $f.FullName -Pattern $pattern -SimpleMatch -ErrorAction Stop)){ $hits+=("{0}:{1}: {2}"-f($f.FullName.Substring((Get-SCRoot).Length).TrimStart([char[]]'\/')),$m.LineNumber,$m.Line.Trim());if($hits.Count-ge$max){break}}}catch{};if($hits.Count-ge$max){break}};return ($hits-join"`n") }
+      'write_file' { $path=Resolve-SCWorkerToolPath ([string](Get-SCArgValue $ToolArgs 'path')) $Task 'write_file' -AllowMissing -Stage $Stage -WorkerSessionId $WorkerSessionId;Assert-SCWorkerMutablePath $path $Task 'write_file' $Stage $WorkerSessionId;$parent=Split-Path -Parent $path;if($parent-and-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null};[IO.File]::WriteAllText($path,[string](Get-SCArgValue $ToolArgs 'content'),(New-Object Text.UTF8Encoding($false)));return 'written' }
+      'replace_text' { $path=Resolve-SCWorkerToolPath ([string](Get-SCArgValue $ToolArgs 'path')) $Task 'replace_text' -Stage $Stage -WorkerSessionId $WorkerSessionId;Assert-SCWorkerMutablePath $path $Task 'replace_text' $Stage $WorkerSessionId;$old=[string](Get-SCArgValue $ToolArgs 'old');$new=[string](Get-SCArgValue $ToolArgs 'new');$text=[IO.File]::ReadAllText($path);$first=$text.IndexOf($old,[StringComparison]::Ordinal);if($first-lt0){throw 'old text not found'};$second=$text.IndexOf($old,$first+$old.Length,[StringComparison]::Ordinal);if($second-ge0){throw 'old text occurs more than once'};$updated=$text.Substring(0,$first)+$new+$text.Substring($first+$old.Length);[IO.File]::WriteAllText($path,$updated,(New-Object Text.UTF8Encoding($false)));return 'replaced' }
+      'run_command' { $command=[string](Get-SCArgValue $ToolArgs 'command');Assert-SCWorkerCommandSafe $command $Task $Stage $WorkerSessionId;$timeout=[int](Get-SCArgValue $ToolArgs 'timeoutSeconds' 120);return ConvertTo-SCModelText (Invoke-SCBoundedCommand $command $timeout) 6 }
       'git_diff' { return ConvertTo-SCModelText ([ordered]@{status=(Invoke-SCBoundedCommand 'git status --short' 30).stdout;diff=(Invoke-SCBoundedCommand 'git diff --no-ext-diff' 60).stdout}) 6 }
       'read_human_intent' { return ConvertTo-SCModelText (Resolve-SCHumanIntentArtifact ([string](Get-SCArgValue $ToolArgs 'sourceRef'))) 20 }
       'read_normalized_intent' { return ConvertTo-SCModelText (Get-SCNormalizedIntentView) 30 }
+      'record_lesson' { return Invoke-SCWorkerRecordLesson $ToolArgs $Task }
       'finish' { return [string](Get-SCArgValue $ToolArgs 'summary') }
       default { throw "Unknown worker tool: $Name" }
     }
@@ -766,17 +859,100 @@ function New-SCWorkerGitSnapshot([string]$SessionId,[int]$Sequence,[string]$Kind
         Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     }
 }
-function New-SCWorkerCheckpoint([string]$SessionId,[string]$Kind,[string]$Endpoint,[string]$Model) {
+function New-SCWorkerCheckpoint([string]$SessionId,[string]$Kind,[string]$Endpoint,[string]$Model,$Metadata=$null) {
     $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return $null}
     $seq=@($s.checkpoints).Count
     $git=New-SCWorkerGitSnapshot $SessionId $seq $Kind
     $cp=[pscustomobject][ordered]@{
         id="$SessionId-cp-$seq";sequence=$seq;kind=$Kind;createdAt=[datetimeoffset]::UtcNow.ToString('o');
         endpoint=$Endpoint;model=$Model;git=($null-ne$git);
-        commit=if($git){$git.commit}else{$null};tree=if($git){$git.tree}else{$null};ref=if($git){$git.ref}else{$null}
+        commit=if($git){$git.commit}else{$null};tree=if($git){$git.tree}else{$null};ref=if($git){$git.ref}else{$null};
+        metadata=$Metadata
     }
     $points=@($s.checkpoints)+$cp;Set-SCProperty $s 'checkpoints' @($points);Set-SCProperty $s 'latestCheckpointId' ([string]$cp.id);Save-SCWorkerSession $s
     return $cp
+}
+<# Records a durable Git snapshot at a recovery-relevant moment: after a
+   validation verdict lands, before validator feedback is handed back to the
+   same worker session for a repair turn, and after a parallel worktree
+   merges. A failure to snapshot never fails the caller -- these are best-effort
+   recovery breadcrumbs, not gates. #>
+function New-SCValidationCheckpoint([string]$SessionId,[string]$ValidationId,[string]$Verdict) {
+    if([string]::IsNullOrWhiteSpace($SessionId)){return $null}
+    try{return New-SCWorkerCheckpoint $SessionId 'validation' $null $null ([ordered]@{validationId=$ValidationId;verdict=$Verdict})}catch{return $null}
+}
+function New-SCRepairCheckpoint([string]$SessionId,[string]$ValidationId,[int]$RejectCount) {
+    if([string]::IsNullOrWhiteSpace($SessionId)){return $null}
+    try{return New-SCWorkerCheckpoint $SessionId 'repair' $null $null ([ordered]@{validationId=$ValidationId;rejectCount=$RejectCount})}catch{return $null}
+}
+function New-SCMergeCheckpoint([string]$SessionId,[string]$MergeCommit,[string]$Branch) {
+    if([string]::IsNullOrWhiteSpace($SessionId)){return $null}
+    try{return New-SCWorkerCheckpoint $SessionId 'merge' $null $null ([ordered]@{mergeCommit=$MergeCommit;branch=$Branch})}catch{return $null}
+}
+<# Gathers evidence about a finished run so callers can distinguish a fast
+   harness failure with zero effect from a genuine worker crash mid-work:
+   elapsed seconds, changed-file count / diff line size versus the tracked
+   baseline (session baseline commit when known, else HEAD in the worktree),
+   whether expected artifacts exist, and whether a candidate was submitted. #>
+function Get-SCRunEvidence($Run,[string]$SessionId=$null,[string]$WorkRoot=$null) {
+    $elapsedSeconds=0.0
+    try{
+        if($Run -and $Run.PSObject.Properties['startedAt'] -and $Run.startedAt){
+            $started=[datetimeoffset]::Parse([string]$Run.startedAt)
+            $ended=if($Run.PSObject.Properties['endedAt'] -and $Run.endedAt){[datetimeoffset]::Parse([string]$Run.endedAt)}else{[datetimeoffset]::UtcNow}
+            $elapsedSeconds=[math]::Round(($ended-$started).TotalSeconds,3)
+        }elseif($Run -and $Run.PSObject.Properties['startedAt'] -and $Run.startedAt -is [datetime]){
+            $elapsedSeconds=[math]::Round(((Get-Date)-$Run.startedAt).TotalSeconds,3)
+        }
+    }catch{}
+    $root=if($WorkRoot){$WorkRoot}else{Get-SCRoot}
+    $filesChanged=0;$linesChanged=0;$diffAvailable=$false
+    try{
+        if(Test-SCWorkerGitRepo -or (Test-Path -LiteralPath (Join-Path $root '.git'))){
+            $baseRef=$null
+            if($SessionId){
+                $s=Get-SCWorkerSession $SessionId
+                if($s -and $s.PSObject.Properties['baselineCheckpointId'] -and $s.baselineCheckpointId){
+                    $baseline=@($s.checkpoints|Where-Object{[string]$_.id-eq[string]$s.baselineCheckpointId}|Select-Object -First 1)
+                    if($baseline.Count-gt0 -and $baseline[0].commit){$baseRef=[string]$baseline[0].commit}
+                }
+            }
+            if(-not$baseRef){$baseRef='HEAD'}
+            $numstat=& git -C $root diff --numstat $baseRef -- . 2>$null
+            if($LASTEXITCODE-eq0 -and $numstat){
+                $diffAvailable=$true
+                foreach($line in @($numstat)){
+                    $parts=[string]$line -split "`t"
+                    if($parts.Count-ge2){
+                        $filesChanged++
+                        $added=0;$removed=0
+                        [void][int]::TryParse($parts[0],[ref]$added)
+                        [void][int]::TryParse($parts[1],[ref]$removed)
+                        $linesChanged+=($added+$removed)
+                    }
+                }
+            }
+        }
+    }catch{}
+    $candidateSubmitted=$false
+    try{
+        if($SessionId){
+            $s=Get-SCWorkerSession $SessionId
+            if($s -and $s.PSObject.Properties['candidateClaim'] -and $s.candidateClaim){$candidateSubmitted=$true}
+        }
+        if(-not$candidateSubmitted -and $Run -and $Run.PSObject.Properties['candidateClaim'] -and $Run.candidateClaim){$candidateSubmitted=$true}
+    }catch{}
+    $artifactPresent=$true
+    try{
+        if($Run -and $Run.PSObject.Properties['candidatePreflight'] -and $Run.candidatePreflight){
+            $artifactPresent=[bool]$Run.candidatePreflight.material
+        }
+    }catch{}
+    return [pscustomobject][ordered]@{
+        elapsedSeconds=$elapsedSeconds;filesChanged=$filesChanged;linesChanged=$linesChanged;
+        diffAvailable=$diffAvailable;candidateSubmitted=$candidateSubmitted;artifactPresent=$artifactPresent;
+        materialChange=($diffAvailable -and ($filesChanged-gt0))
+    }
 }
 function Restore-SCWorkerCheckpoint([string]$SessionId,[string]$CheckpointId) {
     $s=Get-SCWorkerSession $SessionId;if($null-eq$s){throw "Unknown worker session: $SessionId"}
@@ -920,7 +1096,8 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
                 continue
             }
             $toolName=[string]$cmd.tool
-            $result=try{Invoke-SCWorkerTool $toolName $cmd.arguments $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
+            $result=try{Invoke-SCWorkerTool $toolName $cmd.arguments $Task $Stage $registry $WorkerSessionId}catch{"TOOL_ERROR: $($_.Exception.Message)"}
+            if(([string]$result) -match 'BOUNDARY_ESCALATED:'){throw "Worker turn loop ended: boundary violation limit reached. $result"}
             Write-SCWorkerToolFailure $Task $Stage $toolName ([string]$result) $step
             if($WorkerSessionId -and -not([string]$result).StartsWith('TOOL_ERROR:')){Add-SCWorkerMutationToolCall $WorkerSessionId $toolName}
             if($toolName-eq'finish'){
@@ -956,8 +1133,9 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
             $name=[string]$call.function.name
             try{
                 $args=if([string]::IsNullOrWhiteSpace([string]$call.function.arguments)){[pscustomobject]@{}}else{[string]$call.function.arguments|ConvertFrom-Json}
-                $result=try{Invoke-SCWorkerTool $name $args $Task $Stage $registry}catch{"TOOL_ERROR: $($_.Exception.Message)"}
+                $result=try{Invoke-SCWorkerTool $name $args $Task $Stage $registry $WorkerSessionId}catch{"TOOL_ERROR: $($_.Exception.Message)"}
             }catch{$args=[pscustomobject]@{};$result="TOOL_ERROR: malformed arguments: $($_.Exception.Message)"}
+            if(([string]$result) -match 'BOUNDARY_ESCALATED:'){throw "Worker turn loop ended: boundary violation limit reached. $result"}
             Write-SCWorkerToolFailure $Task $Stage $name ([string]$result) $step
             if($WorkerSessionId -and -not([string]$result).StartsWith('TOOL_ERROR:')){Add-SCWorkerMutationToolCall $WorkerSessionId $name}
             if($name-eq'finish'){
