@@ -12,7 +12,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '0.8.28',
+    [string]$Version = '0.9.0',
     [string]$PiVersion = '0.87.0',
     [switch]$IconOnly
 )
