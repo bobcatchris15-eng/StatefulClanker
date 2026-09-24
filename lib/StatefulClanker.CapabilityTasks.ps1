@@ -498,6 +498,19 @@ function Find-SCIntentRefValue($Intent,[string]$Ref) {
     return $null
 }
 
+function Assert-SCStagedDirectiveIntentRefs($DirectiveResult,$Intent) {
+    foreach($change in @($DirectiveResult.changes)){
+        if([string]$change.action-ne'set'){continue}
+        foreach($ref in @($change.record.intentRefs)){
+            $id=[string]$ref
+            if([string]::IsNullOrWhiteSpace($id)){continue}
+            if($null-eq(Find-SCIntentRefValue $Intent $id)){
+                throw "Staged directive '$($change.id)' references Intent '$id', but that ref is absent from the candidate Intent."
+            }
+        }
+    }
+}
+
 function Test-SCTaskIntentCompatible($Task,$OldIntent,$NewIntent,[string]$OldGoal,[string]$NewGoal) {
     $refs=if($Task.PSObject.Properties['intentRefs']){@($Task.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})}else{@()}
     if($refs.Count-eq0){
@@ -772,6 +785,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                 Write-SCJson (Join-Path $stageIntent 'contract.json') $newIntent
                 $intentChanged=$true
             }
+            if(@($directiveResult.changes).Count-gt0){Assert-SCStagedDirectiveIntentRefs $directiveResult $newIntent}
 
             $oldGoal=[string]$liveState.goal
             $newGoal=if($handoff.PSObject.Properties['projectGoal']-and-not[string]::IsNullOrWhiteSpace([string]$handoff.projectGoal)){[string]$handoff.projectGoal}else{$oldGoal}
@@ -906,16 +920,20 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
             return $summary
         }
 
-        Add-SCEvent 'planning.handoff_applied' "Applied planning handoff $($handoff.id) as plan $($result.appliedPlanId)." $result
-        Add-SCEvent 'plan.replaced' "Active plan replaced transactionally: $($result.replacedPlanId) -> $($result.appliedPlanId)." @{transactionId=$result.transactionId;handoffId=$handoff.id;previousPlanId=$result.replacedPlanId;activePlanId=$result.appliedPlanId;preservedComplete=@($result.preservedComplete);resetTasks=@($result.resetTasks);replacedTasks=@($result.replacedTasks);dependencyInvalidated=@($result.dependencyInvalidated);newTasks=@($result.newTasks);retiredTasks=@($result.retiredTasks)}
-        if([bool]$result.goalChanged){Add-SCEvent 'goal.changed' ([string]$result.projectGoal) @{transactionId=$result.transactionId;handoffId=$handoff.id;previousGoal=$result.previousGoal}}
-        if($intentPath){Add-SCEvent 'intent.revised' "Intent contract revised transactionally to $($result.intentRevision)." @{revision=$result.intentRevision;transactionId=$result.transactionId;handoffId=$handoff.id}}
-        foreach($change in @($result.directiveChanges)){
-            if([string]$change.action-eq'set'){
-                Add-SCEvent 'directive.revised' "Human directive '$($change.id)' revised transactionally." @{directiveId=$change.id;transactionId=$result.transactionId;handoffId=$handoff.id;directiveRevision=$result.directiveRevision;sourceRef=$change.record.sourceRef;intentRefs=@($change.record.intentRefs)}
-            } elseif([string]$change.action-eq'retire'){
-                Add-SCEvent 'directive.retired' "Human directive '$($change.id)' retired transactionally." @{directiveId=$change.id;transactionId=$result.transactionId;handoffId=$handoff.id;directiveRevision=$result.directiveRevision}
+        try {
+            Add-SCEvent 'planning.handoff_applied' "Applied planning handoff $($handoff.id) as plan $($result.appliedPlanId)." $result
+            Add-SCEvent 'plan.replaced' "Active plan replaced transactionally: $($result.replacedPlanId) -> $($result.appliedPlanId)." @{transactionId=$result.transactionId;handoffId=$handoff.id;previousPlanId=$result.replacedPlanId;activePlanId=$result.appliedPlanId;preservedComplete=@($result.preservedComplete);resetTasks=@($result.resetTasks);replacedTasks=@($result.replacedTasks);dependencyInvalidated=@($result.dependencyInvalidated);newTasks=@($result.newTasks);retiredTasks=@($result.retiredTasks)}
+            if([bool]$result.goalChanged){Add-SCEvent 'goal.changed' ([string]$result.projectGoal) @{transactionId=$result.transactionId;handoffId=$handoff.id;previousGoal=$result.previousGoal}}
+            if($intentPath){Add-SCEvent 'intent.revised' "Intent contract revised transactionally to $($result.intentRevision)." @{revision=$result.intentRevision;transactionId=$result.transactionId;handoffId=$handoff.id}}
+            foreach($change in @($result.directiveChanges)){
+                if([string]$change.action-eq'set'){
+                    Add-SCEvent 'directive.revised' "Human directive '$($change.id)' revised transactionally." @{directiveId=$change.id;transactionId=$result.transactionId;handoffId=$handoff.id;directiveRevision=$result.directiveRevision;sourceRef=$change.record.sourceRef;intentRefs=@($change.record.intentRefs)}
+                } elseif([string]$change.action-eq'retire'){
+                    Add-SCEvent 'directive.retired' "Human directive '$($change.id)' retired transactionally." @{directiveId=$change.id;transactionId=$result.transactionId;handoffId=$handoff.id;directiveRevision=$result.directiveRevision}
+                }
             }
+        } catch {
+            Write-Warning "Planning transaction $($result.transactionId) committed, but post-commit event logging failed: $($_.Exception.Message)"
         }
         return $result
     } catch {
