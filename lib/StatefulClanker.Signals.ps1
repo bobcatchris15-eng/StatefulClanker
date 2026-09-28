@@ -138,3 +138,31 @@ function Test-SCSignalFreshness($Signal,$Task=$null) {
     }
     return [pscustomobject]@{fresh=($reasons.Count-eq0);reasons=@($reasons)}
 }
+
+
+function Publish-SCExecutionSignal {
+    param(
+        [Parameter(Mandatory=$true)][string]$Kind,
+        [Parameter(Mandatory=$true)]$Task,
+        [Parameter(Mandatory=$true)][string]$Component,
+        [Parameter(Mandatory=$true)][string]$Scope,
+        [string]$Authority='observed',
+        [string]$Qualifier=$null,
+        $Payload=$null,
+        $SourceExtra=$null,
+        $Freshness=$null
+    )
+    try{
+        $source=[ordered]@{component=$Component;taskId=[string]$Task.id}
+        if($SourceExtra){foreach($p in (ConvertTo-SCSignalMap $SourceExtra 'sourceExtra' $true).GetEnumerator()){$source[$p.Key]=$p.Value}}
+        $address=[ordered]@{type='task';id=[string]$Task.id}
+        if($Qualifier){$address['qualifier']=$Qualifier}
+        if($null-eq$Freshness){$Freshness=[ordered]@{taskDefinitionHash=Get-SCTaskDefinitionHash $Task}}
+        $signal=New-SCSignalEnvelope -Domain execution -Kind $Kind -Source $source -Subject @{type='task';id=[string]$Task.id} -Audience @($address) -Authority $Authority -Scope $Scope -Freshness $Freshness -Payload $Payload
+        Write-SCSignal $signal|Out-Null
+        return $signal
+    }catch{
+        try{Add-SCEvent 'signal.shadow_write_failed' $_.Exception.Message @{taskId=$Task.id;kind=$Kind;component=$Component}}catch{}
+        return $null
+    }
+}
