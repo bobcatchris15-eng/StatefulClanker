@@ -97,10 +97,10 @@ function Read-SCSignals([string]$Domain='execution',[int]$Limit=200) {
         $lines=@(Get-Content -LiteralPath $file.FullName|Where-Object{-not[string]::IsNullOrWhiteSpace($_)})
         for($i=$lines.Count-1;$i-ge0;$i--){
             try{$out.Add(($lines[$i]|ConvertFrom-Json))}catch{}
-            if($Limit-gt0-and$out.Count-ge$Limit){return @($out)}
+            if($Limit-gt0-and$out.Count-ge$Limit){return @($out|ForEach-Object{$_})}
         }
     }
-    return @($out)
+    return @($out|ForEach-Object{$_})
 }
 
 function Get-SCSignalsForAudience {
