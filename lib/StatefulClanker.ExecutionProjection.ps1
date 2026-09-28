@@ -155,5 +155,8 @@ function Get-SCExecutionProjection {
 function Write-SCExecutionProjection($Projection) {
     if($null-eq$Projection){return $null}
     Write-SCJson (Get-SCPath ("projections/execution/{0}.json"-f$Projection.id)) $Projection
+    if($Projection.PSObject.Properties['taskId'] -and -not[string]::IsNullOrWhiteSpace([string]$Projection.taskId)){
+        Write-SCJson (Get-SCPath ("projections/execution/latest/{0}.json"-f$Projection.taskId)) $Projection
+    }
     return $Projection
 }
