@@ -158,7 +158,7 @@ function New-SCCompilation($Task) {
     $projectLessons=@(Get-SCPacketProjectLessons $Task $readSetPaths 5 $contextFaults $compilationId)
     $codeNeighbours=@(Get-SCPacketCodeNeighbours $readSetPaths 5 40 $contextFaults $Task.id $compilationId)
     $attemptHistory=@(Get-SCPacketAttemptHistory $Task 3)
-    $readSet=[ordered]@{projectGoalHash=Get-SCHashString ([string]$state.goal);activePlanId=$state.activePlanId;planIntentHash=$planIntentHash;directionRevision=$state.directionRevision;intentRevision=[int]$intent.revision;intentHash=$intentHash;executionPolicyHash=$policyHash;taskId=$Task.id;taskControlRevision=$taskControlRevision;taskDefinitionHash=Get-SCTaskDefinitionHash $Task;dependencies=@($dependencies|ForEach-Object{[ordered]@{id=$_.id;status=$_.status;definitionHash=$_.definitionHash;latestRunId=$_.latestRunId;latestValidationId=$_.latestValidationId}});files=@($retrieved.items|ForEach-Object{[ordered]@{path=$_.path;sha256=$_.sha256;authority=$_.authority}});projectLessonsHash=Get-SCHashString (ConvertTo-SCJson $projectLessons 12);codeNeighboursHash=Get-SCHashString (ConvertTo-SCJson $codeNeighbours 12);attemptHistoryHash=Get-SCHashString (ConvertTo-SCJson $attemptHistory 12)}
+    $readSet=[ordered]@{projectGoalHash=Get-SCHashString ([string]$state.goal);activePlanId=$state.activePlanId;planIntentHash=$planIntentHash;directionRevision=$state.directionRevision;intentRevision=[int]$intent.revision;intentHash=$intentHash;executionPolicyHash=$policyHash;taskId=$Task.id;taskControlRevision=$taskControlRevision;taskDefinitionHash=Get-SCTaskDefinitionHash $Task;executionProjectionHash=[string]$executionProjection.hash;dependencies=@($dependencies|ForEach-Object{[ordered]@{id=$_.id;status=$_.status;definitionHash=$_.definitionHash;latestRunId=$_.latestRunId;latestValidationId=$_.latestValidationId}});files=@($retrieved.items|ForEach-Object{[ordered]@{path=$_.path;sha256=$_.sha256;authority=$_.authority}});projectLessonsHash=Get-SCHashString (ConvertTo-SCJson $projectLessons 12);codeNeighboursHash=Get-SCHashString (ConvertTo-SCJson $codeNeighbours 12);attemptHistoryHash=Get-SCHashString (ConvertTo-SCJson $attemptHistory 12)}
     $inputFingerprint=Get-SCHashString (ConvertTo-SCJson $readSet 20)
     $contract=@('Perform only this bounded task.','The authoritative intent contract is read-only to workers. Never edit, replace, reinterpret away, or weaken it.','If task instructions conflict with the intent contract, emit INTENT_CONFLICT: <specific conflict> and stop rather than choosing your own interpretation.','If the intent contract is ambiguous or insufficient for a material choice, emit INTENT_QUESTION: <specific question> and stop rather than guessing.','Treat durable state and project files as authoritative.','If task.checks are present, run those exact mechanical acceptance commands before submitting when your capabilities permit; the harness will rerun them independently after submission.','Report files changed, commands run, failures, and unresolved risks.','Do not claim verification you did not perform.','If required state or evidence is missing, emit CONTEXT_REQUEST: <specific missing state> rather than guessing.')
     $correctiveFeedback=@($executionProjection.correctiveFeedback)
@@ -211,6 +211,7 @@ function New-SCCompilation($Task) {
             diagnostics=$executionProjection.executionDiagnostics
             correctiveFeedback=@($executionProjection.correctiveFeedback)
             priorAttemptKnowledge=@($executionProjection.priorAttemptKnowledge)
+            continuation=$executionProjection.continuation
             retrievalHealth=$executionProjection.retrievalHealth
         }
         dependencies=@($dependencies)
@@ -245,6 +246,12 @@ function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit') {
     if((Get-SCExecutionPolicyHash)-ne[string]$Compilation.readSet.executionPolicyHash){$reasons+='execution policy/config changed'}
     if((Get-SCTaskControlRevision $task)-ne[int]$Compilation.readSet.taskControlRevision){$reasons+='human task control changed'}
     if((Get-SCTaskDefinitionHash $task)-ne[string]$Compilation.readSet.taskDefinitionHash){$reasons+='task definition changed'}
+    if($Mode-eq'dispatch' -and $Compilation.readSet.PSObject.Properties['executionProjectionHash']){
+        try{
+            $currentProjection=Get-SCExecutionProjection $task
+            if([string]$currentProjection.hash-ne[string]$Compilation.readSet.executionProjectionHash){$reasons+='execution continuation changed before dispatch'}
+        }catch{$reasons+='execution continuation unavailable during dispatch freshness check'}
+    }
     foreach($depRead in @($Compilation.readSet.dependencies)){
         try{$dep=Invoke-SCLocked { Read-SCJson (Get-SCPath ("tasks/{0}.json"-f$depRead.id)) }}catch{$dep=$null}
         if($null-eq$dep){$reasons+="dependency missing: $($depRead.id)";continue}
@@ -257,6 +264,19 @@ function Test-SCCompilationFreshness($Compilation,[string]$Mode='commit') {
         foreach($fileRead in @($Compilation.readSet.files)){$full=Join-Path (Get-SCRoot) ([string]$fileRead.path);$current=Get-SCFileHashValue $full;if([string]$current-ne[string]$fileRead.sha256){$reasons+="context file changed before dispatch: $($fileRead.path)"}}
     }
     return [ordered]@{fresh=($reasons.Count-eq 0);mode=$Mode;checkedAt=(Get-Date).ToUniversalTime().ToString('o');reasons=@($reasons)}
+}
+function New-SCWorkerContinuationMessage($Compilation,[string]$Cause='retry') {
+    if($null-eq$Compilation-or$null-eq$Compilation.ir-or$null-eq$Compilation.ir.execution){return $null}
+    $execution=$Compilation.ir.execution
+    $state=[ordered]@{
+        cause=$Cause
+        projectionId=$execution.projectionId
+        projectionHash=$execution.projectionHash
+        continuation=$execution.continuation
+        correctiveFeedback=@($execution.correctiveFeedback)
+        priorAttemptKnowledge=@($execution.priorAttemptKnowledge|Select-Object -Last 4)
+    }
+    return "STATEFULCLANKER CONTINUATION UPDATE. The refreshed compiled packet is authoritative for this retry. Preserve correct existing work, address the current evidence, and do not restart from memory alone."+[Environment]::NewLine+(ConvertTo-SCModelText $state 14)
 }
 function New-SCWorkerPrompt($Compilation) {
     return "You are a cold-start StatefulClanker worker. The compiled packet is a temporary projection; durable state and project files are authoritative. The project intent contract inside the packet is orchestrator-owned and READ-ONLY: never modify or weaken it. Raise INTENT_QUESTION or INTENT_CONFLICT instead of guessing or changing intent. FILESYSTEM BOUNDARY: operate only inside the current project/worktree. Do not read or write project data through parent, absolute, user-profile, temp, or other outside paths; do not mutate .statefulclanker or .git control state directly; and do not terminate StatefulClanker processes. Installed executables may live outside the project, but their file arguments must remain inside the project.`r`n`r`nSTATEFULCLANKER COMPILED CONTEXT`r`n================================`r`n$(ConvertTo-SCModelText $Compilation.ir 22)`r`n`r`nComplete only this bounded task."
