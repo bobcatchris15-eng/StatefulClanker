@@ -86,6 +86,26 @@ function Write-SCSignal($Signal) {
     $path=Join-Path (Get-SCSignalDirectory ([string]$Signal.domain)) ($when.UtcDateTime.ToString('yyyy-MM-dd')+'.jsonl')
     $line=(ConvertTo-SCJson $Signal 24)-replace'[\r\n]+',''
     Invoke-SCLocked { Add-SCTextLine $path $line }|Out-Null
+
+    # Execution signals immediately refresh the deterministic per-task projection
+    # when the reducer is available. This makes "append -> reduce -> persist"
+    # the normal path rather than waiting for the next worker compilation.
+    if([string]$Signal.domain-eq'execution' -and
+       (Get-Command Get-SCExecutionProjection -ErrorAction SilentlyContinue) -and
+       (Get-Command Write-SCExecutionProjection -ErrorAction SilentlyContinue)){
+        try{
+            $subject=Get-SCSignalValue $Signal 'subject'
+            if([string](Get-SCSignalValue $subject 'type')-eq'task'){
+                $taskId=[string](Get-SCSignalValue $subject 'id')
+                if(-not[string]::IsNullOrWhiteSpace($taskId)){
+                    $task=Get-SCTask $taskId
+                    Write-SCExecutionProjection (Get-SCExecutionProjection $task)|Out-Null
+                }
+            }
+        }catch{
+            try{Add-SCEvent 'projection.refresh_failed' $_.Exception.Message @{signalId=$Signal.id;taskId=if($taskId){$taskId}else{$null}}}catch{}
+        }
+    }
     return $Signal
 }
 
