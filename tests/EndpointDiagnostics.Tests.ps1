@@ -21,19 +21,27 @@ try {
     $job=Start-Job -ArgumentList $port -ScriptBlock {
         param($Port)
         $listener=New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback),$Port;$listener.Start()
+        $postCount=0
         try {
-            $responses=@([pscustomobject]@{status='200 OK';body='{"choices":[{"message":{"role":"assistant","content":"CLANKER_OK"}}]}'},[pscustomobject]@{status='400 Bad Request';body='{"error":{"message":"messages field has invalid shape"}}'})
-            foreach($response in $responses){
+            while($true){
                 $client=$listener.AcceptTcpClient();$stream=$client.GetStream()
                 try {
                     $header=New-Object Collections.Generic.List[byte];$match=0;$term=@(13,10,13,10)
                     while($match-lt4){$b=$stream.ReadByte();if($b-lt0){break};$header.Add([byte]$b);if($b-eq$term[$match]){$match++}elseif($b-eq13){$match=1}else{$match=0}}
                     $text=[Text.Encoding]::ASCII.GetString($header.ToArray());$len=0
+                    $firstLine=($text-split [Environment]::NewLine)[0]
                     foreach($line in ($text-split [Environment]::NewLine)){if($line-match'(?i)^Content-Length:\s*(\d+)'){$len=[int]$Matches[1]}}
                     if($len-gt0){$buf=New-Object byte[] $len;$read=0;while($read-lt$len){$n=$stream.Read($buf,$read,$len-$read);if($n-le0){break};$read+=$n}}
-                    $bytes=[Text.Encoding]::UTF8.GetBytes($response.body)
+                    if($firstLine-match'^GET\s+.+/models\s'){
+                        $status='200 OK';$body='{"data":[{"id":"mock-model"}]}'
+                    }else{
+                        $postCount++
+                        if($postCount-eq1){$status='200 OK';$body='{"choices":[{"message":{"role":"assistant","content":"CLANKER_OK"}}]}'}
+                        else{$status='400 Bad Request';$body='{"error":{"message":"messages field has invalid shape"}}'}
+                    }
+                    $bytes=[Text.Encoding]::UTF8.GetBytes($body)
                     $crlf=[string][char]13+[char]10
-                    $headText='HTTP/1.1 '+$response.status+$crlf+'Content-Type: application/json'+$crlf+'X-Request-Id: diag-'+[guid]::NewGuid().ToString('N')+$crlf+'Content-Length: '+$bytes.Length+$crlf+'Connection: close'+$crlf+$crlf
+                    $headText='HTTP/1.1 '+$status+$crlf+'Content-Type: application/json'+$crlf+'X-Request-Id: diag-'+[guid]::NewGuid().ToString('N')+$crlf+'Content-Length: '+$bytes.Length+$crlf+'Connection: close'+$crlf+$crlf
                     $head=[Text.Encoding]::ASCII.GetBytes($headText)
                     $stream.Write($head,0,$head.Length);$stream.Write($bytes,0,$bytes.Length);$stream.Flush()
                 }finally{$stream.Dispose();$client.Close()}
