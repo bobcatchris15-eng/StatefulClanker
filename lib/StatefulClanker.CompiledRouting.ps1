@@ -122,7 +122,10 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
             $text=(([string]$receipt.stderr)+[Environment]::NewLine+([string]$receipt.stdout)).Trim()
 
             if([int]$receipt.exitCode-eq0){
-                [void](Invoke-SCCompiledRouterCommand @('success','--lease',$leaseToken));$released=$true
+                $routerOwnedOutcome=($receipt.PSObject.Properties['routerOutcomeOwned'] -and [bool]$receipt.routerOutcomeOwned)
+                if($routerOwnedOutcome){[void](Invoke-SCCompiledRouterCommand @('release','--lease',$leaseToken))}
+                else{[void](Invoke-SCCompiledRouterCommand @('success','--lease',$leaseToken))}
+                $released=$true
                 if($WorkerSessionId){
                     Set-SCWorkerSessionRoutePin $WorkerSessionId $endpoint ([string]$record.config.connection) ([string]$record.config.model)
                 }
@@ -135,12 +138,22 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
                 return $receipt
             }
 
-            $failure=Invoke-SCCompiledRouterCommand @('failure','--lease',$leaseToken,'--message',$text)
-            $released=$true
-            $class=if($failure.data -and $failure.data.PSObject.Properties['failureClass']){[string]$failure.data.failureClass}else{'request_error'}
-            $scope=if($failure.data -and $failure.data.PSObject.Properties['scope']){[string]$failure.data.scope}else{'request'}
-            $key=if($failure.data -and $failure.data.PSObject.Properties['key']){[string]$failure.data.key}else{$null}
-            $canFailover=if($failure.data -and $failure.data.PSObject.Properties['failoverAllowed']){[bool]$failure.data.failoverAllowed}else{$false}
+            $routerOwnedOutcome=($receipt.PSObject.Properties['routerOutcomeOwned'] -and [bool]$receipt.routerOutcomeOwned)
+            if($routerOwnedOutcome){
+                [void](Invoke-SCCompiledRouterCommand @('release','--lease',$leaseToken))
+                $released=$true
+                $class=if($receipt.PSObject.Properties['inferenceFailureClass'] -and $receipt.inferenceFailureClass){[string]$receipt.inferenceFailureClass}else{'worker_or_harness'}
+                $scope=if($receipt.PSObject.Properties['inferenceFailureScope'] -and $receipt.inferenceFailureScope){[string]$receipt.inferenceFailureScope}else{'request'}
+                $key=$null
+                $canFailover=if($receipt.PSObject.Properties['inferenceFailoverAllowed']){[bool]$receipt.inferenceFailoverAllowed}else{$false}
+            }else{
+                $failure=Invoke-SCCompiledRouterCommand @('failure','--lease',$leaseToken,'--message',$text)
+                $released=$true
+                $class=if($failure.data -and $failure.data.PSObject.Properties['failureClass']){[string]$failure.data.failureClass}else{'request_error'}
+                $scope=if($failure.data -and $failure.data.PSObject.Properties['scope']){[string]$failure.data.scope}else{'request'}
+                $key=if($failure.data -and $failure.data.PSObject.Properties['key']){[string]$failure.data.key}else{$null}
+                $canFailover=if($failure.data -and $failure.data.PSObject.Properties['failoverAllowed']){[bool]$failure.data.failoverAllowed}else{$false}
+            }
             $history+=,[ordered]@{endpoint=$endpoint;connection=[string]$record.config.connection;model=[string]$record.config.model;outcome='failed';failureClass=$class;healthScope=$scope;healthKey=$key}
             Set-SCProperty $receipt 'routeAttempts' $history.Count
             Set-SCProperty $receipt 'routeHistory' @($history)
