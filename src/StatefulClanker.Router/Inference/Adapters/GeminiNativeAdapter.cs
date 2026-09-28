@@ -22,83 +22,165 @@ public sealed class GeminiNativeAdapter : IProviderAdapter
             ? baseUrl
             : baseUrl+"/models/"+Uri.EscapeDataString(model)+":generateContent";
 
-        var body=new Dictionary<string,object?>
+        var system=new List<string>();
+        var contents=new List<Dictionary<string,object?>>();
+        var callNames=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach(var m in request.messages)
         {
-            ["contents"]=new[]
+            var role=(m.role??"user").ToLowerInvariant();
+            if(role=="system")
             {
-                new Dictionary<string,object?>
+                if(!string.IsNullOrWhiteSpace(m.content)) system.Add(m.content);
+                continue;
+            }
+            if(role=="assistant")
+            {
+                var parts=new List<object>();
+                if(!string.IsNullOrWhiteSpace(m.content))
+                    parts.Add(new Dictionary<string,object?>{{"text",m.content}});
+                foreach(var call in m.tool_calls??new())
+                {
+                    if(!string.IsNullOrWhiteSpace(call.id)) callNames[call.id]=call.function.name;
+                    var part=new Dictionary<string,object?>
+                    {
+                        ["functionCall"]=new Dictionary<string,object?>
+                        {
+                            ["name"]=call.function.name,
+                            ["args"]=AdapterJson.ParseArguments(call.function.arguments)
+                        }
+                    };
+                    if(!string.IsNullOrWhiteSpace(call.thought_signature))
+                        part["thoughtSignature"]=call.thought_signature;
+                    parts.Add(part);
+                }
+                if(parts.Count>0)
+                    contents.Add(new Dictionary<string,object?>{{"role","model"},{"parts",parts.ToArray()}});
+                continue;
+            }
+            if(role=="tool")
+            {
+                var name=!string.IsNullOrWhiteSpace(m.tool_call_id) && callNames.TryGetValue(m.tool_call_id,out var mapped)
+                    ? mapped
+                    : "tool";
+                contents.Add(new Dictionary<string,object?>
                 {
                     ["role"]="user",
-                    ["parts"]=new[]{new Dictionary<string,object?>{{"text",request.prompt}}}
-                }
-            },
-            ["generationConfig"]=new Dictionary<string,object?>
-            {
-                ["maxOutputTokens"]=Math.Clamp(request.maxOutputTokens,1,64)
+                    ["parts"]=new[]{new Dictionary<string,object?>
+                    {
+                        ["functionResponse"]=new Dictionary<string,object?>
+                        {
+                            ["name"]=name,
+                            ["response"]=new Dictionary<string,object?>{{"result",m.content??""}}
+                        }
+                    }}
+                });
+                continue;
             }
-        };
+            contents.Add(new Dictionary<string,object?>
+            {
+                ["role"]="user",
+                ["parts"]=new[]{new Dictionary<string,object?>{{"text",m.content??""}}}
+            });
+        }
 
-        if(request.testTools)
+        var body=new Dictionary<string,object?>{{"contents",contents}};
+        if(system.Count>0)
+            body["systemInstruction"]=new Dictionary<string,object?>
+            {
+                ["parts"]=new[]{new Dictionary<string,object?>{{"text",string.Join("\n\n",system)}}}
+            };
+        if(!string.Equals(request.toolMode,"text",StringComparison.OrdinalIgnoreCase) && request.tools.Count>0)
         {
             body["tools"]=new[]
             {
                 new Dictionary<string,object?>
                 {
-                    ["functionDeclarations"]=new[]
+                    ["functionDeclarations"]=request.tools.Select(t=>(object)new Dictionary<string,object?>
                     {
-                        new Dictionary<string,object?>
-                        {
-                            ["name"]="clanker_probe",
-                            ["description"]="Harmless endpoint diagnostic tool.",
-                            ["parameters"]=new Dictionary<string,object?>
-                            {
-                                ["type"]="OBJECT",
-                                ["properties"]=new Dictionary<string,object?>()
-                            }
-                        }
-                    }
+                        ["name"]=t.function.name,
+                        ["description"]=t.function.description,
+                        ["parameters"]=t.function.parameters
+                    }).ToArray()
                 }
             };
+            body["toolConfig"]=new Dictionary<string,object?>
+            {
+                ["functionCallingConfig"]=new Dictionary<string,object?>{{"mode","AUTO"}}
+            };
         }
+        var generation=new Dictionary<string,object?>{{"maxOutputTokens",Math.Clamp(request.maxOutputTokens,1,131072)}};
+        if(request.temperature is not null) generation["temperature"]=request.temperature.Value;
+        body["generationConfig"]=generation;
 
         var message=AdapterHttp.JsonRequest(
             HttpMethod.Post,uri,connection,apiKey,body,
-            "gemini-native",
-            request.testTools?"native":"text");
+            "gemini-native",request.toolMode,request.sessionKey);
         return new AdapterRequest(message,AdapterHttp.Evidence(message));
     }
 
-    public AdapterParseResult ParseSuccess(string body)
+    public AdapterParseResult ParseSuccess(string body,EndpointEntry endpoint)
     {
         try
         {
             using var doc=JsonDocument.Parse(body);
-            if(!doc.RootElement.TryGetProperty("candidates",out var candidates) ||
+            var root=doc.RootElement;
+            if(!root.TryGetProperty("candidates",out var candidates) ||
                candidates.ValueKind!=JsonValueKind.Array ||
                candidates.GetArrayLength()==0)
-                return new(false,null,"Successful Gemini response did not contain candidates.");
+                return new(false,null,new(){model=endpoint.model},"Successful Gemini response did not contain candidates.");
 
             var candidate=candidates[0];
             if(!candidate.TryGetProperty("content",out var content) ||
                !content.TryGetProperty("parts",out var parts) ||
                parts.ValueKind!=JsonValueKind.Array)
-                return new(false,null,"Successful Gemini candidate did not contain content.parts.");
+                return new(false,null,new(){model=endpoint.model},"Successful Gemini candidate did not contain content.parts.");
 
+            var assistant=new NormalizedInferenceMessage{role="assistant",tool_calls=new()};
             var textParts=new List<string>();
+            var n=0;
             foreach(var part in parts.EnumerateArray())
             {
                 if(part.TryGetProperty("text",out var text) && text.ValueKind==JsonValueKind.String)
                     textParts.Add(text.GetString()??"");
-                else if(part.TryGetProperty("functionCall",out _))
-                    textParts.Add("[functionCall]");
+                if(part.TryGetProperty("functionCall",out var fc) && fc.ValueKind==JsonValueKind.Object)
+                {
+                    n++;
+                    var name=fc.TryGetProperty("name",out var nameEl)?nameEl.GetString()??"tool":"tool";
+                    var args=fc.TryGetProperty("args",out var argsEl)?argsEl.GetRawText():"{}";
+                    var call=new NormalizedToolCall
+                    {
+                        id=$"gemini-{n}-{name}",
+                        type="function",
+                        function=new NormalizedFunctionCall{name=name,arguments=args}
+                    };
+                    if(part.TryGetProperty("thoughtSignature",out var sig) && sig.ValueKind==JsonValueKind.String)
+                        call.thought_signature=sig.GetString();
+                    else if(part.TryGetProperty("thought_signature",out sig) && sig.ValueKind==JsonValueKind.String)
+                        call.thought_signature=sig.GetString();
+                    assistant.tool_calls.Add(call);
+                }
             }
-            return textParts.Count>0
-                ? new(true,string.Join("",textParts),null)
-                : new(false,null,"Gemini candidate contained no text or functionCall.");
+            assistant.content=textParts.Count>0?string.Join("\n",textParts):"";
+
+            var usage=new NormalizedUsage{model=endpoint.model};
+            if(root.TryGetProperty("usageMetadata",out var usageEl) && usageEl.ValueKind==JsonValueKind.Object)
+            {
+                usage.promptTokens=AdapterJson.Long(usageEl,"promptTokenCount");
+                usage.completionTokens=AdapterJson.Long(usageEl,"candidatesTokenCount");
+                usage.totalTokens=AdapterJson.Long(usageEl,"totalTokenCount");
+                if(usage.totalTokens<=0) usage.totalTokens=usage.promptTokens+usage.completionTokens;
+                usage.reported=true;
+            }
+            var hasContent=!string.IsNullOrWhiteSpace(assistant.content);
+            var hasTools=assistant.tool_calls.Count>0;
+            return hasContent||hasTools
+                ? new(true,assistant,usage,null)
+                : new(false,null,usage,"Gemini candidate contained no text or functionCall.");
         }
         catch(Exception ex)
         {
-            return new(false,null,"Could not parse Gemini response: "+ex.Message);
+            return new(false,null,new(){model=endpoint.model},"Could not parse Gemini response: "+ex.Message);
         }
     }
 }
