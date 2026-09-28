@@ -6,6 +6,7 @@ public sealed class RouterEngine
 {
     readonly RouterStore _store;
     readonly SignalStore _signals;
+    readonly RoutingHealthReducer _healthReducer;
     readonly object _leaseLock = new();
     readonly Dictionary<string,LeaseRecord> _leasesByToken = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string,string> _tokenByRoute = new(StringComparer.OrdinalIgnoreCase);
@@ -14,6 +15,7 @@ public sealed class RouterEngine
     {
         _store=store;
         _signals=new SignalStore(store.Root);
+        _healthReducer=new RoutingHealthReducer(store,_signals);
         RestoreLeases();
         ReapExpiredLeases();
     }
@@ -395,57 +397,17 @@ public sealed class RouterEngine
 
     public void MarkHealthy(string key)
     {
-        _store.UpdateHealth(doc =>
-        {
-            if(!doc.endpoints.TryGetValue(key,out var e)) e=new HealthEntry();
-            e.state="healthy";e.reason=null;e.failures=0;e.probeFailures=0;e.retryAfter=null;e.nextProbeAt=null;
-            e.lastSuccess=DateTimeOffset.UtcNow.ToString("O");e.message=null;
-            doc.endpoints[key]=e;return 0;
-        });
+        _healthReducer.MarkHealthy(key);
     }
 
     public HealthEntry RegisterFailureKey(string key,string scope,string klass,string? message,ConnectionProfile? connection=null)
     {
-        return _store.UpdateHealth(doc =>
-        {
-            if(!doc.endpoints.TryGetValue(key,out var e)) e=new HealthEntry();
-            e.scope=scope;e.reason=klass;e.failures=Math.Max(0,e.failures)+1;e.lastFailure=DateTimeOffset.UtcNow.ToString("O");
-            e.message=Bound(message,500);
-            var hard=(klass=="auth"||klass=="permission"||klass=="configuration");
-            var quota=QuotaIntelligence.ObserveFailure(connection?.presetId,klass,message);
-            if(HasQuotaSignal(quota)) e.quota=quota;
-            var exactAt=FutureTime(quota.nextAvailableAt);
-            var explicitDelay=FailurePolicy.ParseExplicitDelay(message);
-            if(hard && explicitDelay is null && exactAt is null)
-            {
-                e.state="quarantined";e.retryAfter=null;e.nextProbeAt=null;
-            }
-            else
-            {
-                var at=exactAt ?? DateTimeOffset.UtcNow.Add(explicitDelay ?? FailurePolicy.Delay(klass,message,e.failures));
-                var atText=at.ToUniversalTime().ToString("O");
-                e.state="cooldown";e.retryAfter=atText;e.nextProbeAt=atText;
-            }
-            if(scope=="connection" && connection is not null)
-                e.configFingerprint=_store.ConnectionFingerprint(connection);
-            doc.endpoints[key]=e;return e;
-        });
+        return _healthReducer.RegisterFailure(key,scope,klass,message,connection);
     }
 
     public void RecordQuotaObservation(string key,string scope,QuotaObservation observation,ConnectionProfile? connection=null)
     {
-        if(!HasQuotaSignal(observation)) return;
-        _store.UpdateHealth(doc =>
-        {
-            if(!doc.endpoints.TryGetValue(key,out var e)) e=new HealthEntry();
-            e.scope=scope;
-            e.quota=observation;
-            e.lastProbe=observation.observedAt;
-            if(scope=="connection" && connection is not null)
-                e.configFingerprint=_store.ConnectionFingerprint(connection);
-            doc.endpoints[key]=e;
-            return 0;
-        });
+        _healthReducer.RecordQuota(key,scope,observation,connection);
     }
 
     public EndpointRoute? FindRoute(string name)
@@ -505,28 +467,7 @@ public sealed class RouterEngine
 
     void NormalizeExpiredCooldowns()
     {
-        var now=DateTimeOffset.UtcNow;
-        _store.UpdateHealth(doc =>
-        {
-            foreach(var kv in doc.endpoints.ToArray())
-            {
-                var e=kv.Value;
-                if(!string.Equals(e.state,"cooldown",StringComparison.OrdinalIgnoreCase)) continue;
-                var raw=e.retryAfter ?? e.nextProbeAt;
-                if(!DateTimeOffset.TryParse(raw,out var due) || due>now) continue;
-
-                e.state="healthy";
-                e.reason=null;
-                e.failures=0;
-                e.probeFailures=0;
-                e.retryAfter=null;
-                e.nextProbeAt=null;
-                e.message=null;
-                e.lastSuccess=now.ToString("O");
-                doc.endpoints[kv.Key]=e;
-            }
-            return 0;
-        });
+        _healthReducer.NormalizeExpiredCooldowns();
     }
 
     object RouteDiagnostic(EndpointRoute route,RoutingHealthDocument health)
