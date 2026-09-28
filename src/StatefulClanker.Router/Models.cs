@@ -163,6 +163,9 @@ public sealed class RouterRequest
     public string? endpoint { get; set; }
     public string? failureClass { get; set; }
     public string? message { get; set; }
+    public string? prompt { get; set; }
+    public string? mode { get; set; }
+    public int maxOutputTokens { get; set; } = 8;
     public string[]? allowedEndpoints { get; set; }
 }
 
