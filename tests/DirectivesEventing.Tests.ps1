@@ -63,6 +63,9 @@ try {
     # Load the runtime in this process so retrieval/compilation can be inspected without dispatching a provider.
     . (Join-Path $repo 'lib\StatefulClanker.Core.ps1')
     . (Join-Path $repo 'lib\StatefulClanker.Eventing.ps1')
+    . (Join-Path $repo 'lib\StatefulClanker.Signals.ps1')
+    . (Join-Path $repo 'lib\StatefulClanker.Manifests.ps1')
+    . (Join-Path $repo 'lib\StatefulClanker.ExecutionProjection.ps1')
     . (Join-Path $repo 'lib\StatefulClanker.Context.ps1')
     . (Join-Path $repo 'lib\StatefulClanker.Plan.ps1')
     . (Join-Path $repo 'lib\StatefulClanker.Directives.ps1')
