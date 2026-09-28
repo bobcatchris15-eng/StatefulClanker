@@ -21,3 +21,120 @@ function ConvertTo-SCSignalMap($Value,[string]$Name,[bool]$AllowNull=$false) {
     if($out.Count-eq0-and-not$AllowNull){throw "Signal $Name must be an object."}
     return $out
 }
+
+function Test-SCSignalEnvelope($Signal,[switch]$ThrowOnError) {
+    $errors=New-Object Collections.Generic.List[string]
+    if($null-eq$Signal){$errors.Add('signal is null')}
+    else{
+        foreach($name in @('id','domain','kind','createdAt','authority','scope')){
+            try{Assert-SCSignalToken ([string]$Signal.$name) $name}catch{$errors.Add($_.Exception.Message)}
+        }
+        if([int]$Signal.schemaVersion-ne1){$errors.Add('schemaVersion must be 1')}
+        if($script:SCSignalDomains-notcontains[string]$Signal.domain){$errors.Add("unsupported domain '$($Signal.domain)'")}
+        if($script:SCSignalAuthorities-notcontains[string]$Signal.authority){$errors.Add("unsupported authority '$($Signal.authority)'")}
+        $created=[datetimeoffset]::MinValue
+        if(-not[datetimeoffset]::TryParse([string]$Signal.createdAt,[ref]$created)){$errors.Add('createdAt is not a timestamp')}
+        try{$source=ConvertTo-SCSignalMap $Signal.source 'source';Assert-SCSignalToken ([string]$source.component) 'source.component'}catch{$errors.Add($_.Exception.Message)}
+        try{$subject=ConvertTo-SCSignalMap $Signal.subject 'subject';Assert-SCSignalToken ([string]$subject.type) 'subject.type';Assert-SCSignalToken ([string]$subject.id) 'subject.id'}catch{$errors.Add($_.Exception.Message)}
+        $addresses=@($Signal.audience)
+        if($addresses.Count-eq0){$errors.Add('audience must contain at least one address')}
+        foreach($a in $addresses){
+            try{$address=ConvertTo-SCSignalMap $a 'audience';Assert-SCSignalToken ([string]$address.type) 'audience.type';Assert-SCSignalToken ([string]$address.id) 'audience.id'}catch{$errors.Add($_.Exception.Message)}
+        }
+        try{$payload=(ConvertTo-SCJson $Signal.payload 20);if($payload.Length-gt$script:SCSignalPayloadMaxChars){$errors.Add('payload exceeds signal size limit')}}catch{$errors.Add('payload is not serializable')}
+    }
+    if($errors.Count-gt0-and$ThrowOnError){throw ("Invalid signal envelope: "+($errors-join'; '))}
+    return [pscustomobject]@{valid=($errors.Count-eq0);errors=@($errors)}
+}
+
+function New-SCSignalEnvelope {
+    param(
+        [Parameter(Mandatory=$true)][string]$Domain,
+        [Parameter(Mandatory=$true)][string]$Kind,
+        [Parameter(Mandatory=$true)]$Source,
+        [Parameter(Mandatory=$true)]$Subject,
+        [Parameter(Mandatory=$true)]$Audience,
+        [Parameter(Mandatory=$true)][string]$Authority,
+        [Parameter(Mandatory=$true)][string]$Scope,
+        $Freshness=$null,
+        $Payload=$null,
+        [string]$Id=$null
+    )
+    $signal=[pscustomobject][ordered]@{
+        schemaVersion=1
+        id=if($Id){$Id}else{New-SCId 'sig'}
+        domain=$Domain
+        kind=$Kind
+        createdAt=[datetimeoffset]::UtcNow.ToString('o')
+        source=ConvertTo-SCSignalMap $Source 'source'
+        subject=ConvertTo-SCSignalMap $Subject 'subject'
+        audience=@($Audience|ForEach-Object{ConvertTo-SCSignalMap $_ 'audience'})
+        authority=$Authority
+        scope=$Scope
+        freshness=ConvertTo-SCSignalMap $Freshness 'freshness' $true
+        payload=if($null-eq$Payload){[ordered]@{}}else{ConvertTo-SCSignalMap $Payload 'payload' $true}
+    }
+    Test-SCSignalEnvelope $signal -ThrowOnError|Out-Null
+    return $signal
+}
+
+function Write-SCSignal($Signal) {
+    Assert-SCInitialized
+    Test-SCSignalEnvelope $Signal -ThrowOnError|Out-Null
+    $when=[datetimeoffset]::Parse([string]$Signal.createdAt)
+    $path=Join-Path (Get-SCSignalDirectory ([string]$Signal.domain)) ($when.UtcDateTime.ToString('yyyy-MM-dd')+'.jsonl')
+    $line=(ConvertTo-SCJson $Signal 24)-replace'[\r\n]+',''
+    Invoke-SCLocked { Add-SCTextLine $path $line }|Out-Null
+    return $Signal
+}
+
+function Read-SCSignals([string]$Domain='execution',[int]$Limit=200) {
+    $dir=Get-SCSignalDirectory $Domain
+    if(-not(Test-Path -LiteralPath $dir -PathType Container)){return @()}
+    $out=New-Object Collections.Generic.List[object]
+    foreach($file in @(Get-ChildItem -LiteralPath $dir -Filter '*.jsonl' -File|Sort-Object Name -Descending)){
+        $lines=@(Get-Content -LiteralPath $file.FullName|Where-Object{-not[string]::IsNullOrWhiteSpace($_)})
+        for($i=$lines.Count-1;$i-ge0;$i--){
+            try{$out.Add(($lines[$i]|ConvertFrom-Json))}catch{}
+            if($Limit-gt0-and$out.Count-ge$Limit){return @($out)}
+        }
+    }
+    return @($out)
+}
+
+function Get-SCSignalsForAudience {
+    param([string]$AudienceType,[string]$AudienceId,[string]$Qualifier=$null,[string]$Domain='execution',[int]$Limit=200)
+    $matches=@()
+    foreach($signal in @(Read-SCSignals $Domain $Limit)){
+        foreach($address in @($signal.audience)){
+            if([string]$address.type-ne$AudienceType-or[string]$address.id-ne$AudienceId){continue}
+            if($Qualifier-and[string]$address.qualifier-ne$Qualifier){continue}
+            $matches+=$signal
+            break
+        }
+    }
+    return @($matches)
+}
+
+function Test-SCSignalFreshness($Signal,$Task=$null) {
+    $reasons=New-Object Collections.Generic.List[string]
+    $freshness=if($Signal.PSObject.Properties['freshness']){$Signal.freshness}else{$null}
+    if($null-eq$freshness){return [pscustomobject]@{fresh=$true;reasons=@()}}
+    if($freshness.PSObject.Properties['expiresAt']-and$freshness.expiresAt){
+        $expires=[datetimeoffset]::MinValue
+        if(-not[datetimeoffset]::TryParse([string]$freshness.expiresAt,[ref]$expires)){$reasons.Add('invalid expiry')}
+        elseif($expires-le[datetimeoffset]::UtcNow){$reasons.Add('expired')}
+    }
+    if($freshness.PSObject.Properties['taskDefinitionHash']-and$freshness.taskDefinitionHash){
+        if($null-eq$Task-and[string]$Signal.subject.type-eq'task'){try{$Task=Get-SCTask ([string]$Signal.subject.id)}catch{}}
+        if($null-eq$Task){$reasons.Add('task unavailable for definition freshness')}
+        elseif((Get-SCTaskDefinitionHash $Task)-ne[string]$freshness.taskDefinitionHash){$reasons.Add('task definition changed')}
+    }
+    if($freshness.PSObject.Properties['fileHashes']-and$freshness.fileHashes){
+        foreach($p in $freshness.fileHashes.PSObject.Properties){
+            $full=Join-Path (Get-SCRoot) ([string]$p.Name)
+            if((Get-SCFileHashValue $full)-ne[string]$p.Value){$reasons.Add("file changed: $($p.Name)")}
+        }
+    }
+    return [pscustomobject]@{fresh=($reasons.Count-eq0);reasons=@($reasons)}
+}
