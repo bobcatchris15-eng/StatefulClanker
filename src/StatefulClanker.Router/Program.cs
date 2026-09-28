@@ -18,7 +18,7 @@ internal static class Program
         var request=ParseRequest(args);
         if(request is null)
         {
-            Console.Error.WriteLine("Usage: StatefulClanker.Router <ping|snapshot|acquire|release|heartbeat|success|failure> [options]");
+            Console.Error.WriteLine("Usage: StatefulClanker.Router <ping|snapshot|acquire|release|heartbeat|success|failure|test-endpoint> [options]");
             return 2;
         }
 
@@ -62,7 +62,7 @@ internal static class Program
     {
         if(args.Length==0) return new RouterRequest{op="snapshot"};
         var op=args[0].ToLowerInvariant();
-        if(op is not ("ping" or "snapshot" or "acquire" or "release" or "heartbeat" or "success" or "failure")) return null;
+        if(op is not ("ping" or "snapshot" or "acquire" or "release" or "heartbeat" or "success" or "failure" or "test-endpoint")) return null;
         var map=new Dictionary<string,string?>(StringComparer.OrdinalIgnoreCase);
         for(var i=1;i<args.Length;i++)
         {
@@ -84,6 +84,9 @@ internal static class Program
             endpoint=Get(map,"endpoint"),
             failureClass=Get(map,"class"),
             message=Get(map,"message"),
+            prompt=Get(map,"prompt"),
+            mode=Get(map,"mode"),
+            maxOutputTokens=int.TryParse(Get(map,"max-output-tokens"),out var maxOut)?Math.Clamp(maxOut,1,64):8,
             allowedEndpoints=ParseList(Get(map,"endpoints"))
         };
     }
