@@ -7,6 +7,7 @@ $repo=Split-Path -Parent $PSScriptRoot
 
 function Assert-True([bool]$Condition,[string]$Message){if(-not$Condition){throw "LIFECYCLE TEST FAILED: $Message"}}
 function Get-SCConfig { return [pscustomobject]@{validatorEnabled=$true;maxTaskAttempts=5} }
+function Get-SCState { return [pscustomobject]@{activePlanId=$null;planApproved=$true} }
 function Get-SCTask([string]$Id) { return $script:task }
 function Save-SCTask($Task) { $script:task=$Task }
 function Save-SCProposal($Proposal) { $script:proposal=$Proposal }
