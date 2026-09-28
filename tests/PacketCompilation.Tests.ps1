@@ -82,6 +82,28 @@ try{
     $faultsLog=Get-SCPath 'telemetry/context-faults.jsonl'
     Assert-True (Test-Path -LiteralPath $faultsLog) 'context-faults.jsonl was not written.'
     Assert-True ((Get-Content -Raw -LiteralPath $faultsLog) -match 'RPK host unreachable') 'Fault was not appended to the context-faults log.'
+
+    Write-Host '  PACKET 4: execution projection changes refresh retry packet without changing task definition'
+    function Search-SCRpkLessons([string]$Text,[string[]]$Paths,[int]$Limit) { return @() }
+    function Get-SCRpkNeighbors([string]$Path,[int]$Depth,[int]$Limit) { return $null }
+    $task4=New-SCTestTask 'task-continuation'
+    $before=New-SCCompilation $task4
+    Publish-SCExecutionSignal -Kind validator_rejection -Task $task4 -Component validator -Scope task -Authority corrective -Qualifier next_attempt -SourceExtra @{validationId='validation-retry-1';compilationId=$before.id} -Payload @{reasonCode='ACCEPTANCE_FAILED';summary='expected artifact still missing';evidenceRefs=@('validation:validation-retry-1')}|Out-Null
+    $after=New-SCCompilation $task4
+    Assert-True ([string]$before.readSet.taskDefinitionHash-eq[string]$after.readSet.taskDefinitionHash) 'Retry evidence unexpectedly changed the task definition hash.'
+    Assert-True ([string]$before.readSet.executionProjectionHash-ne[string]$after.readSet.executionProjectionHash) 'Corrective signal did not change execution projection hash.'
+    Assert-True ([string]$before.inputFingerprint-ne[string]$after.inputFingerprint) 'Corrective signal did not refresh the worker input fingerprint.'
+    Assert-True ([string]$after.ir.task.latestFeedback.reasonCode-eq'ACCEPTANCE_FAILED') 'latestFeedback compatibility alias was not derived from corrective projection.'
+    Assert-True ([string]$after.ir.execution.continuation.latestCorrection.reasonCode-eq'ACCEPTANCE_FAILED') 'Continuation did not carry latest correction.'
+    Assert-True (@($after.ir.execution.continuation.evidenceRefs)-contains'validation:validation-retry-1') 'Continuation lost validator evidence ref.'
+    $continuationText=New-SCWorkerContinuationMessage $after 'validator-rejection'
+    Assert-True ($continuationText-match'ACCEPTANCE_FAILED') 'Projection-backed continuation text omitted the correction reason.'
+    Assert-True ((New-SCWorkerPrompt $after)-match[regex]::Escape([string]$after.ir.execution.projectionHash)) 'Cold worker prompt did not contain the same execution projection used by retry continuation.'
+
+    $task4.instruction='materially changed task definition'
+    Save-SCTask $task4
+    $staleProjection=Get-SCExecutionProjection $task4
+    Assert-True (@($staleProjection.correctiveFeedback).Count-eq0) 'Correction survived a task-definition change despite signal freshness guard.'
 }finally{
     Pop-Location
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
