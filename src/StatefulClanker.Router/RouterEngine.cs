@@ -5,6 +5,7 @@ namespace StatefulClanker.Router;
 public sealed class RouterEngine
 {
     readonly RouterStore _store;
+    readonly SignalStore _signals;
     readonly object _leaseLock = new();
     readonly Dictionary<string,LeaseRecord> _leasesByToken = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string,string> _tokenByRoute = new(StringComparer.OrdinalIgnoreCase);
@@ -12,6 +13,7 @@ public sealed class RouterEngine
     public RouterEngine(RouterStore store)
     {
         _store=store;
+        _signals=new SignalStore(store.Root);
         RestoreLeases();
         ReapExpiredLeases();
     }
@@ -52,14 +54,18 @@ public sealed class RouterEngine
                 string.Equals(a,r.RouteName,StringComparison.OrdinalIgnoreCase)||
                 string.Equals(a,StripPoolPrefix(r.RouteName),StringComparison.OrdinalIgnoreCase))).ToList();
             if(configured.Count==0)
+            {
+                EmitRoutingSignal("route_unavailable",null,"request",new(){{"reason","no_allowed_endpoints"},{"configuredEndpoints",configuredAll.Count}},"router","scheduler");
                 return RouterResponse.Fail(
                     "No allowed endpoints for this project.",
                     new { reason="no_allowed_endpoints",configuredEndpoints=configuredAll.Count,allowlistApplied=true });
+            }
         }
 
         if(!string.IsNullOrWhiteSpace(preferred) && allowSet.Length>0 &&
            !allowSet.Any(a=>string.Equals(a,preferred,StringComparison.OrdinalIgnoreCase)))
         {
+            EmitRoutingSignal("route_unavailable",null,"request",new(){{"reason","preferred_not_allowed"},{"preferred",preferred}},"router","scheduler");
             return RouterResponse.Fail(
                 $"Preferred endpoint '{preferred}' is outside the project's allowed endpoints.",
                 new { reason="preferred_not_allowed",allowlistApplied=true });
@@ -81,6 +87,7 @@ public sealed class RouterEngine
                 : (string.IsNullOrWhiteSpace(preferredConnection)
                     ? "All eligible endpoints are temporarily unavailable."
                     : $"All eligible endpoints on connection '{preferredConnection}' are temporarily unavailable.");
+            EmitRoutingSignal("route_unavailable",null,"request",new(){{"reason",reason},{"connection",preferredConnection},{"requireTools",requireTools},{"eligibleEndpoints",eligible.Count}},"router","scheduler");
             return RouterResponse.Fail(
                 error,
                 new
@@ -107,6 +114,7 @@ public sealed class RouterEngine
                 var preferredRoute=eligible.FirstOrDefault(r=>
                     string.Equals(r.RouteName,preferred,StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(r.CatalogId,preferred,StringComparison.OrdinalIgnoreCase));
+                EmitRoutingSignal("route_unavailable",preferredRoute,"endpoint",new(){{"reason",preferredRoute is null ? "preferred_not_eligible" : IsAtCapacity(preferredRoute) ? "preferred_at_capacity" : "preferred_unhealthy"},{"preferred",preferred}},"router","scheduler");
                 return RouterResponse.Fail(
                     $"Preferred endpoint '{preferred}' is not currently available.",
                     new
@@ -130,6 +138,8 @@ public sealed class RouterEngine
         }
 
         if(selected is null)
+        {
+            EmitRoutingSignal("route_unavailable",null,"request",new(){{"reason","all_candidates_at_capacity"},{"candidateCount",routes.Count}},"router","scheduler");
             return RouterResponse.Fail(
                 "All healthy eligible endpoints are at lease capacity.",
                 new
@@ -138,6 +148,7 @@ public sealed class RouterEngine
                     retryAfterSeconds=2,
                     candidates=routes.Select(r=>RouteDiagnostic(r,health)).ToArray()
                 });
+        }
 
         var lease=new LeaseRecord
         {
@@ -158,6 +169,7 @@ public sealed class RouterEngine
             _tokenByRoute[lease.route]=lease.token;
             PersistLeasesLocked();
         }
+        EmitRoutingSignal("route_acquired",selected,"endpoint",new(){{"connection",lease.connection},{"model",lease.model},{"sessionId",sessionId},{"expiresAt",lease.expiresAt}},"router","scheduler");
 
         return RouterResponse.Ok(new
         {
@@ -214,6 +226,7 @@ public sealed class RouterEngine
         MarkHealthy(route.RouteName);
         MarkHealthy("connection:"+route.Endpoint.connection);
         if(!string.IsNullOrWhiteSpace(route.Service)) MarkHealthy("service:"+route.Service);
+        EmitRoutingSignal("route_succeeded",route,"endpoint",new(){{"connection",route.Endpoint.connection},{"model",route.Endpoint.model}},"router","health");
         if(lease is not null) Release(lease.token);
         return RouterResponse.Ok(new { endpoint=route.RouteName,state="healthy" });
     }
@@ -227,12 +240,14 @@ public sealed class RouterEngine
         var scope=FailurePolicy.ScopeFor(klass);
         if(scope=="request")
         {
+            EmitRoutingSignal("route_failed",route,scope,new(){{"failureClass",klass},{"message",Bound(message,500)},{"healthChanged",false}},"router","health");
             if(lease is not null) Release(lease.token);
             return RouterResponse.Ok(new { endpoint=route.RouteName,failureClass=klass,scope,healthChanged=false,failoverAllowed=FailurePolicy.CanFailover(klass) });
         }
 
         var key=scope=="connection" ? "connection:"+route.Endpoint.connection : route.RouteName;
         var entry=RegisterFailureKey(key,scope,klass,message,route.Connection);
+        EmitRoutingSignal("route_failed",route,scope,new(){{"failureClass",klass},{"message",Bound(message,500)},{"healthKey",key},{"healthChanged",true},{"retryAfter",entry.retryAfter}},"router","health");
 
         if(scope=="connection" && (klass=="timeout" || klass=="server_error") && !string.IsNullOrWhiteSpace(route.Service))
             MaybeDegradeService(route.Service!,route.Endpoint.connection,klass,message);
@@ -460,6 +475,26 @@ public sealed class RouterEngine
         string.Equals(model,"kilo-auto/free",StringComparison.OrdinalIgnoreCase) ||
         string.Equals(model,"openrouter/free",StringComparison.OrdinalIgnoreCase) ||
         string.Equals(model,"openrouter/auto",StringComparison.OrdinalIgnoreCase);
+
+    void EmitRoutingSignal(string kind,EndpointRoute? route,string scope,Dictionary<string,object?> payload,string subjectType,string subjectId)
+    {
+        try
+        {
+            var id=route?.RouteName ?? subjectId;
+            var signal=SignalEnvelope.Routing(kind,subjectType,id,"router",subjectId,scope,payload);
+            if(route is not null)
+            {
+                signal.source["endpoint"]=route.RouteName;
+                signal.source["connection"]=route.Endpoint.connection;
+                signal.source["model"]=route.Endpoint.model;
+            }
+            _signals.Append(signal);
+        }
+        catch
+        {
+            // Shadow stage: signal persistence must not alter routing behavior.
+        }
+    }
 
     static string? Bound(string? text,int max)
     {
