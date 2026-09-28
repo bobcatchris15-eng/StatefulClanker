@@ -11,6 +11,7 @@ try{
     Set-SCRoots $temp $temp
     New-Item -ItemType Directory -Force -Path (Join-Path $temp '.statefulclanker')|Out-Null
     Write-SCJson (Get-SCPath 'state.json') ([ordered]@{schemaVersion=4;projectId='projection-test';revision=0;directionRevision=0})
+    Write-SCJson (Get-SCPath 'config.json') ([ordered]@{dependencyResultBudgetChars=8000})
     function Add-SCEvent { param($Type,$Message,$Data) }
 
     $up=[pscustomobject][ordered]@{id='up';title='upstream';instruction='change';status='complete';stateRevision=0;controlRevision=0;acceptance=@();dependsOn=@();relations=@();retrieval=@();evidence=@();provider=$null;role='worker';humanGate=$false;latestCompletionManifestId='completion-up'}
