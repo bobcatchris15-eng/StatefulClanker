@@ -122,7 +122,25 @@ try {
     $diag=Get-SCWorkerCandidatePreflight $diagId $diagnosis
     Assert-True ([bool]$diag.material) 'Explicit diagnosis output kind incorrectly required a worktree mutation.'
 
-    Write-Host 'PASS: durable worker sessions, migration-safe route preferences, terminal cleanup, catalog snapshots, pre-validator materiality gate, and restorable API-boundary Git checkpoints.'
+    Write-Host '  WS 10: refreshed compilation preserves transcript and injects continuation once'
+    $refreshTask=[pscustomobject]@{id='refresh-task';title='refresh';role='worker';outputKind='change'}
+    $refreshRegistry=@([pscustomobject]@{wireName='finish';capability='builtin.finish'})
+    $refreshId='wsess-refresh'
+    $oldComp=[pscustomobject]@{id='compile-old';inputFingerprint='projection-old'}
+    [void](New-SCWorkerSession $refreshId $refreshTask $oldComp 'OLD COMPILED PACKET' 'native' $refreshRegistry)
+    Add-SCWorkerSessionMessage $refreshId ([ordered]@{role='assistant';content='existing correct work and reasoning'})
+    $newComp=[pscustomobject]@{id='compile-new';inputFingerprint='projection-new'}
+    $projectionContinuation='STATEFULCLANKER CONTINUATION UPDATE: ACCEPTANCE_FAILED validation:retry-1'
+    $refreshed=Sync-SCWorkerSessionContext $refreshId $refreshTask $newComp 'NEW COMPILED PACKET projection-new' 'native' $refreshRegistry $projectionContinuation
+    Assert-True ([string]$refreshed.inputFingerprint-eq'projection-new') 'Session fingerprint did not advance to refreshed projection.'
+    Assert-True (@($refreshed.messages|Where-Object{[string]$_.content-eq'existing correct work and reasoning'}).Count-eq1) 'Session refresh discarded existing transcript.'
+    Assert-True (@($refreshed.messages|Where-Object{[string]$_.content-match'^REFRESHED COMPILED TASK CONTEXT'}).Count-eq1) 'Refreshed compiled packet was not injected exactly once.'
+    Assert-True (@($refreshed.messages|Where-Object{[string]$_.content-eq$projectionContinuation}).Count-eq1) 'Projection-backed continuation was not injected exactly once.'
+    $again=Sync-SCWorkerSessionContext $refreshId $refreshTask $newComp 'NEW COMPILED PACKET projection-new' 'native' $refreshRegistry $projectionContinuation
+    Assert-True (@($again.messages|Where-Object{[string]$_.content-match'^REFRESHED COMPILED TASK CONTEXT'}).Count-eq1) 'Unchanged projection duplicated refreshed packet.'
+    Assert-True (@($again.messages|Where-Object{[string]$_.content-eq$projectionContinuation}).Count-eq1) 'Unchanged projection duplicated continuation message.'
+
+    Write-Host 'PASS: durable worker sessions, migration-safe route preferences, terminal cleanup, catalog snapshots, pre-validator materiality gate, restorable checkpoints, and projection-backed refresh.'
 }
 finally {
     Pop-Location
