@@ -200,6 +200,7 @@ function Complete-SCMergedTask([string]$TaskId) {
     if([string]$task.status-eq'complete' -and [string]$proposal.status-eq'committed'){return}
     if([string]$proposal.status-ne'committed'){$proposal.status='committed';$proposal.committedAt=[datetimeoffset]::UtcNow.ToString('o');Write-SCJson (Get-SCPath ("proposals/{0}.json"-f$proposal.id)) $proposal}
     $task.status='complete';$task.blockReason=$null;Save-SCTask $task
+    Write-SCTaskCompletionManifest $task $proposal 'validated-merged'|Out-Null
     Add-SCEvent 'state.committed' "Committed completion proposal $($proposal.id) after merge." @{taskId=$TaskId;proposalId=$proposal.id}
     Add-SCEvent 'task.completed' "Completed $TaskId after validation and merge." @{taskId=$TaskId;proposalId=$proposal.id;runId=$proposal.evidence.runId}
     Add-SCProgressRecord $task $null $true 'merged-committed' 'Validated worktree merged into the project.'|Out-Null
