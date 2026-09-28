@@ -12,6 +12,7 @@ function Get-SCExecutionProjection {
     $corrective=@()
     foreach($signal in @($signals|Where-Object{[string]$_.authority-eq'corrective'})){
         $payload=Get-SCSignalValue $signal 'payload'
+        $source=Get-SCSignalValue $signal 'source'
         $corrective+=,[ordered]@{
             signalId=[string]$signal.id
             kind=[string]$signal.kind
@@ -20,6 +21,9 @@ function Get-SCExecutionProjection {
             summary=Get-SCSignalValue $payload 'summary'
             requests=@(Get-SCSignalValue $payload 'requests')
             evidenceRefs=@(Get-SCSignalValue $payload 'evidenceRefs')
+            runId=Get-SCSignalValue $source 'runId'
+            validationId=Get-SCSignalValue $source 'validationId'
+            compilationId=Get-SCSignalValue $source 'compilationId'
         }
     }
     if($corrective.Count-gt6){$corrective=@($corrective|Select-Object -Last 6)}
@@ -105,6 +109,25 @@ function Get-SCExecutionProjection {
 
     $lastRun=@($signals|Where-Object{[string]$_.kind-in@('worker_run_completed','worker_run_failed')}|Select-Object -Last 1)
     $lastValidation=@($signals|Where-Object{[string]$_.kind-in@('validation_passed','validator_rejection','validation_error')}|Select-Object -Last 1)
+    $latestCorrection=if($corrective.Count-gt0){$corrective[-1]}else{$null}
+    $continuationEvidence=@()
+    foreach($item in @($corrective|Select-Object -Last 3)){
+        $continuationEvidence+=@($item.evidenceRefs)
+    }
+    foreach($item in @($prior|Select-Object -Last 4)){
+        $continuationEvidence+=@($item.evidenceRefs)
+    }
+    $continuationEvidence=@($continuationEvidence|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|Select-Object -Unique)
+    $latestRunPayload=if($lastRun.Count){Get-SCSignalValue $lastRun[0] 'payload'}else{$null}
+    $latestValidationSource=if($lastValidation.Count){Get-SCSignalValue $lastValidation[0] 'source'}else{$null}
+    $continuation=[ordered]@{
+        latestCorrection=$latestCorrection
+        latestRunRef=if($latestRunPayload-and(Get-SCSignalValue $latestRunPayload 'runId')){"run:"+[string](Get-SCSignalValue $latestRunPayload 'runId')}else{$null}
+        latestValidationRef=if($latestValidationSource-and(Get-SCSignalValue $latestValidationSource 'validationId')){"validation:"+[string](Get-SCSignalValue $latestValidationSource 'validationId')}else{$null}
+        recentAttemptSignalIds=@($attemptSignals|Select-Object -Last 4|ForEach-Object{[string]$_.id})
+        evidenceRefs=$continuationEvidence
+        requiresCorrection=($null-ne$latestCorrection)
+    }
     $semantic=[ordered]@{
         taskId=[string]$Task.id
         taskDefinitionHash=Get-SCTaskDefinitionHash $Task
@@ -119,6 +142,7 @@ function Get-SCExecutionProjection {
         }
         correctiveFeedback=@($corrective)
         priorAttemptKnowledge=@($prior)
+        continuation=$continuation
         dependencyKnowledge=@($dependencyKnowledge)
         retrievalHealth=$retrievalHealth
     }
