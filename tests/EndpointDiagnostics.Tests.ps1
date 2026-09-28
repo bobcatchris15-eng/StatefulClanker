@@ -83,6 +83,6 @@ try {
 }finally{
     $env:SC_ROUTER_ROOT=$oldRoot
     if($daemon-and-not$daemon.HasExited){Stop-Process -Id $daemon.Id -Force -ErrorAction SilentlyContinue}
-    if($job){Wait-Job $job -Timeout 2|Out-Null;Remove-Job $job -Force -ErrorAction SilentlyContinue}
+    if($job){Stop-Job $job -ErrorAction SilentlyContinue;Remove-Job $job -Force -ErrorAction SilentlyContinue}
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
