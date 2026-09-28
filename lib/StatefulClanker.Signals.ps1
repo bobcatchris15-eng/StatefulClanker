@@ -26,9 +26,10 @@ function Test-SCSignalEnvelope($Signal,[switch]$ThrowOnError) {
     $errors=New-Object Collections.Generic.List[string]
     if($null-eq$Signal){$errors.Add('signal is null')}
     else{
-        foreach($name in @('id','domain','kind','createdAt','authority','scope')){
+        foreach($name in @('id','domain','kind','authority','scope')){
             try{Assert-SCSignalToken ([string]$Signal.$name) $name}catch{$errors.Add($_.Exception.Message)}
         }
+        if([string]::IsNullOrWhiteSpace([string]$Signal.createdAt)){$errors.Add('createdAt is required')}
         if([int]$Signal.schemaVersion-ne1){$errors.Add('schemaVersion must be 1')}
         if($script:SCSignalDomains-notcontains[string]$Signal.domain){$errors.Add("unsupported domain '$($Signal.domain)'")}
         if($script:SCSignalAuthorities-notcontains[string]$Signal.authority){$errors.Add("unsupported authority '$($Signal.authority)'")}
