@@ -55,6 +55,7 @@ try {
     Set-SCWorkerCandidateClaim $sessionId ([pscustomobject]@{summary='changed artifact';expectedArtifacts=@('artifact.txt');verification=@('manual test receipt')}) $null
     $changed=Get-SCWorkerCandidatePreflight $sessionId $task
     Assert-True ([bool]$changed.material) "Material candidate was rejected: $($changed.reason)"
+    Assert-True (@($changed.changedFiles)-contains'artifact.txt') 'Candidate preflight did not capture deterministic changed-file set.'
     Assert-True ([bool]$changed.candidateCheckpointId) 'Material candidate did not get a checkpoint.'
     $session=Get-SCWorkerSession $sessionId
     Assert-True ($session.candidateNumber-eq2) "Expected candidateNumber=2, got $($session.candidateNumber)."
