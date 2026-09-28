@@ -91,6 +91,9 @@ Use connection_catalog to inspect live discovered provider catalogs and target_p
 '@
 }
 
+$routerClientPath=Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\StatefulClanker.RouterClient.ps1'
+if(Test-Path -LiteralPath $routerClientPath -PathType Leaf){. $routerClientPath}
+
 function Get-McpCurrentDirectives([string]$Project) {
     $dir=Join-Path (Get-McpStateDir $Project) 'directives\current'
     if(-not(Test-Path -LiteralPath $dir)){return @()}
@@ -407,6 +410,7 @@ function New-SCExtendedTools {
         @{name='task_repair';description='CONTROL-PLANE RECOVERY: repair a stalled non-human-gated task definition/graph metadata after investigation, reset exhausted failure counters, and return it to readiness. Requires a reason, concrete evidence, and an explicit patch. Does not change Human Directives or Intent.';inputSchema=@{type='object';properties=@{project=@{type='string'};taskId=@{type='string'};reason=@{type='string'};evidence=@{type='array';items=@{type='string'}};patch=@{type='object';description='Supported fields include title, instruction, size, outputKind, acceptance, checks, semanticAcceptance, dependsOn, relations, retrieval, evidence, provider, role, sources, intentRefs, capabilityProfile, toolPolicy, implications, proofObligations, parentTaskId, childTaskIds.'}};required=@('taskId','reason','evidence','patch')}},
         @{name='task_recover_complete';description='LAST-RESORT CONTROL-PLANE RECOVERY: mark a stalled non-human-gated task complete when concrete current evidence proves the work already satisfies current Human Directives and reconciled Intent despite a broken/repeated review loop. Audited as a review-gate bypass; never use for unresolved human intent.';inputSchema=@{type='object';properties=@{project=@{type='string'};taskId=@{type='string'};reason=@{type='string'};evidence=@{type='array';items=@{type='string'}}};required=@('taskId','reason','evidence')}},
         @{name='connection_catalog';description='Read sanitized machine inference connections and their last discovered model catalogs. Secrets and custom headers are never returned. Use this before maintaining the machine endpoint catalog.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string';description='Optional connection name to inspect.'}}}},
+        @{name='test_endpoint';description='Run one real minimal inference against one exact machine endpoint through the production router adapter path. Returns sanitized request shape, response evidence, adapter source, and a diagnosis suitable for adapter repair. Never exposes credential/header values.';inputSchema=@{type='object';properties=@{project=@{type='string'};endpoint=@{type='string';description='Exact endpoint id/name from target_pool_list, e.g. pool:connection::model.'};mode=@{type='string';enum=@('minimal','tools')};prompt=@{type='string';description='Optional bounded diagnostic prompt; default asks for CLANKER_OK.'};maxOutputTokens=@{type='integer';minimum=1;maximum=64}};required=@('endpoint')}},
         @{name='target_pool_list';description='Read the machine endpoint catalog used by automatic health-aware round-robin routing.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
         @{name='target_pool_upsert';description='Add or update one discovered connection/model in the machine endpoint catalog. Record a short rationale and research date when Clanker has checked current suitability/free status.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'};displayName=@{type='string'};enabled=@{type='boolean'};workhorse=@{type='boolean'};free=@{type='boolean'};supportsTools=@{type='boolean'};contextLength=@{type='integer';minimum=1};toolMode=@{type='string';enum=@('native','text')};rationale=@{type='string'};researchedAt=@{type='string';description='ISO-8601 timestamp; defaults to now when rationale is supplied.'};source=@{type='string';description='Defaults to clanker.'}};required=@('connection','model')}},
         @{name='target_pool_remove';description='Remove one connection/model from the machine endpoint catalog without altering the machine connection or discovered catalog.';inputSchema=@{type='object';properties=@{project=@{type='string'};connection=@{type='string'};model=@{type='string'}};required=@('connection','model')}},
@@ -495,6 +499,17 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
         'connection_catalog' {
             $connection=Get-McpArgOptional $Arguments 'connection'
             return New-McpTextResult ([ordered]@{connections=@(Get-McpConnectionCatalog $connection);note='Machine-local discovery metadata only; no credentials or custom headers are exposed.'})
+        }
+        'test_endpoint' {
+            if(-not(Get-Command Invoke-SCCompiledRouterCommand -ErrorAction SilentlyContinue)){throw 'Compiled router client is unavailable to the MCP host.'}
+            $endpoint=Get-McpArgRequired $Arguments 'endpoint'
+            $args=@('test-endpoint','--endpoint',$endpoint)
+            $mode=Get-McpArgOptional $Arguments 'mode';if($mode){$args+=@('--mode',$mode)}
+            $prompt=Get-McpArgOptional $Arguments 'prompt';if($prompt){$args+=@('--prompt',$prompt)}
+            if($Arguments-and$Arguments.PSObject.Properties['maxOutputTokens']-and$null-ne$Arguments.maxOutputTokens){$args+=@('--max-output-tokens',[string][int]$Arguments.maxOutputTokens)}
+            $response=Invoke-SCCompiledRouterCommand $args
+            if(-not[bool]$response.ok){throw ([string]$response.error)}
+            return New-McpTextResult $response.data
         }
         'target_pool_list' {
             $pool=Get-McpTargetPool $project
