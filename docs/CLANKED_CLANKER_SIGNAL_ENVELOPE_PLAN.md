@@ -4,9 +4,9 @@
 
 Branch: `clankedClanker`
 
-Purpose: evolve StatefulClanker's existing durable state, context compilation, worker receipts, validation/recovery records, and compiled-router health machinery into a common **addressed signal** architecture without replacing the authority hierarchy, worktree isolation, freshness gates, candidate preflight, or compiled router.
+Purpose: make addressed signals a **primary architectural mechanism** across worker execution and machine inference routing. Preserve the authority hierarchy, worktree isolation, freshness gates, and deterministic acceptance, but freely restructure modules whose present boundaries make the signal architecture awkward or duplicate responsibility.
 
-This is an implementation plan, not a requirement to land every speculative cooperation feature. The migration is deliberately staged so each side of the machinery can run old and new paths in parallel until equivalence is proven.
+This is not a compatibility-preservation exercise. Compatibility shims are temporary migration tools. The target branch should finish with clean ownership boundaries even when that means moving code, deleting wrapper layers, or replacing the current compiled-router/PowerShell split.
 
 ---
 
@@ -55,7 +55,7 @@ This branch must not weaken:
 4. Existing worker filesystem guard and deny-wins capability layering.
 5. Task-definition hashing and dispatch/commit freshness gates.
 6. Candidate preflight and deterministic acceptance.
-7. Compiled router ownership of endpoint selection, leases, health, cooldowns, probes, and round-robin state.
+7. Machine-local ownership of endpoint selection, leases, health, cooldowns, probes, credentials, and routing state. The current router process may be substantially restructured to make that ownership coherent.
 8. Asynchronous workers: no synchronous worker chat, no shared write-lock protocol, no peer worktree browsing.
 9. Existing receipts/events remain available for diagnostics during migration.
 
@@ -212,6 +212,111 @@ For every seam:
 5. move one consumer to the projection;
 6. keep compatibility fallback;
 7. remove fallback only after tests and real runs show equivalence.
+
+---
+
+
+## 4.1 Target architecture — signals are the spine, not an add-on
+
+The end state should be allowed to look materially different from current main.
+
+In particular, split responsibilities explicitly:
+
+```
+PROJECT / EXECUTION PLANE
+  task state
+  worker lifecycle
+  validation
+  completion manifests
+  execution signals
+  execution reducer
+  WorkerPacket compiler
+
+MACHINE INFERENCE PLANE
+  connection catalog + protected credentials
+  provider adapter registry
+  inference gateway
+  endpoint diagnostic service
+  routing signals
+  routing health reducer
+  lease/capacity scheduler
+```
+
+The PowerShell worker runtime should not remain the long-term owner of provider wire protocols merely because it owns the worker loop today.
+
+### Router/inference target
+
+Refactor the current compiled router into a machine-local inference service with clear internal components, e.g.:
+
+```
+StatefulClanker.Router
+  Signals/
+    SignalEnvelope.cs
+    SignalStore.cs
+  Routing/
+    RouterEngine.cs
+    RoutingHealthReducer.cs
+    LeaseManager.cs
+    FailurePolicy.cs
+  Inference/
+    InferenceGateway.cs
+    InferenceRequest.cs
+    InferenceResult.cs
+    ProviderAdapterRegistry.cs
+    Adapters/
+      OpenAiChatAdapter.cs
+      AnthropicMessagesAdapter.cs
+      GeminiNativeAdapter.cs
+      ...
+  Diagnostics/
+    EndpointTestService.cs
+    DiagnosticSanitizer.cs
+  Catalog/
+    ConnectionStore / endpoint catalog / probe catalog
+```
+
+Names are illustrative. The ownership boundary is not:
+
+- routing in C#;
+- request serialization in PowerShell;
+- provider diagnosis half in each.
+
+The ownership boundary should be:
+
+> the machine inference plane owns endpoint selection, credentials, provider adapters, transport, response normalization, quota observations, and routing health.
+
+PowerShell owns task/worker orchestration and consumes normalized inference results.
+
+### Production inference and endpoint testing must share the same path
+
+Do not build a separate "test request" implementation.
+
+Both should pass through:
+
+```
+connection + endpoint
+   -> adapter registry
+   -> adapter builds request
+   -> common transport
+   -> adapter parses response
+   -> normalized inference result
+   -> routing signal
+```
+
+Then `test_endpoint` is trustworthy because it exercises the exact code workers use.
+
+### Migration permission
+
+It is acceptable to:
+
+- split `RouterEngine.cs`;
+- move protocol/auth/request construction out of `StatefulClanker.WorkerRuntime.ps1`;
+- replace `success`/`failure` with a single structured completion/outcome operation;
+- replace wrapper-heavy compilation with explicit pipeline stages;
+- change internal JSON schemas with branch-local migration code;
+- delete compatibility machinery after its consumer has moved.
+
+Do not retain an ugly boundary solely because current main already has tests around it.
 
 ---
 
@@ -671,87 +776,269 @@ Retry behavior is logically equivalent across resumable and non-resumable worker
 
 ---
 
-# 12. Phase 7 — router shadow envelope adapter
+# 12. Phase 7 — restructure the router into the machine inference gateway
 
 ## Goal
 
-Do **not** rebuild the compiled router. Wrap the behavior it already has.
+Use the signal migration as the opportunity to fix the router boundary itself.
 
-Current main already exposes:
-- `acquire`
-- `release`
-- `heartbeat`
-- `success`
-- `failure`
+The current split is backwards for long-term maintenance: C# owns routing/health while `StatefulClanker.WorkerRuntime.ps1` still owns substantial provider protocol, auth-header, request-body, and response-shape logic. A route cannot be diagnosed cleanly when the router does not own the request that actually failed.
 
-and `StatefulClanker.CompiledRouting.ps1` already calls `success`/`failure`.
+Move toward one machine-local inference plane.
 
-Use those as the initial producer seam.
+### 12.1 Introduce an adapter contract
 
-### 12.1 Emit routing signals
+Create a provider adapter interface with responsibilities such as:
+
+```
+adapter id / protocol id
+build request URI
+build sanitized request description
+apply provider-specific headers/auth conventions
+serialize messages/tools
+parse successful response
+parse provider error evidence
+extract usage/quota hints
+declare capability quirks
+```
+
+Credentials remain resolved by the machine-local connection store and are never returned to project state or MCP output.
+
+Initial adapters should correspond to actual wire protocols, not marketing provider names where several providers share a protocol:
+
+- OpenAI-compatible chat/completions;
+- Anthropic Messages;
+- Gemini native generateContent;
+- Cohere/native variants if still required;
+- provider-specific subclasses/overrides only where wire behavior genuinely differs.
+
+A provider preset selects/configures an adapter. Do not scatter hostname conditionals through the worker loop.
+
+### 12.2 Add a normalized inference operation
+
+The router service should expose an internal/CLI/pipe operation such as `infer`:
+
+```
+infer(endpoint, normalizedRequest, diagnosticMode=false)
+```
+
+It should:
+
+1. resolve endpoint -> connection/model/adapter;
+2. acquire or validate a lease as appropriate;
+3. construct the provider request through the adapter;
+4. send it;
+5. normalize success/error response;
+6. emit the routing signal;
+7. update the health projection through the reducer;
+8. return a normalized result.
+
+During migration, PowerShell may still own the outer worker tool loop, but the actual model HTTP exchange should move behind this operation.
+
+Eventually `Invoke-SCDirectApiProvider` should become a thin client of the inference gateway or disappear as protocol ownership moves into C#.
+
+### 12.3 Replace success/failure with structured outcome ownership
+
+Current `success`/`failure` verbs are useful migration seams, not the desired final API.
+
+Once `infer` owns the request, the service already knows:
+
+- HTTP status;
+- transport exception type;
+- adapter id;
+- endpoint/connection/model;
+- sanitized request shape;
+- response headers;
+- bounded response/error body;
+- latency;
+- usage;
+- retry metadata.
+
+It should emit the signal itself. PowerShell should not re-diagnose a string and report it back.
+
+Keep old verbs only while non-gateway callers still exist.
+
+### 12.4 Emit routing signals
 
 On:
 - acquire success;
 - acquire deferred/no route;
-- provider success;
-- provider failure;
-- explicit endpoint failure;
+- inference success;
+- inference/provider failure;
+- adapter/request-shape failure;
+- explicit endpoint test;
 - lease expiry;
 - probe result;
-- internal bridge exception.
+- internal router/transport exception.
 
-Signal kinds:
+Signal kinds should include at least:
 
 - `route_acquired`
 - `route_unavailable`
-- `route_succeeded`
-- `route_failed`
+- `inference_succeeded`
+- `inference_failed`
+- `adapter_diagnostic_failed`
+- `endpoint_test_succeeded`
+- `endpoint_test_failed`
 - `probe_succeeded`
 - `probe_failed`
 - `lease_expired`
 - `harness_routing_fault`
 
-### 12.2 Separate observation from diagnosis
-
-PowerShell should report concrete facts where available:
-
-```json
-{
-  "httpStatus": 429,
-  "exceptionType": null,
-  "providerMessage": "...",
-  "retryAfter": "...",
-  "endpoint": "...",
-  "connection": "...",
-  "model": "...",
-  "origin": "provider"
-}
-```
-
-The router reducer/policy derives:
-- class;
-- scope;
-- cooldown;
-- failover eligibility.
-
-Do not let a bridge-side guess become health truth when the router can classify from facts.
-
-### 12.3 Preserve old verbs
-
-Initially:
-- old `success`/`failure` commands remain;
-- they create signal envelopes internally;
-- health update remains exactly as today.
-
-This proves the signal path without altering routing behavior.
-
 ## Exit criteria
 
-Every route outcome creates a durable signal and current health behavior still passes baseline tests.
+Normal worker inference can execute through the machine inference gateway, and the same adapter/transport path is available to endpoint diagnostics.
 
 ---
 
-# 13. Phase 8 — close the router taxonomy and harden scope
+
+# 13. Phase 8 — first-class orchestrator `test_endpoint`
+
+## Goal
+
+Give the conversational/control-plane orchestrator a direct diagnostic tool that performs a **real, minimal inference** against one exact endpoint through the same production adapter used by workers.
+
+This is distinct from catalog discovery, quota probing, or "Test & discover."
+
+### 13.1 MCP tool
+
+Expose:
+
+`test_endpoint`
+
+Suggested input:
+
+```json
+{
+  "project": "...",
+  "endpoint": "pool:connection::model",
+  "mode": "minimal|tools",
+  "prompt": "optional bounded diagnostic prompt"
+}
+```
+
+Default behavior should use a tiny fixed prompt and minimal output tokens. `mode=tools` may exercise one harmless tool-call schema when testing tool compatibility.
+
+The orchestrator should not need or receive credentials.
+
+### 13.2 Result contract
+
+Return a sanitized structured diagnostic, not merely pass/fail:
+
+```json
+{
+  "ok": false,
+  "endpoint": "...",
+  "connection": "...",
+  "model": "...",
+  "adapterId": "anthropic-messages",
+  "request": {
+    "method": "POST",
+    "uri": "https://api.example/.../messages",
+    "headersPresent": [
+      "content-type",
+      "x-api-key",
+      "anthropic-version"
+    ],
+    "headersRedacted": true,
+    "bodyShape": {
+      "topLevelKeys": ["model", "messages", "max_tokens"],
+      "toolMode": "native"
+    }
+  },
+  "response": {
+    "httpStatus": 400,
+    "headers": {},
+    "bodyExcerpt": "...",
+    "providerRequestId": "..."
+  },
+  "diagnosis": {
+    "class": "bad_request",
+    "scope": "request",
+    "adapterSuspect": true,
+    "providerHealthSuspect": false,
+    "reasonCode": "REQUEST_SHAPE_REJECTED"
+  },
+  "signalRef": "sig-..."
+}
+```
+
+Never return secret header values, API keys, tokens, DPAPI blobs, or environment-variable contents.
+
+### 13.3 Diagnostic semantics
+
+A failed test must distinguish at least:
+
+- credential/auth failure;
+- rate limit/quota;
+- provider/model unavailable;
+- transport/DNS/TLS;
+- provider capacity;
+- malformed provider response;
+- request body rejected;
+- missing/wrong required header;
+- unsupported tool schema;
+- adapter parser failure;
+- router/harness internal failure.
+
+Most 400/422/protocol-shape failures should **not** mark the provider unhealthy. They should create an adapter/request diagnostic with request/harness scope.
+
+A successful real inference is strong evidence that the endpoint and adapter are usable and may heal appropriate degraded health.
+
+### 13.4 Make adapter repair actionable to the orchestrator
+
+The result should include enough sanitized provenance for the orchestrator to investigate the implementation:
+
+- adapter id;
+- provider/preset id;
+- protocol id;
+- source implementation path/name;
+- request URI pattern;
+- header names present/missing, never values;
+- top-level body keys;
+- bounded provider error body;
+- provider request id;
+- exact status code;
+- model id;
+- tool mode;
+- connection configuration hash/version.
+
+When `adapterSuspect=true`, the control plane should be able to:
+
+1. inspect the adapter implementation;
+2. inspect the provider preset;
+3. research the provider's current official API documentation when external research tools are available;
+4. compare documented endpoint, headers, auth scheme, body schema, tool schema, and response shape against the sanitized test evidence;
+5. patch the provider adapter/preset;
+6. run unit/mock tests;
+7. invoke `test_endpoint` again against the exact endpoint;
+8. only then return the endpoint to normal routing.
+
+Do not make the router autonomously edit its own source. The orchestrator performs and audits the code change.
+
+### 13.5 Production-path invariant
+
+A test is invalid if it uses a request builder that normal inference does not use.
+
+Required invariant:
+
+> if `test_endpoint` passes for adapter X and endpoint Y, a normal inference using the same normalized request features must traverse the same adapter serialization, auth/header builder, HTTP transport, and response parser.
+
+Add tests that intentionally break an adapter field/header and prove both production inference and `test_endpoint` fail with the same structured diagnosis.
+
+### 13.6 Tool placement
+
+Implement the MCP surface alongside `connection_catalog` and `target_pool_list` in `mcp/StatefulClanker.McpExtensions.ps1`, backed by the router client rather than a duplicate PowerShell HTTP call.
+
+Also expose a router CLI/pipe operation for tests and non-MCP callers, e.g. `test-endpoint`.
+
+## Exit criteria
+
+The orchestrator can name an exact endpoint, send a real minimal inference, receive sanitized diagnostic evidence, identify whether the adapter is suspect, patch the adapter when warranted, and retest the same production path.
+
+---
+
+# 14. Phase 9 — close the router taxonomy and harden scope
 
 ## Goal
 
@@ -833,7 +1120,7 @@ Taxonomy tests prove that unrelated connections are not quarantined by endpoint/
 
 ---
 
-# 14. Phase 9 — router reducer becomes authoritative
+# 15. Phase 10 — router reducer becomes authoritative
 
 ## Goal
 
@@ -880,7 +1167,7 @@ Router health can be rebuilt from durable routing signals plus static endpoint/c
 
 ---
 
-# 15. Phase 10 — unify dispatch/execution accounting
+# 16. Phase 11 — unify dispatch/execution accounting
 
 ## Goal
 
@@ -917,7 +1204,7 @@ Tasks cannot spin forever between scheduler passes with zero durable attempt/def
 
 ---
 
-# 16. Phase 11 — optional path-addressed advisory handoff
+# 17. Phase 12 — optional path-addressed advisory handoff
 
 ## Goal
 
@@ -955,7 +1242,7 @@ Measure whether this reduces rediscovery before making it default.
 
 ---
 
-# 17. Phase 12 — RPK promotion gate, only if justified
+# 18. Phase 13 — RPK promotion gate, only if justified
 
 Do not dump signals directly into RPK.
 
@@ -975,7 +1262,7 @@ This is deliberately last because task-local continuation should solve most of t
 
 ---
 
-# 18. Specific current code seams
+# 19. Specific current code seams
 
 ## Worker/context
 
@@ -1019,6 +1306,10 @@ Primary migration surfaces:
 - `src/StatefulClanker.Router/RouterStore.cs`
 - `src/StatefulClanker.Router/Models.cs`
 - `src/StatefulClanker.Router/EndpointMonitor.cs`
+- `src/StatefulClanker.Router/ProviderProbeCatalog.cs`
+- new inference-gateway/provider-adapter/endpoint-diagnostic components
+- `lib/StatefulClanker.WorkerRuntime.ps1` protocol/auth/request builders, which should migrate behind the gateway rather than remain duplicated
+- `mcp/StatefulClanker.McpExtensions.ps1` for the orchestrator-facing `test_endpoint` tool
 
 UI readers of route state must not become writers:
 
@@ -1027,7 +1318,7 @@ UI readers of route state must not become writers:
 
 ---
 
-# 19. Definition-of-done for the migration
+# 20. Definition-of-done for the migration
 
 The branch is ready to merge when all of these are true:
 
@@ -1039,19 +1330,23 @@ The branch is ready to merge when all of these are true:
 6. Definition of Done is canonical in the compiled packet.
 7. Retrieval health distinguishes empty-by-design from broken/blocked retrieval.
 8. Worktree retrieval no longer excludes legitimate project files because they live under the state/worktree parent topology.
-9. Router traffic and probes both emit routing signals.
-10. Router failure class and scope are separate.
-11. Harness-internal faults cannot mutate provider health.
-12. Every retryable routing state has `nextRetryAt`.
-13. Router health can be reconstructed from signals.
-14. No-route dispatches create durable defer diagnostics without consuming worker execution attempts.
-15. Existing authority, worktree isolation, freshness, preflight, and acceptance tests remain green.
-16. No worker-to-worker synchronous communication or shared-write coupling is introduced.
-17. Compatibility paths can be removed one seam at a time rather than in a flag day.
+9. Router traffic, explicit endpoint tests, and probes all emit routing signals.
+10. Production inference and `test_endpoint` share the same adapter serialization/auth/transport/parser path.
+11. Provider wire-protocol ownership has moved out of the PowerShell worker loop into a coherent machine-local adapter layer.
+12. The orchestrator has a sanitized `test_endpoint` MCP tool that performs real minimal inference and returns adapter-aware diagnostics.
+13. Adapter/request-shape failures are distinguishable from provider-health failures and do not poison unrelated routes.
+14. Router failure class and scope are separate.
+15. Harness-internal faults cannot mutate provider health.
+16. Every retryable routing state has `nextRetryAt`.
+17. Router health can be reconstructed from signals.
+18. No-route dispatches create durable defer diagnostics without consuming worker execution attempts.
+19. Existing authority, worktree isolation, freshness, preflight, and acceptance tests remain green.
+20. No worker-to-worker synchronous communication or shared-write coupling is introduced.
+21. Compatibility paths are removed when their consumer moves; the final architecture does not keep legacy seams merely for historical symmetry.
 
 ---
 
-# 20. Suggested commit sequence
+# 21. Suggested commit sequence
 
 Keep commits narrow enough to bisect:
 
@@ -1067,19 +1362,23 @@ Keep commits narrow enough to bisect:
 10. `feat: compile canonical definition of done`
 11. `feat: migrate dependency handoff to completion manifests`
 12. `feat: unify retry and recovery continuation projection`
-13. `feat: adapt compiled router outcomes to signal envelopes`
-14. `refactor: separate router failure class from health scope`
-15. `feat: add shadow routing health reducer`
-16. `feat: route acquire through reduced health projection`
-17. `feat: account for dispatch deferrals separately from worker attempts`
-18. `experiment: add hash-invalidated path advisories` (optional)
-19. `refactor: remove proven legacy compatibility paths`
+13. `refactor: split router routing, inference, and diagnostic responsibilities`
+14. `feat: add provider adapter registry and normalized inference gateway`
+15. `refactor: move provider request/auth/response shaping out of WorkerRuntime`
+16. `feat: emit inference and adapter diagnostic signal envelopes`
+17. `feat: expose orchestrator test_endpoint over production inference path`
+18. `refactor: separate router failure class from health scope`
+19. `feat: add shadow routing health reducer`
+20. `feat: route acquire through reduced health projection`
+21. `feat: account for dispatch deferrals separately from worker attempts`
+22. `experiment: add hash-invalidated path advisories` (optional)
+23. `refactor: remove proven legacy compatibility paths`
 
 Each behavior-changing commit should include the test that proves the new invariant.
 
 ---
 
-# 21. First implementation campaign
+# 22. First implementation campaign
 
 The first actual clanking pass should stop after the architecture can carry envelopes end-to-end without depending on them.
 
@@ -1088,14 +1387,18 @@ Scope:
 1. baseline tests;
 2. PowerShell signal module;
 3. C# router signal model/store;
-4. shadow producers for:
+4. carve the router into explicit routing / inference-adapter / diagnostics boundaries, even if the legacy worker HTTP path still temporarily exists;
+5. define the provider adapter contract and normalized inference/result types;
+6. add the `test-endpoint` router operation and MCP `test_endpoint` surface against the new gateway skeleton;
+7. shadow producers for:
    - validator rejection/pass,
    - worker run completion/failure,
    - compiled-router success/failure/no-route,
+   - endpoint-test success/failure,
    - probe success/failure;
-5. no consumer changes except diagnostics;
-6. fix the worktree retrieval/control-state-path distinction because it blocks meaningful worker-side measurement;
-7. add retrieval expected-vs-actual health telemetry.
+8. no execution consumer changes except diagnostics;
+9. fix the worktree retrieval/control-state-path distinction because it blocks meaningful worker-side measurement;
+10. add retrieval expected-vs-actual health telemetry.
 
 At that checkpoint we should be able to inspect two real task runs and answer:
 
