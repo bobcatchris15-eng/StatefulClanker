@@ -516,6 +516,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
                 requiresArtifact=[bool]$preflight.requiresArtifact
                 reason=$preflight.reason
                 missingArtifacts=@($preflight.missingArtifacts)
+                changedFiles=@($preflight.changedFiles)
                 candidateCheckpointId=$preflight.candidateCheckpointId
                 candidateNumber=[int]$preflight.candidateNumber
             }
@@ -525,7 +526,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
             }
             Write-SCJson (Get-SCPath ("runs/{0}.json"-f$run.id)) $run
             if(-not[bool]$preflight.material){
-                Publish-SCExecutionSignal -Kind candidate_empty -Task $task -Component candidate_preflight -Scope attempt -Authority observed -Qualifier same_session -SourceExtra @{runId=[string]$run.id;workerSessionId=$workerSessionId} -Payload @{reason=[string]$preflight.reason;missingArtifacts=@($preflight.missingArtifacts);candidateCheckpointId=$preflight.candidateCheckpointId;evidenceRefs=@("run:$($run.id)")} | Out-Null
+                Publish-SCExecutionSignal -Kind candidate_empty -Task $task -Component candidate_preflight -Scope attempt -Authority observed -Qualifier same_session -SourceExtra @{runId=[string]$run.id;workerSessionId=$workerSessionId} -Payload @{reason=[string]$preflight.reason;missingArtifacts=@($preflight.missingArtifacts);changedFiles=@($preflight.changedFiles);candidateCheckpointId=$preflight.candidateCheckpointId;evidenceRefs=@("run:$($run.id)")} | Out-Null
                 $noArtifactCount=Add-SCWorkerNoArtifact $workerSessionId ([string]$preflight.reason)
                 if($noArtifactCount-eq1){
                     $continuation="CANDIDATE PREFLIGHT REJECTED. No validator was run because StatefulClanker's deterministic evidence gate found no required material artifact change. Reason: $($preflight.reason). This task expects implementation artifacts. Inspect the current worktree, perform the requested work, verify it, and submit a new candidate. Do not merely restate the intended implementation."
