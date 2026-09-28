@@ -19,20 +19,63 @@ function Get-SCDependencySummary($Task) {
 function Resolve-SCSelector([string]$Pattern) {
     $matches=@();try{if($Pattern-match'[*?\[]'){$matches=@(Get-ChildItem -Path $Pattern -File -Recurse -ErrorAction SilentlyContinue)}elseif(Test-Path -LiteralPath $Pattern -PathType Leaf){$matches=@(Get-Item -LiteralPath $Pattern)}elseif(Test-Path -LiteralPath $Pattern -PathType Container){$matches=@(Get-ChildItem -LiteralPath $Pattern -File -Recurse -ErrorAction SilentlyContinue)}}catch{$matches=@()};return @($matches)
 }
+function Test-SCRetrievalPathAllowed([string]$FullPath) {
+    $full=[IO.Path]::GetFullPath($FullPath)
+    $work=[IO.Path]::GetFullPath((Get-SCRoot));$work=$work.TrimEnd([char[]]@('\','/'))
+    $state=[IO.Path]::GetFullPath((Get-SCDir));$state=$state.TrimEnd([char[]]@('\','/'))
+    $sep=[IO.Path]::DirectorySeparatorChar
+    $insideWork=$full.Equals($work,[StringComparison]::OrdinalIgnoreCase)-or$full.StartsWith(($work+$sep),[StringComparison]::OrdinalIgnoreCase)
+    if($insideWork){return $true}
+    $insideState=$full.Equals($state,[StringComparison]::OrdinalIgnoreCase)-or$full.StartsWith(($state+$sep),[StringComparison]::OrdinalIgnoreCase)
+    return (-not$insideState)
+}
 function Get-SCRetrievalPacket($Task) {
-    $cfg=Get-SCConfig;$budget=if($cfg.PSObject.Properties['workingSetBudgetChars']){[int]$cfg.workingSetBudgetChars}else{24000};$maxFile=if($cfg.PSObject.Properties['maxFileChars']){[int]$cfg.maxFileChars}else{8000};$remaining=$budget;$items=@();$seen=@{};$unmatched=@();$selectors=@()
+    $cfg=Get-SCConfig
+    $budget=if($cfg.PSObject.Properties['workingSetBudgetChars']){[int]$cfg.workingSetBudgetChars}else{24000}
+    $maxFile=if($cfg.PSObject.Properties['maxFileChars']){[int]$cfg.maxFileChars}else{8000}
+    $remaining=$budget;$items=@();$seen=@{};$unmatched=@();$unmatchedSources=@();$excluded=@();$matchedSelectors=@();$selectors=@()
+    $sourceRefs=@();if($Task.PSObject.Properties['sources']){$sourceRefs=@($Task.sources)}
+    foreach($src in $sourceRefs){
+        if($remaining-le0){break}
+        $resolved=$null
+        if(Get-Command Resolve-SCSourceReference -ErrorAction SilentlyContinue){try{$resolved=Resolve-SCSourceReference ([string]$src)}catch{}}
+        if($null-eq$resolved){$unmatchedSources+=[string]$src;continue}
+        $key="source:$($resolved.ref)";if($seen.ContainsKey($key)){continue};$seen[$key]=$true
+        $text=[string]$resolved.content;$take=[Math]::Min([Math]::Min($text.Length,$maxFile),$remaining);$excerpt=if($take-gt0){$text.Substring(0,$take)}else{''}
+        $items+=[ordered]@{path=$resolved.path;selector=$resolved.ref;kind='source';authority=$resolved.authority;chars=$take;fullChars=$text.Length;truncated=($text.Length-gt$take);sha256=$resolved.sha256;content=$excerpt};$remaining-=$take
+    }
     foreach($s in @($Task.evidence)){if(-not[string]::IsNullOrWhiteSpace([string]$s)){$selectors+=[ordered]@{selector=[string]$s;kind='evidence';authority='evidence'}}}
     foreach($s in @($Task.retrieval)){if(-not[string]::IsNullOrWhiteSpace([string]$s)){$selectors+=[ordered]@{selector=[string]$s;kind='retrieval';authority='context'}}}
     foreach($entry in $selectors){
-        if($remaining-le 0){break};$pattern=[string]$entry.selector;$matches=@(Resolve-SCSelector $pattern);if($matches.Count-eq 0){$unmatched+=$pattern;continue}
+        if($remaining-le0){break}
+        $pattern=[string]$entry.selector;$matches=@(Resolve-SCSelector $pattern)
+        if($matches.Count-eq0){$unmatched+=$pattern;continue}
+        $matchedSelectors+=$pattern
         foreach($match in $matches){
-            if($remaining-le 0){break};$full=$match.FullName;if($full.StartsWith((Get-SCDir),[StringComparison]::OrdinalIgnoreCase)){continue};if($seen.ContainsKey($full)){continue};$seen[$full]=$true
-            try{$text=Get-Content -Raw -LiteralPath $full}catch{continue};if($null-eq$text){$text=''};$take=[Math]::Min([Math]::Min($text.Length,$maxFile),$remaining);$excerpt=if($take-gt 0){$text.Substring(0,$take)}else{''};$relative=($full.Substring((Get-SCRoot).Length)-replace'^[\\/]+','')
+            if($remaining-le0){break}
+            $full=[IO.Path]::GetFullPath($match.FullName)
+            if(-not(Test-SCRetrievalPathAllowed $full)){$excluded+=[ordered]@{selector=$pattern;path=$full;reason='control-state-boundary'};continue}
+            if($seen.ContainsKey($full)){continue};$seen[$full]=$true
+            try{$text=Get-Content -Raw -LiteralPath $full}catch{continue};if($null-eq$text){$text=''}
+            $take=[Math]::Min([Math]::Min($text.Length,$maxFile),$remaining);$excerpt=if($take-gt0){$text.Substring(0,$take)}else{''}
+            $work=[IO.Path]::GetFullPath((Get-SCRoot));$relative=if($full.StartsWith($work,[StringComparison]::OrdinalIgnoreCase)){($full.Substring($work.Length)-replace'^[\\/]+','')}else{$full}
             $items+=[ordered]@{path=$relative;selector=$pattern;kind=$entry.kind;authority=$entry.authority;chars=$take;fullChars=$text.Length;truncated=($text.Length-gt$take);sha256=Get-SCFileHashValue $full;content=$excerpt};$remaining-=$take
         }
     }
-    return [ordered]@{budgetChars=$budget;usedChars=($budget-$remaining);remainingChars=$remaining;budgetExhausted=($remaining-le 0);unmatchedSelectors=@($unmatched);items=@($items)}
+    $requestedCount=@($sourceRefs).Count+@($selectors).Count
+    $health=[ordered]@{
+        requestedCount=$requestedCount;sourceRefCount=@($sourceRefs).Count;selectorCount=@($selectors).Count
+        matchedSelectorCount=@($matchedSelectors|Select-Object -Unique).Count;includedItemCount=@($items).Count
+        excludedByBoundaryCount=@($excluded).Count;unmatchedSelectorCount=@($unmatched).Count;unmatchedSourceRefCount=@($unmatchedSources).Count
+        allUsefulRetrievalCollapsed=($requestedCount-gt0-and@($items).Count-eq0)
+    }
+    $packet=[ordered]@{budgetChars=$budget;usedChars=($budget-$remaining);remainingChars=$remaining;budgetExhausted=($remaining-le0);unmatchedSelectors=@($unmatched);unmatchedSourceRefs=@($unmatchedSources);excludedByBoundary=@($excluded);health=$health;items=@($items)}
+    if($health.allUsefulRetrievalCollapsed-and(Get-Command Publish-SCExecutionSignal -ErrorAction SilentlyContinue)){
+        Publish-SCExecutionSignal -Kind retrieval_anomaly -Task $Task -Component context_compiler -Scope task -Authority observed -Qualifier current_attempt -Payload @{health=$health;unmatchedSelectors=@($unmatched);unmatchedSourceRefs=@($unmatchedSources);excludedByBoundary=@($excluded)}|Out-Null
+    }
+    return $packet
 }
+
 function Add-SCPacketContextFault($ContextFaults,[string]$Source,[string]$Reason,[string]$TaskId,[string]$CompilationId) {
     $record=[ordered]@{ts=(Get-Date).ToUniversalTime().ToString('o');taskId=$TaskId;compilationId=$CompilationId;source=$Source;reason=$Reason}
     try{
