@@ -244,6 +244,7 @@ function Complete-SCTaskFromRecovery([string]$Id,[string]$PayloadPath,[string]$W
         kind='accepted-existing-work';ts=(Get-Date).ToUniversalTime().ToString('o');reason=$Why;evidence=@($evidence)
     })
     Save-SCTask $task
+    Write-SCTaskCompletionManifest $task $null 'control-plane-recovery' $Why|Out-Null
     Add-SCEvent 'task.completed.control_plane_recovery' "Control plane accepted existing work for stalled task ${Id}: $Why" @{
         taskId=$Id;previousStatus=$previousStatus;previousAttempts=$previousAttempts;reason=$Why;evidence=@($evidence);
         authority='control-plane-recovery';bypassedReviewGate=$true;controlRevision=$task.controlRevision;
