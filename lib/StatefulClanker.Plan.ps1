@@ -269,25 +269,7 @@ function Set-SCTaskSize([string]$TargetTaskId,[string]$TargetSize,[string]$Targe
     return $task
 }
 
-function Get-SCRetrievalPacket($Task) {
-    $cfg=Get-SCConfig;$budget=if($cfg.PSObject.Properties['workingSetBudgetChars']){[int]$cfg.workingSetBudgetChars}else{24000};$maxFile=if($cfg.PSObject.Properties['maxFileChars']){[int]$cfg.maxFileChars}else{8000};$remaining=$budget;$items=@();$seen=@{};$unmatched=@();$unmatchedSources=@();$selectors=@()
-    $sourceRefs=@();if($Task.PSObject.Properties['sources']){$sourceRefs=@($Task.sources)}
-    foreach($src in $sourceRefs) {
-        if($remaining-le0){break};$resolved=Resolve-SCSourceReference ([string]$src);if($null-eq$resolved){$unmatchedSources+=[string]$src;continue};$key="source:$($resolved.ref)";if($seen.ContainsKey($key)){continue};$seen[$key]=$true
-        $text=[string]$resolved.content;$take=[Math]::Min([Math]::Min($text.Length,$maxFile),$remaining);$excerpt=if($take-gt0){$text.Substring(0,$take)}else{''}
-        $items+=[ordered]@{path=$resolved.path;selector=$resolved.ref;kind='source';authority=$resolved.authority;chars=$take;fullChars=$text.Length;truncated=($text.Length-gt$take);sha256=$resolved.sha256;content=$excerpt};$remaining-=$take
-    }
-    foreach($s in @($Task.evidence)){if(-not[string]::IsNullOrWhiteSpace([string]$s)){$selectors+=[ordered]@{selector=[string]$s;kind='evidence';authority='evidence'}}};foreach($s in @($Task.retrieval)){if(-not[string]::IsNullOrWhiteSpace([string]$s)){$selectors+=[ordered]@{selector=[string]$s;kind='retrieval';authority='context'}}}
-    foreach($entry in $selectors) {
-        if($remaining-le0){break};$pattern=[string]$entry.selector;$matches=@(Resolve-SCSelector $pattern);if($matches.Count-eq0){$unmatched+=$pattern;continue}
-        foreach($match in $matches) {
-            if($remaining-le0){break};$full=$match.FullName;if($full.StartsWith((Get-SCDir),[StringComparison]::OrdinalIgnoreCase)){continue};if($seen.ContainsKey($full)){continue};$seen[$full]=$true
-            try{$text=Get-Content -Raw -LiteralPath $full}catch{continue};if($null-eq$text){$text=''};$take=[Math]::Min([Math]::Min($text.Length,$maxFile),$remaining);$excerpt=if($take-gt0){$text.Substring(0,$take)}else{''};$relative=($full.Substring((Get-SCRoot).Length)-replace'^[\\/]+','')
-            $items+=[ordered]@{path=$relative;selector=$pattern;kind=$entry.kind;authority=$entry.authority;chars=$take;fullChars=$text.Length;truncated=($text.Length-gt$take);sha256=Get-SCFileHashValue $full;content=$excerpt};$remaining-=$take
-        }
-    }
-    return [ordered]@{budgetChars=$budget;usedChars=($budget-$remaining);remainingChars=$remaining;budgetExhausted=($remaining-le0);unmatchedSelectors=@($unmatched);unmatchedSourceRefs=@($unmatchedSources);items=@($items)}
-}
+# Retrieval compilation is owned by StatefulClanker.Context.ps1. Plan owns source records only.
 
 function Show-SCSources([string]$Subcommand,[string]$Ref=$null,[string]$Text=$null) {
     if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'}
