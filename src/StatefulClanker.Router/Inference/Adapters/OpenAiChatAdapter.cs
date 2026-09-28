@@ -24,67 +24,91 @@ public sealed class OpenAiChatAdapter : IProviderAdapter
         var body=new Dictionary<string,object?>
         {
             ["model"]=endpoint.model,
-            ["messages"]=new[]{new Dictionary<string,object?>{{"role","user"},{"content",request.prompt}}},
-            ["max_tokens"]=Math.Clamp(request.maxOutputTokens,1,64),
+            ["messages"]=request.messages,
+            ["max_tokens"]=Math.Clamp(request.maxOutputTokens,1,131072),
             ["stream"]=false
         };
-
-        if(request.testTools)
+        if(request.temperature is not null) body["temperature"]=request.temperature.Value;
+        if(!string.Equals(request.toolMode,"text",StringComparison.OrdinalIgnoreCase) && request.tools.Count>0)
         {
-            body["tools"]=new[]
-            {
-                new Dictionary<string,object?>
-                {
-                    ["type"]="function",
-                    ["function"]=new Dictionary<string,object?>
-                    {
-                        ["name"]="clanker_probe",
-                        ["description"]="Harmless endpoint diagnostic tool.",
-                        ["parameters"]=new Dictionary<string,object?>
-                        {
-                            ["type"]="object",
-                            ["properties"]=new Dictionary<string,object?>()
-                        }
-                    }
-                }
-            };
+            body["tools"]=request.tools;
             body["tool_choice"]="auto";
         }
+        if(uri.Contains("openrouter.ai",StringComparison.OrdinalIgnoreCase))
+            body["usage"]=new Dictionary<string,object?>{{"include",true}};
 
         var message=AdapterHttp.JsonRequest(
             HttpMethod.Post,uri,connection,apiKey,body,
-            "openai-chat",
-            request.testTools?"native":"text");
+            "openai-chat",request.toolMode,request.sessionKey);
         return new AdapterRequest(message,AdapterHttp.Evidence(message));
     }
 
-    public AdapterParseResult ParseSuccess(string body)
+    public AdapterParseResult ParseSuccess(string body,EndpointEntry endpoint)
     {
         try
         {
             using var doc=JsonDocument.Parse(body);
-            if(!doc.RootElement.TryGetProperty("choices",out var choices) ||
+            var root=doc.RootElement;
+            if(!root.TryGetProperty("choices",out var choices) ||
                choices.ValueKind!=JsonValueKind.Array ||
                choices.GetArrayLength()==0)
-                return new(false,null,"Successful response did not contain choices.");
+                return new(false,null,new(){model=endpoint.model},"Successful response did not contain choices.");
 
             var first=choices[0];
             if(!first.TryGetProperty("message",out var message))
-                return new(false,null,"Successful response choice did not contain message.");
+                return new(false,null,new(){model=endpoint.model},"Successful response choice did not contain message.");
 
+            var assistant=new NormalizedInferenceMessage{role="assistant"};
             if(message.TryGetProperty("content",out var content))
             {
-                if(content.ValueKind==JsonValueKind.String) return new(true,content.GetString(),null);
-                if(content.ValueKind==JsonValueKind.Array) return new(true,content.ToString(),null);
+                if(content.ValueKind==JsonValueKind.String) assistant.content=content.GetString();
+                else if(content.ValueKind!=JsonValueKind.Null) assistant.content=content.GetRawText();
             }
-            if(message.TryGetProperty("tool_calls",out var tools) && tools.ValueKind==JsonValueKind.Array)
-                return new(true,"[tool_calls]",null);
+            if(message.TryGetProperty("tool_calls",out var toolCalls) && toolCalls.ValueKind==JsonValueKind.Array)
+            {
+                assistant.tool_calls=new();
+                foreach(var call in toolCalls.EnumerateArray())
+                {
+                    if(!call.TryGetProperty("function",out var fn)) continue;
+                    var normalized=new NormalizedToolCall
+                    {
+                        id=call.TryGetProperty("id",out var id)?id.GetString()??"":Guid.NewGuid().ToString("N"),
+                        type="function",
+                        function=new NormalizedFunctionCall
+                        {
+                            name=fn.TryGetProperty("name",out var name)?name.GetString()??"":"",
+                            arguments=fn.TryGetProperty("arguments",out var args)
+                                ? (args.ValueKind==JsonValueKind.String?args.GetString()??"{}":args.GetRawText())
+                                : "{}"
+                        }
+                    };
+                    if(call.TryGetProperty("thought_signature",out var sig) && sig.ValueKind==JsonValueKind.String)
+                        normalized.thought_signature=sig.GetString();
+                    assistant.tool_calls.Add(normalized);
+                }
+            }
 
-            return new(false,null,"Successful response message contained neither content nor tool_calls.");
+            var model=root.TryGetProperty("model",out var modelEl) && modelEl.ValueKind==JsonValueKind.String
+                ? modelEl.GetString()
+                : endpoint.model;
+            var usage=new NormalizedUsage{model=model};
+            if(root.TryGetProperty("usage",out var usageEl) && usageEl.ValueKind==JsonValueKind.Object)
+            {
+                usage.promptTokens=AdapterJson.Long(usageEl,"prompt_tokens","input_tokens");
+                usage.completionTokens=AdapterJson.Long(usageEl,"completion_tokens","output_tokens");
+                usage.totalTokens=AdapterJson.Long(usageEl,"total_tokens");
+                if(usage.totalTokens<=0) usage.totalTokens=usage.promptTokens+usage.completionTokens;
+                usage.reported=true;
+            }
+            var hasContent=!string.IsNullOrWhiteSpace(assistant.content);
+            var hasTools=assistant.tool_calls is {Count:>0};
+            return hasContent||hasTools
+                ? new(true,assistant,usage,null)
+                : new(false,null,usage,"Successful response message contained neither content nor tool_calls.");
         }
         catch(Exception ex)
         {
-            return new(false,null,"Could not parse OpenAI-compatible response: "+ex.Message);
+            return new(false,null,new(){model=endpoint.model},"Could not parse OpenAI-compatible response: "+ex.Message);
         }
     }
 }
