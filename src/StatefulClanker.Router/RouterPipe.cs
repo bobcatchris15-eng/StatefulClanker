@@ -59,6 +59,7 @@ public sealed class RouterPipeServer
                 "heartbeat" => _engine.Heartbeat(req.lease),
                 "success" => _engine.Success(req.lease,req.endpoint),
                 "failure" => _engine.Failure(req.lease,req.endpoint,req.failureClass,req.message),
+                "infer" => await _gateway.InferExactAsync(req.endpoint,req.inference,token),
                 "test-endpoint" => await _gateway.TestEndpointAsync(req.endpoint,req.prompt,req.mode,req.maxOutputTokens,token),
                 "snapshot" => RouterResponse.Ok(_engine.Snapshot()),
                 _ => RouterResponse.Fail("Unknown router operation: "+req.op)
