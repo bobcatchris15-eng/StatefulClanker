@@ -39,19 +39,27 @@ function Get-SCExecutionProjection {
     $retrievalHealth=if($retrievalSignal.Count-gt0){Get-SCSignalValue (Get-SCSignalValue $retrievalSignal[0] 'payload') 'health'}else{$null}
 
     $dependencyKnowledge=@()
-    foreach($depId in @($Task.dependsOn)){
-        if([string]::IsNullOrWhiteSpace([string]$depId)){continue}
+    $depIds=@($Task.dependsOn|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})
+    $cfg=Get-SCConfig
+    $legacyBudget=if($cfg.PSObject.Properties['dependencyResultBudgetChars']){[int]$cfg.dependencyResultBudgetChars}else{8000}
+    $legacyShare=if($depIds.Count-gt0){[Math]::Max(256,[Math]::Floor($legacyBudget/$depIds.Count))}else{0}
+    foreach($depId in $depIds){
         try{$dep=Get-SCTask ([string]$depId)}catch{$dep=$null}
         if($null-eq$dep){
-            $dependencyKnowledge+=,[ordered]@{id=[string]$depId;status='missing';manifest=$null}
+            $dependencyKnowledge+=,[ordered]@{id=[string]$depId;status='missing';definitionHash=$null;manifestId=$null;compatibilitySynthesized=$true}
             continue
         }
+        $latestRunId=if($dep.PSObject.Properties['latestRunId']){[string]$dep.latestRunId}else{$null}
+        $latestValidationId=if($dep.PSObject.Properties['latestValidationId']){[string]$dep.latestValidationId}else{$null}
         $manifest=Get-SCLatestCompletionManifest $dep
         if($manifest){
             $dependencyKnowledge+=,[ordered]@{
                 id=[string]$dep.id
+                title=[string]$dep.title
                 status=[string]$dep.status
                 definitionHash=Get-SCTaskDefinitionHash $dep
+                latestRunId=$latestRunId
+                latestValidationId=$latestValidationId
                 manifestId=[string]$manifest.id
                 changedFiles=@($manifest.changedFiles)
                 artifacts=@($manifest.artifacts)
@@ -62,19 +70,35 @@ function Get-SCExecutionProjection {
                 compatibilitySynthesized=$false
             }
         }else{
+            $legacyResult=$null;$legacyTruncated=$false
+            if($latestRunId-and$legacyShare-gt0){
+                try{
+                    $receipt=Read-SCJson (Get-SCPath ("runs/{0}.json"-f$latestRunId))
+                    if($receipt){
+                        $text=[string]$receipt.stdout
+                        $take=[Math]::Min($text.Length,$legacyShare)
+                        $legacyResult=if($take-gt0){$text.Substring(0,$take)}else{''}
+                        $legacyTruncated=($text.Length-gt$take)
+                    }
+                }catch{}
+            }
             $dependencyKnowledge+=,[ordered]@{
                 id=[string]$dep.id
+                title=[string]$dep.title
                 status=[string]$dep.status
                 definitionHash=Get-SCTaskDefinitionHash $dep
+                latestRunId=$latestRunId
+                latestValidationId=$latestValidationId
                 manifestId=$null
                 changedFiles=@()
                 artifacts=@()
                 conclusions=@()
-                validation=[ordered]@{id=if($dep.PSObject.Properties['latestValidationId']){$dep.latestValidationId}else{$null};verdict=$null}
+                validation=[ordered]@{id=$latestValidationId;verdict=$null}
                 warningsForSuccessor=@()
                 evidenceRefs=@()
                 compatibilitySynthesized=$true
-                latestRunId=if($dep.PSObject.Properties['latestRunId']){$dep.latestRunId}else{$null}
+                legacyResult=$legacyResult
+                legacyResultTruncated=$legacyTruncated
             }
         }
     }
