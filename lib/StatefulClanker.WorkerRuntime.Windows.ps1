@@ -29,18 +29,15 @@ function Unprotect-SCApiKey([string]$Protected) {
 
 # The profile protocol is an adapter boundary, not decoration. Missing protocol is
 # accepted as openai-chat for compatibility with the first connection schema.
-# Supported adapters live in the base Invoke-SCApiChat (WorkerRuntime.ps1): it
-# branches on protocol to build the right request shape (openai-chat -- most
-# providers; anthropic-messages -- native Anthropic Messages API, system/
-# tool_use/tool_result translated from this project's OpenAI-shaped canonical
-# message history). Anything else is refused loudly here rather than silently
-# sent in the wrong shape.
+# Supported adapters are owned by ClankerRouter. This wrapper only preserves
+# the Windows/runtime compatibility protocol guard and forwards the exact routed
+# endpoint record to the base client; it must never rebuild provider requests.
 $script:SCOpenAiChatInvokeBase=${function:Invoke-SCApiChat}
 $script:SCSupportedApiProtocols=@('openai-chat','anthropic-messages','gemini-native')
-function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode) {
+function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode,$ProviderRecord=$null) {
     $protocol=if($Connection.PSObject.Properties['protocol']-and-not[string]::IsNullOrWhiteSpace([string]$Connection.protocol)){[string]$Connection.protocol}else{'openai-chat'}
-    if($script:SCSupportedApiProtocols-notcontains$protocol){throw "Direct inference protocol '$protocol' is not supported by this runtime. Add/select a matching protocol adapter rather than sending an incompatible request shape."}
-    return (& $script:SCOpenAiChatInvokeBase $Connection $Messages $Tools $ToolMode)
+    if($script:SCSupportedApiProtocols-notcontains$protocol){throw "Inference protocol '$protocol' is not supported by ClankerRouter. Add or repair a router adapter instead of sending an incompatible request shape."}
+    return (& $script:SCOpenAiChatInvokeBase $Connection $Messages $Tools $ToolMode $ProviderRecord)
 }
 
 function Invoke-SCBoundedCommand([string]$Command,[int]$TimeoutSeconds=120) {
