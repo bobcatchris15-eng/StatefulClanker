@@ -130,8 +130,28 @@ function Get-SCPacketAttemptHistory($Task,[int]$Limit=3) {
     }catch{}
     return @($out)
 }
+function Get-SCTaskArrayField($Task,[string]$Name) {
+    if($Task.PSObject.Properties[$Name] -and $Task.$Name){return @($Task.$Name)}
+    return @()
+}
+function New-SCCompiledDefinitionOfDone($Task) {
+    return [ordered]@{
+        targetArtifacts=@(Get-SCTaskArrayField $Task 'targetArtifacts')
+        acceptanceCriteria=@($Task.acceptance)
+        mechanicalChecks=@(Get-SCTaskArrayField $Task 'checks')
+        semanticChecks=@(Get-SCTaskArrayField $Task 'semanticAcceptance')
+        proofObligations=@(Get-SCTaskArrayField $Task 'proofObligations')
+        provenance=[ordered]@{
+            targetArtifacts='task.targetArtifacts'
+            acceptanceCriteria='task.acceptance'
+            mechanicalChecks='task.checks'
+            semanticChecks='task.semanticAcceptance'
+            proofObligations='task.proofObligations'
+        }
+    }
+}
 function New-SCCompilation($Task) {
-    $state=Get-SCState;$cfg=Get-SCConfig;$compilationId=New-SCId 'compile';$retrieved=Get-SCRetrievalPacket $Task;$dependencies=@(Get-SCDependencySummary $Task);$executionProjection=Write-SCExecutionProjection (Get-SCExecutionProjection $Task);$eventCount=if($cfg.PSObject.Properties['recentEventCount']){[int]$cfg.recentEventCount}else{12};$eventBudget=if($cfg.PSObject.Properties['recentEventBudgetChars']){[int]$cfg.recentEventBudgetChars}else{4000};$taskControlRevision=Get-SCTaskControlRevision $Task;$policyHash=Get-SCExecutionPolicyHash
+    $state=Get-SCState;$cfg=Get-SCConfig;$compilationId=New-SCId 'compile';$retrieved=Get-SCRetrievalPacket $Task;$executionProjection=Write-SCExecutionProjection (Get-SCExecutionProjection $Task);$dependencies=@($executionProjection.dependencyKnowledge);$eventCount=if($cfg.PSObject.Properties['recentEventCount']){[int]$cfg.recentEventCount}else{12};$eventBudget=if($cfg.PSObject.Properties['recentEventBudgetChars']){[int]$cfg.recentEventBudgetChars}else{4000};$taskControlRevision=Get-SCTaskControlRevision $Task;$policyHash=Get-SCExecutionPolicyHash
     $intent=Get-SCIntentContract;$intentHash=Get-SCIntentHash $intent;$planIntent=Get-SCActivePlanIntent $state;$planIntentHash=Get-SCHashString (ConvertTo-SCJson $planIntent 8)
     $contextFaults=New-Object Collections.ArrayList
     $readSetPaths=@($retrieved.items|ForEach-Object{[string]$_.path});if(@($readSetPaths).Count-eq 0){$readSetPaths=@(@($Task.evidence)+@($Task.retrieval)|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})}
@@ -141,27 +161,62 @@ function New-SCCompilation($Task) {
     $readSet=[ordered]@{projectGoalHash=Get-SCHashString ([string]$state.goal);activePlanId=$state.activePlanId;planIntentHash=$planIntentHash;directionRevision=$state.directionRevision;intentRevision=[int]$intent.revision;intentHash=$intentHash;executionPolicyHash=$policyHash;taskId=$Task.id;taskControlRevision=$taskControlRevision;taskDefinitionHash=Get-SCTaskDefinitionHash $Task;dependencies=@($dependencies|ForEach-Object{[ordered]@{id=$_.id;status=$_.status;definitionHash=$_.definitionHash;latestRunId=$_.latestRunId;latestValidationId=$_.latestValidationId}});files=@($retrieved.items|ForEach-Object{[ordered]@{path=$_.path;sha256=$_.sha256;authority=$_.authority}});projectLessonsHash=Get-SCHashString (ConvertTo-SCJson $projectLessons 12);codeNeighboursHash=Get-SCHashString (ConvertTo-SCJson $codeNeighbours 12);attemptHistoryHash=Get-SCHashString (ConvertTo-SCJson $attemptHistory 12)}
     $inputFingerprint=Get-SCHashString (ConvertTo-SCJson $readSet 20)
     $contract=@('Perform only this bounded task.','The authoritative intent contract is read-only to workers. Never edit, replace, reinterpret away, or weaken it.','If task instructions conflict with the intent contract, emit INTENT_CONFLICT: <specific conflict> and stop rather than choosing your own interpretation.','If the intent contract is ambiguous or insufficient for a material choice, emit INTENT_QUESTION: <specific question> and stop rather than guessing.','Treat durable state and project files as authoritative.','If task.checks are present, run those exact mechanical acceptance commands before submitting when your capabilities permit; the harness will rerun them independently after submission.','Report files changed, commands run, failures, and unresolved risks.','Do not claim verification you did not perform.','If required state or evidence is missing, emit CONTEXT_REQUEST: <specific missing state> rather than guessing.')
-    $latestFeedback = $null
-    if ($Task.PSObject.Properties['latestValidationId'] -and $Task.latestValidationId) {
-        try {
-            $v = Read-SCJson (Get-SCPath ("validations/{0}.json" -f $Task.latestValidationId))
-            if ($v) { $latestFeedback = [ordered]@{ source='validator'; verdict = $v.verdict; feedback = $v.stdout } }
-        } catch {}
-    } elseif ($Task.PSObject.Properties['latestCritiqueId'] -and $Task.latestCritiqueId) {
-        try {
-            $c = Read-SCJson (Get-SCPath ("critiques/{0}.json" -f $Task.latestCritiqueId))
-            if ($c) { $latestFeedback = [ordered]@{ source='legacy-critic'; verdict = $c.verdict; feedback = $c.stdout } }
-        } catch {}
-    }
+    $correctiveFeedback=@($executionProjection.correctiveFeedback)
+    $latestFeedback=if($correctiveFeedback.Count-gt0){$correctiveFeedback[-1]}else{$null}
     $taskRole=if($Task.PSObject.Properties['role']-and$Task.role){[string]$Task.role}else{'worker'}
-    $taskChecks=@();if($Task.PSObject.Properties['checks']){$taskChecks=@($Task.checks)}
-    $taskSemantic=@();if($Task.PSObject.Properties['semanticAcceptance']){$taskSemantic=@($Task.semanticAcceptance)}
-    $taskRelations=@();if($Task.PSObject.Properties['relations']){$taskRelations=@($Task.relations)}
+    $taskChecks=@(Get-SCTaskArrayField $Task 'checks')
+    $taskSemantic=@(Get-SCTaskArrayField $Task 'semanticAcceptance')
+    $taskRelations=@(Get-SCTaskArrayField $Task 'relations')
+    $taskImplications=@(Get-SCTaskArrayField $Task 'implications')
+    $taskProof=@(Get-SCTaskArrayField $Task 'proofObligations')
+    $taskTargets=@(Get-SCTaskArrayField $Task 'targetArtifacts')
+    $taskSources=@(Get-SCTaskArrayField $Task 'sources')
+    $taskIntentRefs=@(Get-SCTaskArrayField $Task 'intentRefs')
+    $definitionOfDone=New-SCCompiledDefinitionOfDone $Task
     $sources=[ordered]@{retrieved=$retrieved;recentEvents=@(Get-SCRecentEvents $eventCount $eventBudget)}
     if(@($projectLessons).Count-gt 0){$sources['projectLessons']=[ordered]@{authority='candidate project-local working knowledge; verify against current files and human/intent authority';items=@($projectLessons)}}
     if(@($codeNeighbours).Count-gt 0){$sources['codeNeighbours']=[ordered]@{authority='candidate code-graph neighbours; verify against current files';items=@($codeNeighbours)}}
     if(@($attemptHistory).Count-gt 0){$sources['attemptHistory']=[ordered]@{authority='prior attempts for this task, newest first';items=@($attemptHistory)}}
-    $ir=[ordered]@{schemaVersion=2;compilationId=$compilationId;compiledAt=(Get-Date).ToUniversalTime().ToString('o');project=[ordered]@{goal=$state.goal;root=Get-SCRoot;activePlan=$planIntent;directionRevision=$state.directionRevision;stateRevision=$state.revision;executionPolicyHash=$policyHash;intent=[ordered]@{revision=[int]$intent.revision;hash=$intentHash;authority='orchestrator-owned; worker read-only';contract=$intent}};task=[ordered]@{id=$Task.id;title=$Task.title;instruction=$Task.instruction;role=$taskRole;outputKind=if($Task.PSObject.Properties['outputKind']){[string]$Task.outputKind}else{'change'};controlRevision=$taskControlRevision;acceptance=@($Task.acceptance);checks=$taskChecks;semanticAcceptance=$taskSemantic;dependsOn=@($Task.dependsOn);relations=$taskRelations;latestFeedback=$latestFeedback};dependencies=$dependencies;sources=$sources;outputContract=$contract}
+    $ir=[ordered]@{
+        schemaVersion=3
+        compilationId=$compilationId
+        compiledAt=(Get-Date).ToUniversalTime().ToString('o')
+        project=[ordered]@{
+            goal=$state.goal;root=Get-SCRoot;activePlan=$planIntent;directionRevision=$state.directionRevision;stateRevision=$state.revision;executionPolicyHash=$policyHash
+            intent=[ordered]@{revision=[int]$intent.revision;hash=$intentHash;authority='orchestrator-owned; worker read-only';contract=$intent}
+        }
+        task=[ordered]@{
+            id=$Task.id;title=$Task.title;instruction=$Task.instruction;role=$taskRole
+            outputKind=if($Task.PSObject.Properties['outputKind']){[string]$Task.outputKind}else{'change'}
+            controlRevision=$taskControlRevision
+            definitionOfDone=$definitionOfDone
+            acceptance=@($Task.acceptance)
+            checks=$taskChecks
+            semanticAcceptance=$taskSemantic
+            implications=$taskImplications
+            proofObligations=$taskProof
+            targetArtifacts=$taskTargets
+            parentTaskId=if($Task.PSObject.Properties['parentTaskId']){$Task.parentTaskId}else{$null}
+            dependsOn=@($Task.dependsOn)
+            relations=$taskRelations
+            retrieval=@($Task.retrieval)
+            evidence=@($Task.evidence)
+            sources=$taskSources
+            intentRefs=$taskIntentRefs
+            latestFeedback=$latestFeedback
+        }
+        execution=[ordered]@{
+            projectionId=$executionProjection.id
+            projectionHash=$executionProjection.hash
+            diagnostics=$executionProjection.executionDiagnostics
+            correctiveFeedback=@($executionProjection.correctiveFeedback)
+            priorAttemptKnowledge=@($executionProjection.priorAttemptKnowledge)
+            retrievalHealth=$executionProjection.retrievalHealth
+        }
+        dependencies=@($dependencies)
+        sources=$sources
+        outputContract=$contract
+    }
     $contextFingerprint=Get-SCHashString (ConvertTo-SCJson $ir 24)
     $receipt=[ordered]@{schemaVersion=2;id=$compilationId;taskId=$Task.id;compiledAt=$ir.compiledAt;inputFingerprint=$inputFingerprint;contextFingerprint=$contextFingerprint;readSet=$readSet;executionProjection=[ordered]@{id=$executionProjection.id;hash=$executionProjection.hash};retrievalStats=[ordered]@{budgetChars=$retrieved.budgetChars;usedChars=$retrieved.usedChars;budgetExhausted=$retrieved.budgetExhausted;unmatchedSelectors=@($retrieved.unmatchedSelectors);itemCount=@($retrieved.items).Count;truncatedCount=@($retrieved.items|Where-Object{$_.truncated}).Count;excludedByBoundaryCount=if($retrieved.PSObject.Properties['health']){[int]$retrieved.health.excludedByBoundaryCount}else{0};health=if($retrieved.PSObject.Properties['health']){$retrieved.health}else{$null}};contextFaults=@($contextFaults);ir=$ir}
     Write-SCJson (Get-SCPath ("compilations/{0}.json"-f$compilationId)) $receipt;Set-SCProperty $Task 'latestCompilationId' $compilationId;Save-SCTask $Task
