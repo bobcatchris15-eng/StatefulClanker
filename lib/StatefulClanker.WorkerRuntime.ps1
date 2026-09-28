@@ -1106,22 +1106,39 @@ function Clear-SCGeminiTranscriptFunctionCalls($Messages) {
     }
     return $out
 }
+function Sync-SCWorkerSessionContext(
+    [string]$WorkerSessionId,
+    $Task,
+    $Compilation,
+    [string]$Prompt,
+    [string]$ToolMode,
+    $Registry,
+    [string]$ContinuationMessage=$null
+) {
+    $session=New-SCWorkerSession $WorkerSessionId $Task $Compilation $Prompt $ToolMode $Registry
+    if([string]$session.toolMode-ne$ToolMode){throw "Worker session $WorkerSessionId uses toolMode '$($session.toolMode)' and cannot resume on '$ToolMode' without transcript conversion."}
+    if($Compilation -and $session.PSObject.Properties['inputFingerprint'] -and [string]$session.inputFingerprint-ne[string]$Compilation.inputFingerprint){
+        $refresh="REFRESHED COMPILED TASK CONTEXT. This packet supersedes older task-context messages while preserving the work and reasoning already in this session:"+[Environment]::NewLine+$Prompt
+        Add-SCWorkerSessionContinuation $WorkerSessionId $refresh
+        $session=Get-SCWorkerSession $WorkerSessionId
+        Set-SCProperty $session 'compilationId' ([string]$Compilation.id)
+        Set-SCProperty $session 'inputFingerprint' ([string]$Compilation.inputFingerprint)
+        Set-SCProperty $session 'status' 'active'
+        Save-SCWorkerSession $session
+    }else{
+        Set-SCProperty $session 'status' 'active'
+        Save-SCWorkerSession $session
+    }
+    Add-SCWorkerSessionContinuation $WorkerSessionId $ContinuationMessage
+    return Get-SCWorkerSession $WorkerSessionId
+}
+
 function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$Stage='worker',$UsageAccumulator=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,$ProviderRecord=$null,$Compilation=$null) {
     $toolMode=Get-SCEffectiveWorkerToolMode $Connection;if(@('native','text')-notcontains$toolMode){throw "Unsupported toolMode '$toolMode'."}
     $maxSteps=Get-SCWorkerMaxSteps $Connection $Task $Stage
     $registry=@(Get-SCWorkerToolRecords $Task $Stage);if($registry.Count-eq0){throw 'No worker capabilities are authorized for this invocation.'}
     if($Stage-eq'run' -and $WorkerSessionId){
-        $session=New-SCWorkerSession $WorkerSessionId $Task $Compilation $Prompt $toolMode $registry
-        if([string]$session.toolMode-ne$toolMode){throw "Worker session $WorkerSessionId uses toolMode '$($session.toolMode)' and cannot resume on '$toolMode' without transcript conversion."}
-        if($Compilation -and $session.PSObject.Properties['inputFingerprint'] -and [string]$session.inputFingerprint-ne[string]$Compilation.inputFingerprint){
-            $refresh="REFRESHED COMPILED TASK CONTEXT. This packet supersedes older task-context messages while preserving the work and reasoning already in this session:"+[Environment]::NewLine+$Prompt
-            Add-SCWorkerSessionContinuation $WorkerSessionId $refresh
-            $session=Get-SCWorkerSession $WorkerSessionId
-            Set-SCProperty $session 'compilationId' ([string]$Compilation.id)
-            Set-SCProperty $session 'inputFingerprint' ([string]$Compilation.inputFingerprint)
-        }
-        Set-SCProperty $session 'status' 'active';Save-SCWorkerSession $session
-        Add-SCWorkerSessionContinuation $WorkerSessionId $ContinuationMessage
+        $session=Sync-SCWorkerSessionContext $WorkerSessionId $Task $Compilation $Prompt $toolMode $registry $ContinuationMessage
         if($ProviderRecord){Add-SCWorkerSessionProvider $WorkerSessionId ([string]$ProviderRecord.name) ([string]$ProviderRecord.config.connection) ([string]$ProviderRecord.config.model)}
         $session=Get-SCWorkerSession $WorkerSessionId
         $messages=@($session.messages)
