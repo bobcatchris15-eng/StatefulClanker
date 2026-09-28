@@ -117,29 +117,50 @@ function Get-SCSignalsForAudience {
     return @($matches)
 }
 
+function Get-SCSignalValue($Object,[string]$Name) {
+    if($null-eq$Object){return $null}
+    if($Object-is[System.Collections.IDictionary]){
+        if($Object.Contains($Name)){return $Object[$Name]}
+        return $null
+    }
+    $property=$Object.PSObject.Properties[$Name]
+    if($null-ne$property){return $property.Value}
+    return $null
+}
+
+function Get-SCSignalEntries($Object) {
+    if($null-eq$Object){return @()}
+    if($Object-is[System.Collections.IDictionary]){
+        return @($Object.Keys|ForEach-Object{[pscustomobject]@{Name=[string]$_;Value=$Object[$_]}})
+    }
+    return @($Object.PSObject.Properties|ForEach-Object{[pscustomobject]@{Name=[string]$_.Name;Value=$_.Value}})
+}
+
 function Test-SCSignalFreshness($Signal,$Task=$null) {
     $reasons=New-Object Collections.Generic.List[string]
-    $freshness=if($Signal.PSObject.Properties['freshness']){$Signal.freshness}else{$null}
+    $freshness=Get-SCSignalValue $Signal 'freshness'
     if($null-eq$freshness){return [pscustomobject]@{fresh=$true;reasons=@()}}
-    if($freshness.PSObject.Properties['expiresAt']-and$freshness.expiresAt){
+    $expiresRaw=Get-SCSignalValue $freshness 'expiresAt'
+    if($expiresRaw){
         $expires=[datetimeoffset]::MinValue
-        if(-not[datetimeoffset]::TryParse([string]$freshness.expiresAt,[ref]$expires)){$reasons.Add('invalid expiry')}
+        if(-not[datetimeoffset]::TryParse([string]$expiresRaw,[ref]$expires)){$reasons.Add('invalid expiry')}
         elseif($expires-le[datetimeoffset]::UtcNow){$reasons.Add('expired')}
     }
-    if($freshness.PSObject.Properties['taskDefinitionHash']-and$freshness.taskDefinitionHash){
-        if($null-eq$Task-and[string]$Signal.subject.type-eq'task'){try{$Task=Get-SCTask ([string]$Signal.subject.id)}catch{}}
+    $definitionHash=Get-SCSignalValue $freshness 'taskDefinitionHash'
+    if($definitionHash){
+        if($null-eq$Task-and[string](Get-SCSignalValue $Signal.subject 'type')-eq'task'){try{$Task=Get-SCTask ([string](Get-SCSignalValue $Signal.subject 'id'))}catch{}}
         if($null-eq$Task){$reasons.Add('task unavailable for definition freshness')}
-        elseif((Get-SCTaskDefinitionHash $Task)-ne[string]$freshness.taskDefinitionHash){$reasons.Add('task definition changed')}
+        elseif((Get-SCTaskDefinitionHash $Task)-ne[string]$definitionHash){$reasons.Add('task definition changed')}
     }
-    if($freshness.PSObject.Properties['fileHashes']-and$freshness.fileHashes){
-        foreach($p in $freshness.fileHashes.PSObject.Properties){
-            $full=Join-Path (Get-SCRoot) ([string]$p.Name)
-            if((Get-SCFileHashValue $full)-ne[string]$p.Value){$reasons.Add("file changed: $($p.Name)")}
+    $fileHashes=Get-SCSignalValue $freshness 'fileHashes'
+    if($fileHashes){
+        foreach($entry in @(Get-SCSignalEntries $fileHashes)){
+            $full=Join-Path (Get-SCRoot) ([string]$entry.Name)
+            if((Get-SCFileHashValue $full)-ne[string]$entry.Value){$reasons.Add("file changed: $($entry.Name)")}
         }
     }
     return [pscustomobject]@{fresh=($reasons.Count-eq0);reasons=@($reasons)}
 }
-
 
 function Publish-SCExecutionSignal {
     param(
