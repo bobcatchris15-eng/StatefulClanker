@@ -203,6 +203,7 @@ function New-SCSyntheticValidationReceipt($Task,$Run,$Compilation,[string]$Verdi
     }
     Write-SCJson (Get-SCPath ("validations/{0}.json"-f$receipt.id)) $receipt
     Add-SCEvent 'validator.finished' "Acceptance gate finished for $($Task.id): $Verdict ($Kind)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$Verdict;validationKind=$Kind;compilationId=$Compilation.id}
+    Publish-SCValidationSignal $Task $receipt $Compilation|Out-Null
     return $receipt
 }
 
@@ -324,6 +325,7 @@ function Invoke-SCReview($Task,$Run,$Compilation,[string]$Stage,[string]$Endpoin
     $dir=if($Stage-eq'critic'){'critiques'}else{'validations'}
     Write-SCJson (Get-SCPath ("{0}/{1}.json"-f$dir,$receipt.id)) $receipt
     Add-SCEvent "$Stage.finished" "$Stage review finished for $($Task.id): $($receipt.verdict)" @{taskId=$Task.id;receiptId=$receipt.id;agentId=$receipt.agentId;verdict=$receipt.verdict;compilationId=$Compilation.id}
+    Publish-SCValidationSignal $Task $receipt $Compilation|Out-Null
     return $receipt
 }
 function New-SCCompletionProposal($Task,$Run,$Compilation) {
@@ -452,6 +454,9 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
         $contextRequests=@(Capture-SCContextRequests $task $run $compilation)
         Write-SCJson (Get-SCPath ("runs/{0}.json"-f$run.id)) $run
         $task=Get-SCTask $task.id;$task.latestRunId=$run.id;Save-SCTask $task
+        $runSignalKind=if([int]$run.exitCode-eq0){'worker_run_completed'}else{'worker_run_failed'}
+        $runQualifier=if([int]$run.exitCode-ne0){'next_attempt'}else{$null}
+        Publish-SCExecutionSignal -Kind $runSignalKind -Task $task -Component worker -Scope attempt -Authority observed -Qualifier $runQualifier -SourceExtra @{runId=[string]$run.id;compilationId=[string]$compilation.id;workerSessionId=$workerSessionId} -Payload @{runId=[string]$run.id;exitCode=[int]$run.exitCode;workerSessionId=$workerSessionId;compilationId=[string]$compilation.id;contextRequestCount=$contextRequests.Count;routeDeferred=($run.PSObject.Properties['routeDeferred'] -and [bool]$run.routeDeferred);routeExhausted=($run.PSObject.Properties['routeExhausted'] -and [bool]$run.routeExhausted);evidenceRefs=@("run:$($run.id)")} | Out-Null
 
         if(Stop-SCForStaleCompilation $task $compilation 'stale-after-worker' 'Compiled state became stale while the worker was running.'){
             Close-SCWorkerSession $workerSessionId 'stale'
@@ -494,6 +499,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
 
         Add-SCEvent 'run.finished' "Worker finished $($run.id)" @{taskId=$task.id;runId=$run.id;agentId=$run.agentId;workerSessionId=$workerSessionId;compilationId=$compilation.id}
         if($contextRequests.Count-gt0){
+            Publish-SCExecutionSignal -Kind context_requested -Task $task -Component worker -Scope task -Authority corrective -Qualifier next_attempt -SourceExtra @{runId=[string]$run.id;compilationId=[string]$compilation.id} -Payload @{requests=@($contextRequests);evidenceRefs=@("run:$($run.id)","compilation:$($compilation.id)")} | Out-Null
             $task=Get-SCTask $task.id;$task.status='needs_rework';$task.blockReason='Worker requested missing context; completion was not proposed.'
             Set-SCProperty $task 'activeWorkerSessionId' $null;Save-SCTask $task
             Close-SCWorkerSession $workerSessionId 'context-fault'
@@ -519,6 +525,7 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
             }
             Write-SCJson (Get-SCPath ("runs/{0}.json"-f$run.id)) $run
             if(-not[bool]$preflight.material){
+                Publish-SCExecutionSignal -Kind candidate_empty -Task $task -Component candidate_preflight -Scope attempt -Authority observed -Qualifier same_session -SourceExtra @{runId=[string]$run.id;workerSessionId=$workerSessionId} -Payload @{reason=[string]$preflight.reason;missingArtifacts=@($preflight.missingArtifacts);candidateCheckpointId=$preflight.candidateCheckpointId;evidenceRefs=@("run:$($run.id)")} | Out-Null
                 $noArtifactCount=Add-SCWorkerNoArtifact $workerSessionId ([string]$preflight.reason)
                 if($noArtifactCount-eq1){
                     $continuation="CANDIDATE PREFLIGHT REJECTED. No validator was run because StatefulClanker's deterministic evidence gate found no required material artifact change. Reason: $($preflight.reason). This task expects implementation artifacts. Inspect the current worktree, perform the requested work, verify it, and submit a new candidate. Do not merely restate the intended implementation."
