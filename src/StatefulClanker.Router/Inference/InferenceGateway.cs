@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Net;
-using System.Text.Json;
 
 namespace StatefulClanker.Router;
 
@@ -17,11 +15,27 @@ public sealed class InferenceGateway : IDisposable
         _engine=engine;
         _store=engine.Store;
         _signals=new SignalStore(_store.Root);
-        _http=new HttpClient{Timeout=TimeSpan.FromSeconds(45)};
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("StatefulClanker-InferenceGateway/0.1");
+        _http=new HttpClient();
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("StatefulClanker-InferenceGateway/0.2");
     }
 
     public IReadOnlyList<object> DescribeAdapters() => _adapters.Describe();
+
+    public async Task<RouterResponse> InferExactAsync(
+        string? endpoint,
+        NormalizedInferenceRequest? request,
+        CancellationToken token=default)
+    {
+        if(string.IsNullOrWhiteSpace(endpoint)) return RouterResponse.Fail("endpoint is required.");
+        if(request is null) return RouterResponse.Fail("inference request is required.");
+        var route=_engine.FindRoute(endpoint);
+        if(route is null) return RouterResponse.Fail($"Unknown endpoint '{endpoint}'.");
+        if(route.Connection is null)
+            return RouterResponse.Fail($"Endpoint '{route.RouteName}' references missing connection '{route.Endpoint.connection}'.");
+
+        var result=await ExecuteAsync(route,request,false,token);
+        return RouterResponse.Ok(result);
+    }
 
     public async Task<RouterResponse> TestEndpointAsync(
         string? endpoint,
@@ -30,49 +44,72 @@ public sealed class InferenceGateway : IDisposable
         int maxOutputTokens=8,
         CancellationToken token=default)
     {
-        if(string.IsNullOrWhiteSpace(endpoint))
-            return RouterResponse.Fail("endpoint is required.");
-
+        if(string.IsNullOrWhiteSpace(endpoint)) return RouterResponse.Fail("endpoint is required.");
         var route=_engine.FindRoute(endpoint);
-        if(route is null)
-            return RouterResponse.Fail($"Unknown endpoint '{endpoint}'.");
-
+        if(route is null) return RouterResponse.Fail($"Unknown endpoint '{endpoint}'.");
         if(route.Connection is null)
             return RouterResponse.Fail($"Endpoint '{route.RouteName}' references missing connection '{route.Endpoint.connection}'.");
 
-        IProviderAdapter adapter;
-        try
+        var request=new NormalizedInferenceRequest
         {
-            adapter=_adapters.Resolve(route.Connection);
-        }
+            prompt=string.IsNullOrWhiteSpace(prompt)?"Reply with exactly: CLANKER_OK":prompt!,
+            maxOutputTokens=Math.Clamp(maxOutputTokens,1,64),
+            testTools=string.Equals(mode,"tools",StringComparison.OrdinalIgnoreCase),
+            toolMode=string.Equals(mode,"tools",StringComparison.OrdinalIgnoreCase)?"native":"text",
+            timeoutSeconds=45
+        };
+        request.EnsureDiagnosticConversation();
+        var inference=await ExecuteAsync(route,request,true,token);
+        var mapped=new EndpointTestResult
+        {
+            ok=inference.ok,
+            endpoint=inference.endpoint,
+            connection=inference.connection,
+            model=inference.model,
+            adapterId=inference.adapterId,
+            adapterSource=inference.adapterSource,
+            protocol=route.Connection.protocol,
+            connectionConfigFingerprint=_store.ConnectionFingerprint(route.Connection),
+            request=inference.request,
+            response=inference.response,
+            diagnosis=inference.diagnosis,
+            signalRef=inference.signalRef
+        };
+        return RouterResponse.Ok(mapped);
+    }
+
+    async Task<NormalizedInferenceResult> ExecuteAsync(
+        EndpointRoute route,
+        NormalizedInferenceRequest request,
+        bool diagnosticMode,
+        CancellationToken token)
+    {
+        IProviderAdapter adapter;
+        try{adapter=_adapters.Resolve(route.Connection!);}
         catch(Exception ex)
         {
-            var unsupported=BaseResult(route,"unresolved","",new SanitizedRequestEvidence(),
-                new SanitizedResponseEvidence(),
+            var unsupported=BaseResult(route,"unresolved","",
                 Diagnosis("adapter_unavailable","request",true,false,"ADAPTER_NOT_FOUND",ex.Message));
-            unsupported.signalRef=EmitTestSignal(route,unsupported,false);
-            return RouterResponse.Ok(unsupported);
+            unsupported.failoverAllowed=false;
+            unsupported.signalRef=EmitSignal(route,unsupported,diagnosticMode);
+            return unsupported;
         }
-
-        var normalized=new NormalizedInferenceRequest
-        {
-            prompt=string.IsNullOrWhiteSpace(prompt) ? "Reply with exactly: CLANKER_OK" : prompt!,
-            maxOutputTokens=Math.Clamp(maxOutputTokens,1,64),
-            testTools=string.Equals(mode,"tools",StringComparison.OrdinalIgnoreCase)
-        };
 
         AdapterRequest? built=null;
         var responseEvidence=new SanitizedResponseEvidence();
         var stopwatch=Stopwatch.StartNew();
+        using var timeoutCts=CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(request.timeoutSeconds,15,1800)));
 
         try
         {
-            var key=ConnectionCredentialResolver.ResolveKey(route.Connection);
-            built=adapter.BuildRequest(route.Connection,route.Endpoint,normalized,key);
-            using var response=await _http.SendAsync(built.message,HttpCompletionOption.ResponseHeadersRead,token);
+            var key=ConnectionCredentialResolver.ResolveKey(route.Connection!);
+            built=adapter.BuildRequest(route.Connection!,route.Endpoint,request,key);
+            using var response=await _http.SendAsync(
+                built.message,HttpCompletionOption.ResponseHeadersRead,timeoutCts.Token);
             stopwatch.Stop();
 
-            var body=await ReadBodyBounded(response,token);
+            var body=await ReadBodyBounded(response,timeoutCts.Token);
             responseEvidence=new SanitizedResponseEvidence
             {
                 httpStatus=(int)response.StatusCode,
@@ -84,55 +121,71 @@ public sealed class InferenceGateway : IDisposable
 
             if(response.IsSuccessStatusCode)
             {
-                var parsed=adapter.ParseSuccess(body);
-                if(parsed.Success)
+                var parsed=adapter.ParseSuccess(body,route.Endpoint);
+                if(parsed.Success && parsed.Assistant is not null)
                 {
                     _engine.Success(null,route.RouteName);
-                    var result=BaseResult(
-                        route,adapter.Id,adapter.SourcePath,built.evidence,responseEvidence,
-                        Diagnosis("none","endpoint",false,false,"TEST_INFERENCE_SUCCEEDED","Real inference succeeded through the production adapter path."));
+                    var result=BaseResult(route,adapter.Id,adapter.SourcePath,
+                        Diagnosis("none","endpoint",false,false,
+                            diagnosticMode?"TEST_INFERENCE_SUCCEEDED":"INFERENCE_SUCCEEDED",
+                            "Inference succeeded through the router-owned adapter."));
                     result.ok=true;
-                    result.signalRef=EmitTestSignal(route,result,true);
-                    return RouterResponse.Ok(result);
+                    result.assistant=parsed.Assistant;
+                    result.usage=parsed.Usage;
+                    result.request=built.evidence;
+                    result.response=responseEvidence;
+                    result.healthChanged=true;
+                    result.signalRef=EmitSignal(route,result,diagnosticMode);
+                    return result;
                 }
 
-                var malformed=BaseResult(
-                    route,adapter.Id,adapter.SourcePath,built.evidence,responseEvidence,
-                    Diagnosis("malformed_response","request",true,false,"RESPONSE_SHAPE_UNRECOGNIZED",parsed.Error));
-                malformed.signalRef=EmitTestSignal(route,malformed,false);
-                return RouterResponse.Ok(malformed);
+                var malformed=BaseResult(route,adapter.Id,adapter.SourcePath,
+                    Diagnosis("malformed_response","request",true,false,
+                        "RESPONSE_SHAPE_UNRECOGNIZED",parsed.Error));
+                malformed.usage=parsed.Usage;
+                malformed.request=built.evidence;
+                malformed.response=responseEvidence;
+                malformed.failoverAllowed=false;
+                malformed.signalRef=EmitSignal(route,malformed,diagnosticMode);
+                return malformed;
             }
 
             var diagnosticText=$"HTTP {(int)response.StatusCode} {response.ReasonPhrase} {body}".Trim();
             var klass=FailurePolicy.Classify(diagnosticText,(int)response.StatusCode);
             var scope=FailurePolicy.ScopeFor(klass);
-            var adapterSuspect=(int)response.StatusCode is 400 or 404 or 422 ||
+            var adapterSuspect=(int)response.StatusCode is 400 or 422 ||
                                klass is "bad_request" or "protocol_error" or "malformed_response";
             if((int)response.StatusCode is 400 or 422) scope="request";
             var providerSuspect=scope is not ("request" or "harness");
+            var healthChanged=scope is not ("request" or "harness");
 
-            if(scope is not ("request" or "harness"))
+            if(healthChanged)
                 _engine.Failure(null,route.RouteName,klass,diagnosticText);
 
-            var failed=BaseResult(
-                route,adapter.Id,adapter.SourcePath,built.evidence,responseEvidence,
-                Diagnosis(
-                    klass,scope,adapterSuspect,providerSuspect,
+            var failed=BaseResult(route,adapter.Id,adapter.SourcePath,
+                Diagnosis(klass,scope,adapterSuspect,providerSuspect,
                     ReasonCode(klass,(int)response.StatusCode,adapterSuspect),
                     Bound(diagnosticText,1000)));
-            failed.signalRef=EmitTestSignal(route,failed,false);
-            return RouterResponse.Ok(failed);
+            failed.request=built.evidence;
+            failed.response=responseEvidence;
+            failed.healthChanged=healthChanged;
+            failed.failoverAllowed=!adapterSuspect && FailurePolicy.CanFailover(klass);
+            failed.signalRef=EmitSignal(route,failed,diagnosticMode);
+            return failed;
         }
         catch(TaskCanceledException ex) when(!token.IsCancellationRequested)
         {
             stopwatch.Stop();
             responseEvidence.durationSeconds=Math.Round(stopwatch.Elapsed.TotalSeconds,3);
             _engine.Failure(null,route.RouteName,"timeout",ex.Message);
-            var result=BaseResult(
-                route,adapter.Id,adapter.SourcePath,built?.evidence??new SanitizedRequestEvidence(),responseEvidence,
+            var result=BaseResult(route,adapter.Id,adapter.SourcePath,
                 Diagnosis("timeout","endpoint",false,true,"TRANSPORT_TIMEOUT",ex.Message));
-            result.signalRef=EmitTestSignal(route,result,false);
-            return RouterResponse.Ok(result);
+            result.request=built?.evidence??new SanitizedRequestEvidence();
+            result.response=responseEvidence;
+            result.healthChanged=true;
+            result.failoverAllowed=true;
+            result.signalRef=EmitSignal(route,result,diagnosticMode);
+            return result;
         }
         catch(HttpRequestException ex)
         {
@@ -141,38 +194,37 @@ public sealed class InferenceGateway : IDisposable
             var klass=FailurePolicy.Classify(ex.Message);
             if(klass=="request_error") klass="transport";
             var scope=klass=="transport"?"endpoint":FailurePolicy.ScopeFor(klass);
-            if(scope!="request") _engine.Failure(null,route.RouteName,klass,ex.Message);
-            var result=BaseResult(
-                route,adapter.Id,adapter.SourcePath,built?.evidence??new SanitizedRequestEvidence(),responseEvidence,
+            var healthChanged=scope is not ("request" or "harness");
+            if(healthChanged) _engine.Failure(null,route.RouteName,klass,ex.Message);
+            var result=BaseResult(route,adapter.Id,adapter.SourcePath,
                 Diagnosis(klass,scope,false,true,"TRANSPORT_FAILURE",ex.Message));
-            result.signalRef=EmitTestSignal(route,result,false);
-            return RouterResponse.Ok(result);
+            result.request=built?.evidence??new SanitizedRequestEvidence();
+            result.response=responseEvidence;
+            result.healthChanged=healthChanged;
+            result.failoverAllowed=FailurePolicy.CanFailover(klass) || klass=="transport";
+            result.signalRef=EmitSignal(route,result,diagnosticMode);
+            return result;
         }
         catch(Exception ex)
         {
             stopwatch.Stop();
             responseEvidence.durationSeconds=Math.Round(stopwatch.Elapsed.TotalSeconds,3);
-            var result=BaseResult(
-                route,adapter.Id,adapter.SourcePath,built?.evidence??new SanitizedRequestEvidence(),responseEvidence,
-                Diagnosis("harness_internal","harness",true,false,"ADAPTER_OR_HARNESS_EXCEPTION",ex.Message));
-            result.signalRef=EmitTestSignal(route,result,false);
-            return RouterResponse.Ok(result);
+            var result=BaseResult(route,adapter.Id,adapter.SourcePath,
+                Diagnosis("harness_internal","harness",true,false,
+                    "ADAPTER_OR_HARNESS_EXCEPTION",ex.Message));
+            result.request=built?.evidence??new SanitizedRequestEvidence();
+            result.response=responseEvidence;
+            result.healthChanged=false;
+            result.failoverAllowed=false;
+            result.signalRef=EmitSignal(route,result,diagnosticMode);
+            return result;
         }
-        finally
-        {
-            built?.Dispose();
-        }
+        finally{built?.Dispose();}
     }
 
-    EndpointTestResult BaseResult(
-        EndpointRoute route,
-        string adapterId,
-        string adapterSource,
-        SanitizedRequestEvidence request,
-        SanitizedResponseEvidence response,
-        InferenceDiagnosis diagnosis)
-    {
-        return new EndpointTestResult
+    NormalizedInferenceResult BaseResult(
+        EndpointRoute route,string adapterId,string adapterSource,InferenceDiagnosis diagnosis) =>
+        new()
         {
             ok=false,
             endpoint=route.RouteName,
@@ -180,15 +232,11 @@ public sealed class InferenceGateway : IDisposable
             model=route.Endpoint.model,
             adapterId=adapterId,
             adapterSource=adapterSource,
-            protocol=route.Connection?.protocol??"",
-            connectionConfigFingerprint=route.Connection is null ? "" : _store.ConnectionFingerprint(route.Connection),
-            request=request,
-            response=response,
-            diagnosis=diagnosis
+            diagnosis=diagnosis,
+            usage=new NormalizedUsage{model=route.Endpoint.model}
         };
-    }
 
-    string? EmitTestSignal(EndpointRoute route,EndpointTestResult result,bool success)
+    string? EmitSignal(EndpointRoute route,NormalizedInferenceResult result,bool diagnosticMode)
     {
         try
         {
@@ -199,31 +247,30 @@ public sealed class InferenceGateway : IDisposable
                 ["model"]=result.model,
                 ["adapterId"]=result.adapterId,
                 ["adapterSource"]=result.adapterSource,
-                ["protocol"]=result.protocol,
                 ["request"]=result.request,
                 ["response"]=result.response,
                 ["diagnosis"]=result.diagnosis,
-                ["connectionConfigFingerprint"]=result.connectionConfigFingerprint
+                ["usage"]=result.usage,
+                ["failoverAllowed"]=result.failoverAllowed,
+                ["healthChanged"]=result.healthChanged
             };
+            var kind=diagnosticMode
+                ? (result.ok?"endpoint_test_succeeded":"endpoint_test_failed")
+                : (result.ok?"inference_succeeded":"inference_failed");
             var signal=SignalEnvelope.Routing(
-                success?"endpoint_test_succeeded":"endpoint_test_failed",
-                "endpoint",route.RouteName,
-                "orchestrator","control-plane",
-                result.diagnosis.scope,
-                payload);
+                kind,"endpoint",route.RouteName,
+                diagnosticMode?"orchestrator":"router",
+                diagnosticMode?"control-plane":"inference",
+                result.diagnosis.scope,payload);
             signal.source["component"]="inference-gateway";
             return _signals.Append(signal);
         }
-        catch
-        {
-            return null;
-        }
+        catch{return null;}
     }
 
     static InferenceDiagnosis Diagnosis(
-        string klass,string scope,bool adapterSuspect,bool providerSuspect,string reasonCode,string? summary)
-    {
-        return new InferenceDiagnosis
+        string klass,string scope,bool adapterSuspect,bool providerSuspect,string reasonCode,string? summary) =>
+        new()
         {
             failureClass=klass,
             scope=scope,
@@ -232,12 +279,10 @@ public sealed class InferenceGateway : IDisposable
             reasonCode=reasonCode,
             summary=Bound(summary,1000)
         };
-    }
 
     static string ReasonCode(string klass,int status,bool adapterSuspect)
     {
         if(adapterSuspect && status is 400 or 422) return "REQUEST_SHAPE_REJECTED";
-        if(adapterSuspect && status==404) return "REQUEST_URI_OR_MODEL_REJECTED";
         return klass switch
         {
             "auth" or "permission" => "AUTHENTICATION_REJECTED",
@@ -249,7 +294,7 @@ public sealed class InferenceGateway : IDisposable
             "server_error" => "PROVIDER_SERVER_ERROR",
             "bad_request" => "REQUEST_SHAPE_REJECTED",
             "protocol_error" => "PROTOCOL_REJECTED",
-            _ => "ENDPOINT_TEST_FAILED"
+            _ => "INFERENCE_FAILED"
         };
     }
 
@@ -277,8 +322,7 @@ public sealed class InferenceGateway : IDisposable
     static string? ProviderRequestId(HttpResponseMessage response)
     {
         foreach(var key in new[]{"x-request-id","request-id","cf-ray"})
-            if(response.Headers.TryGetValues(key,out var values))
-                return values.FirstOrDefault();
+            if(response.Headers.TryGetValues(key,out var values)) return values.FirstOrDefault();
         return null;
     }
 
