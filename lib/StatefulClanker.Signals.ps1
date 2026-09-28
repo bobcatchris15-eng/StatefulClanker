@@ -93,6 +93,7 @@ function Write-SCSignal($Signal) {
     if([string]$Signal.domain-eq'execution' -and
        (Get-Command Get-SCExecutionProjection -ErrorAction SilentlyContinue) -and
        (Get-Command Write-SCExecutionProjection -ErrorAction SilentlyContinue)){
+        $taskId=$null
         try{
             $subject=Get-SCSignalValue $Signal 'subject'
             if([string](Get-SCSignalValue $subject 'type')-eq'task'){
