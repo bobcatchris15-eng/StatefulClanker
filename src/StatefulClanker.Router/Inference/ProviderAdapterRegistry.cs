@@ -10,7 +10,7 @@ public interface IProviderAdapter
     string SourcePath { get; }
     bool CanHandle(ConnectionProfile connection);
     AdapterRequest BuildRequest(ConnectionProfile connection,EndpointEntry endpoint,NormalizedInferenceRequest request,string? apiKey);
-    AdapterParseResult ParseSuccess(string body);
+    AdapterParseResult ParseSuccess(string body,EndpointEntry endpoint);
 }
 
 public sealed class ProviderAdapterRegistry
@@ -35,6 +35,26 @@ public sealed class ProviderAdapterRegistry
     }).ToArray();
 }
 
+public static class AdapterJson
+{
+    public static object ParseArguments(string? json)
+    {
+        if(string.IsNullOrWhiteSpace(json)) return new Dictionary<string,object?>();
+        try{return JsonSerializer.Deserialize<JsonElement>(json);}
+        catch{return new Dictionary<string,object?>();}
+    }
+
+    public static long Long(JsonElement obj,params string[] names)
+    {
+        foreach(var name in names)
+        {
+            if(!obj.TryGetProperty(name,out var value)) continue;
+            if(value.ValueKind==JsonValueKind.Number && value.TryGetInt64(out var n)) return n;
+        }
+        return 0;
+    }
+}
+
 public static class AdapterHttp
 {
     public static HttpRequestMessage JsonRequest(
@@ -45,13 +65,18 @@ public static class AdapterHttp
         object body,
         string protocol,
         string toolMode,
+        string? sessionKey=null,
         IEnumerable<string>? extraHeaderNames=null)
     {
         var request=new HttpRequestMessage(method,uri);
         foreach(var h in connection.headers)
         {
             if(string.Equals(h.Key,"content-type",StringComparison.OrdinalIgnoreCase)) continue;
-            request.Headers.TryAddWithoutValidation(h.Key,h.Value);
+            var value=h.Value;
+            if(string.Equals(h.Key,"x-opencode-session",StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(value,"project",StringComparison.OrdinalIgnoreCase))
+                value=string.IsNullOrWhiteSpace(sessionKey)?"statefulclanker-router":sessionKey;
+            request.Headers.TryAddWithoutValidation(h.Key,value);
         }
 
         ApplyConfiguredAuth(request,connection,apiKey);
@@ -128,9 +153,6 @@ public static class AdapterHttp
             if(doc.RootElement.ValueKind!=JsonValueKind.Object) return new();
             return doc.RootElement.EnumerateObject().Select(x=>x.Name).OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).ToList();
         }
-        catch
-        {
-            return new();
-        }
+        catch{return new();}
     }
 }
