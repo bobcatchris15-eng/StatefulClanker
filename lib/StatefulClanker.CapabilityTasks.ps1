@@ -102,12 +102,13 @@ function Get-SCTaskDefinitionHash($Task) {
     $semantic=@();if($Task.PSObject.Properties['semanticAcceptance']){$semantic=@($Task.semanticAcceptance)}
     $implications=@();if($Task.PSObject.Properties['implications']){$implications=@($Task.implications)}
     $proof=@();if($Task.PSObject.Properties['proofObligations']){$proof=@($Task.proofObligations)}
+    $targets=@();if($Task.PSObject.Properties['targetArtifacts']){$targets=@($Task.targetArtifacts)}
     $relations=@();if($Task.PSObject.Properties['relations']){$relations=@($Task.relations)}
     $definition=[ordered]@{
         title=$Task.title;instruction=$Task.instruction;size=if($Task.PSObject.Properties['size']){$Task.size}else{'small'}
         sources=$sources;intentRefs=$intentRefs;capabilityProfile=if($Task.PSObject.Properties['capabilityProfile']){$Task.capabilityProfile}else{$null}
         toolPolicy=if($Task.PSObject.Properties['toolPolicy']){$Task.toolPolicy}else{$null};acceptance=@($Task.acceptance)
-        checks=$checks;semanticAcceptance=$semantic;implications=$implications;proofObligations=$proof
+        checks=$checks;semanticAcceptance=$semantic;implications=$implications;proofObligations=$proof;targetArtifacts=$targets
         parentTaskId=if($Task.PSObject.Properties['parentTaskId']){$Task.parentTaskId}else{$null};dependsOn=@($Task.dependsOn);relations=$relations
         retrieval=@($Task.retrieval);evidence=@($Task.evidence);provider=$Task.provider;role=$taskRole
         outputKind=if($Task.PSObject.Properties['outputKind']){$Task.outputKind}else{'change'};humanGate=[bool]$Task.humanGate
@@ -118,7 +119,7 @@ function Get-SCTaskDefinitionHash($Task) {
 function Add-SCTask {
     if([string]::IsNullOrWhiteSpace($Title)){throw '-Title is required.'};if([string]::IsNullOrWhiteSpace($Instruction)){throw '-Instruction is required.'};$id=if($TaskId){$TaskId}else{New-SCId 'task'};if(@(Get-SCTasks|Where-Object{$_.id-eq$id}).Count-gt0){throw "Task exists: $id"}
     $taskObj=New-SCTaskObject $id $Title $Instruction @($Accept) @($DependsOn) @($Relation) @($Retrieval) @($Evidence) $Provider $Role ([bool]$HumanGate);$sizeValue=if($Size){$Size.ToLowerInvariant()}else{'small'};if(@('tiny','small','medium','large')-notcontains$sizeValue){throw "Invalid -Size '$Size'."}
-    $outputKindValue=if($OutputKind){$OutputKind.ToLowerInvariant()}else{'change'};if(@('change','document','state-update','research','diagnosis','answer','none','no-change')-notcontains$outputKindValue){throw "Invalid -OutputKind '$OutputKind'."};Set-SCProperty $taskObj 'size' $sizeValue;Set-SCProperty $taskObj 'outputKind' $outputKindValue;Set-SCProperty $taskObj 'sources' @($Source);Set-SCProperty $taskObj 'intentRefs' @($IntentRef);Set-SCProperty $taskObj 'capabilityProfile' $CapabilityProfile;Set-SCProperty $taskObj 'toolPolicy' (New-SCTaskToolPolicy $ToolAllow $ToolDeny);Set-SCProperty $taskObj 'checks' @($Check);Set-SCProperty $taskObj 'semanticAcceptance' @($Judge);Set-SCProperty $taskObj 'implications' @();Set-SCProperty $taskObj 'proofObligations' @();Set-SCProperty $taskObj 'refinementStatus' 'pending';Set-SCProperty $taskObj 'refinementDepth' 0;Set-SCProperty $taskObj 'parentTaskId' $null;Set-SCProperty $taskObj 'childTaskIds' @()
+    $outputKindValue=if($OutputKind){$OutputKind.ToLowerInvariant()}else{'change'};if(@('change','document','state-update','research','diagnosis','answer','none','no-change')-notcontains$outputKindValue){throw "Invalid -OutputKind '$OutputKind'."};Set-SCProperty $taskObj 'size' $sizeValue;Set-SCProperty $taskObj 'outputKind' $outputKindValue;Set-SCProperty $taskObj 'sources' @($Source);Set-SCProperty $taskObj 'intentRefs' @($IntentRef);Set-SCProperty $taskObj 'capabilityProfile' $CapabilityProfile;Set-SCProperty $taskObj 'toolPolicy' (New-SCTaskToolPolicy $ToolAllow $ToolDeny);Set-SCProperty $taskObj 'checks' @($Check);Set-SCProperty $taskObj 'semanticAcceptance' @($Judge);Set-SCProperty $taskObj 'implications' @();Set-SCProperty $taskObj 'proofObligations' @();Set-SCProperty $taskObj 'targetArtifacts' @();Set-SCProperty $taskObj 'refinementStatus' 'pending';Set-SCProperty $taskObj 'refinementDepth' 0;Set-SCProperty $taskObj 'parentTaskId' $null;Set-SCProperty $taskObj 'childTaskIds' @()
     Save-SCTask $taskObj;Update-SCReadiness;Add-SCEvent 'task.created' $Title @{taskId=$id;size=$sizeValue;capabilityProfile=$CapabilityProfile;toolPolicy=$taskObj.toolPolicy};[Console]::Out.WriteLine($id)
 }
 
@@ -161,7 +162,7 @@ function Repair-SCTaskFromRecovery([string]$Id,[string]$PayloadPath,[string]$Why
 
     $beforeHash=Get-SCTaskDefinitionHash $task
     $changed=@()
-    $allowed=@('title','instruction','size','outputKind','acceptance','checks','semanticAcceptance','dependsOn','relations','retrieval','evidence','provider','role','sources','intentRefs','capabilityProfile','toolPolicy','implications','proofObligations','parentTaskId','childTaskIds')
+    $allowed=@('title','instruction','size','outputKind','acceptance','checks','semanticAcceptance','dependsOn','relations','retrieval','evidence','provider','role','sources','intentRefs','capabilityProfile','toolPolicy','implications','proofObligations','targetArtifacts','parentTaskId','childTaskIds')
     foreach($name in $allowed){
         $prop=$patch.PSObject.Properties[$name]
         if($null-eq$prop){continue}
