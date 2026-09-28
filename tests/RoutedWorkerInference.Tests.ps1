@@ -42,8 +42,13 @@ try{
   }
 }finally{$listener.Stop()}
 '@|Set-Content -LiteralPath $serverScript -Encoding UTF8
-    $server=Start-Process -FilePath $PSHOME\pwsh.exe -ArgumentList '-NoProfile','-File',$serverScript,'-Port',[string]$port -PassThru -WindowStyle Hidden
-    Start-Sleep -Milliseconds 300
+    $serverOut=Join-Path $temp 'mock-server.stdout.txt';$serverErr=Join-Path $temp 'mock-server.stderr.txt'
+    $server=Start-Process -FilePath $PSHOME\pwsh.exe -ArgumentList '-NoProfile','-File',$serverScript,'-Port',[string]$port -PassThru -WindowStyle Hidden -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr
+    Start-Sleep -Milliseconds 800
+    if($server.HasExited){
+        $detail=if(Test-Path $serverErr){Get-Content -Raw $serverErr}else{'no stderr'}
+        throw "Mock inference server exited during startup: $detail"
+    }
     $daemon=Start-Process -FilePath $router -ArgumentList 'daemon' -PassThru -WindowStyle Hidden
 
     . (Join-Path $repo 'lib\StatefulClanker.Core.ps1')
