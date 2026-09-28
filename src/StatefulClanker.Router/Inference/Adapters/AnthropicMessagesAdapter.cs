@@ -20,57 +20,103 @@ public sealed class AnthropicMessagesAdapter : IProviderAdapter
                 ? baseUrl+"/messages"
                 : baseUrl+"/v1/messages";
 
+        var system=new List<string>();
+        var messages=new List<Dictionary<string,object?>>();
+        List<object>? pendingResults=null;
+
+        foreach(var m in request.messages)
+        {
+            var role=(m.role??"user").ToLowerInvariant();
+            if(role=="system")
+            {
+                if(!string.IsNullOrWhiteSpace(m.content)) system.Add(m.content);
+                continue;
+            }
+            if(role=="tool")
+            {
+                pendingResults ??= new();
+                pendingResults.Add(new Dictionary<string,object?>
+                {
+                    ["type"]="tool_result",
+                    ["tool_use_id"]=m.tool_call_id??"",
+                    ["content"]=m.content??""
+                });
+                continue;
+            }
+            if(pendingResults is {Count:>0})
+            {
+                messages.Add(new Dictionary<string,object?>{{"role","user"},{"content",pendingResults.ToArray()}});
+                pendingResults=null;
+            }
+
+            if(role=="assistant")
+            {
+                var blocks=new List<object>();
+                if(!string.IsNullOrWhiteSpace(m.content))
+                    blocks.Add(new Dictionary<string,object?>{{"type","text"},{"text",m.content}});
+                foreach(var call in m.tool_calls??new())
+                {
+                    blocks.Add(new Dictionary<string,object?>
+                    {
+                        ["type"]="tool_use",
+                        ["id"]=call.id,
+                        ["name"]=call.function.name,
+                        ["input"]=AdapterJson.ParseArguments(call.function.arguments)
+                    });
+                }
+                messages.Add(new Dictionary<string,object?>{{"role","assistant"},{"content",blocks.ToArray()}});
+            }
+            else
+            {
+                messages.Add(new Dictionary<string,object?>{{"role","user"},{"content",m.content??""}});
+            }
+        }
+        if(pendingResults is {Count:>0})
+            messages.Add(new Dictionary<string,object?>{{"role","user"},{"content",pendingResults.ToArray()}});
+
         var body=new Dictionary<string,object?>
         {
             ["model"]=endpoint.model,
-            ["max_tokens"]=Math.Clamp(request.maxOutputTokens,1,64),
-            ["messages"]=new[]{new Dictionary<string,object?>{{"role","user"},{"content",request.prompt}}}
+            ["max_tokens"]=Math.Clamp(request.maxOutputTokens,1,131072),
+            ["messages"]=messages
         };
-
-        if(request.testTools)
+        if(system.Count>0) body["system"]=string.Join("\n\n",system);
+        if(request.temperature is not null) body["temperature"]=request.temperature.Value;
+        if(!string.Equals(request.toolMode,"text",StringComparison.OrdinalIgnoreCase) && request.tools.Count>0)
         {
-            body["tools"]=new[]
+            body["tools"]=request.tools.Select(t=>(object)new Dictionary<string,object?>
             {
-                new Dictionary<string,object?>
-                {
-                    ["name"]="clanker_probe",
-                    ["description"]="Harmless endpoint diagnostic tool.",
-                    ["input_schema"]=new Dictionary<string,object?>
-                    {
-                        ["type"]="object",
-                        ["properties"]=new Dictionary<string,object?>()
-                    }
-                }
-            };
+                ["name"]=t.function.name,
+                ["description"]=t.function.description,
+                ["input_schema"]=t.function.parameters
+            }).ToArray();
         }
 
         var message=AdapterHttp.JsonRequest(
             HttpMethod.Post,uri,connection,apiKey,body,
-            "anthropic-messages",
-            request.testTools?"native":"text");
+            "anthropic-messages",request.toolMode,request.sessionKey);
         if(!message.Headers.Contains("anthropic-version"))
             message.Headers.TryAddWithoutValidation("anthropic-version","2023-06-01");
 
-        // Refresh evidence after protocol-required headers are applied.
         var evidence=AdapterHttp.Evidence(message);
         if(!evidence.headersPresent.Contains("anthropic-version",StringComparer.OrdinalIgnoreCase))
         {
             evidence.headersPresent.Add("anthropic-version");
-            evidence.headersPresent= evidence.headersPresent.OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).ToList();
+            evidence.headersPresent=evidence.headersPresent.OrderBy(x=>x,StringComparer.OrdinalIgnoreCase).ToList();
         }
         return new AdapterRequest(message,evidence);
     }
 
-    public AdapterParseResult ParseSuccess(string body)
+    public AdapterParseResult ParseSuccess(string body,EndpointEntry endpoint)
     {
         try
         {
             using var doc=JsonDocument.Parse(body);
-            if(!doc.RootElement.TryGetProperty("content",out var content) ||
-               content.ValueKind!=JsonValueKind.Array ||
-               content.GetArrayLength()==0)
-                return new(false,null,"Successful Anthropic response did not contain content.");
+            var root=doc.RootElement;
+            if(!root.TryGetProperty("content",out var content) || content.ValueKind!=JsonValueKind.Array)
+                return new(false,null,new(){model=endpoint.model},"Successful Anthropic response did not contain content.");
 
+            var assistant=new NormalizedInferenceMessage{role="assistant",tool_calls=new()};
             var textParts=new List<string>();
             foreach(var part in content.EnumerateArray())
             {
@@ -81,15 +127,39 @@ public sealed class AnthropicMessagesAdapter : IProviderAdapter
                     textParts.Add(text.GetString()??"");
                 else if(part.TryGetProperty("type",out type) &&
                         string.Equals(type.GetString(),"tool_use",StringComparison.OrdinalIgnoreCase))
-                    textParts.Add("[tool_use]");
+                {
+                    var input=part.TryGetProperty("input",out var inputEl)?inputEl.GetRawText():"{}";
+                    assistant.tool_calls.Add(new NormalizedToolCall
+                    {
+                        id=part.TryGetProperty("id",out var id)?id.GetString()??Guid.NewGuid().ToString("N"):Guid.NewGuid().ToString("N"),
+                        type="function",
+                        function=new NormalizedFunctionCall
+                        {
+                            name=part.TryGetProperty("name",out var name)?name.GetString()??"":"",
+                            arguments=input
+                        }
+                    });
+                }
             }
-            return textParts.Count>0
-                ? new(true,string.Join("",textParts),null)
-                : new(false,null,"Anthropic content contained no text or tool_use item.");
+            assistant.content=textParts.Count>0?string.Join("\n",textParts):"";
+
+            var usage=new NormalizedUsage{model=endpoint.model};
+            if(root.TryGetProperty("usage",out var usageEl) && usageEl.ValueKind==JsonValueKind.Object)
+            {
+                usage.promptTokens=AdapterJson.Long(usageEl,"input_tokens");
+                usage.completionTokens=AdapterJson.Long(usageEl,"output_tokens");
+                usage.totalTokens=usage.promptTokens+usage.completionTokens;
+                usage.reported=true;
+            }
+            var hasContent=!string.IsNullOrWhiteSpace(assistant.content);
+            var hasTools=assistant.tool_calls.Count>0;
+            return hasContent||hasTools
+                ? new(true,assistant,usage,null)
+                : new(false,null,usage,"Anthropic content contained no text or tool_use item.");
         }
         catch(Exception ex)
         {
-            return new(false,null,"Could not parse Anthropic response: "+ex.Message);
+            return new(false,null,new(){model=endpoint.model},"Could not parse Anthropic response: "+ex.Message);
         }
     }
 }
