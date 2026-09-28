@@ -17,6 +17,7 @@ function Stop-SCForStaleCompilation { return $false }
 function Add-SCEvent($Type,$Message,$Data) { $script:events+=,$Type }
 function Add-SCProgressRecord { return $null }
 function Add-SCCompletedTaskCount { $script:completedCount++ }
+function Write-SCTaskCompletionManifest { param($Task,$Proposal,$CompletionAuthority,$Reason) return $null }
 function Update-SCReadiness { }
 function Save-SCWorktreeWork { return $true }
 function Merge-SCWorktreeBranch { return [pscustomobject]@{merged=$true;reason=$null} }
