@@ -982,6 +982,14 @@ function Get-SCWorkerCandidatePreflight([string]$SessionId,$Task) {
             $material=$false;$reason='candidate produced no observed mutation tool calls and no Git snapshot comparison was available'
         }
     }
+    $changedFiles=@()
+    if($baseline.Count-gt0 -and $baseline[0].commit -and $candidate -and $candidate.commit){
+        try{
+            $root=if($s.PSObject.Properties['workRoot'] -and $s.workRoot){[string]$s.workRoot}else{Get-SCRoot}
+            $names=@(& git -C $root diff --name-only --no-renames ([string]$baseline[0].commit) ([string]$candidate.commit) -- . 2>$null)
+            if($LASTEXITCODE-eq0){$changedFiles=@($names|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{([string]$_).Trim()}|Select-Object -Unique)}
+        }catch{$changedFiles=@()}
+    }
     $missing=@()
     if($s.candidateClaim -and $s.candidateClaim.PSObject.Properties['expectedArtifacts']){
         foreach($rel in @($s.candidateClaim.expectedArtifacts)){
@@ -990,7 +998,7 @@ function Get-SCWorkerCandidatePreflight([string]$SessionId,$Task) {
         }
     }
     if($missing.Count-gt0){$material=$false;$reason="claimed artifacts are missing: $($missing-join', ')"}
-    return [pscustomobject][ordered]@{material=$material;requiresArtifact=$requiresArtifact;reason=$reason;missingArtifacts=@($missing);candidateCheckpointId=if($candidate){$candidate.id}else{$null};candidateNumber=[int]$s.candidateNumber;session=$s}
+    return [pscustomobject][ordered]@{material=$material;requiresArtifact=$requiresArtifact;reason=$reason;missingArtifacts=@($missing);changedFiles=@($changedFiles);candidateCheckpointId=if($candidate){$candidate.id}else{$null};candidateNumber=[int]$s.candidateNumber;session=$s}
 }
 function Add-SCWorkerNoArtifact([string]$SessionId,[string]$Reason) {
     $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return 0}
