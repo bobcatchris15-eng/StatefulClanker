@@ -17,9 +17,10 @@ public sealed class RouterPipeServer
 {
     readonly string _pipeName;
     readonly RouterEngine _engine;
+    readonly InferenceGateway _gateway;
     readonly JsonSerializerOptions _json=new(){PropertyNameCaseInsensitive=true};
 
-    public RouterPipeServer(string pipeName,RouterEngine engine){_pipeName=pipeName;_engine=engine;}
+    public RouterPipeServer(string pipeName,RouterEngine engine){_pipeName=pipeName;_engine=engine;_gateway=new InferenceGateway(engine);}
 
     public async Task RunAsync(CancellationToken token)
     {
@@ -58,6 +59,7 @@ public sealed class RouterPipeServer
                 "heartbeat" => _engine.Heartbeat(req.lease),
                 "success" => _engine.Success(req.lease,req.endpoint),
                 "failure" => _engine.Failure(req.lease,req.endpoint,req.failureClass,req.message),
+                "test-endpoint" => await _gateway.TestEndpointAsync(req.endpoint,req.prompt,req.mode,req.maxOutputTokens,token),
                 "snapshot" => RouterResponse.Ok(_engine.Snapshot()),
                 _ => RouterResponse.Fail("Unknown router operation: "+req.op)
             };
