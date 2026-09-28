@@ -18,7 +18,7 @@ internal static class Program
         var request=ParseRequest(args);
         if(request is null)
         {
-            Console.Error.WriteLine("Usage: StatefulClanker.Router <ping|snapshot|acquire|release|heartbeat|success|failure|test-endpoint> [options]");
+            Console.Error.WriteLine("Usage: StatefulClanker.Router <ping|snapshot|acquire|release|heartbeat|success|failure|infer|test-endpoint> [options]");
             return 2;
         }
 
@@ -62,7 +62,7 @@ internal static class Program
     {
         if(args.Length==0) return new RouterRequest{op="snapshot"};
         var op=args[0].ToLowerInvariant();
-        if(op is not ("ping" or "snapshot" or "acquire" or "release" or "heartbeat" or "success" or "failure" or "test-endpoint")) return null;
+        if(op is not ("ping" or "snapshot" or "acquire" or "release" or "heartbeat" or "success" or "failure" or "infer" or "test-endpoint")) return null;
         var map=new Dictionary<string,string?>(StringComparer.OrdinalIgnoreCase);
         for(var i=1;i<args.Length;i++)
         {
@@ -71,6 +71,18 @@ internal static class Program
             var value=(i+1<args.Length && !args[i+1].StartsWith("--"))?args[++i]:"true";
             map[key]=value;
         }
+        NormalizedInferenceRequest? inference=null;
+        var requestFile=Get(map,"request-file");
+        if(op=="infer" && !string.IsNullOrWhiteSpace(requestFile))
+        {
+            var full=Path.GetFullPath(requestFile);
+            var info=new FileInfo(full);
+            if(!info.Exists) throw new FileNotFoundException("Inference request file was not found.",full);
+            if(info.Length>4*1024*1024) throw new InvalidDataException("Inference request exceeds the 4 MiB IPC limit.");
+            inference=JsonSerializer.Deserialize<NormalizedInferenceRequest>(File.ReadAllText(full),Json)
+                ?? throw new InvalidDataException("Inference request file was empty or malformed.");
+        }
+
         return new RouterRequest
         {
             op=op,
@@ -87,6 +99,7 @@ internal static class Program
             prompt=Get(map,"prompt"),
             mode=Get(map,"mode"),
             maxOutputTokens=int.TryParse(Get(map,"max-output-tokens"),out var maxOut)?Math.Clamp(maxOut,1,64):8,
+            inference=inference,
             allowedEndpoints=ParseList(Get(map,"endpoints"))
         };
     }
@@ -98,7 +111,10 @@ internal static class Program
 
     static async Task<RouterResponse> SendWithDaemonAsync(string pipeName,RouterRequest request)
     {
-        try { return await RouterPipeClient.SendAsync(pipeName,request,500); }
+        var responseTimeout=request.op=="infer"
+            ? Math.Max(15000,Math.Min(1805000,(request.inference?.timeoutSeconds??300)*1000+5000))
+            : 500;
+        try { return await RouterPipeClient.SendAsync(pipeName,request,responseTimeout); }
         catch { }
 
         var exe=Environment.ProcessPath ?? throw new InvalidOperationException("Cannot determine router executable path.");
@@ -115,7 +131,7 @@ internal static class Program
         for(var i=0;i<40;i++)
         {
             await Task.Delay(100);
-            try { return await RouterPipeClient.SendAsync(pipeName,request,750); }
+            try { return await RouterPipeClient.SendAsync(pipeName,request,responseTimeout); }
             catch(Exception ex){last=ex;}
         }
         throw new IOException("Router daemon did not become ready.",last);
