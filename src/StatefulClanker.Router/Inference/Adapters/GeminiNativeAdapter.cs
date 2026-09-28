@@ -14,9 +14,10 @@ public sealed class GeminiNativeAdapter : IProviderAdapter
     {
         var baseUrl=(connection.baseUrl??"").TrimEnd('/');
         if(string.IsNullOrWhiteSpace(baseUrl)) throw new InvalidOperationException("Connection baseUrl is required.");
-        var model=(endpoint.model??"").StartsWith("models/",StringComparison.OrdinalIgnoreCase)
-            ? endpoint.model["models/".Length..]
-            : endpoint.model;
+        var rawModel=endpoint.model??"";
+        var model=rawModel.StartsWith("models/",StringComparison.OrdinalIgnoreCase)
+            ? rawModel["models/".Length..]
+            : rawModel;
         var uri=baseUrl.Contains(":generateContent",StringComparison.OrdinalIgnoreCase)
             ? baseUrl
             : baseUrl+"/models/"+Uri.EscapeDataString(model)+":generateContent";
