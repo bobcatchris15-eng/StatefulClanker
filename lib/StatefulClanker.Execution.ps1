@@ -535,8 +535,11 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
                 Publish-SCExecutionSignal -Kind candidate_empty -Task $task -Component candidate_preflight -Scope attempt -Authority observed -Qualifier same_session -SourceExtra @{runId=[string]$run.id;workerSessionId=$workerSessionId} -Payload @{reason=[string]$preflight.reason;missingArtifacts=@($preflight.missingArtifacts);changedFiles=@($preflight.changedFiles);candidateCheckpointId=$preflight.candidateCheckpointId;evidenceRefs=@("run:$($run.id)")} | Out-Null
                 $noArtifactCount=Add-SCWorkerNoArtifact $workerSessionId ([string]$preflight.reason)
                 if($noArtifactCount-eq1){
-                    $continuation="CANDIDATE PREFLIGHT REJECTED. No validator was run because StatefulClanker's deterministic evidence gate found no required material artifact change. Reason: $($preflight.reason). This task expects implementation artifacts. Inspect the current worktree, perform the requested work, verify it, and submit a new candidate. Do not merely restate the intended implementation."
-                    Add-SCEvent 'worker.session_repair' 'Returning no-artifact candidate to the same worker session.' @{taskId=$task.id;workerSessionId=$workerSessionId;candidateNumber=$preflight.candidateNumber;reason=$preflight.reason}
+                    $task=Get-SCTask $task.id
+                    $compilation=New-SCCompilation $task
+                    $basePrompt=New-SCWorkerPrompt $compilation
+                    $continuation=New-SCWorkerContinuationMessage $compilation 'candidate-preflight'
+                    Add-SCEvent 'worker.session_repair' 'Returning no-artifact candidate to the same worker session using refreshed execution projection.' @{taskId=$task.id;workerSessionId=$workerSessionId;candidateNumber=$preflight.candidateNumber;reason=$preflight.reason;compilationId=$compilation.id;projectionHash=$compilation.ir.execution.projectionHash}
                     Add-SCProgressRecord $task $compilation $false 'candidate-preflight-repair' ([string]$preflight.reason)|Out-Null
                     continue
                 }
@@ -642,12 +645,13 @@ function Invoke-SCTask([string]$RequestedTaskId,[string]$ProviderOverride,[strin
                 if($resumable){
                     if(Stop-SCForStaleCompilation $task $compilation 'stale-after-validator' 'Compiled state became stale during validator review.' $proposal){Close-SCWorkerSession $workerSessionId 'stale';return}
                     New-SCRepairCheckpoint $workerSessionId ([string]$validation.id) $validatorRejectCount|Out-Null
-                    $feedback=[string]$validation.stdout
-                    if($feedback.Length-gt6000){$feedback=$feedback.Substring(0,6000)}
-                    $continuation="VALIDATOR REJECTED CANDIDATE $validatorRejectCount. Repair the existing work in this same worker session; do not restart from the task description and do not discard correct work. Validator feedback follows:"+[Environment]::NewLine+$feedback+[Environment]::NewLine+"Inspect the current worktree, address the specific validation failures, run appropriate verification, and submit a replacement candidate."
-                    $task=Get-SCTask $task.id;$task.status='running';$task.blockReason=$null;Save-SCTask $task
+                    $task=Get-SCTask $task.id
+                    $task.status='running';$task.blockReason=$null;Save-SCTask $task
+                    $compilation=New-SCCompilation $task
+                    $basePrompt=New-SCWorkerPrompt $compilation
+                    $continuation=New-SCWorkerContinuationMessage $compilation 'validator-rejection'
                     Add-SCProgressRecord $task $compilation $false 'validator-repair-same-session' $reason|Out-Null
-                    Add-SCEvent 'worker.session_repair' "Returning validator rejection to worker session $workerSessionId." @{taskId=$task.id;workerSessionId=$workerSessionId;validatorRejectCount=$validatorRejectCount;validationId=$validation.id}
+                    Add-SCEvent 'worker.session_repair' "Returning validator rejection to worker session $workerSessionId using refreshed execution projection." @{taskId=$task.id;workerSessionId=$workerSessionId;validatorRejectCount=$validatorRejectCount;validationId=$validation.id;compilationId=$compilation.id;projectionHash=$compilation.ir.execution.projectionHash}
                     continue
                 }
 
