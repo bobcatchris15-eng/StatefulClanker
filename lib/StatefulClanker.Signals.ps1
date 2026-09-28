@@ -166,3 +166,23 @@ function Publish-SCExecutionSignal {
         return $null
     }
 }
+
+
+function Publish-SCValidationSignal($Task,$Receipt,$Compilation) {
+    if($null-eq$Receipt){return $null}
+    $stage=if($Receipt.PSObject.Properties['stage']){[string]$Receipt.stage}else{'validator'}
+    $verdict=if($Receipt.PSObject.Properties['verdict']){[string]$Receipt.verdict}else{'ERROR'}
+    if($stage-eq'critic'){
+        $kind='critic_advisory';$authority='advisory';$qualifier=$null
+    }elseif($verdict-eq'PASS'){
+        $kind='validation_passed';$authority='observed';$qualifier=$null
+    }elseif($verdict-eq'FAIL'){
+        $kind='validator_rejection';$authority='corrective';$qualifier='next_attempt'
+    }else{
+        $kind='validation_error';$authority='observed';$qualifier=$null
+    }
+    $summary=if($Receipt.PSObject.Properties['stdout']){[string]$Receipt.stdout}else{''}
+    if($summary.Length-gt800){$summary=$summary.Substring(0,800)}
+    $validationKind=if($Receipt.PSObject.Properties['validationKind']){[string]$Receipt.validationKind}else{$null}
+    return Publish-SCExecutionSignal -Kind $kind -Task $Task -Component $stage -Scope task -Authority $authority -Qualifier $qualifier -SourceExtra @{validationId=[string]$Receipt.id;compilationId=if($Compilation){[string]$Compilation.id}else{$null}} -Payload @{verdict=$verdict;validationKind=$validationKind;summary=$summary;evidenceRefs=@("validation:$($Receipt.id)")}
+}
