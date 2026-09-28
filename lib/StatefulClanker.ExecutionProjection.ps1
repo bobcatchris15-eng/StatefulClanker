@@ -81,11 +81,8 @@ function Get-SCExecutionProjection {
 
     $lastRun=@($signals|Where-Object{[string]$_.kind-in@('worker_run_completed','worker_run_failed')}|Select-Object -Last 1)
     $lastValidation=@($signals|Where-Object{[string]$_.kind-in@('validation_passed','validator_rejection','validation_error')}|Select-Object -Last 1)
-    $projection=[ordered]@{
-        schemaVersion=1
-        id=New-SCId 'execproj'
+    $semantic=[ordered]@{
         taskId=[string]$Task.id
-        generatedAt=[datetimeoffset]::UtcNow.ToString('o')
         taskDefinitionHash=Get-SCTaskDefinitionHash $Task
         executionDiagnostics=[ordered]@{
             attemptCount=if($Task.PSObject.Properties['attemptCount']){[int]$Task.attemptCount}else{0}
@@ -101,8 +98,9 @@ function Get-SCExecutionProjection {
         dependencyKnowledge=@($dependencyKnowledge)
         retrievalHealth=$retrievalHealth
     }
-    $hash=Get-SCHashString (ConvertTo-SCJson $projection 24)
-    $projection['hash']=$hash
+    $hash=Get-SCHashString (ConvertTo-SCJson $semantic 24)
+    $projection=[ordered]@{schemaVersion=1;id=New-SCId 'execproj';generatedAt=[datetimeoffset]::UtcNow.ToString('o');hash=$hash}
+    foreach($entry in $semantic.GetEnumerator()){$projection[$entry.Key]=$entry.Value}
     return [pscustomobject]$projection
 }
 
