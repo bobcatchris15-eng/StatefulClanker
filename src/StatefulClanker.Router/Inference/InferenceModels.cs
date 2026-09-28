@@ -1,12 +1,102 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace StatefulClanker.Router;
 
 public sealed class NormalizedInferenceRequest
 {
+    // prompt/testTools remain as a compact convenience surface for test_endpoint.
     public string prompt { get; set; } = "Reply with exactly: CLANKER_OK";
-    public int maxOutputTokens { get; set; } = 8;
     public bool testTools { get; set; }
+    public List<NormalizedInferenceMessage> messages { get; set; } = new();
+    public List<NormalizedToolDefinition> tools { get; set; } = new();
+    public string toolMode { get; set; } = "text";
+    public int maxOutputTokens { get; set; } = 4096;
+    public double? temperature { get; set; }
+    public int timeoutSeconds { get; set; } = 300;
+    public string? sessionKey { get; set; }
+
+    public void EnsureDiagnosticConversation()
+    {
+        if(messages.Count==0)
+            messages.Add(new NormalizedInferenceMessage{role="user",content=prompt});
+        if(testTools && tools.Count==0)
+        {
+            tools.Add(new NormalizedToolDefinition
+            {
+                type="function",
+                function=new NormalizedFunctionDefinition
+                {
+                    name="clanker_probe",
+                    description="Harmless endpoint diagnostic tool.",
+                    parameters=JsonSerializer.Deserialize<JsonElement>("{\"type\":\"object\",\"properties\":{}}")
+                }
+            });
+        }
+        if(testTools) toolMode="native";
+    }
+}
+
+public sealed class NormalizedInferenceMessage
+{
+    public string role { get; set; } = "user";
+    public string? content { get; set; }
+    public List<NormalizedToolCall>? tool_calls { get; set; }
+    public string? tool_call_id { get; set; }
+}
+
+public sealed class NormalizedToolCall
+{
+    public string id { get; set; } = "";
+    public string type { get; set; } = "function";
+    public NormalizedFunctionCall function { get; set; } = new();
+    public string? thought_signature { get; set; }
+}
+
+public sealed class NormalizedFunctionCall
+{
+    public string name { get; set; } = "";
+    public string arguments { get; set; } = "{}";
+}
+
+public sealed class NormalizedToolDefinition
+{
+    public string type { get; set; } = "function";
+    public NormalizedFunctionDefinition function { get; set; } = new();
+}
+
+public sealed class NormalizedFunctionDefinition
+{
+    public string name { get; set; } = "";
+    public string description { get; set; } = "";
+    public JsonElement parameters { get; set; }
+}
+
+public sealed class NormalizedUsage
+{
+    public string? model { get; set; }
+    public long promptTokens { get; set; }
+    public long completionTokens { get; set; }
+    public long totalTokens { get; set; }
+    public bool reported { get; set; }
+}
+
+public sealed class NormalizedInferenceResult
+{
+    public bool ok { get; set; }
+    public string endpoint { get; set; } = "";
+    public string connection { get; set; } = "";
+    public string model { get; set; } = "";
+    public string adapterId { get; set; } = "";
+    public string adapterSource { get; set; } = "";
+    public NormalizedInferenceMessage? assistant { get; set; }
+    public NormalizedUsage usage { get; set; } = new();
+    public SanitizedRequestEvidence request { get; set; } = new();
+    public SanitizedResponseEvidence response { get; set; } = new();
+    public InferenceDiagnosis diagnosis { get; set; } = new();
+    public bool failoverAllowed { get; set; }
+    public bool healthChanged { get; set; }
+    public string? signalRef { get; set; }
 }
 
 public sealed class SanitizedBodyShape
@@ -75,4 +165,8 @@ public sealed class AdapterRequest : IDisposable
     public void Dispose() => message.Dispose();
 }
 
-public sealed record AdapterParseResult(bool Success,string? Text,string? Error);
+public sealed record AdapterParseResult(
+    bool Success,
+    NormalizedInferenceMessage? Assistant,
+    NormalizedUsage Usage,
+    string? Error);
