@@ -166,6 +166,7 @@ public sealed class RouterRequest
     public string? prompt { get; set; }
     public string? mode { get; set; }
     public int maxOutputTokens { get; set; } = 8;
+    public NormalizedInferenceRequest? inference { get; set; }
     public string[]? allowedEndpoints { get; set; }
 }
 
