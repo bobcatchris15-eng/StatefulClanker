@@ -251,6 +251,22 @@ public sealed class PlannerStore
         var candidate = ReadJson<PlannerCandidate>(Path.Combine(candidateDir, "candidate.json"))
             ?? throw new InvalidOperationException("Unknown candidate: " + candidateId);
 
+        var frozenPlan = Path.Combine(_root, candidate.planPath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(frozenPlan) || FileHash(frozenPlan) != candidate.planSha256)
+            throw new InvalidOperationException("Candidate plan changed after staging; create a new candidate.");
+        if (!string.IsNullOrWhiteSpace(candidate.intentPath))
+        {
+            var frozenIntent = Path.Combine(_root, candidate.intentPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(frozenIntent) || FileHash(frozenIntent) != candidate.intentSha256)
+                throw new InvalidOperationException("Candidate Intent changed after staging; create a new candidate.");
+        }
+        if (!string.IsNullOrWhiteSpace(candidate.directiveChangesPath))
+        {
+            var frozenDirectives = Path.Combine(_root, candidate.directiveChangesPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(frozenDirectives) || FileHash(frozenDirectives) != candidate.directiveChangesSha256)
+                throw new InvalidOperationException("Candidate directive delta changed after staging; create a new candidate.");
+        }
+
         var handoff = new PlannerHandoff
         {
             id = NewId("handoff"),
