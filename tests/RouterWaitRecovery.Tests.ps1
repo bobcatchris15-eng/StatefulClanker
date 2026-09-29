@@ -64,7 +64,7 @@ try{
         toolMode='text'
         maxOutputTokens=16
         timeoutSeconds=10
-        maxRouteAttempts=4
+        maxRouteAttempts=2
         maxRouteWaitSeconds=3
     }|ConvertTo-Json -Depth 20 -Compress|Set-Content -LiteralPath $requestFile -Encoding UTF8
 
