@@ -205,7 +205,7 @@ end
         Write-Host '  REPLAN TX 3: refuse stale baseline before touching live graph'
         $keepPath=Join-Path $stateRoot 'tasks\t-keep.json'
         $keepBytes=[IO.File]::ReadAllBytes($keepPath)
-        $keep=([Text.Encoding]::UTF8.GetString($keepBytes)|ConvertFrom-Json)
+        $keep=Read-Json $keepPath
         $keep.blockReason='external drift injected by test'
         Write-Json $keepPath $keep
 
