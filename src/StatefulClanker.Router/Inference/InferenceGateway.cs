@@ -34,6 +34,7 @@ public sealed class InferenceGateway : IDisposable
         var maxWait=Math.Clamp(inference.maxRouteWaitSeconds,0,300);
         var deadline=DateTimeOffset.UtcNow.AddSeconds(maxWait);
         var history=new List<RoutingAttemptRecord>();
+        var requestExcluded=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         NormalizedInferenceResult? last=null;
         var preferred=request.preferred;
 
@@ -47,7 +48,8 @@ public sealed class InferenceGateway : IDisposable
                 request.requireTools,
                 request.ownerPid,
                 request.allowedEndpoints,
-                inference.toolMode);
+                inference.toolMode,
+                requestExcluded.ToArray());
 
             if(!acquire.ok)
             {
@@ -63,18 +65,32 @@ public sealed class InferenceGateway : IDisposable
                     continue;
                 }
 
-                var unavailable=last??new NormalizedInferenceResult();
-                unavailable.ok=false;
-                unavailable.routeDeferred=true;
-                unavailable.routeExhausted=history.Count>0;
-                unavailable.nextRetryAt=nextRetryAt;
-                unavailable.routeAttempts=history.Count;
-                unavailable.routeHistory=history;
-                unavailable.diagnosis=Diagnosis(
-                    "route_unavailable","request",false,false,
-                    reason.ToUpperInvariant(),
-                    acquire.error??"No eligible inference route is currently available.");
-                unavailable.failoverAllowed=false;
+                if(last is not null)
+                {
+                    last.ok=false;
+                    last.routeDeferred=false;
+                    last.routeExhausted=true;
+                    last.nextRetryAt=nextRetryAt;
+                    last.routeAttempts=history.Count;
+                    last.routeHistory=new(history);
+                    last.failoverAllowed=false;
+                    return RouterResponse.Ok(last);
+                }
+
+                var unavailable=new NormalizedInferenceResult
+                {
+                    ok=false,
+                    routeDeferred=true,
+                    routeExhausted=false,
+                    nextRetryAt=nextRetryAt,
+                    routeAttempts=0,
+                    routeHistory=new(),
+                    diagnosis=Diagnosis(
+                        "route_unavailable","request",false,false,
+                        reason.ToUpperInvariant(),
+                        acquire.error??"No eligible inference route is currently available."),
+                    failoverAllowed=false
+                };
                 return RouterResponse.Ok(unavailable);
             }
 
@@ -126,6 +142,12 @@ public sealed class InferenceGateway : IDisposable
             last=result;
             if(request.strictPreferred || !result.failoverAllowed)
                 return RouterResponse.Ok(result);
+
+            // Request-scoped failures such as context/session incompatibility may
+            // be worth trying on another model without poisoning global endpoint
+            // health. Exclude only those routes for the remainder of this request.
+            if(!result.healthChanged)
+                requestExcluded.Add(route.RouteName);
 
             preferred=null;
         }
