@@ -16,7 +16,7 @@ $ErrorActionPreference='Stop'
 
 $script:StatefulClankerHome=$PSScriptRoot
 $runtimeRef='29bf71c77bc9d51c2ee791cb1f99ada552841d4a'
-$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.CapabilityTasks.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.ReflexiveKnowledge.ps1','StatefulClanker.Collaboration.ps1','StatefulClanker.Execution.ps1','StatefulClanker.RouterClient.ps1','StatefulClanker.CompiledRouting.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.Autofill.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerPolicy.ps1','StatefulClanker.McpDiscovery.ps1','StatefulClanker.WorkerRuntime.ps1','StatefulClanker.WorkerRuntime.Windows.ps1')
+$runtimeNames=@('StatefulClanker.Core.ps1','StatefulClanker.Eventing.ps1','StatefulClanker.Context.ps1','StatefulClanker.Plan.ps1','StatefulClanker.CapabilityTasks.ps1','StatefulClanker.Directives.ps1','StatefulClanker.Semantics.ps1','StatefulClanker.ReflexiveKnowledge.ps1','StatefulClanker.Collaboration.ps1','StatefulClanker.PlanningRuntime.ps1','StatefulClanker.Execution.ps1','StatefulClanker.RouterClient.ps1','StatefulClanker.CompiledRouting.ps1','StatefulClanker.Intent.ps1','StatefulClanker.Concurrency.ps1','StatefulClanker.Autofill.ps1','StatefulClanker.ProjectReview.ps1','StatefulClanker.DispatchGuard.ps1','StatefulClanker.WorkerPolicy.ps1','StatefulClanker.McpDiscovery.ps1','StatefulClanker.WorkerRuntime.ps1','StatefulClanker.WorkerRuntime.Windows.ps1')
 $checkedOutLib=Join-Path $PSScriptRoot 'lib'
 $useCheckedOut=$true
 foreach($name in $runtimeNames){if(-not(Test-Path -LiteralPath (Join-Path $checkedOutLib $name) -PathType Leaf)){$useCheckedOut=$false;break}}
@@ -69,6 +69,13 @@ switch($Command.ToLowerInvariant()){
 'directive'{Show-SCDirectives $Subcommand $DirectiveId $Message $Scope $IntentRef $SourceRef $Reason;break}
 'events'{Get-SCControlEventsSince $Since $Limit $MinimumLevel|ConvertTo-SCJson -Depth 16|Write-Host;break}
 'intent'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='show'};switch($Subcommand.ToLowerInvariant()){'show'{Show-SCIntent 'show';break};'history'{Show-SCIntent 'history';break};'escalations'{Show-SCIntent 'escalations';break};'replace'{Replace-SCIntentContract $Path $Reason;break};default{throw "Unknown intent subcommand: $Subcommand"}};break}
+'planning'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){
+    'participants'{Get-SCPlanningParticipants|ConvertTo-Json -Depth 30 -Compress|Write-Output;break}
+    'artifacts'{Get-SCPlanningArtifacts|ConvertTo-Json -Depth 30 -Compress|Write-Output;break}
+    'run-pass'{$brief=if($Path){Get-Content -Raw -LiteralPath $Path}elseif($Message){$Message}else{''};if([string]::IsNullOrWhiteSpace($brief)){throw '-Path or -Message with planning brief required.'};$result=Invoke-SCPlanningPass $Role $brief $Provider $Endpoint $Connection;$result|ConvertTo-Json -Depth 40 -Compress|Write-Output;break}
+    'run-recipe'{$brief=if($Path){Get-Content -Raw -LiteralPath $Path}elseif($Message){$Message}else{''};if([string]::IsNullOrWhiteSpace($brief)){throw '-Path or -Message with planning brief required.'};$result=Invoke-SCPlanningRecipe $brief $Provider $Endpoint $Connection;$result|ConvertTo-Json -Depth 50 -Compress|Write-Output;break}
+    default{throw "Unknown planning subcommand: $Subcommand"}
+};break}
 'run'{if($Parallel -gt 0 -or $Subcommand -eq 'parallel'){Invoke-SCParallel $Parallel $Provider -Endpoint $Endpoint -Connection $Connection -NoMerge:$NoMerge}else{Invoke-SCTask $TaskId $Provider $Endpoint $Connection};break}
 'autofill'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){'run'{Invoke-SCAutofillSupervisor $IntervalSeconds $Provider $PSCommandPath -Endpoint $Endpoint -Connection $Connection -NoMerge:$NoMerge;break};'status'{Show-SCAutofillStatus;break};'stop'{Request-SCAutofillStop;break};'pause'{Request-SCAutofillPause;break};'resume'{Request-SCAutofillResume;break};'trigger'{Request-SCAutofillTrigger;break};default{throw "Unknown autofill subcommand: $Subcommand"}};break}
 'complete'{Complete-SCTask $TaskId;break}
