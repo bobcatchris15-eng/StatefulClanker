@@ -18,7 +18,7 @@ internal static class Program
         var request=ParseRequest(args);
         if(request is null)
         {
-            Console.Error.WriteLine("Usage: StatefulClanker.Router <ping|snapshot|acquire|release|heartbeat|success|failure|infer|test-endpoint> [options]");
+            Console.Error.WriteLine("Usage: StatefulClanker.Router <ping|snapshot|negotiate|acquire|release|heartbeat|success|failure|infer|test-endpoint> [options]");
             return 2;
         }
 
@@ -62,7 +62,7 @@ internal static class Program
     {
         if(args.Length==0) return new RouterRequest{op="snapshot"};
         var op=args[0].ToLowerInvariant();
-        if(op is not ("ping" or "snapshot" or "acquire" or "release" or "heartbeat" or "success" or "failure" or "infer" or "test-endpoint")) return null;
+        if(op is not ("ping" or "snapshot" or "negotiate" or "acquire" or "release" or "heartbeat" or "success" or "failure" or "infer" or "test-endpoint")) return null;
         var map=new Dictionary<string,string?>(StringComparer.OrdinalIgnoreCase);
         for(var i=1;i<args.Length;i++)
         {
