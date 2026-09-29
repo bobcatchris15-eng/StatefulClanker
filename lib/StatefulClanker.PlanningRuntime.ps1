@@ -1,0 +1,178 @@
+# Session-scoped planning inference runtime.
+# Planning participants are ephemeral model sessions whose durable outputs live under
+# the active Planner session. They never mutate live project semantics or task state.
+
+function Get-SCPlanningRuntimeActive {
+    $active=Get-SCPlanningActiveRecord
+    if($null-eq$active){throw 'No active planning session.'}
+    if(@('planning','review')-notcontains[string]$active.phase){throw "Planning inference requires phase planning/review; current phase is '$($active.phase)'."}
+    return $active
+}
+function Get-SCPlanningRuntimeSessionDir($Active=$null) {
+    if($null-eq$Active){$Active=Get-SCPlanningRuntimeActive}
+    return Get-SCPath ("planning/sessions/{0}"-f[string]$Active.sessionId)
+}
+function Get-SCPlanningParticipantDir($Active=$null) {
+    $p=Join-Path (Get-SCPlanningRuntimeSessionDir $Active) 'participants'
+    if(-not(Test-Path -LiteralPath $p)){New-Item -ItemType Directory -Force -Path $p|Out-Null}
+    return $p
+}
+function Get-SCPlanningArtifactDir($Active=$null) {
+    $p=Join-Path (Get-SCPlanningRuntimeSessionDir $Active) 'artifacts'
+    if(-not(Test-Path -LiteralPath $p)){New-Item -ItemType Directory -Force -Path $p|Out-Null}
+    return $p
+}
+function Get-SCPlanningParticipants {
+    $active=Get-SCPlanningRuntimeActive;$dir=Get-SCPlanningParticipantDir $active
+    return @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File -ErrorAction SilentlyContinue|Sort-Object Name|ForEach-Object{Read-SCJson $_.FullName}|Where-Object{$null-ne$_})
+}
+function Get-SCPlanningArtifacts {
+    $active=Get-SCPlanningRuntimeActive;$dir=Get-SCPlanningArtifactDir $active
+    return @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File -ErrorAction SilentlyContinue|Sort-Object Name|ForEach-Object{Read-SCJson $_.FullName}|Where-Object{$null-ne$_})
+}
+function Get-SCPlanningRoleDoctrine([string]$Role) {
+    switch($Role){
+        'intent' {return 'Normalize the requested future. Separate direct human authority, existing accepted constraints, assumptions, unresolved questions, desired end state, and fit criteria. Do not invent product choices.'}
+        'architecture' {return 'Identify components, interfaces, state transitions, integration boundaries, architectural obligations, and decisions that materially constrain implementation. Prefer explicit obligations over vague recommendations.'}
+        'code_implications' {return 'Inspect the repository read-only. Identify concrete code surfaces, callers, tests, packaging/install/runtime implications, hidden coupling, and discovery work needed before implementation.'}
+        'state_implications' {return 'Inspect persistence, migrations, durable state, compatibility, rollback/recovery, concurrency, and lifecycle implications. Identify invariants that implementation tasks must preserve.'}
+        'failure_modes' {return 'Adversarially enumerate likely literal-but-wrong completions, missing dependencies, unsafe assumptions, unprovable acceptance, and failure/recovery paths materially connected to current intent.'}
+        'decomposition' {return 'Turn reconciled obligations into a cold-worker task graph. One implementation thesis per task, explicit dependencies, narrow acceptance, and durable traceability. Produce a candidate SCPLAN 1 inside your structured result.'}
+        'adversary' {return 'Attack the proposed decomposition. Find missing coverage, oversized tasks, false dependencies, hidden product decisions, dangling traceability, unprovable acceptance, and integration gaps. Do not rewrite the whole plan.'}
+        'reconciler' {return 'Reconcile all specialist artifacts into one coherent planning bundle. Resolve only evidence-backed disagreements; preserve unresolved human-owned decisions as open questions. Produce the final candidate Intent and SCPLAN without applying them.'}
+        default {throw "Unknown planning role '$Role'."}
+    }
+}
+function Get-SCPlanningBaselineContext($Active,[string]$Brief,[bool]$IncludeArtifacts=$false) {
+    if([string]::IsNullOrWhiteSpace([string]$Active.baselinePath)){throw 'Planning session is not settled.'}
+    $baselinePath=Resolve-SCPlanningArtifactPath ([string]$Active.baselinePath)
+    $baseline=Read-SCJson $baselinePath
+    if($null-eq$baseline){throw 'Planning baseline is missing.'}
+    $snapshot=Resolve-SCPlanningArtifactPath ([string]$baseline.snapshotPath)
+    $state=Read-SCJson (Join-Path $snapshot 'state.json')
+    $intent=Read-SCJson (Join-Path $snapshot 'intent/contract.json')
+    $directives=@()
+    $dd=Join-Path $snapshot 'directives/current'
+    if(Test-Path -LiteralPath $dd){$directives=@(Get-ChildItem -LiteralPath $dd -Filter '*.json' -File|Sort-Object Name|ForEach-Object{Read-SCJson $_.FullName}|Where-Object{$null-ne$_})}
+    $tasks=@()
+    $td=Join-Path $snapshot 'tasks'
+    if(Test-Path -LiteralPath $td){
+        $tasks=@(Get-ChildItem -LiteralPath $td -Filter '*.json' -File|Sort-Object Name|ForEach-Object{
+            $t=Read-SCJson $_.FullName
+            if($t){[ordered]@{id=$t.id;status=$t.status;title=$t.title;instruction=$t.instruction;intentRefs=@($t.intentRefs);dependsOn=@($t.dependsOn);acceptance=@($t.acceptance)}}
+        })
+    }
+    $context=[ordered]@{
+        planningSessionId=[string]$Active.sessionId
+        brief=$Brief
+        baseline=[ordered]@{gitHead=$baseline.gitHead;projectGoal=$baseline.projectGoal;activePlanId=$baseline.activePlanId;taskCounts=$baseline.taskCounts}
+        state=$state
+        currentDirectives=@($directives)
+        intent=$intent
+        currentTasks=@($tasks)
+    }
+    if($IncludeArtifacts){$context['priorArtifacts']=@(Get-SCPlanningArtifacts|ForEach-Object{[ordered]@{id=$_.id;role=$_.role;kind=$_.kind;content=$_.content;structured=$_.structured}})}
+    return $context
+}
+function ConvertFrom-SCPlanningStructuredOutput([string]$Text) {
+    if([string]::IsNullOrWhiteSpace($Text)){return $null}
+    $trim=$Text.Trim()
+    try{return $trim|ConvertFrom-Json -ErrorAction Stop}catch{}
+    $m=[regex]::Match($trim,'(?s)\{.*\}')
+    if($m.Success){try{return $m.Value|ConvertFrom-Json -ErrorAction Stop}catch{}}
+    return $null
+}
+function New-SCPlanningSyntheticTask([string]$ParticipantId,[string]$Role) {
+    return [pscustomobject][ordered]@{
+        id=$ParticipantId;title=("Planning pass: "+$Role);instruction=(Get-SCPlanningRoleDoctrine $Role)
+        role='planner';outputKind='research';humanGate=$false;capabilityProfile=$null
+        toolPolicy=[pscustomobject][ordered]@{
+            allow=@('builtin.read_file','builtin.search_text','builtin.git_diff','builtin.finish','intent.human.read','intent.normalized.read')
+            deny=@('builtin.write_file','builtin.replace_text','builtin.run_command','builtin.collaboration.*','rpk.*')
+        }
+    }
+}
+function Invoke-SCPlanningPass([string]$Role,[string]$Brief,[string]$ProviderOverride=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
+    $active=Get-SCPlanningRuntimeActive
+    $roleName=$Role.ToLowerInvariant()
+    $doctrine=Get-SCPlanningRoleDoctrine $roleName
+    $includeArtifacts=@('decomposition','adversary','reconciler')-contains$roleName
+    $ctx=Get-SCPlanningBaselineContext $active $Brief $includeArtifacts
+    $participantId=('planning-'+$roleName+'-'+[guid]::NewGuid().ToString('N').Substring(0,8))
+    $participant=[ordered]@{
+        schemaVersion=1;id=$participantId;sessionId=[string]$active.sessionId;role=$roleName;status='running'
+        createdAt=[datetimeoffset]::UtcNow.ToString('o');updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+        provider=$null;endpoint=$null;connection=$null;model=$null;promptTokens=0;completionTokens=0;totalTokens=0
+        receiptId=$null;artifactId=$null;error=$null
+    }
+    $participantPath=Join-Path (Get-SCPlanningParticipantDir $active) ($participantId+'.json')
+    Write-SCJson $participantPath $participant
+    $outputContract=if($roleName-eq'reconciler'){
+        'Return one JSON object with keys: summary, projectGoal, intentContract, directiveChanges, planText, openQuestions, unresolvedConflicts. planText must be a complete SCPLAN 1 document. Use null/[] where unchanged.'
+    }elseif($roleName-eq'decomposition'){
+        'Return one JSON object with keys: summary, obligationsCovered, openQuestions, planText. planText must be a complete SCPLAN 1 candidate, not applied state.'
+    }else{
+        'Return one JSON object with keys: summary, observations, obligations, assumptions, questions, risks, evidence. Keep observations concise and evidence-addressable.'
+    }
+    $prompt=@"
+STATEFULCLANKER PLANNING PARTICIPANT
+Session: $($active.sessionId)
+Role: $roleName
+
+You are an independent planning specialist. You do NOT implement or mutate the project. Repository tools are read-only for this pass.
+Your epistemic job:
+$doctrine
+
+Rules:
+- Current human directives outrank normalized Intent; both outrank planner inference.
+- Distinguish evidence from inference and assumptions.
+- Do not silently decide human-owned product choices.
+- Inspect repository evidence when your role needs it.
+- Do not generate hidden reasoning transcripts for peers; emit compact findings.
+- $outputContract
+
+PLANNING CONTEXT
+$($ctx|ConvertTo-Json -Depth 30)
+"@
+    $task=New-SCPlanningSyntheticTask $participantId $roleName
+    try{
+        $receipt=Invoke-SCProvider $task $prompt 'planning' $ProviderOverride $null $null $null $null $EndpointOverride $ConnectionOverride
+        $participant.status=if([int]$receipt.exitCode-eq0){'complete'}else{'failed'}
+        $participant.updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+        $participant.provider=$receipt.provider;$participant.endpoint=$receipt.endpoint;$participant.connection=$receipt.connection;$participant.model=$receipt.model
+        if($receipt.PSObject.Properties['promptTokens']){$participant.promptTokens=[long]$receipt.promptTokens}
+        if($receipt.PSObject.Properties['completionTokens']){$participant.completionTokens=[long]$receipt.completionTokens}
+        if($receipt.PSObject.Properties['totalTokens']){$participant.totalTokens=[long]$receipt.totalTokens}
+        $participant.receiptId=$receipt.id
+        if([int]$receipt.exitCode-ne0){$participant.error=[string]$receipt.stderr;Write-SCJson $participantPath $participant;throw "Planning pass '$roleName' failed: $($receipt.stderr)"}
+        $structured=ConvertFrom-SCPlanningStructuredOutput ([string]$receipt.stdout)
+        $artifactId=('pa-'+[guid]::NewGuid().ToString('N').Substring(0,12))
+        $artifact=[ordered]@{
+            schemaVersion=1;id=$artifactId;sessionId=[string]$active.sessionId;participantId=$participantId;role=$roleName
+            kind=if($roleName-eq'reconciler'){'candidate_bundle'}elseif($roleName-eq'decomposition'){'decomposition'}else{'observation'}
+            createdAt=[datetimeoffset]::UtcNow.ToString('o');content=[string]$receipt.stdout;structured=$structured
+            receiptId=$receipt.id;provider=$receipt.provider;endpoint=$receipt.endpoint;connection=$receipt.connection;model=$receipt.model
+            tokenUsage=[ordered]@{prompt=$participant.promptTokens;completion=$participant.completionTokens;total=$participant.totalTokens}
+        }
+        Write-SCJson (Join-Path (Get-SCPlanningArtifactDir $active) ($artifactId+'.json')) $artifact
+        $participant.artifactId=$artifactId;Write-SCJson $participantPath $participant
+        return [pscustomobject][ordered]@{participant=[pscustomobject]$participant;artifact=[pscustomobject]$artifact}
+    }catch{
+        $participant.status='failed';$participant.updatedAt=[datetimeoffset]::UtcNow.ToString('o');$participant.error=$_.Exception.Message
+        Write-SCJson $participantPath $participant
+        throw
+    }
+}
+function Invoke-SCPlanningRecipe([string]$Brief,[string]$ProviderOverride=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
+    $active=Get-SCPlanningRuntimeActive
+    $roles=@('intent','architecture','code_implications','state_implications','failure_modes','decomposition','adversary','reconciler')
+    $runs=@()
+    foreach($role in $roles){$runs+=,(Invoke-SCPlanningPass $role $Brief $ProviderOverride $EndpointOverride $ConnectionOverride)}
+    $final=$runs[-1].artifact
+    return [pscustomobject][ordered]@{
+        sessionId=[string]$active.sessionId;completed=$true;roles=@($roles)
+        participantIds=@($runs|ForEach-Object{$_.participant.id})
+        artifactIds=@($runs|ForEach-Object{$_.artifact.id})
+        finalArtifact=$final
+    }
+}
