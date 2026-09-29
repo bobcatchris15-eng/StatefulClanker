@@ -152,6 +152,10 @@ Write-Host 'STEP 8aa: Pi planner skill invocation'
 & (Join-Path $PSScriptRoot 'PiPlannerSkill.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Pi planner skill tests failed (exit $LASTEXITCODE)." }
 
+Write-Host 'STEP 8ab: planning inference runtime'
+& (Join-Path $PSScriptRoot 'PlanningRuntime.Tests.ps1')
+if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Planning runtime tests failed (exit $LASTEXITCODE)." }
+
 Write-Host 'STEP 8b: prompt delivery'
 & (Join-Path $PSScriptRoot 'Prompt.Tests.ps1')
 if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw "Prompt tests failed (exit $LASTEXITCODE)." }
