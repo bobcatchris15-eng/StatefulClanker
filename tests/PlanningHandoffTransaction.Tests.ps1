@@ -21,8 +21,7 @@ function Invoke-Planner([string[]]$PlannerArgs){
     return $response.data
 }
 function Invoke-HarnessJson([string]$HandoffPath){
-    $raw=& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $harness plan apply-handoff -Path $HandoffPath 2>&1|Out-String
-    if($LASTEXITCODE-ne0){throw "Harness command failed: $raw"}
+    $raw=& $harness plan apply-handoff -Path $HandoffPath 2>&1|Out-String
     $lines=@($raw -split [Environment]::NewLine|Where-Object{-not[string]::IsNullOrWhiteSpace($_)})
     if($lines.Count-eq0){throw 'Harness command produced no JSON.'}
     return ($lines[-1]|ConvertFrom-Json)
