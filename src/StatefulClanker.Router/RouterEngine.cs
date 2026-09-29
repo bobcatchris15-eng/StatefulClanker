@@ -237,62 +237,55 @@ public sealed class RouterEngine
                 if(preferredRoute is null)
                     return RouterResponse.Fail($"Preferred endpoint '{preferred}' is not eligible.",
                         new{reason="preferred_not_eligible"});
-                if(!Available(preferredRoute,health) || IsAtCapacity(preferredRoute))
-                    return RouterResponse.Fail($"Preferred endpoint '{preferred}' is not currently available.",
-                        new
-                        {
-                            reason=IsAtCapacity(preferredRoute)?"preferred_at_capacity":"preferred_unhealthy",
-                            nextRetryAt=NextRetryAt(new[]{preferredRoute},health)
-                        });
+                var currentlyAvailable=Available(preferredRoute,health) && !IsAtCapacity(preferredRoute);
                 return RouterResponse.Ok(new
                 {
                     toolMode=string.Equals(preferredRoute.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase)
                         && preferredRoute.Endpoint.supportsTools==true ? "native" : "text",
                     nativeCandidates=(preferredRoute.Endpoint.supportsTools==true && string.Equals(preferredRoute.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase))?1:0,
-                    healthyCandidates=1,
+                    healthyCandidates=currentlyAvailable?1:0,
+                    configuredCandidates=1,
+                    currentlyAvailable,
+                    nextRetryAt=currentlyAvailable?null:NextRetryAt(new[]{preferredRoute},health),
                     strictPreferred=true
                 });
             }
         }
 
         var healthy=configured.Where(r=>Available(r,health) && !IsAtCapacity(r)).ToList();
-        if(healthy.Count==0)
-            return RouterResponse.Fail("All eligible endpoints are temporarily unavailable.",
-                new
-                {
-                    reason="all_candidates_unavailable",
-                    nextRetryAt=NextRetryAt(configured,health),
-                    eligibleEndpoints=configured.Count
-                });
+        var protocolCandidates=healthy.Count>0?healthy:configured;
 
         // Preserve soft session affinity when possible, but expose only the
         // compatible tool protocol to the caller, never the chosen endpoint.
-        if(preferredRoute is not null && healthy.Any(r=>string.Equals(r.RouteName,preferredRoute.RouteName,StringComparison.OrdinalIgnoreCase)))
+        if(preferredRoute is not null && protocolCandidates.Any(r=>string.Equals(r.RouteName,preferredRoute.RouteName,StringComparison.OrdinalIgnoreCase)))
         {
             var preferredNative=preferredRoute.Endpoint.supportsTools==true &&
                 string.Equals(preferredRoute.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase);
             if(preferredNative)
             {
-                var nativeHealthy=healthy.Count(r=>r.Endpoint.supportsTools==true &&
+                var nativeHealthy=protocolCandidates.Count(r=>r.Endpoint.supportsTools==true &&
                     string.Equals(r.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase));
-                if(nativeHealthy>=2 || healthy.Count==1)
-                    return RouterResponse.Ok(new{toolMode="native",nativeCandidates=nativeHealthy,healthyCandidates=healthy.Count,strictPreferred=false});
+                if(nativeHealthy>=2 || protocolCandidates.Count==1)
+                    return RouterResponse.Ok(new{toolMode="native",nativeCandidates=nativeHealthy,healthyCandidates=healthy.Count,configuredCandidates=configured.Count,currentlyAvailable=(healthy.Count>0),nextRetryAt=healthy.Count>0?null:NextRetryAt(configured,health),strictPreferred=false});
             }
         }
 
-        var nativeCount=healthy.Count(r=>r.Endpoint.supportsTools==true &&
+        var nativeCount=protocolCandidates.Count(r=>r.Endpoint.supportsTools==true &&
             string.Equals(r.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase));
 
         // Text protocol is the wider compatibility class: a native-capable model
         // can still follow the text tool protocol, while a text-only endpoint
         // cannot consume a native tool transcript. Prefer native only when it has
         // redundant coverage, or when it is the sole available class.
-        var mode=(nativeCount>=2 || (nativeCount==healthy.Count && nativeCount>0))?"native":"text";
+        var mode=(nativeCount>=2 || (nativeCount==protocolCandidates.Count && nativeCount>0))?"native":"text";
         return RouterResponse.Ok(new
         {
             toolMode=mode,
             nativeCandidates=nativeCount,
             healthyCandidates=healthy.Count,
+            configuredCandidates=configured.Count,
+            currentlyAvailable=(healthy.Count>0),
+            nextRetryAt=healthy.Count>0?null:NextRetryAt(configured,health),
             strictPreferred=false
         });
     }
