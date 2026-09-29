@@ -684,15 +684,16 @@ function Apply-SCStagedDirectiveChanges([string]$ChangesPath,[string]$StageDirec
                 if(-not(Test-Path -LiteralPath $history)){New-Item -ItemType Directory -Force -Path $history|Out-Null}
                 Write-SCJson (Join-Path $history ("revision-{0:d4}.json"-f[int]$previous.revision)) $previous
             }
-            $record=[ordered]@{
+            $recordRefs=@();if($change.PSObject.Properties['intentRefs']){$recordRefs=@($change.intentRefs|Where-Object{$_}|ForEach-Object{[string]$_})}
+            $record=[pscustomobject][ordered]@{
                 schemaVersion=1;id=$id;scope=$scope;revision=$next;text=$text;sourceRef=$sourceRef
-                intentRefs=if($change.PSObject.Properties['intentRefs']){@($change.intentRefs|Where-Object{$_}|ForEach-Object{[string]$_})}else{@()}
+                intentRefs=$recordRefs
                 updatedAt=(Get-Date).ToUniversalTime().ToString('o')
                 reason=if($change.PSObject.Properties['reason']){[string]$change.reason}else{$null}
                 authority='latest direct human word for this directive scope'
             }
             Write-SCJson $path $record;$global++
-            $events+=,[ordered]@{
+            $events+=,[pscustomobject][ordered]@{
                 action='set';id=$id;record=$record
                 previousSourceRef=if($previous-and$previous.PSObject.Properties['sourceRef']){[string]$previous.sourceRef}else{$null}
                 previousRevision=if($previous-and$previous.PSObject.Properties['revision']){[int]$previous.revision}else{$null}
@@ -706,7 +707,7 @@ function Apply-SCStagedDirectiveChanges([string]$ChangesPath,[string]$StageDirec
             Write-SCJson (Join-Path $history ("revision-{0:d4}-retired.json"-f[int]$previous.revision)) $previous
             Remove-Item -LiteralPath $path -Force
             $global++
-            $events+=,[ordered]@{
+            $events+=,[pscustomobject][ordered]@{
                 action='retire';id=$id;record=$previous
                 previousSourceRef=if($previous.PSObject.Properties['sourceRef']){[string]$previous.sourceRef}else{$null}
                 previousRevision=if($previous.PSObject.Properties['revision']){[int]$previous.revision}else{$null}
@@ -714,7 +715,7 @@ function Apply-SCStagedDirectiveChanges([string]$ChangesPath,[string]$StageDirec
         }else{throw "Unknown staged directive action '$action' for '$id'."}
     }
     $records=Get-SCStagedDirectiveRecords $StageDirectives
-    return [ordered]@{revision=$global;hash=(Get-SCDirectiveHash $records);changes=@($events)}
+    return [pscustomobject][ordered]@{revision=$global;hash=(Get-SCDirectiveHash $records);changes=@($events)}
 }
 
 function Invalidate-SCStagedCompletedDependents([string]$StageTasks,$Dispositions) {
