@@ -472,6 +472,33 @@ function Assert-SCReplacementPlanGraph($Tasks) {
     }
 }
 
+function Test-SCPlanningCandidatePreflight([string]$PlanPath,[string]$IntentPath=$null) {
+    $input=Get-SCPlanInput $PlanPath
+    $plan=$input.plan
+    if($null-eq$plan-or$null-eq$plan.tasks-or@($plan.tasks).Count-eq0){throw 'Planning candidate contains no tasks.'}
+    $intent=if($IntentPath){Read-SCJson $IntentPath}else{Get-SCIntentContract}
+    if($null-ne$intent){Assert-SCIntentShape $intent}
+    $tasks=@();foreach($item in @($plan.tasks)){$tasks+=,(New-SCTaskFromPlanItem $item)}
+    Assert-SCReplacementPlanGraph $tasks
+
+    $planIntent=@();if($plan.PSObject.Properties['intent']){$planIntent=@($plan.intent|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})}
+    $issues=@()
+    foreach($task in $tasks){
+        $accept=@($task.acceptance)+@($task.checks)+@($task.semanticAcceptance)
+        if(@($accept|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}).Count-eq0){$issues+="Task '$($task.id)' has no acceptance/proof surface."}
+        $refs=@($task.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})
+        $sources=@($task.sources|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})
+        if($refs.Count-eq0-and$sources.Count-eq0-and$planIntent.Count-eq0){$issues+="Task '$($task.id)' has no traceability reason (intent/source/plan intent)."}
+        foreach($ref in $refs){if($null-eq(Find-SCIntentRefValue $intent ([string]$ref))){$issues+="Task '$($task.id)' references missing Intent '$ref'."}}
+        if($task.PSObject.Properties['capabilityProfile']-and-not[string]::IsNullOrWhiteSpace([string]$task.capabilityProfile)){
+            try{[void](Get-SCTaskCapabilityProfile (Get-SCWorkerCapabilityCatalog) $task)}catch{$issues+="Task '$($task.id)' capability profile is unavailable: $($_.Exception.Message)"}
+        }
+    }
+    foreach($ref in $planIntent){if($null-eq(Find-SCIntentRefValue $intent ([string]$ref))){$issues+="Plan references missing Intent '$ref'."}}
+    if($issues.Count-gt0){throw ('Planning candidate preflight failed:'+ [Environment]::NewLine +' - '+($issues -join([Environment]::NewLine+' - ')))}
+    return [pscustomobject][ordered]@{valid=$true;taskCount=$tasks.Count;intentRefCount=@($tasks|ForEach-Object{@($_.intentRefs)}).Count;format=$input.format}
+}
+
 function Get-SCIntentSemanticHash($Intent) {
     if($null-eq$Intent){return $null}
     $projection=[ordered]@{}
