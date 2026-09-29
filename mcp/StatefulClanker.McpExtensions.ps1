@@ -453,10 +453,44 @@ function Invoke-McpPlannerCommand([string]$Project,[string[]]$PlannerArgs) {
     return $response.data
 }
 
+function ConvertFrom-McpHarnessLastJson($HarnessResult,[string]$Operation) {
+    $lines=@(([string]$HarnessResult.stdout) -split [Environment]::NewLine|Where-Object{-not[string]::IsNullOrWhiteSpace($_)})
+    if($lines.Count-eq0){throw "$Operation returned no JSON output."}
+    try{return $lines[-1]|ConvertFrom-Json -ErrorAction Stop}catch{throw "$Operation returned malformed JSON: $($HarnessResult.stdout)"}
+}
+
 function Invoke-McpPlanningControl([string]$Project,$Arguments) {
     $action=(Get-McpArgRequired $Arguments 'action').ToLowerInvariant()
     switch($action) {
         'status' { return Invoke-McpPlannerCommand $Project @('status') }
+        'participants' {
+            $result=Invoke-McpHarness $Project @('planning','participants')
+            return ConvertFrom-McpHarnessLastJson $result 'planning participants'
+        }
+        'artifacts' {
+            $result=Invoke-McpHarness $Project @('planning','artifacts')
+            return ConvertFrom-McpHarnessLastJson $result 'planning artifacts'
+        }
+        'runpass' {
+            $role=Get-McpArgRequired $Arguments 'role';$brief=Get-McpArgRequired $Arguments 'brief'
+            $temp=Join-Path ([IO.Path]::GetTempPath()) ("statefulclanker-planning-brief-{0}.txt"-f[Guid]::NewGuid().ToString('N'))
+            try {
+                [IO.File]::WriteAllText($temp,$brief,(New-Object Text.UTF8Encoding($false)))
+                $cli=@('planning','run-pass','-Role',$role,'-Path',$temp)
+                foreach($pair in @(@('provider','-Provider'),@('endpoint','-Endpoint'),@('connection','-Connection'))){$v=Get-McpArgOptional $Arguments $pair[0];if($v){$cli+=@($pair[1],[string]$v)}}
+                return ConvertFrom-McpHarnessLastJson (Invoke-McpHarness $Project $cli) "planning pass '$role'"
+            } finally {Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+        }
+        'runrecipe' {
+            $brief=Get-McpArgRequired $Arguments 'brief'
+            $temp=Join-Path ([IO.Path]::GetTempPath()) ("statefulclanker-planning-brief-{0}.txt"-f[Guid]::NewGuid().ToString('N'))
+            try {
+                [IO.File]::WriteAllText($temp,$brief,(New-Object Text.UTF8Encoding($false)))
+                $cli=@('planning','run-recipe','-Path',$temp)
+                foreach($pair in @(@('provider','-Provider'),@('endpoint','-Endpoint'),@('connection','-Connection'))){$v=Get-McpArgOptional $Arguments $pair[0];if($v){$cli+=@($pair[1],[string]$v)}}
+                return ConvertFrom-McpHarnessLastJson (Invoke-McpHarness $Project $cli) 'planning recipe'
+            } finally {Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+        }
         'begin' {
             $reason=Get-McpArgOptional $Arguments 'reason';if(-not$reason){$reason='Explicit planning/replanning session.'}
             $cli=@('begin','--reason',$reason)
@@ -542,7 +576,7 @@ function New-SCExtendedTools {
         @{name='collaboration_team';description='Create or update a temporary cooperation team. Members are task/participant ids. This is a routing roster, not a shared transcript.';inputSchema=@{type='object';properties=@{project=@{type='string'};teamId=@{type='string'};participantIds=@{type='array';items=@{type='string'};minItems=2};purpose=@{type='string'}};required=@('teamId','participantIds')}},
         @{name='collaboration_send';description='Send one concise typed cooperation packet between planning/implementation participants. Preserve independent contexts: send claims, questions, evidence, contracts or objections, never hidden reasoning transcripts.';inputSchema=@{type='object';properties=@{project=@{type='string'};fromId=@{type='string'};type=@{type='string';enum=@('ask','answer','discovery','proposal','objection','ack','warning','blocked','request_change','i_dont_know')};subject=@{type='string'};body=@{type='string'};toIds=@{type='array';items=@{type='string'}};teamId=@{type='string'};evidence=@{type='array';items=@{type='string'}};replyTo=@{type='string'};requiresAck=@{type='boolean'}};required=@('fromId','type','subject','body')}},
         @{name='collaboration_inbox';description='Read structured cooperation packets addressed to one planning/implementation participant.';inputSchema=@{type='object';properties=@{project=@{type='string'};participantId=@{type='string'};excludeIds=@{type='array';items=@{type='string'}};limit=@{type='integer';minimum=1;maximum=200}};required=@('participantId')}},
-        @{name='planning_control';description='Operate the isolated Planner session. Planning owns the project while active and blocks implementation dispatch. Actions: status, begin, settle, ask, answer, questions, candidate, accept, apply, cancel; release is a low-level recovery action after an already-committed transaction.';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('status','begin','settle','ask','answer','questions','candidate','accept','apply','release','cancel')};reason=@{type='string'};executionTokenEstimate=@{type='integer';minimum=1};text=@{type='string'};why=@{type='string'};impact=@{type='string';enum=@('low','medium','high')};owner=@{type='string';enum=@('human','system')};blocking=@{type='boolean'};questionId=@{type='string'};planText=@{type='string';description='Complete candidate SCPLAN 1 text.'};intentContract=@{type='object';description='Optional staged normalized Intent candidate.'};directiveChanges=@{type='array';description='Optional staged directive set/retire changes applied atomically with Intent and plan.';items=@{type='object'}};projectGoal=@{type='string';description='Optional staged replacement for the worker-facing project goal.'};summary=@{type='string'};candidateId=@{type='string'};handoffId=@{type='string'};appliedPlanId=@{type='string'}};required=@('action')}},
+        @{name='planning_control';description='Operate the isolated Planner session and its session-scoped inference participants. Actions: status, begin, settle, participants, artifacts, runPass, runRecipe, ask, answer, questions, candidate, accept, apply, cancel; release is a low-level recovery action after an already-committed transaction.';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('status','begin','settle','participants','artifacts','runPass','runRecipe','ask','answer','questions','candidate','accept','apply','release','cancel')};reason=@{type='string'};executionTokenEstimate=@{type='integer';minimum=1};text=@{type='string'};why=@{type='string'};impact=@{type='string';enum=@('low','medium','high')};owner=@{type='string';enum=@('human','system')};blocking=@{type='boolean'};questionId=@{type='string'};brief=@{type='string';description='Planning brief supplied to one specialist pass or the fixed planning recipe.'};role=@{type='string';enum=@('intent','architecture','code_implications','state_implications','failure_modes','decomposition','adversary','reconciler')};provider=@{type='string'};endpoint=@{type='string'};connection=@{type='string'};planText=@{type='string';description='Complete candidate SCPLAN 1 text.'};intentContract=@{type='object';description='Optional staged normalized Intent candidate.'};directiveChanges=@{type='array';description='Optional staged directive set/retire changes applied atomically with Intent and plan.';items=@{type='object'}};projectGoal=@{type='string';description='Optional staged replacement for the worker-facing project goal.'};summary=@{type='string'};candidateId=@{type='string'};handoffId=@{type='string'};appliedPlanId=@{type='string'}};required=@('action')}},
         @{name='plan_apply';description='LEGACY ADDITIVE IMPORT: apply SCPLAN 1 directly from text only when no isolated planning session is active. Replanning must stage a planning_control candidate/handoff instead.';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string';description='Complete SCPLAN 1 document.'}};required=@('text')}},
         @{name='source_add';description='Persist verbatim source/background text as a durable human:<id> artifact. For material current human direction use directive_set instead.';inputSchema=@{type='object';properties=@{project=@{type='string'};text=@{type='string'}};required=@('text')}},
         @{name='source_get';description='Read a durable source by reference, including optional #Lx-Ly ranges.';inputSchema=@{type='object';properties=@{project=@{type='string'};sourceRef=@{type='string'}};required=@('sourceRef')}},
