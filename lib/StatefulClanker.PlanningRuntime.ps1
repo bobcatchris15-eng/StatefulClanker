@@ -108,7 +108,7 @@ function Invoke-SCPlanningPass([string]$Role,[string]$Brief,[string]$ProviderOve
     $participantPath=Join-Path (Get-SCPlanningParticipantDir $active) ($participantId+'.json')
     Write-SCJson $participantPath $participant
     $outputContract=if($roleName-eq'reconciler'){
-        'Return one JSON object with keys: summary, projectGoal, intentContract, directiveChanges, planText, openQuestions, unresolvedConflicts. planText must be a complete SCPLAN 1 document. Use null/[] where unchanged.'
+        'Return one JSON object with keys: summary, projectGoal, intentContract, directiveChanges, planText, openQuestions, unresolvedConflicts. planText must be a complete SCPLAN 1 document. Any staged Intent entries in requirements/constraints/invariants/nonGoals/decisions/preferences/openQuestions must be structured objects with stable id, kind, text (or question), source, and authority so planner inference cannot masquerade as human authority. Use null/[] where unchanged.'
     }elseif($roleName-eq'decomposition'){
         'Return one JSON object with keys: summary, obligationsCovered, openQuestions, planText. planText must be a complete SCPLAN 1 candidate, not applied state.'
     }else{
