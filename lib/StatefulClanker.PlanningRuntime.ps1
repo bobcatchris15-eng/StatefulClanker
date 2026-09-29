@@ -22,6 +22,11 @@ function Get-SCPlanningArtifactDir($Active=$null) {
     if(-not(Test-Path -LiteralPath $p)){New-Item -ItemType Directory -Force -Path $p|Out-Null}
     return $p
 }
+function Get-SCPlanningRecipeDir($Active=$null) {
+    $p=Join-Path (Get-SCPlanningRuntimeSessionDir $Active) 'recipes'
+    if(-not(Test-Path -LiteralPath $p)){New-Item -ItemType Directory -Force -Path $p|Out-Null}
+    return $p
+}
 function Get-SCPlanningParticipants {
     $active=Get-SCPlanningRuntimeActive;$dir=Get-SCPlanningParticipantDir $active
     return @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File -ErrorAction SilentlyContinue|Sort-Object Name|ForEach-Object{Read-SCJson $_.FullName}|Where-Object{$null-ne$_})
@@ -43,7 +48,7 @@ function Get-SCPlanningRoleDoctrine([string]$Role) {
         default {throw "Unknown planning role '$Role'."}
     }
 }
-function Get-SCPlanningBaselineContext($Active,[string]$Brief,[bool]$IncludeArtifacts=$false) {
+function Get-SCPlanningBaselineContext($Active,[string]$Brief,[bool]$IncludeArtifacts=$false,[string]$RecipeId=$null) {
     if([string]::IsNullOrWhiteSpace([string]$Active.baselinePath)){throw 'Planning session is not settled.'}
     $baselinePath=Resolve-SCPlanningArtifactPath ([string]$Active.baselinePath)
     $baseline=Read-SCJson $baselinePath
@@ -71,7 +76,11 @@ function Get-SCPlanningBaselineContext($Active,[string]$Brief,[bool]$IncludeArti
         intent=$intent
         currentTasks=@($tasks)
     }
-    if($IncludeArtifacts){$context['priorArtifacts']=@(Get-SCPlanningArtifacts|ForEach-Object{[ordered]@{id=$_.id;role=$_.role;kind=$_.kind;content=$_.content;structured=$_.structured}})}
+    if($IncludeArtifacts){
+        $prior=@(Get-SCPlanningArtifacts)
+        if(-not[string]::IsNullOrWhiteSpace($RecipeId)){$prior=@($prior|Where-Object{$_.PSObject.Properties['recipeId']-and[string]$_.recipeId-eq$RecipeId})}
+        $context['priorArtifacts']=@($prior|ForEach-Object{[ordered]@{id=$_.id;recipeId=if($_.PSObject.Properties['recipeId']){$_.recipeId}else{$null};role=$_.role;kind=$_.kind;content=$_.content;structured=$_.structured}})
+    }
     return $context
 }
 function ConvertFrom-SCPlanningStructuredOutput([string]$Text) {
@@ -92,15 +101,15 @@ function New-SCPlanningSyntheticTask([string]$ParticipantId,[string]$Role) {
         }
     }
 }
-function Invoke-SCPlanningPass([string]$Role,[string]$Brief,[string]$ProviderOverride=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
+function Invoke-SCPlanningPass([string]$Role,[string]$Brief,[string]$ProviderOverride=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null,[string]$RecipeId=$null) {
     $active=Get-SCPlanningRuntimeActive
     $roleName=$Role.ToLowerInvariant()
     $doctrine=Get-SCPlanningRoleDoctrine $roleName
     $includeArtifacts=@('decomposition','adversary','reconciler')-contains$roleName
-    $ctx=Get-SCPlanningBaselineContext $active $Brief $includeArtifacts
+    $ctx=Get-SCPlanningBaselineContext $active $Brief $includeArtifacts $RecipeId
     $participantId=('planning-'+$roleName+'-'+[guid]::NewGuid().ToString('N').Substring(0,8))
     $participant=[ordered]@{
-        schemaVersion=1;id=$participantId;sessionId=[string]$active.sessionId;role=$roleName;status='running'
+        schemaVersion=1;id=$participantId;sessionId=[string]$active.sessionId;recipeId=$RecipeId;role=$roleName;status='running'
         createdAt=[datetimeoffset]::UtcNow.ToString('o');updatedAt=[datetimeoffset]::UtcNow.ToString('o')
         provider=$null;endpoint=$null;connection=$null;model=$null;promptTokens=0;completionTokens=0;totalTokens=0
         receiptId=$null;artifactId=$null;error=$null
@@ -151,7 +160,7 @@ $($ctx|ConvertTo-Json -Depth 30)
         $structured=ConvertFrom-SCPlanningStructuredOutput ([string]$receipt.stdout)
         $artifactId=('pa-'+[guid]::NewGuid().ToString('N').Substring(0,12))
         $artifact=[ordered]@{
-            schemaVersion=1;id=$artifactId;sessionId=[string]$active.sessionId;participantId=$participantId;role=$roleName
+            schemaVersion=1;id=$artifactId;sessionId=[string]$active.sessionId;recipeId=$RecipeId;participantId=$participantId;role=$roleName
             kind=if($roleName-eq'reconciler'){'candidate_bundle'}elseif($roleName-eq'decomposition'){'decomposition'}else{'observation'}
             createdAt=[datetimeoffset]::UtcNow.ToString('o');content=[string]$receipt.stdout;structured=$structured
             receiptId=$receipt.id;provider=$participant.provider;endpoint=$participant.endpoint;connection=$participant.connection;model=$participant.model
@@ -169,13 +178,40 @@ $($ctx|ConvertTo-Json -Depth 30)
 function Invoke-SCPlanningRecipe([string]$Brief,[string]$ProviderOverride=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
     $active=Get-SCPlanningRuntimeActive
     $roles=@('intent','architecture','code_implications','state_implications','failure_modes','decomposition','adversary','reconciler')
+    $recipeId=('recipe-'+[guid]::NewGuid().ToString('N').Substring(0,12))
+    $recipePath=Join-Path (Get-SCPlanningRecipeDir $active) ($recipeId+'.json')
+    $record=[pscustomobject][ordered]@{
+        schemaVersion=1;id=$recipeId;sessionId=[string]$active.sessionId;status='running';brief=$Brief
+        roles=@($roles);participantIds=@();artifactIds=@();createdAt=[datetimeoffset]::UtcNow.ToString('o');updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+        planningTokens=0;targetTokens=if($active.budget-and$active.budget.PSObject.Properties['planningTargetTokens']){$active.budget.planningTargetTokens}else{$null}
+        finalArtifactId=$null;error=$null
+    }
+    Write-SCJson $recipePath $record
     $runs=@()
-    foreach($role in $roles){$runs+=,(Invoke-SCPlanningPass $role $Brief $ProviderOverride $EndpointOverride $ConnectionOverride)}
-    $final=$runs[-1].artifact
-    return [pscustomobject][ordered]@{
-        sessionId=[string]$active.sessionId;completed=$true;roles=@($roles)
-        participantIds=@($runs|ForEach-Object{$_.participant.id})
-        artifactIds=@($runs|ForEach-Object{$_.artifact.id})
-        finalArtifact=$final
+    try{
+        foreach($role in $roles){
+            $run=Invoke-SCPlanningPass $role $Brief $ProviderOverride $EndpointOverride $ConnectionOverride $recipeId
+            $runs+=,$run
+            $record.participantIds=@($runs|ForEach-Object{$_.participant.id})
+            $record.artifactIds=@($runs|ForEach-Object{$_.artifact.id})
+            $record.planningTokens=[long](($runs|ForEach-Object{[long]$_.participant.totalTokens}|Measure-Object -Sum).Sum)
+            $record.updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+            Write-SCJson $recipePath $record
+        }
+        $final=$runs[-1].artifact
+        $record.status='complete';$record.finalArtifactId=[string]$final.id;$record.updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+        Write-SCJson $recipePath $record
+        return [pscustomobject][ordered]@{
+            sessionId=[string]$active.sessionId;recipeId=$recipeId;completed=$true;roles=@($roles)
+            participantIds=@($record.participantIds);artifactIds=@($record.artifactIds);planningTokens=[long]$record.planningTokens
+            targetTokens=$record.targetTokens;overTarget=($null-ne$record.targetTokens-and[long]$record.planningTokens-gt[long]$record.targetTokens)
+            finalArtifact=$final
+        }
+    }catch{
+        $record.status='failed';$record.error=$_.Exception.Message;$record.updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+        $record.participantIds=@($runs|ForEach-Object{$_.participant.id});$record.artifactIds=@($runs|ForEach-Object{$_.artifact.id})
+        $record.planningTokens=[long](($runs|ForEach-Object{[long]$_.participant.totalTokens}|Measure-Object -Sum).Sum)
+        Write-SCJson $recipePath $record
+        throw
     }
 }
