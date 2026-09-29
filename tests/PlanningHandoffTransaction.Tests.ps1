@@ -20,11 +20,11 @@ function Invoke-Planner([string[]]$PlannerArgs){
     if(-not[bool]$response.ok){throw "Planner returned failure: $($response.error)"}
     return $response.data
 }
-function Invoke-HarnessJson([string[]]$Args){
-    $raw=& $harness @Args 2>&1|Out-String
+function Invoke-HarnessJson([string[]]$HarnessArgs){
+    $raw=& $harness @HarnessArgs 2>&1|Out-String
     if($LASTEXITCODE-ne0){throw "Harness command failed: $raw"}
     $lines=@($raw -split [Environment]::NewLine|Where-Object{-not[string]::IsNullOrWhiteSpace($_)})
-    if($lines.Count-eq0){throw "Harness command produced no JSON: $($Args -join ' ')"}
+    if($lines.Count-eq0){throw "Harness command produced no JSON: $($HarnessArgs -join ' ')"}
     return ($lines[-1]|ConvertFrom-Json)
 }
 
