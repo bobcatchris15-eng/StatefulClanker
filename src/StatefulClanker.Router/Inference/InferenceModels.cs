@@ -15,6 +15,8 @@ public sealed class NormalizedInferenceRequest
     public double? temperature { get; set; }
     public int timeoutSeconds { get; set; } = 300;
     public string? sessionKey { get; set; }
+    public int maxRouteAttempts { get; set; } = 6;
+    public int maxRouteWaitSeconds { get; set; } = 20;
 
     public void EnsureDiagnosticConversation()
     {
@@ -81,6 +83,19 @@ public sealed class NormalizedUsage
     public bool reported { get; set; }
 }
 
+public sealed class RoutingAttemptRecord
+{
+    public int attempt { get; set; }
+    public string endpoint { get; set; } = "";
+    public string connection { get; set; } = "";
+    public string model { get; set; } = "";
+    public string outcome { get; set; } = "";
+    public string? failureClass { get; set; }
+    public string? scope { get; set; }
+    public string? reasonCode { get; set; }
+    public double durationSeconds { get; set; }
+}
+
 public sealed class NormalizedInferenceResult
 {
     public bool ok { get; set; }
@@ -96,6 +111,11 @@ public sealed class NormalizedInferenceResult
     public InferenceDiagnosis diagnosis { get; set; } = new();
     public bool failoverAllowed { get; set; }
     public bool healthChanged { get; set; }
+    public bool routeDeferred { get; set; }
+    public bool routeExhausted { get; set; }
+    public string? nextRetryAt { get; set; }
+    public int routeAttempts { get; set; }
+    public List<RoutingAttemptRecord> routeHistory { get; set; } = new();
     public string? signalRef { get; set; }
 }
 
