@@ -249,7 +249,7 @@ end
         Assert-True (Test-Path -LiteralPath (Join-Path $stateRoot ("transactions\{0}\backup\tasks\t-drop.json"-f$result.transactionId))) 'Retired task was not retained in transaction backup.'
 
         Write-Host '  REPLAN TX 5: committed handoff is idempotent until Planner release'
-        $again=Invoke-HarnessJson @('plan','apply-handoff','-Path',$handoffPath)
+        $again=Invoke-HarnessJson $handoffPath
         Assert-True ([string]$again.transactionId-eq[string]$result.transactionId) 'Retry created a second transaction for same handoff.'
         Assert-True ([string]$again.appliedPlanId-eq[string]$result.appliedPlanId) 'Retry changed applied plan id.'
 
