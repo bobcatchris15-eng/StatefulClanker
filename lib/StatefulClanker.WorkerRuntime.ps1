@@ -23,6 +23,18 @@ function Get-SCMachineConnection([string]$Name) {
     return $p.Value
 }
 function Get-SCEffectiveApiConnection($ProviderRecord) {
+    if($ProviderRecord.config.PSObject.Properties['routerManaged'] -and [bool]$ProviderRecord.config.routerManaged){
+        $copy=[ordered]@{
+            protocol='router-normalized'
+            model='router'
+            toolMode=if($ProviderRecord.config.PSObject.Properties['toolMode'] -and $ProviderRecord.config.toolMode){[string]$ProviderRecord.config.toolMode}else{'text'}
+            maxTokens=if($ProviderRecord.config.PSObject.Properties['maxTokens'] -and $ProviderRecord.config.maxTokens){[int]$ProviderRecord.config.maxTokens}else{4096}
+            requestTimeoutSeconds=if($ProviderRecord.config.PSObject.Properties['requestTimeoutSeconds'] -and $ProviderRecord.config.requestTimeoutSeconds){[int]$ProviderRecord.config.requestTimeoutSeconds}else{300}
+        }
+        if($ProviderRecord.config.PSObject.Properties['maxSteps'] -and $ProviderRecord.config.maxSteps){$copy['maxSteps']=[int]$ProviderRecord.config.maxSteps}
+        if($ProviderRecord.config.PSObject.Properties['temperature'] -and $null-ne$ProviderRecord.config.temperature){$copy['temperature']=[double]$ProviderRecord.config.temperature}
+        return [pscustomobject]$copy
+    }
     $connectionName=[string]$ProviderRecord.config.connection
     $base=Get-SCMachineConnection $connectionName
     $copy=[ordered]@{}
@@ -613,31 +625,48 @@ function Invoke-SCLegacyApiChat($Connection,$Messages,$Tools,[string]$ToolMode) 
 function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode,$ProviderRecord=$null) {
     $routerAvailable=(Get-Command Invoke-SCCompiledRouterCommand -ErrorAction SilentlyContinue)
     if($ProviderRecord-and$routerAvailable){
-        $endpoint=[string]$ProviderRecord.name
-        if([string]::IsNullOrWhiteSpace($endpoint)){throw 'Routed API inference requires an exact endpoint id.'}
+        $routerManaged=($ProviderRecord.config.PSObject.Properties['routerManaged'] -and [bool]$ProviderRecord.config.routerManaged)
+        $endpoint=if($routerManaged){$null}else{[string]$ProviderRecord.name}
+        if(-not$routerManaged-and[string]::IsNullOrWhiteSpace($endpoint)){throw 'Exact routed API inference requires an endpoint id.'}
+
         $maxTokens=4096
         if($Connection.PSObject.Properties['maxTokens']-and[int]$Connection.maxTokens-gt0){$maxTokens=[int]$Connection.maxTokens}
         $timeout=300
         if($Connection.PSObject.Properties['requestTimeoutSeconds']-and[int]$Connection.requestTimeoutSeconds-gt0){
             $timeout=[Math]::Min(1800,[Math]::Max(15,[int]$Connection.requestTimeoutSeconds))
         }
+        $maxRouteAttempts=6;$maxRouteWaitSeconds=20
+        if($ProviderRecord.config.PSObject.Properties['maxRouteAttempts']){$maxRouteAttempts=[Math]::Min(32,[Math]::Max(1,[int]$ProviderRecord.config.maxRouteAttempts))}
+        if($ProviderRecord.config.PSObject.Properties['maxRouteWaitSeconds']){$maxRouteWaitSeconds=[Math]::Min(300,[Math]::Max(0,[int]$ProviderRecord.config.maxRouteWaitSeconds))}
         $request=[ordered]@{
             messages=@($Messages)
             tools=if($ToolMode-ne'text'){@($Tools)}else{@()}
             toolMode=$ToolMode
             maxOutputTokens=$maxTokens
             timeoutSeconds=$timeout
+            maxRouteAttempts=$maxRouteAttempts
+            maxRouteWaitSeconds=$maxRouteWaitSeconds
             sessionKey=Get-SCProjectSessionId
         }
-        if($Connection.PSObject.Properties['temperature']-and$null-ne$Connection.temperature){
-            $request['temperature']=[double]$Connection.temperature
-        }
+        if($Connection.PSObject.Properties['temperature']-and$null-ne$Connection.temperature){$request['temperature']=[double]$Connection.temperature}
+
         $dir=Get-SCPath 'router-inference'
         if(-not(Test-Path -LiteralPath $dir -PathType Container)){New-Item -ItemType Directory -Force -Path $dir|Out-Null}
         $file=Join-Path $dir ((New-SCId 'infer')+'.json')
         try{
             $request|ConvertTo-Json -Depth 50 -Compress|Set-Content -LiteralPath $file -Encoding UTF8
-            $response=Invoke-SCCompiledRouterCommand @('infer','--endpoint',$endpoint,'--request-file',$file)
+            $args=@('infer','--request-file',$file,'--owner-pid',[string]$PID)
+            if($routerManaged){
+                if($ProviderRecord.config.PSObject.Properties['preferred'] -and $ProviderRecord.config.preferred){$args+=@('--preferred',[string]$ProviderRecord.config.preferred)}
+                if($ProviderRecord.config.PSObject.Properties['connection'] -and $ProviderRecord.config.connection){$args+=@('--connection',[string]$ProviderRecord.config.connection)}
+                if($ProviderRecord.config.PSObject.Properties['strictPreferred'] -and [bool]$ProviderRecord.config.strictPreferred){$args+=@('--strict-preferred','true')}
+                if($ProviderRecord.config.PSObject.Properties['sessionId'] -and $ProviderRecord.config.sessionId){$args+=@('--session',[string]$ProviderRecord.config.sessionId)}
+                if($ProviderRecord.config.PSObject.Properties['allowedEndpoints'] -and @($ProviderRecord.config.allowedEndpoints).Count-gt0){$args+=@('--endpoints',(@($ProviderRecord.config.allowedEndpoints)-join','))}
+            }else{
+                $args+=@('--endpoint',$endpoint)
+            }
+
+            $response=Invoke-SCCompiledRouterCommand $args
             if(-not[bool]$response.ok){throw "Router inference operation failed: $([string]$response.error)"}
             $data=$response.data
             if(-not[bool]$data.ok){
@@ -652,7 +681,7 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode,$Provid
             }
             $usage=$data.usage
             return [pscustomobject][ordered]@{
-                model=if($usage-and$usage.PSObject.Properties['model']){[string]$usage.model}else{[string]$Connection.model}
+                model=if($usage-and$usage.PSObject.Properties['model']){[string]$usage.model}else{[string]$data.model}
                 usage=[pscustomobject][ordered]@{
                     prompt_tokens=if($usage){[long]$usage.promptTokens}else{0L}
                     completion_tokens=if($usage){[long]$usage.completionTokens}else{0L}
@@ -661,13 +690,16 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode,$Provid
                 normalizedAssistant=$data.assistant
                 routerInference=$true
                 routerSignalRef=$data.signalRef
+                routerEndpoint=[string]$data.endpoint
+                routerConnection=[string]$data.connection
+                routerModel=[string]$data.model
+                routerRouteAttempts=[int]$data.routeAttempts
+                routerRouteHistory=@($data.routeHistory)
             }
         }finally{
             Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
         }
     }
-    # Compatibility/test seam only. Production compiled routing always supplies
-    # ProviderRecord and therefore traverses the machine inference gateway.
     return Invoke-SCLegacyApiChat $Connection $Messages $Tools $ToolMode
 }
 
@@ -749,6 +781,13 @@ function Add-SCApiUsage($Accumulator,$Response) {
     elseif($Response.PSObject.Properties['usageMetadata']-and$Response.usageMetadata){$reported=$true;$prompt=Get-SCApiUsageValue $Response.usageMetadata @('promptTokenCount');$completion=Get-SCApiUsageValue $Response.usageMetadata @('candidatesTokenCount');$total=Get-SCApiUsageValue $Response.usageMetadata @('totalTokenCount');if($total-le0-and($prompt-gt0-or$completion-gt0)){$total=$prompt+$completion}}
     $Accumulator.apiRequests=[long]$Accumulator.apiRequests+1;if($reported){$Accumulator.usageReports=[long]$Accumulator.usageReports+1};$Accumulator.promptTokens=[long]$Accumulator.promptTokens+$prompt;$Accumulator.completionTokens=[long]$Accumulator.completionTokens+$completion;$Accumulator.totalTokens=[long]$Accumulator.totalTokens+$total
     if(-not[string]::IsNullOrWhiteSpace($model)){$map=$Accumulator.modelUsage;if(-not$map.ContainsKey($model)){$map[$model]=[ordered]@{model=$model;requests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L}};$row=$map[$model];$row.requests=[long]$row.requests+1;if($reported){$row.usageReports=[long]$row.usageReports+1};$row.promptTokens=[long]$row.promptTokens+$prompt;$row.completionTokens=[long]$row.completionTokens+$completion;$row.totalTokens=[long]$row.totalTokens+$total}
+    if($Response.PSObject.Properties['routerEndpoint'] -and $Response.routerEndpoint){
+        $Accumulator.lastEndpoint=[string]$Response.routerEndpoint
+        $Accumulator.lastConnection=[string]$Response.routerConnection
+        $Accumulator.lastModel=[string]$Response.routerModel
+        $Accumulator.lastRouteAttempts=[int]$Response.routerRouteAttempts
+        $Accumulator.lastRouteHistory=@($Response.routerRouteHistory)
+    }
 }
 
 function Ensure-SCWorkerSessionLayout {
@@ -1159,7 +1198,11 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
     $malformedTextTurns=0
     for($step=1;$step-le$maxSteps;$step++){
         $response=Invoke-SCApiChat $Connection $messages $tools $toolMode $ProviderRecord
-        if($WorkerSessionId -and $ProviderRecord){Set-SCWorkerSessionRoutePin $WorkerSessionId ([string]$ProviderRecord.name) ([string]$ProviderRecord.config.connection) ([string]$ProviderRecord.config.model)}
+        if($WorkerSessionId -and $response.PSObject.Properties['routerEndpoint'] -and $response.routerEndpoint){
+            Set-SCWorkerSessionRoutePin $WorkerSessionId ([string]$response.routerEndpoint) ([string]$response.routerConnection) ([string]$response.routerModel)
+        }elseif($WorkerSessionId -and $ProviderRecord -and -not($ProviderRecord.config.PSObject.Properties['routerManaged'] -and [bool]$ProviderRecord.config.routerManaged)){
+            Set-SCWorkerSessionRoutePin $WorkerSessionId ([string]$ProviderRecord.name) ([string]$ProviderRecord.config.connection) ([string]$ProviderRecord.config.model)
+        }
         Add-SCApiUsage $UsageAccumulator $response
         $m=Get-SCAssistantMessage $response $protocol
         if($toolMode-eq'text'){
@@ -1256,12 +1299,13 @@ function Invoke-SCDirectWorkerLoop($Connection,[string]$Prompt,$Task,[string]$St
 }
 
 function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$ProviderRecord,[string]$ParentAgentId,$Compilation,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null) {
-    $connectionName=[string]$ProviderRecord.config.connection
+    $routerManaged=($ProviderRecord.config.PSObject.Properties['routerManaged'] -and [bool]$ProviderRecord.config.routerManaged)
+    $connectionName=if($routerManaged){'router'}else{[string]$ProviderRecord.config.connection}
     $connection=Get-SCEffectiveApiConnection $ProviderRecord
     $receiptId=New-SCId $Stage;$agentId=New-SCId 'agent';$promptPath=Get-SCPath ("prompts/{0}.txt"-f$receiptId);$Prompt|Set-Content -LiteralPath $promptPath -Encoding UTF8
     $stdoutPath=Get-SCPath ("runs/{0}.stdout.txt"-f$receiptId);$stderrPath=Get-SCPath ("runs/{0}.stderr.txt"-f$receiptId);$started=(Get-Date).ToUniversalTime();$compilationId=if($Compilation){$Compilation.id}else{$null};$fingerprint=if($Compilation){$Compilation.inputFingerprint}else{$null};$retrievedChars=0;if($Compilation-and$Compilation.ir.sources.retrieved){$retrievedChars=[int]$Compilation.ir.sources.retrieved.usedChars}
     $capabilities=@(Get-SCWorkerToolRecords $Task $Stage|ForEach-Object{[string]$_.capability})
-    $usage=@{fallbackModel=[string]$connection.model;apiRequests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L;modelUsage=@{}}
+    $usage=@{fallbackModel=[string]$connection.model;apiRequests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L;modelUsage=@{};lastEndpoint=$null;lastConnection=$null;lastModel=$null;lastRouteAttempts=0;lastRouteHistory=@()}
     $telemetry=[ordered]@{schemaVersion=4;agentId=$agentId;receiptId=$receiptId;parentAgentId=$ParentAgentId;taskId=$Task.id;taskTitle=$Task.title;stage=$Stage;role=$Task.role;provider=$ProviderRecord.name;endpoint=$ProviderRecord.name;backendType='api';connection=$connectionName;model=[string]$connection.model;actualModels=@();modelUsage=@();apiRequests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L;capabilities=$capabilities;lifecycle='running';processId=$PID;startedAt=$started.ToString('o');heartbeatAt=$started.ToString('o');endedAt=$null;durationSeconds=$null;promptChars=$Prompt.Length;retrievedChars=$retrievedChars;compilationId=$compilationId;inputFingerprint=$fingerprint;command='direct-api';args=@();exitCode=$null;verdict=$null;stdoutPath=$stdoutPath;stderrPath=$stderrPath;error=$null}
     Save-SCActiveTelemetry $telemetry;Add-SCTelemetryEvent 'agent.started' $telemetry;$stdout='';$stderr='';$exitCode=-1;$inferenceDiagnostic=$null
     try{
@@ -1281,7 +1325,7 @@ function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$Provid
     }
     $modelUsage=@($usage.modelUsage.Values|Sort-Object model);$telemetry.apiRequests=[long]$usage.apiRequests;$telemetry.usageReports=[long]$usage.usageReports;$telemetry.promptTokens=[long]$usage.promptTokens;$telemetry.completionTokens=[long]$usage.completionTokens;$telemetry.totalTokens=[long]$usage.totalTokens;$telemetry.modelUsage=$modelUsage;$telemetry.actualModels=@($modelUsage|ForEach-Object{[string]$_.model})
     $ended=(Get-Date).ToUniversalTime();$telemetry.lifecycle=if($exitCode-eq0){'completed'}else{'failed'};$telemetry.exitCode=$exitCode;$telemetry.endedAt=$ended.ToString('o');$telemetry.heartbeatAt=$telemetry.endedAt;$telemetry.durationSeconds=[math]::Round(($ended-$started).TotalSeconds,3);Complete-SCTelemetry $telemetry
-    return [pscustomobject][ordered]@{schemaVersion=4;id=$receiptId;agentId=$agentId;taskId=$Task.id;stage=$Stage;provider=$ProviderRecord.name;endpoint=$ProviderRecord.name;backendType='api';workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]($Stage-eq'run' -and $WorkerSessionId));connection=$connectionName;model=[string]$connection.model;actualModels=@($telemetry.actualModels);modelUsage=@($telemetry.modelUsage);apiRequests=$telemetry.apiRequests;usageReports=$telemetry.usageReports;promptTokens=$telemetry.promptTokens;completionTokens=$telemetry.completionTokens;totalTokens=$telemetry.totalTokens;capabilities=$capabilities;compilationId=$compilationId;inputFingerprint=$fingerprint;command='router-inference';args=@();promptPath=$promptPath;startedAt=$started.ToString('o');endedAt=$ended.ToString('o');durationSeconds=$telemetry.durationSeconds;exitCode=$exitCode;stdout=$stdout;stderr=$stderr;verdict=$null;routerOutcomeOwned=$true;inferenceFailureClass=if($inferenceDiagnostic){[string](Get-SCField $inferenceDiagnostic.diagnosis 'class')}else{$null};inferenceFailureScope=if($inferenceDiagnostic){[string](Get-SCField $inferenceDiagnostic.diagnosis 'scope')}else{$null};inferenceFailoverAllowed=if($inferenceDiagnostic){[bool]$inferenceDiagnostic.failoverAllowed}else{$false};inferenceHealthChanged=if($inferenceDiagnostic){[bool]$inferenceDiagnostic.healthChanged}else{$false};inferenceReasonCode=if($inferenceDiagnostic){[string]$inferenceDiagnostic.diagnosis.reasonCode}else{$null};inferenceSignalRef=if($inferenceDiagnostic){[string]$inferenceDiagnostic.signalRef}else{$null}}
+    return [pscustomobject][ordered]@{schemaVersion=4;id=$receiptId;agentId=$agentId;taskId=$Task.id;stage=$Stage;provider=$ProviderRecord.name;endpoint=if($usage.lastEndpoint){[string]$usage.lastEndpoint}else{[string]$ProviderRecord.name};backendType='api';workerSessionId=$WorkerSessionId;workerSessionResumable=([bool]($Stage-eq'run' -and $WorkerSessionId));connection=if($usage.lastConnection){[string]$usage.lastConnection}else{$connectionName};model=if($usage.lastModel){[string]$usage.lastModel}else{[string]$connection.model};actualModels=@($telemetry.actualModels);modelUsage=@($telemetry.modelUsage);apiRequests=$telemetry.apiRequests;usageReports=$telemetry.usageReports;promptTokens=$telemetry.promptTokens;completionTokens=$telemetry.completionTokens;totalTokens=$telemetry.totalTokens;capabilities=$capabilities;compilationId=$compilationId;inputFingerprint=$fingerprint;command='router-inference';args=@();promptPath=$promptPath;startedAt=$started.ToString('o');endedAt=$ended.ToString('o');durationSeconds=$telemetry.durationSeconds;exitCode=$exitCode;stdout=$stdout;stderr=$stderr;verdict=$null;routerOutcomeOwned=$true;inferenceFailureClass=if($inferenceDiagnostic){[string](Get-SCField $inferenceDiagnostic.diagnosis 'class')}else{$null};inferenceFailureScope=if($inferenceDiagnostic){[string](Get-SCField $inferenceDiagnostic.diagnosis 'scope')}else{$null};inferenceFailoverAllowed=if($inferenceDiagnostic){[bool]$inferenceDiagnostic.failoverAllowed}else{$false};inferenceHealthChanged=if($inferenceDiagnostic){[bool]$inferenceDiagnostic.healthChanged}else{$false};inferenceReasonCode=if($inferenceDiagnostic){[string]$inferenceDiagnostic.diagnosis.reasonCode}else{$null};inferenceSignalRef=if($inferenceDiagnostic){[string]$inferenceDiagnostic.signalRef}else{$null};routeDeferred=if($inferenceDiagnostic){[bool]$inferenceDiagnostic.routeDeferred}else{$false};retryAfter=if($inferenceDiagnostic){[string]$inferenceDiagnostic.nextRetryAt}else{$null};routeExhausted=if($inferenceDiagnostic){[bool]$inferenceDiagnostic.routeExhausted}else{$false};routeAttempts=if($inferenceDiagnostic){[int]$inferenceDiagnostic.routeAttempts}else{[int]$usage.lastRouteAttempts};routeHistory=if($inferenceDiagnostic){@($inferenceDiagnostic.routeHistory)}else{@($usage.lastRouteHistory)}}
 }
 
 function Invoke-SCProvider($Task,[string]$Prompt,[string]$Stage,[string]$ProviderOverride,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
