@@ -215,6 +215,7 @@ end
 
         Write-Host '  REPLAN TX 4: atomically replace graph and classify old work'
         $result=Invoke-HarnessJson $handoffPath
+        Write-Host ('  dispositions: '+($result.taskDispositions|ConvertTo-Json -Depth 8 -Compress))
         Assert-True ([string]$result.replacedPlanId-eq$oldPlanId) 'Transaction did not identify replaced plan.'
         Assert-True (@($result.preservedComplete)-contains't-keep') 'Still-valid completed task was not preserved.'
         Assert-True (@($result.replacedTasks)-contains't-change') 'Intent-invalidated task was not replaced.'
