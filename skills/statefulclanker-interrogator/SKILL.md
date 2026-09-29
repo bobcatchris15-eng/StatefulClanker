@@ -34,8 +34,11 @@ Core actions:
 - `status` — inspect whether planning currently owns the project.
 - `begin` — establish the execution barrier and enter quiescing.
 - `settle` — capture the stable baseline only after active implementation work is gone.
+- `participants` / `artifacts` — inspect durable session-scoped specialist runs and their outputs.
+- `runPass` — run one named read-only planning specialist through the normal inference router.
+- `runRecipe` — execute the standard intent -> architecture -> implications -> decomposition -> adversary -> reconciler recipe and persist every pass.
 - `ask` / `answer` / `questions` — persist structured uncertainty and decisions.
-- `candidate` — stage and hash a complete SCPLAN, optional reconciled Intent candidate, and optional directive-change delta.
+- `candidate` — deterministically preflight, stage, and hash a complete SCPLAN, optional reconciled Intent candidate, and optional directive-change delta.
 - `accept` — freeze the selected candidate into an accepted handoff after blocking questions are resolved.
 - `apply` — normal terminal action: validate the frozen baseline, transactionally replace semantic/task state, preserve only still-valid completed work, and release the Planner barrier.
 - `release` — low-level recovery primitive for the rare case where the transaction committed but automatic release did not complete.
@@ -128,9 +131,18 @@ Treat these as different semantic classes:
 
 Preserve provenance. Never silently promote a planner inference into a human requirement.
 
-Useful epistemic metadata includes source, authority, confidence, mutability, and rationale.
+For any staged replacement Intent produced during isolated planning, semantic array entries (requirements, constraints, invariants, non-goals, decisions, preferences, and open questions) should be structured records with at least:
+- stable `id`;
+- `kind`;
+- exact `text` (or `question` for an open question);
+- `source` identifying human/directive/evidence/planning provenance;
+- `authority` distinguishing direct human authority from accepted or inferred planning material.
+
+Confidence, mutability, rationale, and evidence links may be added where they help. The candidate preflight rejects newly staged unprovenanced string entries.
 
 ## Multi-agent planning
+
+Do not simulate specialist passes inside the Interrogator's own context when the planning runtime is available. After settle, use `planning_control runRecipe` for the ordinary first pass. The runtime creates session-scoped participant records, routes each pass independently, persists the output artifact, and gives the final reconciler all prior artifacts. Use `runPass` only for a targeted follow-up when the first recipe exposes a real gap.
 
 Do not ask several agents to independently write complete plans and then vote.
 
@@ -171,6 +183,10 @@ Planning normally produces one coherent candidate bundle:
 2. directive-change delta when direct human authority changed;
 3. normalized/reconciled Intent when semantics changed;
 4. executable replacement plan/task graph.
+
+Before accepting a candidate, inspect the reconciler artifact rather than blindly accepting it. Resolve or persist any genuine human-owned questions, then stage the candidate.
+
+Candidate staging performs deterministic preflight before Planner accepts the artifact. It rejects malformed dependency graphs, tasks without a proof surface, dangling Intent references, unavailable capability profiles, and tasks with no traceability reason.
 
 Before accepting a candidate, verify:
 - all blocking human-owned questions are answered;
