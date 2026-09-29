@@ -33,7 +33,7 @@ function Unprotect-SCApiKey([string]$Protected) {
 # the Windows/runtime compatibility protocol guard and forwards the exact routed
 # endpoint record to the base client; it must never rebuild provider requests.
 $script:SCOpenAiChatInvokeBase=${function:Invoke-SCApiChat}
-$script:SCSupportedApiProtocols=@('openai-chat','anthropic-messages','gemini-native')
+$script:SCSupportedApiProtocols=@('router-normalized','openai-chat','anthropic-messages','gemini-native')
 function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode,$ProviderRecord=$null) {
     $protocol=if($Connection.PSObject.Properties['protocol']-and-not[string]::IsNullOrWhiteSpace([string]$Connection.protocol)){[string]$Connection.protocol}else{'openai-chat'}
     if($script:SCSupportedApiProtocols-notcontains$protocol){throw "Inference protocol '$protocol' is not supported by ClankerRouter. Add or repair a router adapter instead of sending an incompatible request shape."}
