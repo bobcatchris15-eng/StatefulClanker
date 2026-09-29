@@ -83,7 +83,10 @@ function Get-SCPlanningBaselineContext($Active,[string]$Brief,[bool]$IncludeArti
     if($IncludeArtifacts){
         $prior=@(Get-SCPlanningArtifacts)
         if(-not[string]::IsNullOrWhiteSpace($RecipeId)){$prior=@($prior|Where-Object{$_.PSObject.Properties['recipeId']-and[string]$_.recipeId-eq$RecipeId})}
-        $context['priorArtifacts']=@($prior|ForEach-Object{[ordered]@{id=$_.id;recipeId=if($_.PSObject.Properties['recipeId']){$_.recipeId}else{$null};role=$_.role;kind=$_.kind;content=$_.content;structured=$_.structured}})
+        $context['priorArtifacts']=@($prior|ForEach-Object{
+            $payload=if($_.PSObject.Properties['structured']-and$null-ne$_.structured){$_.structured}else{[string]$_.content}
+            [ordered]@{id=$_.id;recipeId=if($_.PSObject.Properties['recipeId']){$_.recipeId}else{$null};role=$_.role;kind=$_.kind;payload=$payload}
+        })
     }
     return $context
 }
@@ -94,6 +97,149 @@ function ConvertFrom-SCPlanningStructuredOutput([string]$Text) {
     $m=[regex]::Match($trim,'(?s)\{.*\}')
     if($m.Success){try{return $m.Value|ConvertFrom-Json -ErrorAction Stop}catch{}}
     return $null
+}
+function Assert-SCPlanningStructuredOutput([string]$Role,$Structured) {
+    if($null-eq$Structured){throw "Planning pass '$Role' returned no parseable structured JSON."}
+    $required=if($Role-eq'reconciler'){
+        @('summary','projectGoal','intentContract','directiveChanges','planText','openQuestions','unresolvedConflicts')
+    }elseif($Role-eq'decomposition'){
+        @('summary','obligationsCovered','openQuestions','planText')
+    }else{
+        @('summary','observations','obligations','assumptions','questions','risks','evidence')
+    }
+    $missing=@($required|Where-Object{-not$Structured.PSObject.Properties[$_]})
+    if($missing.Count-gt0){throw "Planning pass '$Role' structured output is missing: $($missing -join ', ')." }
+    if(@('decomposition','reconciler')-contains$Role){
+        $planText=[string]$Structured.planText
+        if([string]::IsNullOrWhiteSpace($planText)-or$planText -notmatch '(?m)^\s*SCPLAN\s+1\s*    return [pscustomobject][ordered]@{
+        id=$ParticipantId;title=("Planning pass: "+$Role);instruction=(Get-SCPlanningRoleDoctrine $Role)
+        role='planner';outputKind='research';humanGate=$false;capabilityProfile=$null
+        toolPolicy=[pscustomobject][ordered]@{
+            allow=@('builtin.read_file','builtin.search_text','builtin.git_diff','intent.human.read','intent.normalized.read')
+            deny=@('builtin.write_file','builtin.replace_text','builtin.run_command','builtin.collaboration.*','rpk.*')
+        }
+    }
+}
+function Invoke-SCPlanningPass([string]$Role,[string]$Brief,[string]$ProviderOverride=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null,[string]$RecipeId=$null) {
+    $active=Get-SCPlanningRuntimeActive
+    $roleName=$Role.ToLowerInvariant()
+    $doctrine=Get-SCPlanningRoleDoctrine $roleName
+    $includeArtifacts=@('decomposition','adversary','reconciler')-contains$roleName
+    $ctx=Get-SCPlanningBaselineContext $active $Brief $includeArtifacts $RecipeId
+    $participantId=('planning-'+$roleName+'-'+[guid]::NewGuid().ToString('N').Substring(0,8))
+    $participant=[ordered]@{
+        schemaVersion=1;id=$participantId;sessionId=[string]$active.sessionId;recipeId=$RecipeId;role=$roleName;status='running'
+        createdAt=[datetimeoffset]::UtcNow.ToString('o');updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+        provider=$null;endpoint=$null;connection=$null;model=$null;promptTokens=0;completionTokens=0;totalTokens=0
+        receiptId=$null;artifactId=$null;error=$null
+    }
+    $participantPath=Join-Path (Get-SCPlanningParticipantDir $active) ($participantId+'.json')
+    Write-SCJson $participantPath $participant
+    $outputContract=if($roleName-eq'reconciler'){
+        'Return one JSON object with keys: summary, projectGoal, intentContract, directiveChanges, planText, openQuestions, unresolvedConflicts. planText must be a complete SCPLAN 1 document. Any staged Intent entries in requirements/constraints/invariants/nonGoals/decisions/preferences/openQuestions must be structured objects with stable id, kind, text (or question), source, and authority so planner inference cannot masquerade as human authority. Use null/[] where unchanged.'
+    }elseif($roleName-eq'decomposition'){
+        'Return one JSON object with keys: summary, obligationsCovered, openQuestions, planText. planText must be a complete SCPLAN 1 candidate, not applied state.'
+    }else{
+        'Return one JSON object with keys: summary, observations, obligations, assumptions, questions, risks, evidence. Keep observations concise and evidence-addressable.'
+    }
+    $prompt=@"
+STATEFULCLANKER PLANNING PARTICIPANT
+Session: $($active.sessionId)
+Role: $roleName
+
+You are an independent planning specialist. You do NOT implement or mutate the project. Repository tools are read-only for this pass.
+Your epistemic job:
+$doctrine
+
+Rules:
+- Current human directives outrank normalized Intent; both outrank planner inference.
+- Distinguish evidence from inference and assumptions.
+- Do not silently decide human-owned product choices.
+- Inspect repository evidence when your role needs it.
+- Do not generate hidden reasoning transcripts for peers; emit compact findings.
+- $outputContract
+
+PLANNING CONTEXT
+$($ctx|ConvertTo-Json -Depth 30)
+"@
+    $task=New-SCPlanningSyntheticTask $participantId $roleName
+    try{
+        $receipt=Invoke-SCProvider $task $prompt 'planning' $ProviderOverride $null $null $null $null $EndpointOverride $ConnectionOverride
+        $participant.status=if([int]$receipt.exitCode-eq0){'complete'}else{'failed'}
+        $participant.updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+        $participant.provider=if($receipt.PSObject.Properties['provider']){[string]$receipt.provider}else{$null}
+        $participant.endpoint=if($receipt.PSObject.Properties['endpoint']){[string]$receipt.endpoint}else{$null}
+        $participant.connection=if($receipt.PSObject.Properties['connection']){[string]$receipt.connection}else{$null}
+        $participant.model=if($receipt.PSObject.Properties['model']){[string]$receipt.model}else{$null}
+        if($receipt.PSObject.Properties['promptTokens']){$participant.promptTokens=[long]$receipt.promptTokens}
+        if($receipt.PSObject.Properties['completionTokens']){$participant.completionTokens=[long]$receipt.completionTokens}
+        if($receipt.PSObject.Properties['totalTokens']){$participant.totalTokens=[long]$receipt.totalTokens}
+        $participant.receiptId=$receipt.id
+        if([int]$receipt.exitCode-ne0){$participant.error=[string]$receipt.stderr;Write-SCJson $participantPath $participant;throw "Planning pass '$roleName' failed: $($receipt.stderr)"}
+        $structured=ConvertFrom-SCPlanningStructuredOutput ([string]$receipt.stdout)
+        [void](Assert-SCPlanningStructuredOutput $roleName $structured)
+        $artifactId=('pa-'+[guid]::NewGuid().ToString('N').Substring(0,12))
+        $artifact=[ordered]@{
+            schemaVersion=1;id=$artifactId;sessionId=[string]$active.sessionId;recipeId=$RecipeId;participantId=$participantId;role=$roleName
+            kind=if($roleName-eq'reconciler'){'candidate_bundle'}elseif($roleName-eq'decomposition'){'decomposition'}else{'observation'}
+            createdAt=[datetimeoffset]::UtcNow.ToString('o');content=[string]$receipt.stdout;structured=$structured
+            receiptId=$receipt.id;provider=$participant.provider;endpoint=$participant.endpoint;connection=$participant.connection;model=$participant.model
+            tokenUsage=[ordered]@{prompt=$participant.promptTokens;completion=$participant.completionTokens;total=$participant.totalTokens}
+        }
+        Write-SCJson (Join-Path (Get-SCPlanningArtifactDir $active) ($artifactId+'.json')) $artifact
+        $participant.artifactId=$artifactId;Write-SCJson $participantPath $participant
+        return [pscustomobject][ordered]@{participant=[pscustomobject]$participant;artifact=[pscustomobject]$artifact}
+    }catch{
+        $participant.status='failed';$participant.updatedAt=[datetimeoffset]::UtcNow.ToString('o');$participant.error=$_.Exception.Message
+        Write-SCJson $participantPath $participant
+        throw
+    }
+}
+function Invoke-SCPlanningRecipe([string]$Brief,[string]$ProviderOverride=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
+    $active=Get-SCPlanningRuntimeActive
+    $roles=@('intent','architecture','code_implications','state_implications','failure_modes','decomposition','adversary','reconciler')
+    $recipeId=('recipe-'+[guid]::NewGuid().ToString('N').Substring(0,12))
+    $recipePath=Join-Path (Get-SCPlanningRecipeDir $active) ($recipeId+'.json')
+    $record=[pscustomobject][ordered]@{
+        schemaVersion=1;id=$recipeId;sessionId=[string]$active.sessionId;status='running';brief=$Brief
+        roles=@($roles);participantIds=@();artifactIds=@();createdAt=[datetimeoffset]::UtcNow.ToString('o');updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+        planningTokens=0;targetTokens=if($active.budget-and$active.budget.PSObject.Properties['planningTargetTokens']){$active.budget.planningTargetTokens}else{$null}
+        finalArtifactId=$null;error=$null
+    }
+    Write-SCJson $recipePath $record
+    $runs=@()
+    try{
+        foreach($role in $roles){
+            $run=Invoke-SCPlanningPass $role $Brief $ProviderOverride $EndpointOverride $ConnectionOverride $recipeId
+            $runs+=,$run
+            $record.participantIds=@($runs|ForEach-Object{$_.participant.id})
+            $record.artifactIds=@($runs|ForEach-Object{$_.artifact.id})
+            $record.planningTokens=[long](($runs|ForEach-Object{[long]$_.participant.totalTokens}|Measure-Object -Sum).Sum)
+            $record.updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+            Write-SCJson $recipePath $record
+        }
+        $final=$runs[-1].artifact
+        $record.status='complete';$record.finalArtifactId=[string]$final.id;$record.updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+        Write-SCJson $recipePath $record
+        return [pscustomobject][ordered]@{
+            sessionId=[string]$active.sessionId;recipeId=$recipeId;completed=$true;roles=@($roles)
+            participantIds=@($record.participantIds);artifactIds=@($record.artifactIds);planningTokens=[long]$record.planningTokens
+            targetTokens=$record.targetTokens;overTarget=($null-ne$record.targetTokens-and[long]$record.planningTokens-gt[long]$record.targetTokens)
+            finalArtifact=$final
+        }
+    }catch{
+        $record.status='failed';$record.error=$_.Exception.Message;$record.updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+        $record.participantIds=@($runs|ForEach-Object{$_.participant.id});$record.artifactIds=@($runs|ForEach-Object{$_.artifact.id})
+        $record.planningTokens=[long](($runs|ForEach-Object{[long]$_.participant.totalTokens}|Measure-Object -Sum).Sum)
+        Write-SCJson $recipePath $record
+        throw
+    }
+}
+){
+            throw "Planning pass '$Role' did not return a complete SCPLAN 1 planText."
+        }
+    }
+    return $true
 }
 function New-SCPlanningSyntheticTask([string]$ParticipantId,[string]$Role) {
     return [pscustomobject][ordered]@{
