@@ -26,8 +26,14 @@ internal static class Program
                     Get(opts, "why") ?? "",
                     Get(opts, "impact") ?? "medium",
                     Get(opts, "owner") ?? "human",
-                    GetBool(opts, "blocking", true)),
-                "answer" => store.AnswerQuestion(Require(opts, "question"), Require(opts, "text")),
+                    GetBool(opts, "blocking", true),
+                    GetStringList(opts, "affected-refs-json"),
+                    GetStringList(opts, "alternatives-json"),
+                    GetStringList(opts, "evidence-json")),
+                "answer" => store.AnswerQuestion(
+                    Require(opts, "question"),
+                    Require(opts, "text"),
+                    Get(opts, "source")),
                 "questions" => store.Questions(),
                 "candidate" => store.AddCandidate(
                     Require(opts, "plan"),
@@ -58,7 +64,8 @@ internal static class Program
         Console.Error.WriteLine("  begin --reason <text> [--execution-token-estimate <n>]");
         Console.Error.WriteLine("  settle");
         Console.Error.WriteLine("  ask --text <q> [--why <text>] [--impact low|medium|high] [--owner human|system] [--blocking true|false]");
-        Console.Error.WriteLine("  answer --question <id> --text <answer>");
+        Console.Error.WriteLine("      [--affected-refs-json <json-array>] [--alternatives-json <json-array>] [--evidence-json <json-array>]");
+        Console.Error.WriteLine("  answer --question <id> --text <answer> [--source human|evidence|planner|system]");
         Console.Error.WriteLine("  candidate --plan <file> [--intent <file>] [--directives <file>] [--goal <text>] [--summary <text>]");
         Console.Error.WriteLine("  accept --candidate <id>");
         Console.Error.WriteLine("  release --handoff <id> --applied-plan-id <plan-id>");
@@ -90,6 +97,22 @@ internal static class Program
 
     static bool GetBool(Dictionary<string,string?> map, string key, bool fallback)
         => bool.TryParse(Get(map, key), out var value) ? value : fallback;
+
+    static List<string> GetStringList(Dictionary<string,string?> map, string key)
+    {
+        var raw = Get(map, key);
+        if (string.IsNullOrWhiteSpace(raw)) return new List<string>();
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(raw, Json)
+                ?.Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToList() ?? new List<string>();
+        }
+        catch (JsonException ex)
+        {
+            throw new ArgumentException($"--{key} must be a JSON array of strings.", ex);
+        }
+    }
 
     static long? GetLong(Dictionary<string,string?> map, string key)
         => long.TryParse(Get(map, key), out var value) ? value : null;
