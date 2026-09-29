@@ -434,7 +434,7 @@ function New-SCTaskFromPlanItem($Item) {
     Set-SCProperty $task 'refinementDepth' 0
     Set-SCProperty $task 'parentTaskId' $null
     Set-SCProperty $task 'childTaskIds' @()
-    return $task
+    return [pscustomobject]$task
 }
 
 function Assert-SCReplacementPlanGraph($Tasks) {
