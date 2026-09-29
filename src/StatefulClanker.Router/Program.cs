@@ -111,10 +111,16 @@ internal static class Program
 
     static async Task<RouterResponse> SendWithDaemonAsync(string pipeName,RouterRequest request)
     {
-        var responseTimeout=request.op=="infer"
-            ? Math.Max(15000,Math.Min(1805000,(request.inference?.timeoutSeconds??300)*1000+5000))
-            : 500;
-        try { return await RouterPipeClient.SendAsync(pipeName,request,responseTimeout); }
+        var responseTimeout=500;
+        if(request.op=="infer")
+        {
+            var perAttempt=Math.Clamp(request.inference?.timeoutSeconds??300,15,1800);
+            var attempts=Math.Clamp(request.inference?.maxRouteAttempts??6,1,32);
+            var wait=Math.Clamp(request.inference?.maxRouteWaitSeconds??20,0,300);
+            var theoretical=(long)perAttempt*1000L*attempts+(long)wait*1000L+10000L;
+            responseTimeout=(int)Math.Min(int.MaxValue-1000L,theoretical);
+        }
+        try { return await RouterPipeClient.SendAsync(pipeName,request,500,responseTimeout); }
         catch { }
 
         var exe=Environment.ProcessPath ?? throw new InvalidOperationException("Cannot determine router executable path.");
@@ -131,7 +137,7 @@ internal static class Program
         for(var i=0;i<40;i++)
         {
             await Task.Delay(100);
-            try { return await RouterPipeClient.SendAsync(pipeName,request,responseTimeout); }
+            try { return await RouterPipeClient.SendAsync(pipeName,request,750,responseTimeout); }
             catch(Exception ex){last=ex;}
         }
         throw new IOException("Router daemon did not become ready.",last);
