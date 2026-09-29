@@ -405,25 +405,31 @@ function Assert-SCPlanningBaselineFresh($Baseline) {
 function New-SCTaskFromPlanItem($Item) {
     if($null-eq$Item){throw 'Plan task is empty.'}
     $id=if($Item.PSObject.Properties['id']-and$Item.id){[string]$Item.id}else{throw 'Every transactional plan task requires a stable id.'}
-    $accept=if($Item.PSObject.Properties['acceptance']){@($Item.acceptance)}else{@()}
-    $depends=if($Item.PSObject.Properties['dependsOn']){@($Item.dependsOn)}else{@()}
-    $relations=if($Item.PSObject.Properties['relations']){@($Item.relations)}else{@()}
-    $retrieval=if($Item.PSObject.Properties['retrieval']){@($Item.retrieval)}else{@()}
-    $evidence=if($Item.PSObject.Properties['evidence']){@($Item.evidence)}else{@()}
+    $accept=@();if($Item.PSObject.Properties['acceptance']){$accept=@($Item.acceptance)}
+    $depends=@();if($Item.PSObject.Properties['dependsOn']){$depends=@($Item.dependsOn)}
+    $relations=@();if($Item.PSObject.Properties['relations']){$relations=@($Item.relations)}
+    $retrieval=@();if($Item.PSObject.Properties['retrieval']){$retrieval=@($Item.retrieval)}
+    $evidence=@();if($Item.PSObject.Properties['evidence']){$evidence=@($Item.evidence)}
+    $sources=@();if($Item.PSObject.Properties['sources']){$sources=@($Item.sources)}
+    $intentRefs=@();if($Item.PSObject.Properties['intentRefs']){$intentRefs=@($Item.intentRefs)}
+    $checks=@();if($Item.PSObject.Properties['checks']){$checks=@($Item.checks)}
+    $semantic=@();if($Item.PSObject.Properties['semanticAcceptance']){$semantic=@($Item.semanticAcceptance)}
+    $implications=@();if($Item.PSObject.Properties['implications']){$implications=@($Item.implications)}
+    $proof=@();if($Item.PSObject.Properties['proofObligations']){$proof=@($Item.proofObligations)}
     $provider=if($Item.PSObject.Properties['provider']){[string]$Item.provider}else{$null}
     $role=if($Item.PSObject.Properties['role']-and$Item.role){[string]$Item.role}else{'worker'}
     $human=if($Item.PSObject.Properties['humanGate']){[bool]$Item.humanGate}else{$false}
     $task=New-SCTaskObject $id ([string]$Item.title) ([string]$Item.instruction) $accept $depends $relations $retrieval $evidence $provider $role $human
     Set-SCProperty $task 'size' $(if($Item.PSObject.Properties['size']){[string]$Item.size}else{'small'})
     Set-SCProperty $task 'outputKind' $(if($Item.PSObject.Properties['outputKind']-and$Item.outputKind){[string]$Item.outputKind}else{'change'})
-    Set-SCProperty $task 'sources' $(if($Item.PSObject.Properties['sources']){@($Item.sources)}else{@()})
-    Set-SCProperty $task 'intentRefs' $(if($Item.PSObject.Properties['intentRefs']){@($Item.intentRefs)}else{@()})
+    Set-SCProperty $task 'sources' $sources
+    Set-SCProperty $task 'intentRefs' $intentRefs
     Set-SCProperty $task 'capabilityProfile' $(if($Item.PSObject.Properties['capabilityProfile']-and$Item.capabilityProfile){[string]$Item.capabilityProfile}else{$null})
     Set-SCProperty $task 'toolPolicy' $(if($Item.PSObject.Properties['toolPolicy']){$Item.toolPolicy}else{$null})
-    Set-SCProperty $task 'checks' $(if($Item.PSObject.Properties['checks']){@($Item.checks)}else{@()})
-    Set-SCProperty $task 'semanticAcceptance' $(if($Item.PSObject.Properties['semanticAcceptance']){@($Item.semanticAcceptance)}else{@()})
-    Set-SCProperty $task 'implications' $(if($Item.PSObject.Properties['implications']){@($Item.implications)}else{@()})
-    Set-SCProperty $task 'proofObligations' $(if($Item.PSObject.Properties['proofObligations']){@($Item.proofObligations)}else{@()})
+    Set-SCProperty $task 'checks' $checks
+    Set-SCProperty $task 'semanticAcceptance' $semantic
+    Set-SCProperty $task 'implications' $implications
+    Set-SCProperty $task 'proofObligations' $proof
     Set-SCProperty $task 'refinementStatus' 'pending'
     Set-SCProperty $task 'refinementDepth' 0
     Set-SCProperty $task 'parentTaskId' $null
