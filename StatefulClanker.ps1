@@ -60,7 +60,7 @@ function Assert-SCCommandAllowedDuringPlanning([string]$Cmd,[string]$Sub) {
 if($Command.ToLowerInvariant()-ne'init'){Assert-SCCommandAllowedDuringPlanning $Command $Subcommand}
 
 switch($Command.ToLowerInvariant()){
-'init'{Initialize-SC;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout;break}
+'init'{Initialize-SC;Ensure-SCInputLayout;Ensure-SCDirectiveLayout;Ensure-SCControlEventLayout;Ensure-SCIntentLayout;[void](Get-SCIntentContract);break}
 'goal'{$text=if($Message){$Message}elseif($Subcommand){$Subcommand}else{$Title};Set-SCGoal $text;break}
 'status'{Show-SCStatus;break}
 'task'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='list'};switch($Subcommand.ToLowerInvariant()){'add'{Add-SCTask;break};'set'{[void](Set-SCTaskSize $TaskId $Size $Provider);break};'list'{Update-SCReadiness;Get-SCTasks|Sort-Object createdAt|Select-Object id,status,size,capabilityProfile,attemptCount,role,humanGate,title|Format-Table -AutoSize;break};'show'{if(-not$TaskId){throw '-TaskId required.'};Get-SCTask $TaskId|ConvertTo-SCJson -Depth 18|Write-Output;break};'retry'{Retry-SCTask $TaskId;break};'repair'{[void](Repair-SCTaskFromRecovery $TaskId $Path $Reason);break};'recover'{[void](Complete-SCTaskFromRecovery $TaskId $Path $Reason);break};default{throw "Unknown task subcommand: $Subcommand"}};break}
