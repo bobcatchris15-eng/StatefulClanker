@@ -55,8 +55,32 @@ try{
     $recipeArtifacts=@($artifacts|Where-Object{[string]$_.recipeId-eq[string]$recipe.recipeId})
     if($recipeArtifacts.Count-ne8){throw "Expected 8 artifacts in recipe generation, got $($recipeArtifacts.Count)."}
 
+    . (Join-Path $repo 'mcp\StatefulClanker.McpCore.ps1')
+    . (Join-Path $repo 'mcp\StatefulClanker.McpExtensions.ps1')
+    Set-McpDefaultProject $temp
+    function Invoke-PlanningTool([int]$Id,$Arguments){
+        $rpc=Invoke-McpRpc ([pscustomobject]@{jsonrpc='2.0';id=$Id;method='tools/call';params=[pscustomobject]@{name='planning_control';arguments=$Arguments}})
+        if($rpc.result.PSObject.Properties['isError']-and[bool]$rpc.result.isError){throw [string]$rpc.result.content[0].text}
+        return $rpc.result.content[0].text|ConvertFrom-Json
+    }
+
+    $mcpRecipe=Invoke-PlanningTool 801 ([pscustomobject]@{action='runRecipe';project=$temp;brief='Plan the same bounded change as an independent recipe generation.';provider='mock'})
+    if(-not[bool]$mcpRecipe.completed){throw 'planning_control runRecipe did not complete.'}
+    if([string]$mcpRecipe.recipeId-eq[string]$recipe.recipeId){throw 'MCP planning recipe reused a prior recipe generation id.'}
+    $mcpRecipes=Invoke-PlanningTool 802 ([pscustomobject]@{action='recipes';project=$temp})
+    if(@($mcpRecipes).Count-ne2){throw "Expected two durable recipe generations through MCP, got $(@($mcpRecipes).Count)."}
+
+    $question=Invoke-PlanningTool 803 ([pscustomobject]@{
+        action='ask';project=$temp;text='Which integration seam is authoritative?';why='Changes implementation boundary';impact='high';owner='human';blocking=$true
+        affectedRefs=@('REQ-INTEGRATION');alternatives=@('seam-a','seam-b');questionEvidence=@('Both seams exist in current repository evidence.')
+    })
+    if(@($question.affectedRefs)-notcontains'REQ-INTEGRATION'){throw 'planning_control ask lost affected refs.'}
+    if(@($question.alternatives).Count-ne2){throw 'planning_control ask lost alternatives.'}
+    $answered=Invoke-PlanningTool 804 ([pscustomobject]@{action='answer';project=$temp;questionId=$question.id;text='seam-a';resolutionSource='human'})
+    if([string]$answered.resolutionSource-ne'human'){throw 'planning_control answer lost resolution provenance.'}
+
     [void](Invoke-Planner @('cancel','--project',$temp,'--reason','test complete'))
-    Write-Host 'PASS: planning runtime persists session-scoped participants/artifacts and executes the fixed specialist recipe.'
+    Write-Host 'PASS: planning runtime persists isolated recipe generations and planning_control drives recipes plus provenance-rich questions.'
 }finally{
     Pop-Location -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
