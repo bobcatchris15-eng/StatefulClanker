@@ -139,7 +139,10 @@ $($ctx|ConvertTo-Json -Depth 30)
         $receipt=Invoke-SCProvider $task $prompt 'planning' $ProviderOverride $null $null $null $null $EndpointOverride $ConnectionOverride
         $participant.status=if([int]$receipt.exitCode-eq0){'complete'}else{'failed'}
         $participant.updatedAt=[datetimeoffset]::UtcNow.ToString('o')
-        $participant.provider=$receipt.provider;$participant.endpoint=$receipt.endpoint;$participant.connection=$receipt.connection;$participant.model=$receipt.model
+        $participant.provider=if($receipt.PSObject.Properties['provider']){[string]$receipt.provider}else{$null}
+        $participant.endpoint=if($receipt.PSObject.Properties['endpoint']){[string]$receipt.endpoint}else{$null}
+        $participant.connection=if($receipt.PSObject.Properties['connection']){[string]$receipt.connection}else{$null}
+        $participant.model=if($receipt.PSObject.Properties['model']){[string]$receipt.model}else{$null}
         if($receipt.PSObject.Properties['promptTokens']){$participant.promptTokens=[long]$receipt.promptTokens}
         if($receipt.PSObject.Properties['completionTokens']){$participant.completionTokens=[long]$receipt.completionTokens}
         if($receipt.PSObject.Properties['totalTokens']){$participant.totalTokens=[long]$receipt.totalTokens}
@@ -151,7 +154,7 @@ $($ctx|ConvertTo-Json -Depth 30)
             schemaVersion=1;id=$artifactId;sessionId=[string]$active.sessionId;participantId=$participantId;role=$roleName
             kind=if($roleName-eq'reconciler'){'candidate_bundle'}elseif($roleName-eq'decomposition'){'decomposition'}else{'observation'}
             createdAt=[datetimeoffset]::UtcNow.ToString('o');content=[string]$receipt.stdout;structured=$structured
-            receiptId=$receipt.id;provider=$receipt.provider;endpoint=$receipt.endpoint;connection=$receipt.connection;model=$receipt.model
+            receiptId=$receipt.id;provider=$participant.provider;endpoint=$participant.endpoint;connection=$participant.connection;model=$participant.model
             tokenUsage=[ordered]@{prompt=$participant.promptTokens;completion=$participant.completionTokens;total=$participant.totalTokens}
         }
         Write-SCJson (Join-Path (Get-SCPlanningArtifactDir $active) ($artifactId+'.json')) $artifact
