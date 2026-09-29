@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace StatefulClanker.Router;
 
@@ -21,6 +22,127 @@ public sealed class InferenceGateway : IDisposable
 
     public IReadOnlyList<object> DescribeAdapters() => _adapters.Describe();
 
+    public async Task<RouterResponse> InferAsync(RouterRequest request,CancellationToken token=default)
+    {
+        if(request.inference is null) return RouterResponse.Fail("inference request is required.");
+        if(!string.IsNullOrWhiteSpace(request.endpoint))
+            return await InferExactAsync(request.endpoint,request.inference,token);
+
+        var inference=request.inference;
+        inference.EnsureDiagnosticConversation();
+        var maxAttempts=Math.Clamp(inference.maxRouteAttempts,1,32);
+        var maxWait=Math.Clamp(inference.maxRouteWaitSeconds,0,300);
+        var deadline=DateTimeOffset.UtcNow.AddSeconds(maxWait);
+        var history=new List<RoutingAttemptRecord>();
+        NormalizedInferenceResult? last=null;
+        var preferred=request.preferred;
+
+        for(var attempt=1;attempt<=maxAttempts;attempt++)
+        {
+            var acquire=_engine.Acquire(
+                preferred,
+                request.preferredConnection,
+                request.strictPreferred,
+                request.sessionId,
+                request.requireTools,
+                request.ownerPid,
+                request.allowedEndpoints,
+                inference.toolMode);
+
+            if(!acquire.ok)
+            {
+                var reason=ReadString(acquire.data,"reason")??"route_unavailable";
+                var nextRetryAt=ReadString(acquire.data,"nextRetryAt");
+                var retrySeconds=ReadDouble(acquire.data,"retryAfterSeconds");
+                var delay=RetryDelay(nextRetryAt,retrySeconds,deadline);
+
+                if(delay>TimeSpan.Zero && attempt<maxAttempts)
+                {
+                    await Task.Delay(delay,token);
+                    if(!request.strictPreferred) preferred=null;
+                    continue;
+                }
+
+                var unavailable=last??new NormalizedInferenceResult();
+                unavailable.ok=false;
+                unavailable.routeDeferred=true;
+                unavailable.routeExhausted=history.Count>0;
+                unavailable.nextRetryAt=nextRetryAt;
+                unavailable.routeAttempts=history.Count;
+                unavailable.routeHistory=history;
+                unavailable.diagnosis=Diagnosis(
+                    "route_unavailable","request",false,false,
+                    reason.ToUpperInvariant(),
+                    acquire.error??"No eligible inference route is currently available.");
+                unavailable.failoverAllowed=false;
+                return RouterResponse.Ok(unavailable);
+            }
+
+            var lease=ReadString(acquire.data,"lease");
+            var endpoint=ReadString(acquire.data,"endpoint");
+            if(string.IsNullOrWhiteSpace(endpoint))
+            {
+                if(!string.IsNullOrWhiteSpace(lease)) _engine.Release(lease);
+                return RouterResponse.Fail("Router acquire succeeded without an endpoint.");
+            }
+
+            var route=_engine.FindRoute(endpoint);
+            if(route is null)
+            {
+                if(!string.IsNullOrWhiteSpace(lease)) _engine.Release(lease);
+                preferred=null;
+                continue;
+            }
+
+            var started=Stopwatch.StartNew();
+            NormalizedInferenceResult result;
+            try
+            {
+                result=await ExecuteAsync(route,inference,false,token,lease);
+            }
+            finally
+            {
+                if(!string.IsNullOrWhiteSpace(lease)) _engine.Release(lease);
+            }
+            started.Stop();
+
+            history.Add(new RoutingAttemptRecord
+            {
+                attempt=attempt,
+                endpoint=route.RouteName,
+                connection=route.Endpoint.connection,
+                model=route.Endpoint.model,
+                outcome=result.ok?"success":"failed",
+                failureClass=result.ok?null:result.diagnosis.failureClass,
+                scope=result.ok?null:result.diagnosis.scope,
+                reasonCode=result.ok?null:result.diagnosis.reasonCode,
+                durationSeconds=Math.Round(started.Elapsed.TotalSeconds,3)
+            });
+            result.routeAttempts=history.Count;
+            result.routeHistory=new(history);
+
+            if(result.ok) return RouterResponse.Ok(result);
+
+            last=result;
+            if(request.strictPreferred || !result.failoverAllowed)
+                return RouterResponse.Ok(result);
+
+            preferred=null;
+        }
+
+        var exhausted=last??new NormalizedInferenceResult
+        {
+            diagnosis=Diagnosis("route_exhausted","request",false,false,
+                "ROUTE_ATTEMPTS_EXHAUSTED","Inference route attempts were exhausted.")
+        };
+        exhausted.ok=false;
+        exhausted.routeExhausted=true;
+        exhausted.routeAttempts=history.Count;
+        exhausted.routeHistory=history;
+        exhausted.failoverAllowed=false;
+        return RouterResponse.Ok(exhausted);
+    }
+
     public async Task<RouterResponse> InferExactAsync(
         string? endpoint,
         NormalizedInferenceRequest? request,
@@ -33,7 +155,7 @@ public sealed class InferenceGateway : IDisposable
         if(route.Connection is null)
             return RouterResponse.Fail($"Endpoint '{route.RouteName}' references missing connection '{route.Endpoint.connection}'.");
 
-        var result=await ExecuteAsync(route,request,false,token);
+        var result=await ExecuteAsync(route,request,false,token,null);
         return RouterResponse.Ok(result);
     }
 
@@ -59,7 +181,7 @@ public sealed class InferenceGateway : IDisposable
             timeoutSeconds=45
         };
         request.EnsureDiagnosticConversation();
-        var inference=await ExecuteAsync(route,request,true,token);
+        var inference=await ExecuteAsync(route,request,true,token,null);
         var mapped=new EndpointTestResult
         {
             ok=inference.ok,
@@ -82,7 +204,8 @@ public sealed class InferenceGateway : IDisposable
         EndpointRoute route,
         NormalizedInferenceRequest request,
         bool diagnosticMode,
-        CancellationToken token)
+        CancellationToken token,
+        string? leaseToken)
     {
         IProviderAdapter adapter;
         try{adapter=_adapters.Resolve(route.Connection!);}
@@ -124,7 +247,7 @@ public sealed class InferenceGateway : IDisposable
                 var parsed=adapter.ParseSuccess(body,route.Endpoint);
                 if(parsed.Success && parsed.Assistant is not null)
                 {
-                    _engine.Success(null,route.RouteName);
+                    _engine.Success(leaseToken,route.RouteName);
                     var result=BaseResult(route,adapter.Id,adapter.SourcePath,
                         Diagnosis("none","endpoint",false,false,
                             diagnosticMode?"TEST_INFERENCE_SUCCEEDED":"INFERENCE_SUCCEEDED",
@@ -160,7 +283,7 @@ public sealed class InferenceGateway : IDisposable
             var healthChanged=scope is not ("request" or "harness");
 
             if(healthChanged)
-                _engine.Failure(null,route.RouteName,klass,diagnosticText);
+                _engine.Failure(leaseToken,route.RouteName,klass,diagnosticText);
 
             var failed=BaseResult(route,adapter.Id,adapter.SourcePath,
                 Diagnosis(klass,scope,adapterSuspect,providerSuspect,
@@ -177,7 +300,7 @@ public sealed class InferenceGateway : IDisposable
         {
             stopwatch.Stop();
             responseEvidence.durationSeconds=Math.Round(stopwatch.Elapsed.TotalSeconds,3);
-            _engine.Failure(null,route.RouteName,"timeout",ex.Message);
+            _engine.Failure(leaseToken,route.RouteName,"timeout",ex.Message);
             var result=BaseResult(route,adapter.Id,adapter.SourcePath,
                 Diagnosis("timeout","endpoint",false,true,"TRANSPORT_TIMEOUT",ex.Message));
             result.request=built?.evidence??new SanitizedRequestEvidence();
@@ -195,7 +318,7 @@ public sealed class InferenceGateway : IDisposable
             if(klass=="request_error") klass="transport";
             var scope=klass=="transport"?"endpoint":FailurePolicy.ScopeFor(klass);
             var healthChanged=scope is not ("request" or "harness");
-            if(healthChanged) _engine.Failure(null,route.RouteName,klass,ex.Message);
+            if(healthChanged) _engine.Failure(leaseToken,route.RouteName,klass,ex.Message);
             var result=BaseResult(route,adapter.Id,adapter.SourcePath,
                 Diagnosis(klass,scope,false,true,"TRANSPORT_FAILURE",ex.Message));
             result.request=built?.evidence??new SanitizedRequestEvidence();
@@ -266,6 +389,53 @@ public sealed class InferenceGateway : IDisposable
             return _signals.Append(signal);
         }
         catch{return null;}
+    }
+
+    static string? ReadString(object? source,string name)
+    {
+        if(source is null) return null;
+        try
+        {
+            using var doc=JsonDocument.Parse(JsonSerializer.Serialize(source));
+            if(doc.RootElement.TryGetProperty(name,out var value) && value.ValueKind!=JsonValueKind.Null)
+                return value.ValueKind==JsonValueKind.String?value.GetString():value.ToString();
+        }
+        catch{}
+        return null;
+    }
+
+    static double? ReadDouble(object? source,string name)
+    {
+        if(source is null) return null;
+        try
+        {
+            using var doc=JsonDocument.Parse(JsonSerializer.Serialize(source));
+            if(doc.RootElement.TryGetProperty(name,out var value))
+            {
+                if(value.ValueKind==JsonValueKind.Number && value.TryGetDouble(out var n)) return n;
+                if(value.ValueKind==JsonValueKind.String && double.TryParse(value.GetString(),out n)) return n;
+            }
+        }
+        catch{}
+        return null;
+    }
+
+    static TimeSpan RetryDelay(string? nextRetryAt,double? retrySeconds,DateTimeOffset deadline)
+    {
+        var now=DateTimeOffset.UtcNow;
+        if(now>=deadline) return TimeSpan.Zero;
+        DateTimeOffset target=now;
+        if(!string.IsNullOrWhiteSpace(nextRetryAt) && DateTimeOffset.TryParse(nextRetryAt,out var parsed))
+            target=parsed;
+        else if(retrySeconds is >0)
+            target=now.AddSeconds(Math.Min(5,retrySeconds.Value));
+        else
+            return TimeSpan.Zero;
+
+        if(target>deadline) return TimeSpan.Zero;
+        var delay=target-now;
+        if(delay<TimeSpan.FromMilliseconds(100)) delay=TimeSpan.FromMilliseconds(100);
+        return delay;
     }
 
     static InferenceDiagnosis Diagnosis(
