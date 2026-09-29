@@ -3,8 +3,8 @@ $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent $PSScriptRoot
 $router=Join-Path $repo 'src\StatefulClanker.Router\bin\Debug\net8.0-windows\StatefulClanker.Router.exe'
 function Assert-True([bool]$Condition,[string]$Message){if(-not$Condition){throw "TRANSPARENT FAILOVER TEST FAILED: $Message"}}
-function Call-Router([string[]]$Args){
-    $raw=& $router @Args
+function Call-Router([string[]]$CallArgs){
+    $raw=& $router @CallArgs
     $obj=$raw|ConvertFrom-Json
     if($LASTEXITCODE-ne0-or-not[bool]$obj.ok){throw "router call failed: $raw"}
     return $obj
