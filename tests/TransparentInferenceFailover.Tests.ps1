@@ -74,6 +74,7 @@ try{
     Assert-True $ready 'router daemon did not become ready'
 
     $result=(Call-Router @('infer','--request-file',$requestFile,'--owner-pid',[string]$PID)).data
+    if(-not[bool]$result.ok){Write-Host ('FAILOVER_DIAGNOSTIC='+($result|ConvertTo-Json -Depth 20 -Compress))}
     Assert-True ([bool]$result.ok) 'single inference request did not survive endpoint failure'
     Assert-True ([string]$result.assistant.content-eq'ROUTED_OK') 'successful fallback response was not returned'
     Assert-True ([int]$result.routeAttempts-eq2) "expected 2 internal route attempts, got $($result.routeAttempts)"
