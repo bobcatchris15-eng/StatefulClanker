@@ -806,8 +806,8 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
     $snapshot=Resolve-SCPlanningArtifactPath ([string]$baseline.snapshotPath)
     if(-not(Test-Path -LiteralPath $snapshot -PathType Container)){throw "Planning baseline snapshot is missing: $($baseline.snapshotPath)"}
 
-    $input=Get-SCPlanInput $planPath
-    $plan=$input.plan
+    $planInput=Get-SCPlanInput $planPath
+    $plan=$planInput.plan
     if($null-eq$plan-or$null-eq$plan.tasks-or@($plan.tasks).Count-eq0){throw 'Replacement handoff plan contains no tasks.'}
 
     $transactionId=New-SCId 'replan'
@@ -919,7 +919,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
             $name=if($plan.PSObject.Properties['name']){[string]$plan.name}else{'Planning handoff'}
             $summary=if($plan.PSObject.Properties['summary']){[string]$plan.summary}else{''}
             $planRecord=[ordered]@{
-                schemaVersion=5;id=$planId;name=$name;summary=$summary;format=$input.format;source=$planPath
+                schemaVersion=5;id=$planId;name=$name;summary=$summary;format=$planInput.format;source=$planPath
                 sourceRefs=if($plan.PSObject.Properties['sources']){@($plan.sources)}else{@()}
                 intentRefs=if($plan.PSObject.Properties['intent']){@($plan.intent)}else{@()}
                 importedAt=(Get-Date).ToUniversalTime().ToString('o')
@@ -930,7 +930,7 @@ function Apply-SCPlanningHandoff([string]$HandoffPath) {
                 tasks=@($plan.tasks)
             }
             Write-SCJson (Join-Path $stagePlans ("{0}.json"-f$planId)) $planRecord
-            if($input.format-eq'scplan'){Copy-Item -LiteralPath $planPath -Destination (Join-Path $stagePlans ("{0}.scplan"-f$planId)) -Force}
+            if($planInput.format-eq'scplan'){Copy-Item -LiteralPath $planPath -Destination (Join-Path $stagePlans ("{0}.scplan"-f$planId)) -Force}
 
             $nextState=(ConvertTo-SCJson $liveState 30)|ConvertFrom-Json
             $nextState.goal=$newGoal
