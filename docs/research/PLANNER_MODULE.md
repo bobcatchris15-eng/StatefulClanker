@@ -32,6 +32,9 @@ The Planner writes only under the managed project's .statefulclanker/planning di
         session.json
         baseline.json
         questions/
+        participants/
+        artifacts/
+        recipes/
         candidates/
         handoffs/
         closed.json
@@ -90,26 +93,31 @@ The baseline is evidence of what the planners reasoned against.
 
 ## Questions
 
-Planner questions currently carry:
-- text;
-- rationale;
+Planner questions carry:
+- text and rationale;
 - impact;
-- owner;
+- decision owner;
 - blocking flag;
-- status;
-- answer.
+- affected semantic refs;
+- candidate alternatives;
+- evidence already checked;
+- status and answer;
+- resolution source (human, evidence, planner, or system).
 
-The Interrogator decides which uncertainty is worth asking the human. Planner only persists the channel.
+The Interrogator decides which uncertainty is worth escalating. Planner persists enough provenance that an evidence-derived resolution does not become indistinguishable from a direct human decision.
 
 Candidate acceptance fails while any blocking question remains open.
 
 ## Candidate and handoff
 
-Candidate creation copies and hashes:
+Candidate creation first runs deterministic semantic preflight, then copies and hashes:
 - one plan artifact;
-- optionally one Intent artifact.
+- optionally one provenance-rich Intent artifact;
+- optionally a staged directive-change artifact.
 
-Acceptance turns that candidate into an inert handoff manifest and leaves the execution barrier in place.
+Preflight rejects malformed dependency graphs, dangling Intent refs, tasks without a proof surface, missing traceability, unavailable capability profiles, and newly staged Intent entries that lack stable provenance/authority metadata.
+
+Acceptance re-verifies the staged artifact hashes before turning the candidate into an inert handoff manifest, so bytes cannot change between staging and acceptance. The execution barrier remains in place.
 
 Normal completion is now `planning_control apply`. The execution runtime validates the settled baseline, builds the complete replacement graph off to the side, journals backups, commits project goal/directives/Intent/plan/tasks/state under the canonical state mutex, and only then asks Planner to release the barrier.
 
@@ -139,9 +147,13 @@ This launches Pi with:
 
 The Pi extension no longer contains a prompt-regex "planning intent" switch. The role is selected at launch and remains stable for that conversation.
 
-Interrogator uses one MCP surface, `planning_control`, for Planner state:
+Interrogator uses one MCP surface, `planning_control`, for Planner state and planning inference:
 
-    status -> begin -> settle -> ask/answer -> candidate -> accept -> apply
+    status -> begin -> settle
+           -> runRecipe / runPass
+           -> inspect participants / artifacts / recipes
+           -> ask/answer when human authority is actually needed
+           -> candidate -> accept -> apply
 
 The ordinary `control_snapshot` also exposes `planning.active`, `planning.phase`, session id, baseline path, and accepted handoff id when available. This makes phase ownership observable to any control-plane client without requiring Planner-specific filesystem knowledge.
 
@@ -201,24 +213,30 @@ This integration test exercises:
 - the real MCP `planning_control apply` combined apply/release path;
 - startup rollback when a synthetic crash removes `state.json` during `committing`.
 
-## Multi-agent planning shape
+## Multi-agent planning runtime
 
-Keep the first planning swarm simple:
+The first planning runtime is implemented as a fixed, deliberately boring recipe:
 
 1. Intent normalization.
 2. Architecture pass.
-3. Parallel implication passes with distinct jobs.
-4. Semantic decomposition using the planner specialist skill.
-5. Adversarial task inspection.
-6. One reconciliation/compression pass.
+3. Code-implications pass.
+4. State/lifecycle implications pass.
+5. Failure-mode pass.
+6. Semantic decomposition.
+7. Adversarial task inspection.
+8. One reconciliation/compression pass.
+
+Each pass is an independent ephemeral inference session routed through the normal endpoint machinery with a read-only planning capability policy. Every pass gets a durable participant record and artifact. A recipe has its own generation id, status, participant/artifact roster, and token receipts; decomposition/adversary/reconciler only receive prior artifacts from the same recipe generation, so a retry cannot silently mix old findings into a new plan.
+
+The implication passes are epistemically independent but currently dispatched serially. Parallelizing them is an optimization, not a semantic requirement for the first experiment.
 
 Do not have several agents mutate one shared draft concurrently.
 Do not have several agents produce complete plans and vote.
 Do not recursively let agents interview each other.
 
-Have specialist passes return structured observations/deltas to one reconciler.
+Specialists return structured observations/deltas. Only the reconciler produces the final candidate bundle; the human-facing Interrogator inspects that bundle, persists any genuine human-owned questions, and stages it through candidate preflight.
 
-Initial token policy is parity: planning target approximately equals expected implementation inference. The session stores a 1.0 planning-to-execution ratio and can store an execution token estimate. Enforcement should wait for an actual planning inference runner with measured token receipts.
+Initial token policy remains parity: planning target approximately equals expected implementation inference. The session stores a 1.0 planning-to-execution ratio and optional execution estimate; recipe records now accumulate measured planning token receipts and report whether the soft target was exceeded. It is intentionally not a hard cutoff yet.
 
 ## Simple robustness findings
 
