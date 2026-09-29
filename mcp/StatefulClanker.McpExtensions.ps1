@@ -502,8 +502,13 @@ function Invoke-McpPlanningControl([string]$Project,$Arguments) {
             $text=Get-McpArgRequired $Arguments 'text';$cli=@('ask','--text',$text)
             foreach($pair in @(@('why','--why'),@('impact','--impact'),@('owner','--owner'))){$v=Get-McpArgOptional $Arguments $pair[0];if($v){$cli+=@($pair[1],[string]$v)}}
             if(Test-McpArgumentPresent $Arguments 'blocking'){$cli+=@('--blocking',([string](ConvertTo-McpBoolean (Get-McpRawArgument $Arguments 'blocking') 'blocking')).ToLowerInvariant())}
-            foreach($pair in @(@('affectedRefs','--affected-refs-json'),@('alternatives','--alternatives-json'),@('questionEvidence','--evidence-json'))){
-                $items=@(Get-McpArgArray $Arguments $pair[0]);if($items.Count-gt0){$cli+=@($pair[1],($items|ConvertTo-Json -Compress))}
+            foreach($pair in @(@('affectedRefs','--affected-refs-b64'),@('alternatives','--alternatives-b64'),@('questionEvidence','--evidence-b64'))){
+                $items=@(Get-McpArgArray $Arguments $pair[0])
+                if($items.Count-gt0){
+                    $json=$items|ConvertTo-Json -Compress
+                    $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+                    $cli+=@($pair[1],$encoded)
+                }
             }
             return Invoke-McpPlannerCommand $Project $cli
         }
