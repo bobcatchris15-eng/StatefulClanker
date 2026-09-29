@@ -38,7 +38,8 @@ public sealed class InferenceGateway : IDisposable
         NormalizedInferenceResult? last=null;
         var preferred=request.preferred;
 
-        for(var attempt=1;attempt<=maxAttempts;attempt++)
+        var routeAttempt=0;
+        while(routeAttempt<maxAttempts)
         {
             var acquire=_engine.Acquire(
                 preferred,
@@ -58,7 +59,7 @@ public sealed class InferenceGateway : IDisposable
                 var retrySeconds=ReadDouble(acquire.data,"retryAfterSeconds");
                 var delay=RetryDelay(nextRetryAt,retrySeconds,deadline);
 
-                if(delay>TimeSpan.Zero && attempt<maxAttempts)
+                if(delay>TimeSpan.Zero)
                 {
                     await Task.Delay(delay,token);
                     if(!request.strictPreferred) preferred=null;
@@ -110,6 +111,7 @@ public sealed class InferenceGateway : IDisposable
                 continue;
             }
 
+            routeAttempt++;
             var started=Stopwatch.StartNew();
             NormalizedInferenceResult result;
             try
@@ -124,7 +126,7 @@ public sealed class InferenceGateway : IDisposable
 
             history.Add(new RoutingAttemptRecord
             {
-                attempt=attempt,
+                attempt=routeAttempt,
                 endpoint=route.RouteName,
                 connection=route.Endpoint.connection,
                 model=route.Endpoint.model,
