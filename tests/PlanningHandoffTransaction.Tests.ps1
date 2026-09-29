@@ -20,11 +20,11 @@ function Invoke-Planner([string[]]$PlannerArgs){
     if(-not[bool]$response.ok){throw "Planner returned failure: $($response.error)"}
     return $response.data
 }
-function Invoke-HarnessJson([string[]]$HarnessArgs){
-    $raw=& $harness @HarnessArgs 2>&1|Out-String
+function Invoke-HarnessJson([string]$HandoffPath){
+    $raw=& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $harness plan apply-handoff -Path $HandoffPath 2>&1|Out-String
     if($LASTEXITCODE-ne0){throw "Harness command failed: $raw"}
     $lines=@($raw -split [Environment]::NewLine|Where-Object{-not[string]::IsNullOrWhiteSpace($_)})
-    if($lines.Count-eq0){throw "Harness command produced no JSON: $($HarnessArgs -join ' ')"}
+    if($lines.Count-eq0){throw 'Harness command produced no JSON.'}
     return ($lines[-1]|ConvertFrom-Json)
 }
 
@@ -215,7 +215,7 @@ end
         [IO.File]::WriteAllBytes($keepPath,$keepBytes)
 
         Write-Host '  REPLAN TX 4: atomically replace graph and classify old work'
-        $result=Invoke-HarnessJson @('plan','apply-handoff','-Path',$handoffPath)
+        $result=Invoke-HarnessJson $handoffPath
         Assert-True ([string]$result.replacedPlanId-eq$oldPlanId) 'Transaction did not identify replaced plan.'
         Assert-True (@($result.preservedComplete)-contains't-keep') 'Still-valid completed task was not preserved.'
         Assert-True (@($result.replacedTasks)-contains't-change') 'Intent-invalidated task was not replaced.'
