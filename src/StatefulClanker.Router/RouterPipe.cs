@@ -78,15 +78,22 @@ public static class RouterPipeClient
 {
     static readonly JsonSerializerOptions Json=new(){PropertyNameCaseInsensitive=true};
 
-    public static async Task<RouterResponse> SendAsync(string pipeName,RouterRequest request,int timeoutMs=3000)
+    public static async Task<RouterResponse> SendAsync(
+        string pipeName,
+        RouterRequest request,
+        int connectTimeoutMs=3000,
+        int responseTimeoutMs=3000)
     {
         using var pipe=new NamedPipeClientStream(".",pipeName,PipeDirection.InOut,PipeOptions.Asynchronous);
-        using var cts=new CancellationTokenSource(timeoutMs);
-        await pipe.ConnectAsync(cts.Token);
+        using(var connectCts=new CancellationTokenSource(connectTimeoutMs))
+            await pipe.ConnectAsync(connectCts.Token);
+
         using var reader=new StreamReader(pipe,Encoding.UTF8,false,4096,true);
         using var writer=new StreamWriter(pipe,new UTF8Encoding(false),4096,true){AutoFlush=true};
         await writer.WriteLineAsync(JsonSerializer.Serialize(request,Json));
-        var line=await reader.ReadLineAsync(cts.Token);
+
+        using var responseCts=new CancellationTokenSource(responseTimeoutMs);
+        var line=await reader.ReadLineAsync(responseCts.Token);
         return string.IsNullOrWhiteSpace(line)?RouterResponse.Fail("Router returned no response."):
             JsonSerializer.Deserialize<RouterResponse>(line,Json) ?? RouterResponse.Fail("Router returned malformed response.");
     }
