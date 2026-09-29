@@ -509,7 +509,9 @@ function Invoke-McpPlanningControl([string]$Project,$Arguments) {
             foreach($pair in @(@('affectedRefs','--affected-refs-b64'),@('alternatives','--alternatives-b64'),@('questionEvidence','--evidence-b64'))){
                 $items=@(Get-McpArgArray $Arguments $pair[0])
                 if($items.Count-gt0){
-                    $json=$items|ConvertTo-Json -Compress
+                    # Windows PowerShell serializes a one-item pipeline as a scalar.
+                    # Planner expects a JSON array on this transport for every list.
+                    $json=if($items.Count-eq1){'['+(ConvertTo-Json -InputObject $items[0] -Compress)+']'}else{$items|ConvertTo-Json -Compress}
                     $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
                     $cli+=@($pair[1],$encoded)
                 }
