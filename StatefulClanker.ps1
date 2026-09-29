@@ -72,6 +72,7 @@ switch($Command.ToLowerInvariant()){
 'planning'{if([string]::IsNullOrWhiteSpace($Subcommand)){$Subcommand='status'};switch($Subcommand.ToLowerInvariant()){
     'participants'{Get-SCPlanningParticipants|ConvertTo-Json -Depth 30 -Compress|Write-Output;break}
     'artifacts'{Get-SCPlanningArtifacts|ConvertTo-Json -Depth 30 -Compress|Write-Output;break}
+    'recipes'{Get-SCPlanningRecipes|ConvertTo-Json -Depth 30 -Compress|Write-Output;break}
     'run-pass'{$brief=if($Path){Get-Content -Raw -LiteralPath $Path}elseif($Message){$Message}else{''};if([string]::IsNullOrWhiteSpace($brief)){throw '-Path or -Message with planning brief required.'};$result=Invoke-SCPlanningPass $Role $brief $Provider $Endpoint $Connection;$result|ConvertTo-Json -Depth 40 -Compress|Write-Output;break}
     'run-recipe'{$brief=if($Path){Get-Content -Raw -LiteralPath $Path}elseif($Message){$Message}else{''};if([string]::IsNullOrWhiteSpace($brief)){throw '-Path or -Message with planning brief required.'};$result=Invoke-SCPlanningRecipe $brief $Provider $Endpoint $Connection;$result|ConvertTo-Json -Depth 50 -Compress|Write-Output;break}
     default{throw "Unknown planning subcommand: $Subcommand"}
