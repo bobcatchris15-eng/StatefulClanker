@@ -34,7 +34,7 @@ Core actions:
 - `status` — inspect whether planning currently owns the project.
 - `begin` — establish the execution barrier and enter quiescing.
 - `settle` — capture the stable baseline only after active implementation work is gone.
-- `participants` / `artifacts` — inspect durable session-scoped specialist runs and their outputs.
+- `participants` / `artifacts` / `recipes` — inspect durable session-scoped specialist runs, outputs, and recipe generations.
 - `runPass` — run one named read-only planning specialist through the normal inference router.
 - `runRecipe` — execute the standard intent -> architecture -> implications -> decomposition -> adversary -> reconciler recipe and persist every pass.
 - `ask` / `answer` / `questions` — persist structured uncertainty and decisions.
@@ -142,7 +142,7 @@ Confidence, mutability, rationale, and evidence links may be added where they he
 
 ## Multi-agent planning
 
-Do not simulate specialist passes inside the Interrogator's own context when the planning runtime is available. After settle, use `planning_control runRecipe` for the ordinary first pass. The runtime creates session-scoped participant records, routes each pass independently, persists the output artifact, and gives the final reconciler all prior artifacts. Use `runPass` only for a targeted follow-up when the first recipe exposes a real gap.
+Do not simulate specialist passes inside the Interrogator's own context when the planning runtime is available. After settle, use `planning_control runRecipe` for the ordinary first pass. The runtime creates one durable recipe generation, creates session-scoped participant records, routes each pass independently, persists each output artifact under that recipe id, and gives decomposition/adversary/reconciliation only the prior artifacts from the same generation. A rerun therefore cannot accidentally reconcile stale findings from an earlier attempt. Use `runPass` only for a targeted follow-up when the first recipe exposes a real gap.
 
 Do not ask several agents to independently write complete plans and then vote.
 
