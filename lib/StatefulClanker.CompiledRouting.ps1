@@ -2,33 +2,6 @@
 # leases, health, cooldowns, probing, and the round-robin cursor. PowerShell owns
 # provider invocation and durable worker transcript semantics only.
 
-function Get-SCCompiledRouterRoot {
-    if($env:SC_ROUTER_ROOT){return [IO.Path]::GetFullPath([string]$env:SC_ROUTER_ROOT)}
-    return Join-Path $env:LOCALAPPDATA 'StatefulClanker'
-}
-function Get-SCMachineEndpointCatalogPath { return Join-Path (Get-SCCompiledRouterRoot) 'endpoints.json' }
-function Get-SCMachineEndpointRecord([string]$Endpoint) {
-    $catalogId=if($Endpoint.StartsWith('pool:',[StringComparison]::OrdinalIgnoreCase)){$Endpoint.Substring(5)}else{$Endpoint}
-    $path=Get-SCMachineEndpointCatalogPath
-    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return $null}
-    try{$catalog=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json}catch{return $null}
-    if(-not$catalog.PSObject.Properties['entries'] -or -not$catalog.entries){return $null}
-    $prop=$catalog.entries.PSObject.Properties[$catalogId]
-    if($null-eq$prop){return $null}
-    $entry=$prop.Value
-    return [pscustomobject][ordered]@{
-        name=('pool:'+$catalogId)
-        config=[pscustomobject][ordered]@{
-            type='api'
-            connection=[string]$entry.connection
-            model=[string]$entry.model
-            toolMode=if($entry.PSObject.Properties['toolMode'] -and $entry.toolMode){[string]$entry.toolMode}else{'native'}
-            supportsTools=if($entry.PSObject.Properties['supportsTools']){$entry.supportsTools}else{$null}
-            contextLength=if($entry.PSObject.Properties['contextLength']){$entry.contextLength}else{$null}
-        }
-    }
-}
-
 function Get-SCProjectRoutingAllowlist {
     $cfg=Get-SCConfig
     if(-not($cfg.PSObject.Properties['routing'] -and $cfg.routing)){return @()}
