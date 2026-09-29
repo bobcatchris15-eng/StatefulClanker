@@ -305,8 +305,9 @@ public sealed class InferenceGateway : IDisposable
             var providerSuspect=scope is not ("request" or "harness");
             var healthChanged=scope is not ("request" or "harness");
 
+            RouterResponse? healthOutcome=null;
             if(healthChanged)
-                _engine.Failure(leaseToken,route.RouteName,klass,diagnosticText);
+                healthOutcome=_engine.Failure(leaseToken,route.RouteName,klass,diagnosticText);
 
             var failed=BaseResult(route,adapter.Id,adapter.SourcePath,
                 Diagnosis(klass,scope,adapterSuspect,providerSuspect,
@@ -316,6 +317,8 @@ public sealed class InferenceGateway : IDisposable
             failed.response=responseEvidence;
             failed.healthChanged=healthChanged;
             failed.failoverAllowed=!adapterSuspect && FailurePolicy.CanFailover(klass);
+            failed.nextRetryAt=healthOutcome is null?null:
+                ReadString(healthOutcome.data,"retryAfter")??ReadString(healthOutcome.data,"nextProbeAt");
             failed.signalRef=EmitSignal(route,failed,diagnosticMode);
             return failed;
         }
@@ -323,13 +326,14 @@ public sealed class InferenceGateway : IDisposable
         {
             stopwatch.Stop();
             responseEvidence.durationSeconds=Math.Round(stopwatch.Elapsed.TotalSeconds,3);
-            _engine.Failure(leaseToken,route.RouteName,"timeout",ex.Message);
+            var healthOutcome=_engine.Failure(leaseToken,route.RouteName,"timeout",ex.Message);
             var result=BaseResult(route,adapter.Id,adapter.SourcePath,
                 Diagnosis("timeout","endpoint",false,true,"TRANSPORT_TIMEOUT",ex.Message));
             result.request=built?.evidence??new SanitizedRequestEvidence();
             result.response=responseEvidence;
             result.healthChanged=true;
             result.failoverAllowed=true;
+            result.nextRetryAt=ReadString(healthOutcome.data,"retryAfter")??ReadString(healthOutcome.data,"nextProbeAt");
             result.signalRef=EmitSignal(route,result,diagnosticMode);
             return result;
         }
@@ -341,13 +345,16 @@ public sealed class InferenceGateway : IDisposable
             if(klass=="request_error") klass="transport";
             var scope=klass=="transport"?"endpoint":FailurePolicy.ScopeFor(klass);
             var healthChanged=scope is not ("request" or "harness");
-            if(healthChanged) _engine.Failure(leaseToken,route.RouteName,klass,ex.Message);
+            RouterResponse? healthOutcome=null;
+            if(healthChanged) healthOutcome=_engine.Failure(leaseToken,route.RouteName,klass,ex.Message);
             var result=BaseResult(route,adapter.Id,adapter.SourcePath,
                 Diagnosis(klass,scope,false,true,"TRANSPORT_FAILURE",ex.Message));
             result.request=built?.evidence??new SanitizedRequestEvidence();
             result.response=responseEvidence;
             result.healthChanged=healthChanged;
             result.failoverAllowed=FailurePolicy.CanFailover(klass) || klass=="transport";
+            result.nextRetryAt=healthOutcome is null?null:
+                ReadString(healthOutcome.data,"retryAfter")??ReadString(healthOutcome.data,"nextProbeAt");
             result.signalRef=EmitSignal(route,result,diagnosticMode);
             return result;
         }
