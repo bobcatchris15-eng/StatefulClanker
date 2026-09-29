@@ -273,7 +273,8 @@ public sealed class InferenceGateway : IDisposable
                 return malformed;
             }
 
-            var diagnosticText=$"HTTP {(int)response.StatusCode} {response.ReasonPhrase} {body}".Trim();
+            var routingHeaders=string.Join(" ",responseEvidence.headers.Select(kv=>$"{kv.Key}: {kv.Value}"));
+            var diagnosticText=$"HTTP {(int)response.StatusCode} {response.ReasonPhrase} {routingHeaders} {body}".Trim();
             var klass=FailurePolicy.Classify(diagnosticText,(int)response.StatusCode);
             var scope=FailurePolicy.ScopeFor(klass);
             var adapterSuspect=(int)response.StatusCode is 400 or 422 ||
