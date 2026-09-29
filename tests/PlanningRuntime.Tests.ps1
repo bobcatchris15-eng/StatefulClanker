@@ -46,7 +46,7 @@ try{
     if(-not[bool]$recipe.completed){throw 'Planning recipe did not complete.'}
     if(@($recipe.roles).Count-ne8){throw "Expected 8 planning roles, got $(@($recipe.roles).Count)."}
     if([string]$recipe.finalArtifact.role-ne'reconciler'){throw 'Planning recipe did not end in reconciler artifact.'}
-    if($null-eq$recipe.finalArtifact.structured-or[string]$recipe.finalArtifact.structured.planText -notmatch '(?m)^SCPLAN 1$'){throw 'Planning recipe final artifact is not a structured reconciled SCPLAN.'}
+    if($null-eq$recipe.finalArtifact.structured-or-not([string]$recipe.finalArtifact.structured.planText).TrimStart().StartsWith('SCPLAN 1',[StringComparison]::Ordinal)){throw 'Planning recipe final artifact is not a structured reconciled SCPLAN.'}
 
     $participants=Last-Json (& $harness planning participants 2>&1|Out-String)
     $artifacts=Last-Json (& $harness planning artifacts 2>&1|Out-String)
