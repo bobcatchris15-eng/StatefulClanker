@@ -39,7 +39,7 @@ public sealed class RouterEngine
             .ToArray();
     }
 
-    public RouterResponse Acquire(string? preferred,string? preferredConnection,bool strictPreferred,string? sessionId,bool requireTools,int ownerPid=0,string[]? allowedEndpoints=null,string? requiredToolMode=null)
+    public RouterResponse Acquire(string? preferred,string? preferredConnection,bool strictPreferred,string? sessionId,bool requireTools,int ownerPid=0,string[]? allowedEndpoints=null,string? requiredToolMode=null,string[]? excludedEndpoints=null)
     {
         ReapExpiredLeases();
         NormalizeExpiredCooldowns();
@@ -71,6 +71,22 @@ public sealed class RouterEngine
             return RouterResponse.Fail(
                 $"Preferred endpoint '{preferred}' is outside the project's allowed endpoints.",
                 new { reason="preferred_not_allowed",allowlistApplied=true });
+        }
+
+        var excludeSet=(excludedEndpoints??Array.Empty<string>())
+            .Where(x=>!string.IsNullOrWhiteSpace(x))
+            .Select(x=>x.Trim())
+            .ToArray();
+        if(excludeSet.Length>0)
+        {
+            configured=configured.Where(r=>!excludeSet.Any(x=>
+                string.Equals(x,r.RouteName,StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(x,r.CatalogId,StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(x,StripPoolPrefix(r.RouteName),StringComparison.OrdinalIgnoreCase))).ToList();
+            if(configured.Count==0)
+                return RouterResponse.Fail(
+                    "All compatible endpoints have already been attempted for this inference request.",
+                    new { reason="all_candidates_attempted",excludedEndpoints=excludeSet });
         }
 
         var nativeRequired=requireTools || string.Equals(requiredToolMode,"native",StringComparison.OrdinalIgnoreCase);
