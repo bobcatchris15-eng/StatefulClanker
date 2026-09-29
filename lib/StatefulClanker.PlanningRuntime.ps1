@@ -35,6 +35,10 @@ function Get-SCPlanningArtifacts {
     $active=Get-SCPlanningRuntimeActive;$dir=Get-SCPlanningArtifactDir $active
     return @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File -ErrorAction SilentlyContinue|Sort-Object Name|ForEach-Object{Read-SCJson $_.FullName}|Where-Object{$null-ne$_})
 }
+function Get-SCPlanningRecipes {
+    $active=Get-SCPlanningRuntimeActive;$dir=Get-SCPlanningRecipeDir $active
+    return @(Get-ChildItem -LiteralPath $dir -Filter '*.json' -File -ErrorAction SilentlyContinue|Sort-Object Name|ForEach-Object{Read-SCJson $_.FullName}|Where-Object{$null-ne$_})
+}
 function Get-SCPlanningRoleDoctrine([string]$Role) {
     switch($Role){
         'intent' {return 'Normalize the requested future. Separate direct human authority, existing accepted constraints, assumptions, unresolved questions, desired end state, and fit criteria. Do not invent product choices.'}
