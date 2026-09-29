@@ -39,7 +39,7 @@ public sealed class RouterEngine
             .ToArray();
     }
 
-    public RouterResponse Acquire(string? preferred,string? preferredConnection,bool strictPreferred,string? sessionId,bool requireTools,int ownerPid=0,string[]? allowedEndpoints=null)
+    public RouterResponse Acquire(string? preferred,string? preferredConnection,bool strictPreferred,string? sessionId,bool requireTools,int ownerPid=0,string[]? allowedEndpoints=null,string? requiredToolMode=null)
     {
         ReapExpiredLeases();
         NormalizeExpiredCooldowns();
@@ -73,8 +73,9 @@ public sealed class RouterEngine
                 new { reason="preferred_not_allowed",allowlistApplied=true });
         }
 
+        var nativeRequired=requireTools || string.Equals(requiredToolMode,"native",StringComparison.OrdinalIgnoreCase);
         var eligible=configured
-            .Where(r=>!requireTools || (r.Endpoint.supportsTools==true && string.Equals(r.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase)))
+            .Where(r=>!nativeRequired || (r.Endpoint.supportsTools==true && string.Equals(r.Endpoint.toolMode,"native",StringComparison.OrdinalIgnoreCase)))
             .Where(r=>string.IsNullOrWhiteSpace(preferredConnection) || string.Equals(r.Endpoint.connection,preferredConnection,StringComparison.OrdinalIgnoreCase))
             .ToList();
         var routes=eligible.Where(r=>Available(r,health)).ToList();
@@ -98,6 +99,7 @@ public sealed class RouterEngine
                     nextRetryAt=NextRetryAt(eligible,health),
                     connection=preferredConnection,
                     requireTools,
+                    requiredToolMode,
                     configuredEndpoints=configured.Count,
                     eligibleEndpoints=eligible.Count,
                     candidates=eligible.Select(r=>RouteDiagnostic(r,health)).ToArray()
