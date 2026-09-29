@@ -62,7 +62,7 @@ try{
     . (Join-Path $repo 'lib\StatefulClanker.CompiledRouting.ps1')
 
     Set-SCRoots $project $project
-    New-Item -ItemType Directory -Force -Path (Join-Path $project '.statefulclanker')|Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $project '.statefulclanker'),(Get-SCPath 'prompts'),(Get-SCPath 'runs')|Out-Null
     Write-SCJson (Get-SCPath 'state.json') ([ordered]@{schemaVersion=4;projectId='routed-worker'})
     Write-SCJson (Get-SCPath 'config.json') ([ordered]@{maxSteps=8;routing=[ordered]@{maxRouteAttempts=6;maxRouteWaitSeconds=2}})
     function Invoke-SCLegacyApiChat { throw 'LEGACY_API_PATH_USED' }
