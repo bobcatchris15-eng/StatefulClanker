@@ -597,7 +597,7 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
     $project=Get-McpProject $Arguments;Assert-McpInitialized $project
     switch($Name) {
         'collaboration_team' {
-            return New-McpTextResult (Set-SCCollaborationTeam $project (Get-McpArgRequired $Arguments 'teamId') @(Get-McpArgArray $Arguments 'participantIds') ([string](Get-McpArgOptional $Arguments 'purpose'))
+            return New-McpTextResult (Set-SCCollaborationTeam $project (Get-McpArgRequired $Arguments 'teamId') @(Get-McpArgArray $Arguments 'participantIds') ([string](Get-McpArgOptional $Arguments 'purpose')))
         }
         'collaboration_send' {
             $from=Get-McpArgRequired $Arguments 'fromId';$type=Get-McpArgRequired $Arguments 'type';$subject=Get-McpArgRequired $Arguments 'subject';$body=Get-McpArgRequired $Arguments 'body'
