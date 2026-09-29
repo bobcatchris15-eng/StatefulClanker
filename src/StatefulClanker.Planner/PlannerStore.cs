@@ -127,7 +127,8 @@ public sealed class PlannerStore
         return new { settled = true, phase = control.phase, baseline = control.baselinePath };
     });
 
-    public PlannerQuestion AddQuestion(string text, string why, string impact, string owner, bool blocking)
+    public PlannerQuestion AddQuestion(string text, string why, string impact, string owner, bool blocking,
+        List<string>? affectedRefs = null, List<string>? alternatives = null, List<string>? evidence = null)
         => WithLock(() =>
     {
         var control = RequireActive();
@@ -142,7 +143,10 @@ public sealed class PlannerStore
             why = why?.Trim() ?? "",
             impact = string.IsNullOrWhiteSpace(impact) ? "medium" : impact.Trim().ToLowerInvariant(),
             owner = string.IsNullOrWhiteSpace(owner) ? "human" : owner.Trim().ToLowerInvariant(),
-            blocking = blocking
+            blocking = blocking,
+            affectedRefs = (affectedRefs ?? new()).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            alternatives = (alternatives ?? new()).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).ToList(),
+            evidence = (evidence ?? new()).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).ToList()
         };
 
         var dir = Path.Combine(SessionDir(control.sessionId), "questions");
@@ -151,7 +155,7 @@ public sealed class PlannerStore
         return question;
     });
 
-    public PlannerQuestion AnswerQuestion(string questionId, string answer) => WithLock(() =>
+    public PlannerQuestion AnswerQuestion(string questionId, string answer, string? resolutionSource = null) => WithLock(() =>
     {
         var control = RequireActive();
         RequirePlanningPhase(control);
@@ -160,6 +164,7 @@ public sealed class PlannerStore
             ?? throw new InvalidOperationException("Unknown planning question: " + questionId);
 
         question.answer = answer ?? "";
+        question.resolutionSource = string.IsNullOrWhiteSpace(resolutionSource) ? "human" : resolutionSource.Trim().ToLowerInvariant();
         question.status = "answered";
         question.updatedAt = DateTimeOffset.UtcNow.ToString("O");
         WriteJson(path, question);
