@@ -376,21 +376,18 @@ imply a missing saved project must not silently substitute another project
 prove restart with the saved project removed produces no-active-project state
 ```
 
-## 9.1 Current runtime boundary: essential proof must not live only in `imply` / `prove`
+## 9.1 Runtime boundary for `imply` / `prove`
 
-The current parser persists `implications` and `proofObligations`, and they participate in task-definition freshness.
+The parser persists `implications` and `proofObligations`, they participate in task-definition freshness, and the compiled worker/reviewer receipt now projects both fields into model-visible task context.
 
-However, the current compiled worker/reviewer packet does **not yet project those fields into the model-visible task context**.
+Use them deliberately:
 
-Therefore:
+- `accept` remains the direct all-or-nothing bounded outcome the validator must judge;
+- `imply` records material second-order consequences the worker/reviewer should keep in view;
+- `prove` records concrete evidence obligations that support the task or a later integration boundary;
+- if a proof is itself substantial, requires a different environment, or spans several tasks, make it a dependent validation/integration task rather than bloating one worker's acceptance surface.
 
-- use `imply` / `prove` as durable planning/refinement metadata;
-- do not rely on them as the only place an essential requirement or proof lives;
-- if the worker must perform a proof for the task to pass **today**, encode it in the instruction and/or `accept`;
-- if the proof is materially separate, create a dependent validation/integration task;
-- never assume the critic/validator saw an `imply` or `prove` line unless the runtime is later changed to compile them.
-
-This is a temporary runtime limitation, not a reason to abandon the fields. They remain useful for planner reasoning, freshness, and future refinement.
+Do not duplicate every acceptance criterion into `prove`; use the fields to preserve reasoning that would otherwise disappear between planning and execution.
 
 ## 9.2 Implications are not an invitation to infinite hardening
 
