@@ -138,12 +138,16 @@ function New-McpTextResult($Value) {
     } elseif ($Value -is [string]) {
         $text = $Value
     } elseif ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [System.Collections.IDictionary])) {
-        $count = 0
-        try { $count = $Value.Count } catch { foreach ($x in $Value) { $count++ } }
-        if ($count -eq 0) {
+        # Windows PowerShell 5.1 serializes Object[] passed through -InputObject
+        # as {"value":[...],"Count":N}. MCP callers expect JSON array semantics,
+        # including for one-item collections, so materialize and encode explicitly.
+        $items = @($Value)
+        if ($items.Count -eq 0) {
             $text = '[]'
+        } elseif ($items.Count -eq 1) {
+            $text = '[' + (ConvertTo-Json -InputObject $items[0] -Depth 30) + ']'
         } else {
-            $text = ConvertTo-Json -InputObject $Value -Depth 30
+            $text = ($items | ConvertTo-Json -Depth 30)
         }
     } else {
         $text = ConvertTo-Json -InputObject $Value -Depth 30
