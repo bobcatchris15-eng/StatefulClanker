@@ -534,6 +534,8 @@ function Invoke-McpPlanningControl([string]$Project,$Arguments) {
                         $cli+=@('--directives',$directiveTemp)
                     }
                 }
+                $preflight=@('plan','preflight','-Path',$planTemp);if($intentTemp){$preflight+=@('-SourceRef',$intentTemp)}
+                [void](Invoke-McpHarness $Project $preflight)
                 return Invoke-McpPlannerCommand $Project $cli
             } finally {
                 Remove-Item -LiteralPath $planTemp -Force -ErrorAction SilentlyContinue
