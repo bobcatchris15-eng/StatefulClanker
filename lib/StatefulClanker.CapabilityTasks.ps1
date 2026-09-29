@@ -472,12 +472,38 @@ function Assert-SCReplacementPlanGraph($Tasks) {
     }
 }
 
+function Assert-SCPlanningIntentProvenance($Intent) {
+    if($null-eq$Intent){throw 'Planning Intent candidate is empty.'}
+    $issues=@();$ids=@{}
+    foreach($field in @('requirements','constraints','invariants','nonGoals','decisions','preferences','openQuestions')){
+        if(-not$Intent.PSObject.Properties[$field]){continue}
+        foreach($item in @($Intent.$field)){
+            if($item-is[string]){$issues+="Intent field '$field' contains unprovenanced string '$item'. Planning candidates must use structured entries.";continue}
+            if($null-eq$item){$issues+="Intent field '$field' contains a null entry.";continue}
+            $id=if($item.PSObject.Properties['id']){[string]$item.id}else{''}
+            $text=if($item.PSObject.Properties['text']){[string]$item.text}elseif($item.PSObject.Properties['question']){[string]$item.question}else{''}
+            $kind=if($item.PSObject.Properties['kind']){[string]$item.kind}else{''}
+            $source=if($item.PSObject.Properties['source']){[string]$item.source}else{''}
+            $authority=if($item.PSObject.Properties['authority']){[string]$item.authority}else{''}
+            if([string]::IsNullOrWhiteSpace($id)){$issues+="Intent field '$field' contains an entry without stable id."}
+            elseif($ids.ContainsKey($id)){$issues+="Intent id '$id' is duplicated."}else{$ids[$id]=$true}
+            if([string]::IsNullOrWhiteSpace($text)){$issues+="Intent '$id' has no text/question."}
+            if([string]::IsNullOrWhiteSpace($kind)){$issues+="Intent '$id' has no kind."}
+            if([string]::IsNullOrWhiteSpace($source)){$issues+="Intent '$id' has no provenance source."}
+            if([string]::IsNullOrWhiteSpace($authority)){$issues+="Intent '$id' has no authority classification."}
+        }
+    }
+    if($issues.Count-gt0){throw ('Planning Intent provenance check failed:'+ [Environment]::NewLine +' - '+($issues -join([Environment]::NewLine+' - ')))}
+    return $true
+}
+
 function Test-SCPlanningCandidatePreflight([string]$PlanPath,[string]$IntentPath=$null) {
     $input=Get-SCPlanInput $PlanPath
     $plan=$input.plan
     if($null-eq$plan-or$null-eq$plan.tasks-or@($plan.tasks).Count-eq0){throw 'Planning candidate contains no tasks.'}
     $intent=if($IntentPath){Read-SCJson $IntentPath}else{Get-SCIntentContract}
     if($null-ne$intent){Assert-SCIntentShape $intent}
+    if($IntentPath){[void](Assert-SCPlanningIntentProvenance $intent)}
     $tasks=@();foreach($item in @($plan.tasks)){$tasks+=,(New-SCTaskFromPlanItem $item)}
     Assert-SCReplacementPlanGraph $tasks
 
