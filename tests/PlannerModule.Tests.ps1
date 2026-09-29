@@ -36,8 +36,8 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stateRoot 'intent')|Out-Nu
     title='Busy'
 }|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $stateRoot 'tasks\busy-task.json') -Encoding UTF8
 
-function Invoke-Planner([string[]]$Args){
-    $raw=& $dotnet.Source run --project $project -- @Args 2>&1|Out-String
+function Invoke-Planner([string[]]$PlannerArgs){
+    $raw=& $dotnet.Source run --project $project -- @PlannerArgs 2>&1|Out-String
     if($LASTEXITCODE-ne0){throw "Planner command failed: $raw"}
     $result=$raw|ConvertFrom-Json
     if(-not$result.ok){throw "Planner returned failure: $($result.error)"}
