@@ -54,6 +54,7 @@ public sealed class RouterPipeServer
             var response=req.op.ToLowerInvariant() switch
             {
                 "ping" => RouterResponse.Ok(new{service="StatefulClanker.Router",version="0.1"}),
+                "negotiate" => _engine.Negotiate(req.preferred,req.preferredConnection,req.strictPreferred,req.allowedEndpoints),
                 "acquire" => _engine.Acquire(req.preferred,req.preferredConnection,req.strictPreferred,req.sessionId,req.requireTools,req.ownerPid,req.allowedEndpoints),
                 "release" => _engine.Release(req.lease),
                 "heartbeat" => _engine.Heartbeat(req.lease),
