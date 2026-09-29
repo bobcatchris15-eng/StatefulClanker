@@ -104,7 +104,7 @@ end
     $mcpCandidate=Invoke-PlanningTool 807 ([pscustomobject]@{action='candidate';project=$temp;planText=$planText;summary='MCP candidate preflight and staging'})
     if(-not$mcpCandidate.id-or-not$mcpCandidate.planSha256){throw 'planning_control candidate did not stage a frozen plan.'}
     $mcpHandoff=Invoke-PlanningTool 808 ([pscustomobject]@{action='accept';project=$temp;candidateId=[string]$mcpCandidate.id})
-    if([string]$mcpHandoff.status-ne'pending'){throw 'planning_control accept did not produce a pending handoff.'}
+    if([string]$mcpHandoff.status-ne'accepted'){throw 'planning_control accept did not produce an accepted handoff.'}
     $mcpApplied=Invoke-PlanningTool 809 ([pscustomobject]@{action='apply';project=$temp})
     if(-not[bool]$mcpApplied.applied){throw 'planning_control apply did not commit the accepted handoff.'}
     if(Test-Path -LiteralPath (Join-Path $temp '.statefulclanker\planning\active.json')){throw 'Planning barrier survived successful MCP apply/release.'}
