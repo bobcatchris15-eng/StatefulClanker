@@ -69,7 +69,11 @@ public sealed class PlannerQuestion
     public string impact { get; set; } = "medium";
     public string owner { get; set; } = "human";
     public bool blocking { get; set; } = true;
+    public List<string> affectedRefs { get; set; } = new();
+    public List<string> alternatives { get; set; } = new();
+    public List<string> evidence { get; set; } = new();
     public string? answer { get; set; }
+    public string? resolutionSource { get; set; }
 }
 
 public sealed class PlannerCandidate
