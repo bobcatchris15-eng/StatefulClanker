@@ -507,7 +507,7 @@ function Test-SCPlanningCandidatePreflight([string]$PlanPath,[string]$IntentPath
     $input=Get-SCPlanInput $PlanPath
     $plan=$input.plan
     if($null-eq$plan-or$null-eq$plan.tasks-or@($plan.tasks).Count-eq0){throw 'Planning candidate contains no tasks.'}
-    $intent=if($IntentPath){Read-SCJson $IntentPath}else{Get-SCIntentContract}
+    $intent=if($IntentPath){Read-SCJson $IntentPath}else{$liveIntentPath=Get-SCPath 'intent/contract.json';if(Test-Path -LiteralPath $liveIntentPath -PathType Leaf){Read-SCJson $liveIntentPath}else{$null}}
     if($null-ne$intent){Assert-SCIntentShape $intent}
     if($IntentPath){[void](Assert-SCPlanningIntentProvenance $intent)}
     $tasks=@();foreach($item in @($plan.tasks)){$tasks+=,(New-SCTaskFromPlanItem $item)}
