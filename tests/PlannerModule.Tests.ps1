@@ -65,6 +65,9 @@ try {
         if(-not$settled.settled-or$settled.phase-ne'planning'){throw 'Planner did not settle into planning.'}
         if(-not(Test-Path (Join-Path $stateRoot 'planning\sessions'))){throw 'Missing planner session directory.'}
 
+        $affectedB64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('["REQ-BEHAVIOR"]'))
+        $alternativesB64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('["Behavior A","Behavior B"]'))
+        $evidenceB64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('["Repository has two viable integration seams."]'))
         $question=Invoke-Planner @(
             'ask','--project',$temp,
             '--text','Which behavior?',
@@ -72,9 +75,9 @@ try {
             '--impact','high',
             '--owner','human',
             '--blocking','true',
-            '--affected-refs-json','["REQ-BEHAVIOR"]',
-            '--alternatives-json','["Behavior A","Behavior B"]',
-            '--evidence-json','["Repository has two viable integration seams."]')
+            '--affected-refs-b64',$affectedB64,
+            '--alternatives-b64',$alternativesB64,
+            '--evidence-b64',$evidenceB64)
         if($question.status-ne'open'){throw 'Question was not persisted open.'}
         if(@($question.affectedRefs)-notcontains'REQ-BEHAVIOR'){throw 'Question affected refs were not persisted.'}
         if(@($question.alternatives).Count-ne2){throw 'Question alternatives were not persisted.'}
