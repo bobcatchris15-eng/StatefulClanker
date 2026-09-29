@@ -71,11 +71,18 @@ try {
             '--why','Changes architecture',
             '--impact','high',
             '--owner','human',
-            '--blocking','true')
+            '--blocking','true',
+            '--affected-refs-json','["REQ-BEHAVIOR"]',
+            '--alternatives-json','["Behavior A","Behavior B"]',
+            '--evidence-json','["Repository has two viable integration seams."]')
         if($question.status-ne'open'){throw 'Question was not persisted open.'}
+        if(@($question.affectedRefs)-notcontains'REQ-BEHAVIOR'){throw 'Question affected refs were not persisted.'}
+        if(@($question.alternatives).Count-ne2){throw 'Question alternatives were not persisted.'}
+        if(@($question.evidence).Count-ne1){throw 'Question evidence was not persisted.'}
 
-        $answer=Invoke-Planner @('answer','--project',$temp,'--question',$question.id,'--text','Behavior A')
+        $answer=Invoke-Planner @('answer','--project',$temp,'--question',$question.id,'--text','Behavior A','--source','human')
         if($answer.status-ne'answered'){throw 'Question answer was not persisted.'}
+        if([string]$answer.resolutionSource-ne'human'){throw 'Question resolution provenance was not persisted.'}
 
         'SCPLAN 1
 plan test
