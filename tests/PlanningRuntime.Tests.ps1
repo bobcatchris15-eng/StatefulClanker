@@ -47,8 +47,13 @@ try{
 
     $participants=Last-Json (& $harness planning participants 2>&1|Out-String)
     $artifacts=Last-Json (& $harness planning artifacts 2>&1|Out-String)
+    $recipes=Last-Json (& $harness planning recipes 2>&1|Out-String)
     if(@($participants).Count-lt9){throw 'Planning participant registry did not retain pass history.'}
     if(@($artifacts).Count-lt9){throw 'Planning artifact registry did not retain pass outputs.'}
+    if(@($recipes).Count-ne1-or[string]$recipes[0].status-ne'complete'){throw 'Planning recipe generation was not durably recorded complete.'}
+    if([string]$recipes[0].id-ne[string]$recipe.recipeId){throw 'Planning recipe result did not match durable recipe generation.'}
+    $recipeArtifacts=@($artifacts|Where-Object{[string]$_.recipeId-eq[string]$recipe.recipeId})
+    if($recipeArtifacts.Count-ne8){throw "Expected 8 artifacts in recipe generation, got $($recipeArtifacts.Count)."}
 
     [void](Invoke-Planner @('cancel','--project',$temp,'--reason','test complete'))
     Write-Host 'PASS: planning runtime persists session-scoped participants/artifacts and executes the fixed specialist recipe.'
