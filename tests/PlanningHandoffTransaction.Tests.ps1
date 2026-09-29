@@ -13,8 +13,8 @@ function Write-Json([string]$Path,$Value){
     $parent=Split-Path -Parent $Path;if($parent-and-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null}
     $Value|ConvertTo-Json -Depth 30|Set-Content -LiteralPath $Path -Encoding UTF8
 }
-function Invoke-Planner([string[]]$Args){
-    $raw=& $dotnet.Source run --project $plannerProject -- @Args 2>&1|Out-String
+function Invoke-Planner([string[]]$PlannerArgs){
+    $raw=& $dotnet.Source run --project $plannerProject -- @PlannerArgs 2>&1|Out-String
     if($LASTEXITCODE-ne0){throw "Planner command failed: $raw"}
     $response=$raw|ConvertFrom-Json
     if(-not[bool]$response.ok){throw "Planner returned failure: $($response.error)"}
