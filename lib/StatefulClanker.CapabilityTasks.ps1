@@ -566,8 +566,8 @@ function Assert-SCStagedDirectiveIntentRefs($DirectiveResult,$Intent) {
 }
 
 function Test-SCTaskIntentCompatible($Task,$OldIntent,$NewIntent,[string]$OldGoal,[string]$NewGoal,$DirectiveChanges) {
-    $refs=if($Task.PSObject.Properties['intentRefs']){@($Task.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})}else{@()}
-    $sources=if($Task.PSObject.Properties['sources']){@($Task.sources|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})}else{@()}
+    $refs=@(if($Task.PSObject.Properties['intentRefs']){$Task.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_}})
+    $sources=@(if($Task.PSObject.Properties['sources']){$Task.sources|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_}})
     $changes=@($DirectiveChanges)
 
     foreach($change in $changes){
@@ -581,7 +581,7 @@ function Test-SCTaskIntentCompatible($Task,$OldIntent,$NewIntent,[string]$OldGoa
     if($changes.Count-gt0){
         if($refs.Count-eq0){return $false}
         foreach($change in $changes){
-            $directiveRefs=if($change.record-and$change.record.PSObject.Properties['intentRefs']){@($change.record.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_})}else{@()}
+            $directiveRefs=@(if($change.record-and$change.record.PSObject.Properties['intentRefs']){$change.record.intentRefs|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)}|ForEach-Object{[string]$_}})
             if($directiveRefs.Count-eq0){return $false}
             foreach($ref in $refs){if($directiveRefs-contains$ref){return $false}}
         }
