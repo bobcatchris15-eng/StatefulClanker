@@ -79,8 +79,41 @@ try{
     $answered=Invoke-PlanningTool 804 ([pscustomobject]@{action='answer';project=$temp;questionId=$question.id;text='seam-a';resolutionSource='human'})
     if([string]$answered.resolutionSource-ne'human'){throw 'planning_control answer lost resolution provenance.'}
 
-    [void](Invoke-Planner @('cancel','--project',$temp,'--reason','test complete'))
-    Write-Host 'PASS: planning runtime persists isolated recipe generations and planning_control drives recipes plus provenance-rich questions.'
+    [void](Invoke-Planner @('cancel','--project',$temp,'--reason','recipe test complete'))
+
+    Write-Host '  PLANNING RUNTIME E2E: MCP owns begin -> settle -> candidate -> accept -> apply'
+    'Durable planning lifecycle evidence.'|Set-Content -LiteralPath (Join-Path $temp 'planning-spec.txt') -Encoding UTF8
+    $mcpBegin=Invoke-PlanningTool 805 ([pscustomobject]@{action='begin';project=$temp;reason='MCP end-to-end planning lifecycle'})
+    if([string]$mcpBegin.phase-ne'quiescing'){throw 'planning_control begin did not establish quiescing ownership.'}
+    $mcpSettle=Invoke-PlanningTool 806 ([pscustomobject]@{action='settle';project=$temp})
+    if(-not[bool]$mcpSettle.settled){throw 'planning_control settle did not freeze the baseline.'}
+
+    $planText=@'
+SCPLAN 1
+plan mcp-end-to-end
+summary Exercise the complete planning_control handoff path.
+
+task mcp-planned-task
+title MCP planned task
+instruction Preserve the bounded planning lifecycle evidence.
+size small
+source file:planning-spec.txt
+accept planning lifecycle evidence remains present
+end
+'@
+    $mcpCandidate=Invoke-PlanningTool 807 ([pscustomobject]@{action='candidate';project=$temp;planText=$planText;summary='MCP candidate preflight and staging'})
+    if(-not$mcpCandidate.id-or-not$mcpCandidate.planSha256){throw 'planning_control candidate did not stage a frozen plan.'}
+    $mcpHandoff=Invoke-PlanningTool 808 ([pscustomobject]@{action='accept';project=$temp;candidateId=[string]$mcpCandidate.id})
+    if([string]$mcpHandoff.status-ne'pending'){throw 'planning_control accept did not produce a pending handoff.'}
+    $mcpApplied=Invoke-PlanningTool 809 ([pscustomobject]@{action='apply';project=$temp})
+    if(-not[bool]$mcpApplied.applied){throw 'planning_control apply did not commit the accepted handoff.'}
+    if(Test-Path -LiteralPath (Join-Path $temp '.statefulclanker\planning\active.json')){throw 'Planning barrier survived successful MCP apply/release.'}
+    $appliedTask=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\tasks\mcp-planned-task.json')|ConvertFrom-Json
+    if([string]$appliedTask.id-ne'mcp-planned-task'){throw 'Applied MCP planning handoff did not install the replacement task graph.'}
+    $appliedState=Get-Content -Raw -LiteralPath (Join-Path $temp '.statefulclanker\state.json')|ConvertFrom-Json
+    if([string]$appliedState.activePlanId-ne[string]$mcpApplied.transaction.appliedPlanId){throw 'Applied plan id does not match the committed MCP planning transaction.'}
+
+    Write-Host 'PASS: planning runtime persists isolated recipe generations, provenance-rich questions, and the complete MCP planning handoff lifecycle.'
 }finally{
     Pop-Location -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
