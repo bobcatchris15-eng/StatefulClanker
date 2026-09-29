@@ -27,9 +27,9 @@ internal static class Program
                     Get(opts, "impact") ?? "medium",
                     Get(opts, "owner") ?? "human",
                     GetBool(opts, "blocking", true),
-                    GetStringList(opts, "affected-refs-json"),
-                    GetStringList(opts, "alternatives-json"),
-                    GetStringList(opts, "evidence-json")),
+                    GetStringListBase64(opts, "affected-refs-b64"),
+                    GetStringListBase64(opts, "alternatives-b64"),
+                    GetStringListBase64(opts, "evidence-b64")),
                 "answer" => store.AnswerQuestion(
                     Require(opts, "question"),
                     Require(opts, "text"),
@@ -64,7 +64,7 @@ internal static class Program
         Console.Error.WriteLine("  begin --reason <text> [--execution-token-estimate <n>]");
         Console.Error.WriteLine("  settle");
         Console.Error.WriteLine("  ask --text <q> [--why <text>] [--impact low|medium|high] [--owner human|system] [--blocking true|false]");
-        Console.Error.WriteLine("      [--affected-refs-json <json-array>] [--alternatives-json <json-array>] [--evidence-json <json-array>]");
+        Console.Error.WriteLine("      [--affected-refs-b64 <base64-json-array>] [--alternatives-b64 <base64-json-array>] [--evidence-b64 <base64-json-array>]");
         Console.Error.WriteLine("  answer --question <id> --text <answer> [--source human|evidence|planner|system]");
         Console.Error.WriteLine("  candidate --plan <file> [--intent <file>] [--directives <file>] [--goal <text>] [--summary <text>]");
         Console.Error.WriteLine("  accept --candidate <id>");
@@ -98,19 +98,20 @@ internal static class Program
     static bool GetBool(Dictionary<string,string?> map, string key, bool fallback)
         => bool.TryParse(Get(map, key), out var value) ? value : fallback;
 
-    static List<string> GetStringList(Dictionary<string,string?> map, string key)
+    static List<string> GetStringListBase64(Dictionary<string,string?> map, string key)
     {
-        var raw = Get(map, key);
-        if (string.IsNullOrWhiteSpace(raw)) return new List<string>();
+        var encoded = Get(map, key);
+        if (string.IsNullOrWhiteSpace(encoded)) return new List<string>();
         try
         {
+            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
             return JsonSerializer.Deserialize<List<string>>(raw, Json)
                 ?.Where(x => !string.IsNullOrWhiteSpace(x))
                 .ToList() ?? new List<string>();
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is FormatException or JsonException)
         {
-            throw new ArgumentException($"--{key} must be a JSON array of strings.", ex);
+            throw new ArgumentException($"--{key} must be base64-encoded JSON containing an array of strings.", ex);
         }
     }
 
