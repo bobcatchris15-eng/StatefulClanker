@@ -5,8 +5,8 @@ $plannerProject=Join-Path $repo 'src\StatefulClanker.Planner\StatefulClanker.Pla
 $mockCmd=Join-Path $PSScriptRoot 'MockProvider.cmd'
 $dotnet=Get-Command dotnet -ErrorAction SilentlyContinue
 if(-not$dotnet){throw 'dotnet SDK is required for PlanningRuntime.Tests.ps1'}
-function Invoke-Planner([string[]]$Args){
-    $raw=& $dotnet.Source run --project $plannerProject -- @Args 2>&1|Out-String
+function Invoke-Planner([string[]]$PlannerArgs){
+    $raw=& $dotnet.Source run --project $plannerProject -- @PlannerArgs 2>&1|Out-String
     if($LASTEXITCODE-ne0){throw "Planner command failed: $raw"}
     $r=$raw|ConvertFrom-Json
     if(-not[bool]$r.ok){throw [string]$r.error}
