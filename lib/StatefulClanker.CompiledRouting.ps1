@@ -12,7 +12,7 @@ function Get-SCProjectRoutingAllowlist {
 }
 
 function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage,[string]$ParentAgentId=$null,$Compilation=$null,[string]$WorkerSessionId=$null,[string]$ContinuationMessage=$null,[string]$EndpointOverride=$null,[string]$ConnectionOverride=$null) {
-    $allowlist=Get-SCProjectRoutingAllowlist
+    $allowlist=@(Get-SCProjectRoutingAllowlist)
     $routeSnapshot=Get-SCRouteSnapshotReceipt
     Set-SCProperty $routeSnapshot 'router' 'compiled'
 

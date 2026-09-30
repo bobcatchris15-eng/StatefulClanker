@@ -4,6 +4,7 @@ $repo=Split-Path -Parent $PSScriptRoot
 function Assert-True([bool]$Condition,[string]$Message){if(-not$Condition){throw "COMPILED ROUTER BRIDGE TEST FAILED: $Message"}}
 
 . (Join-Path $repo 'lib\StatefulClanker.CompiledRouting.ps1')
+$realAllowlistFunction=${function:Get-SCProjectRoutingAllowlist}
 
 function Get-SCConfig { return [pscustomobject]@{routing=[pscustomobject]@{maxRouteAttempts=6;maxRouteWaitSeconds=20}} }
 function Get-SCProjectRoutingAllowlist { return @('a::m1','b::m2') }
@@ -62,3 +63,41 @@ Assert-True (@($receipt.routeHistory).Count-eq2) 'Router route history was not p
 Assert-True ([string]$script:lastPin.endpoint-eq'pool:b::m2') 'Final successful endpoint was not retained as soft session affinity.'
 Assert-True (@($script:events|Where-Object{$_.type-eq'routing.failover_succeeded'}).Count-eq1) 'Transparent failover success was not surfaced as telemetry.'
 Write-Host 'PASS: PowerShell delegates endpoint selection and failover to ClankerRouter.'
+
+Write-Host '  BRIDGE 3: real project allowlists retain negotiation and worker argument shape under StrictMode'
+# Restore production parsing after the earlier bridge tests' fixed allowlist double.
+${function:Get-SCProjectRoutingAllowlist}=$realAllowlistFunction
+function Get-SCConfig { return $script:allowlistConfig }
+Set-StrictMode -Version 2.0
+$allowlistCases=@(
+    @{name='missing routing';config=[pscustomobject]@{};expected=@()},
+    @{name='missing endpoints';config=[pscustomobject]@{routing=[pscustomobject]@{}};expected=@()},
+    @{name='empty endpoints';config=[pscustomobject]@{routing=[pscustomobject]@{endpoints=@()}};expected=@()},
+    @{name='singleton';config=[pscustomobject]@{routing=[pscustomobject]@{endpoints=@('a::m1')}};expected=@('a::m1')},
+    @{name='multiple';config=[pscustomobject]@{routing=[pscustomobject]@{endpoints=@('a::m1','b::m2')}};expected=@('a::m1','b::m2')}
+)
+$allowlistFailures=@()
+foreach($case in $allowlistCases){
+    $script:allowlistConfig=$case.config
+    $script:routerCalls=@()
+    $script:providerCalls=0
+    $script:seenRecord=$null
+    try{
+        $caseReceipt=Invoke-SCProviderViaCompiledRouter $task 'do work' 'run' $null $null 'ws-bridge' $null
+        Assert-True ($caseReceipt.exitCode-eq0) "$($case.name): dispatch failed."
+        Assert-True ($script:routerCalls.Count-eq1 -and $script:providerCalls-eq1) "$($case.name): expected one negotiation and provider invocation."
+        $expectedArgs=@('negotiate','--preferred','pool:a::m1')
+        if($case.expected.Count-gt0){$expectedArgs+=@('--endpoints',($case.expected-join','))}
+        Assert-True (($script:routerCalls[0]-join '|')-ceq($expectedArgs-join '|')) "$($case.name): negotiation changed endpoint arguments."
+        $actual=$script:seenRecord.config.allowedEndpoints
+        Assert-True ($actual -is [array]) "$($case.name): allowedEndpoints must be an actual array."
+        Assert-True ($actual.Count-eq$case.expected.Count) "$($case.name): allowedEndpoints count changed."
+        Assert-True (($actual-join '|')-ceq($case.expected-join '|')) "$($case.name): allowedEndpoints values changed."
+        Write-Host "    PASS: $($case.name)"
+    }catch{
+        $allowlistFailures+=,"$($case.name): $($_.Exception.Message)"
+        Write-Host "    FAIL: $($allowlistFailures[-1])"
+    }
+}
+Assert-True ($allowlistFailures.Count-eq0) ($allowlistFailures-join '; ')
+Write-Host 'PASS: real allowlists dispatch with exact negotiation arguments and worker arrays.'
