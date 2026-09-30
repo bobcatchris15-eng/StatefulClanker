@@ -19,9 +19,13 @@ StatefulClanker's routing authority is moving out of per-dispatch PowerShell sta
 - preferred worker-session route affinity with safe migration,
 - and the live routing snapshot used by the Overview page.
 
-It does **not** own inference protocol execution yet. Existing PowerShell provider adapters still issue the actual model request and maintain worker transcript/session semantics. PowerShell asks the compiled router for a lease, invokes the selected provider, then reports success or failure back to the router.
+The router also owns inference protocol execution through its provider adapters. PowerShell owns worker tools and durable transcript/session semantics and submits normalized inference requests to the router.
 
-This deliberately creates a strangler boundary: routing can move to compiled code without rewriting every already-working provider adapter at once.
+Successful inference responses are read completely before adapter parsing. Only diagnostic excerpts are bounded (4,096 characters); truncating the parsing input would corrupt valid large content or tool arguments. A genuinely malformed response is a request-scoped adapter diagnosis and does not by itself quarantine a provider.
+
+Worker-session endpoint pins are advisory preferences. When a remembered endpoint is no longer permitted or eligible, routing may select another compatible endpoint inside the current project allowlist. Explicit operator endpoint overrides remain strict and fail if excluded; connection constraints remain enforced. Missing or empty project allowlists impose no additional endpoint restriction, and a singleton allowlist is handled as an array.
+
+MCP may itself be hosted by Windows PowerShell, but harness child processes require PowerShell 7 or newer. The MCP bridge resolves a supported `pwsh` executable instead of inheriting a Windows PowerShell 5.1 host.
 
 ## Machine state
 
@@ -63,11 +67,11 @@ Failures intentionally poison the smallest justified scope:
 | Failure | Scope | Behavior |
 | --- | --- | --- |
 | HTTP 429 / rate limit / quota window | endpoint | Cool only that provider/model endpoint. Sibling models stay eligible. |
-| capacity / model unavailable / malformed protocol reply | endpoint | Retire the affected model temporarily. |
+| capacity / model unavailable | endpoint | Retire the affected model temporarily. |
 | auth / permission / configuration | connection | Quarantine every endpoint using that credential/config until configuration changes. |
 | billing exhausted | connection | Cool the credential and periodically allow a real request to test recovery. |
 | timeout / server error | connection initially | Back off the connection. Independent corroborating connection failures may degrade the provider service. |
-| request/session incompatibility | request | Do not poison endpoint health. |
+| request/session incompatibility / malformed inference response | request | Do not poison endpoint health. |
 
 A service-wide outage requires corroborating evidence. A 401, billing failure, model error, or other credential-specific failure from a service probe is **not** treated as evidence that every independent account on that provider is down.
 
@@ -143,6 +147,10 @@ Project-local CLI providers remain available only when explicitly requested as c
 `STATEFULCLANKER_DISABLE_COMPILED_ROUTER=1` disables automatic compiled routing for diagnosis; it does not enable a legacy router.
 
 ## Packaging
+
+Build and test updates outside the live installation. A new client executable can still contact an old daemon because the named pipe is keyed by machine state root, not executable path; isolated tests must use a temporary `SC_ROUTER_ROOT`.
+
+For deployment, pause dispatch across affected projects and wait for active inference and worker leases to drain. Back up the router and changed harness/MCP files, stop the idle daemon, replace files, and verify the new daemon PID and artifact hash. Restart MCP and any harness process that already loaded changed PowerShell functions. Embedded Pi can recreate a stopped MCP child on its next tool call without discarding its persisted conversation. Preserve existing project holds and pause state; deployment is not permission to resume tasks. Keep the old file bundle for rollback.
 
 The Windows installer publishes `StatefulClanker.Router.exe` as a self-contained win-x64 binary under:
 
