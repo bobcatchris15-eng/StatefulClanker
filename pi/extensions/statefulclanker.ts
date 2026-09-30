@@ -842,6 +842,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
   let cursor = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
   let delivering = false;
+  let manualQueuedForRoot: string | null = null;
 
   const ensureClient = (cwd: string): StdioMcpClient => {
     const nextRoot = projectRoot(cwd) ?? resolve(cwd);
