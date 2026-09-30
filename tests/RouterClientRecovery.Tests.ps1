@@ -62,6 +62,3 @@ foreach(var mode in new[]{"startup-timeout","startup-disconnect","timeout","disc
 } finally {
     if(Test-Path -LiteralPath $temp){Remove-Item -LiteralPath $temp -Recurse -Force}
 }
-
-
-
