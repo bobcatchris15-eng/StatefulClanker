@@ -704,7 +704,7 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode,$Provid
                 throw $ex
             }
             $usage=$data.usage
-            return [pscustomobject][ordered]@{
+            $result=[pscustomobject][ordered]@{
                 model=if($usage-and$usage.PSObject.Properties['model']){[string]$usage.model}else{[string]$data.model}
                 usage=[pscustomobject][ordered]@{
                     prompt_tokens=if($usage){[long]$usage.promptTokens}else{0L}
@@ -720,6 +720,8 @@ function Invoke-SCApiChat($Connection,$Messages,$Tools,[string]$ToolMode,$Provid
                 routerRouteAttempts=[int]$data.routeAttempts
                 routerRouteHistory=@($data.routeHistory)
             }
+            if($data.PSObject.Properties['inferenceAttempts']){$result|Add-Member -NotePropertyName routerInferenceAttempts -NotePropertyValue @($data.inferenceAttempts)}
+            return $result
         }finally{
             Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
         }
@@ -797,14 +799,33 @@ function Get-SCApiUsageValue($Usage,[string[]]$Names) {
     foreach($name in $Names){if($Usage.PSObject.Properties[$name]){try{return [long]$Usage.$name}catch{}}}
     return 0L
 }
+function Add-SCRouterInferenceUsage($Accumulator,$Diagnostic) {
+    if($null-eq$Accumulator-or$null-eq$Diagnostic){return}
+    foreach($attempt in @($Diagnostic.inferenceAttempts)){
+        if($null-eq$attempt){continue}
+        $attemptUsage=$attempt.usage
+        $response=[pscustomobject]@{
+            model=if($attemptUsage){[string]$attemptUsage.model}else{''}
+            usage=if($attemptUsage){[pscustomobject]@{prompt_tokens=[long]$attemptUsage.promptTokens;completion_tokens=[long]$attemptUsage.completionTokens;total_tokens=[long]$attemptUsage.totalTokens}}else{$null}
+            usageReported=($attemptUsage-and[bool]$attemptUsage.reported)
+        }
+        Add-SCApiUsage $Accumulator $response
+    }
+}
 function Add-SCApiUsage($Accumulator,$Response) {
     if($null-eq$Accumulator-or$null-eq$Response){return}
-    $model=if($Response.PSObject.Properties['model']-and-not[string]::IsNullOrWhiteSpace([string]$Response.model)){[string]$Response.model}elseif($Accumulator.ContainsKey('fallbackModel')){[string]$Accumulator.fallbackModel}else{''}
-    $prompt=0L;$completion=0L;$total=0L;$reported=$false
-    if($Response.PSObject.Properties['usage']-and$Response.usage){$reported=$true;$prompt=Get-SCApiUsageValue $Response.usage @('prompt_tokens','input_tokens');$completion=Get-SCApiUsageValue $Response.usage @('completion_tokens','output_tokens');$total=Get-SCApiUsageValue $Response.usage @('total_tokens');if($total-le0-and($prompt-gt0-or$completion-gt0)){$total=$prompt+$completion}}
-    elseif($Response.PSObject.Properties['usageMetadata']-and$Response.usageMetadata){$reported=$true;$prompt=Get-SCApiUsageValue $Response.usageMetadata @('promptTokenCount');$completion=Get-SCApiUsageValue $Response.usageMetadata @('candidatesTokenCount');$total=Get-SCApiUsageValue $Response.usageMetadata @('totalTokenCount');if($total-le0-and($prompt-gt0-or$completion-gt0)){$total=$prompt+$completion}}
-    $Accumulator.apiRequests=[long]$Accumulator.apiRequests+1;if($reported){$Accumulator.usageReports=[long]$Accumulator.usageReports+1};$Accumulator.promptTokens=[long]$Accumulator.promptTokens+$prompt;$Accumulator.completionTokens=[long]$Accumulator.completionTokens+$completion;$Accumulator.totalTokens=[long]$Accumulator.totalTokens+$total
-    if(-not[string]::IsNullOrWhiteSpace($model)){$map=$Accumulator.modelUsage;if(-not$map.ContainsKey($model)){$map[$model]=[ordered]@{model=$model;requests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L}};$row=$map[$model];$row.requests=[long]$row.requests+1;if($reported){$row.usageReports=[long]$row.usageReports+1};$row.promptTokens=[long]$row.promptTokens+$prompt;$row.completionTokens=[long]$row.completionTokens+$completion;$row.totalTokens=[long]$row.totalTokens+$total}
+    $hasAttempts=[bool]$Response.PSObject.Properties['routerInferenceAttempts']
+    if($hasAttempts){
+        Add-SCRouterInferenceUsage $Accumulator ([pscustomobject]@{inferenceAttempts=@($Response.routerInferenceAttempts)})
+    }else{
+        $model=if($Response.PSObject.Properties['model']-and-not[string]::IsNullOrWhiteSpace([string]$Response.model)){[string]$Response.model}elseif($Accumulator.ContainsKey('fallbackModel')){[string]$Accumulator.fallbackModel}else{''}
+        $prompt=0L;$completion=0L;$total=0L;$reported=$false
+        if($Response.PSObject.Properties['usage']-and$Response.usage){$reported=$true;$prompt=Get-SCApiUsageValue $Response.usage @('prompt_tokens','input_tokens');$completion=Get-SCApiUsageValue $Response.usage @('completion_tokens','output_tokens');$total=Get-SCApiUsageValue $Response.usage @('total_tokens');if($total-le0-and($prompt-gt0-or$completion-gt0)){$total=$prompt+$completion}}
+        elseif($Response.PSObject.Properties['usageMetadata']-and$Response.usageMetadata){$reported=$true;$prompt=Get-SCApiUsageValue $Response.usageMetadata @('promptTokenCount');$completion=Get-SCApiUsageValue $Response.usageMetadata @('candidatesTokenCount');$total=Get-SCApiUsageValue $Response.usageMetadata @('totalTokenCount');if($total-le0-and($prompt-gt0-or$completion-gt0)){$total=$prompt+$completion}}
+        if($Response.PSObject.Properties['usageReported']){$reported=[bool]$Response.usageReported}
+        $Accumulator.apiRequests=[long]$Accumulator.apiRequests+1;if($reported){$Accumulator.usageReports=[long]$Accumulator.usageReports+1};$Accumulator.promptTokens=[long]$Accumulator.promptTokens+$prompt;$Accumulator.completionTokens=[long]$Accumulator.completionTokens+$completion;$Accumulator.totalTokens=[long]$Accumulator.totalTokens+$total
+        if(-not[string]::IsNullOrWhiteSpace($model)){$map=$Accumulator.modelUsage;if(-not$map.ContainsKey($model)){$map[$model]=[ordered]@{model=$model;requests=0L;usageReports=0L;promptTokens=0L;completionTokens=0L;totalTokens=0L}};$row=$map[$model];$row.requests=[long]$row.requests+1;if($reported){$row.usageReports=[long]$row.usageReports+1};$row.promptTokens=[long]$row.promptTokens+$prompt;$row.completionTokens=[long]$row.completionTokens+$completion;$row.totalTokens=[long]$row.totalTokens+$total}
+    }
     if($Response.PSObject.Properties['routerEndpoint'] -and $Response.routerEndpoint){
         $Accumulator.lastEndpoint=[string]$Response.routerEndpoint
         $Accumulator.lastConnection=[string]$Response.routerConnection
@@ -1350,6 +1371,7 @@ function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$Provid
         try{
             if($_.Exception-and$_.Exception.Data-and$_.Exception.Data.Contains('SCInferenceDiagnostic')){
                 $inferenceDiagnostic=$_.Exception.Data['SCInferenceDiagnostic']
+                if($inferenceDiagnostic.PSObject.Properties['inferenceAttempts']){Add-SCRouterInferenceUsage $usage $inferenceDiagnostic}
             }
         }catch{}
         $stderr=$_|Out-String
