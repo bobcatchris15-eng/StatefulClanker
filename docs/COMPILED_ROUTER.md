@@ -25,6 +25,12 @@ Successful inference responses are read completely before adapter parsing. Only 
 
 Worker-session endpoint pins are advisory preferences. When a remembered endpoint is no longer permitted or eligible, routing may select another compatible endpoint inside the current project allowlist. Explicit operator endpoint overrides remain strict and fail if excluded; connection constraints remain enforced. Missing or empty project allowlists impose no additional endpoint restriction, and a singleton allowlist is handled as an array.
 
+Worker sessions retain their persisted tool protocol when resumed. Text mode executes authorized tools through JSON commands and can run on native-capable models too. Native transcripts require native-tool endpoints; if none is available, routing defers rather than changing the transcript protocol. A catalog entry with `supportsTools: false` therefore does not exclude it from text-mode workers.
+
+OpenAI-compatible requests omit absent optional tool fields instead of emitting null. Actual assistant tool calls and tool-result identifiers remain present, and nullable assistant content is preserved.
+
+Endpoint diagnostics allow the provider's 45-second response budget plus IPC overhead. Daemon startup retries apply only before a pipe connection is established; a failure after connection is returned to the caller without replaying the submitted request. `ping` also contacts the daemon and is not a stateless executable check.
+
 MCP may itself be hosted by Windows PowerShell, but harness child processes require PowerShell 7 or newer. The MCP bridge resolves a supported `pwsh` executable instead of inheriting a Windows PowerShell 5.1 host.
 
 ## Machine state
@@ -47,6 +53,8 @@ It adds:
 - `routing/leases.json`
 
 `SC_ROUTER_ROOT` may override the root for testing.
+
+Router state and pipe identities normalize absolute paths, separators, trailing separators, and Windows case aliases. The default machine root retains its existing pipe identity. Clients using a custom root should be updated together and their daemons restarted when adopting this normalization.
 
 ## Endpoint identity and concurrency
 
