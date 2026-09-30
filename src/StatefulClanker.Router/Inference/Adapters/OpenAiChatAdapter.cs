@@ -24,7 +24,7 @@ public sealed class OpenAiChatAdapter : IProviderAdapter
         var body=new Dictionary<string,object?>
         {
             ["model"]=endpoint.model,
-            ["messages"]=request.messages,
+            ["messages"]=request.messages.Select(ToWireMessage).ToArray(),
             ["max_tokens"]=Math.Clamp(request.maxOutputTokens,1,131072),
             ["stream"]=false
         };
@@ -41,6 +41,29 @@ public sealed class OpenAiChatAdapter : IProviderAdapter
             HttpMethod.Post,uri,connection,apiKey,body,
             "openai-chat",request.toolMode,request.sessionKey);
         return new AdapterRequest(message,AdapterHttp.Evidence(message));
+    }
+
+    static Dictionary<string,object?> ToWireMessage(NormalizedInferenceMessage message)
+    {
+        var wire=new Dictionary<string,object?>
+        {
+            ["role"]=message.role,
+            ["content"]=message.content
+        };
+        if(message.tool_call_id is not null) wire["tool_call_id"]=message.tool_call_id;
+        if(message.tool_calls is not null)
+            wire["tool_calls"]=message.tool_calls.Select(call=>
+            {
+                var tool=new Dictionary<string,object?>
+                {
+                    ["id"]=call.id,
+                    ["type"]=call.type,
+                    ["function"]=call.function
+                };
+                if(call.thought_signature is not null) tool["thought_signature"]=call.thought_signature;
+                return tool;
+            }).ToArray();
+        return wire;
     }
 
     public AdapterParseResult ParseSuccess(string body,EndpointEntry endpoint)
