@@ -8,7 +8,7 @@ public static class RouterNames
 {
     public static string PipeName(string root)
     {
-        var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(root))).ToLowerInvariant()[..12];
+        var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(RouterRoot.Identity(root)))).ToLowerInvariant()[..12];
         return "StatefulClanker.Router.v1."+hash;
     }
 }

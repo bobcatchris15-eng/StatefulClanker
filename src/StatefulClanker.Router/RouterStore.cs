@@ -25,10 +25,10 @@ public sealed class RouterStore
 
     public RouterStore(string? root=null)
     {
-        Root = root ?? Environment.GetEnvironmentVariable("SC_ROUTER_ROOT")
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "StatefulClanker");
+        Root = RouterRoot.Normalize(root ?? Environment.GetEnvironmentVariable("SC_ROUTER_ROOT")
+            ?? RouterRoot.Default);
         Directory.CreateDirectory(RoutingDir);
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Root))).ToLowerInvariant()[..16];
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(RouterRoot.Identity(Root)))).ToLowerInvariant()[..16];
         _mutex = new Mutex(false, "Local\\StatefulClankerRouterState-" + hash);
     }
 

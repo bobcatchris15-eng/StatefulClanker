@@ -12,9 +12,10 @@ public sealed class SignalStore
 
     public SignalStore(string routerRoot)
     {
-        _dir=Path.Combine(routerRoot,"routing","signals");
+        var root=RouterRoot.Normalize(routerRoot);
+        _dir=Path.Combine(root,"routing","signals");
         Directory.CreateDirectory(_dir);
-        var hash=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(routerRoot))).ToLowerInvariant()[..16];
+        var hash=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(RouterRoot.Identity(root)))).ToLowerInvariant()[..16];
         _mutex=new Mutex(false,"Local\\StatefulClankerRouterSignals-"+hash);
     }
 
