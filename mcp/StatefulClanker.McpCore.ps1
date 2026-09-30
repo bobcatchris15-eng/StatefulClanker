@@ -5,6 +5,7 @@ $script:McpVersion = '0.8.21'
 $script:McpProtocol = '2025-06-18'
 $script:McpHarness = Join-Path (Split-Path -Parent $PSScriptRoot) 'StatefulClanker.ps1'
 $script:McpDefaultProject = $null
+$script:McpPwshPath = $null
 
 function Set-McpDefaultProject([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return }
@@ -203,13 +204,25 @@ function ConvertTo-McpWindowsArg($Value) {
 }
 
 function Get-McpPwshPath {
-    $self = (Get-Process -Id $PID).Path
-    if (-not [string]::IsNullOrWhiteSpace($self)) { return $self }
-    $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    $cmd = Get-Command powershell -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    throw 'Could not locate a PowerShell host to run the StatefulClanker CLI.'
+    if ($script:McpPwshPath) { return $script:McpPwshPath }
+    if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -ge 7) {
+        $self = (Get-Process -Id $PID).Path
+        if (-not [string]::IsNullOrWhiteSpace($self)) {
+            $script:McpPwshPath = $self
+            return $self
+        }
+    }
+    $cmd = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) {
+        try {
+            $version = & $cmd.Source -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.Major' 2>$null
+            if ($LASTEXITCODE -eq 0 -and @($version).Count -eq 1 -and [int]$version -ge 7) {
+                $script:McpPwshPath = $cmd.Source
+                return $script:McpPwshPath
+            }
+        } catch { }
+    }
+    throw 'StatefulClanker CLI requires PowerShell 7 or newer. Install PowerShell 7 and ensure pwsh is on PATH, then restart the MCP server.'
 }
 
 <# Quote a value as a PowerShell single-quoted literal. #>
