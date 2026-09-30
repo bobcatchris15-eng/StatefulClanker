@@ -689,6 +689,9 @@ function Retry-SCTask([string]$Id) {
     $task.status='ready'
     $task.blockReason=$null
     Set-SCProperty $task 'retryDisposition' $null
+    Set-SCProperty $task 'latestValidationId' $null
+    Set-SCProperty $task 'routingNotBefore' $null
+    Set-SCProperty $task 'lastRoutingError' $null
     Save-SCTask $task
     if($was-eq'complete'-or$was-eq'stale'){Invalidate-SCDependents $Id 'upstream task retried'}
     Update-SCReadiness

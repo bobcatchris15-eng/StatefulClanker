@@ -119,22 +119,77 @@ function New-SCWorktree([string]$StateRoot, [string]$TaskId) {
     $path = Join-Path $root $slug
     $branch = "sc/task/$slug"
 
-    if (Test-Path -LiteralPath $path) { Remove-SCWorktree $StateRoot $TaskId }
+    if ((Test-Path -LiteralPath $path) -or (Test-SCBranchExists $StateRoot $branch)) { Remove-SCWorktree $StateRoot $TaskId }
     Remove-SCBranchIfExists $StateRoot $branch
 
-    $result=Invoke-SCGitCapture $StateRoot @('worktree','add','-b',$branch,$path,'HEAD')
+    $base=Invoke-SCGitCapture $StateRoot @('rev-parse','HEAD')
+    if($base.exitCode-ne0){throw "Cannot resolve worktree base: $($base.output)"}
+    $baseCommit=$base.output.Trim()
+    $result=Invoke-SCGitCapture $StateRoot @('worktree','add','-b',$branch,$path,$baseCommit)
     if ($result.exitCode -ne 0) { throw "git worktree add failed for $TaskId : $($result.output)" }
-    return [ordered]@{ taskId = $TaskId; path = (Resolve-Path -LiteralPath $path).Path; branch = $branch }
+    $worktree=[ordered]@{taskId=$TaskId;path=(Resolve-Path -LiteralPath $path).Path;branch=$branch;baseCommit=$baseCommit}
+    Write-SCJson (Join-Path $StateRoot ".statefulclanker/worktree-bases/$slug.json") $worktree
+    return $worktree
+}
+
+function Get-SCWorktreeCandidate([string]$StateRoot,$Worktree) {
+    $base=$Worktree.baseCommit
+    if(-not$base){
+        $slug=([string]$Worktree.taskId -replace '[^A-Za-z0-9_.-]','-')
+        $saved=Read-SCJson (Join-Path $StateRoot ".statefulclanker/worktree-bases/$slug.json")
+        if($saved){$base=$saved.baseCommit}
+    }
+    if(-not$base){
+        $common=Invoke-SCGitCapture $StateRoot @('merge-base','HEAD',[string]$Worktree.branch)
+        if($common.exitCode-ne0){throw "Cannot resolve candidate base: $($common.output)"}
+        $base=$common.output.Trim()
+    }
+    $tip=Invoke-SCGitCapture $StateRoot @('rev-parse',[string]$Worktree.branch)
+    if($tip.exitCode-ne0){throw "Cannot resolve candidate branch: $($tip.output)"}
+    $diff=Invoke-SCGitCapture $StateRoot @('diff','--name-only',[string]$base,$tip.output.Trim(),'--')
+    if($diff.exitCode-ne0){throw "Cannot inspect candidate changes: $($diff.output)"}
+    $files=@($diff.output -split '\r?\n'|Where-Object{-not[string]::IsNullOrWhiteSpace($_)})
+    return [ordered]@{baseCommit=[string]$base;commit=$tip.output.Trim();changedFiles=$files;material=($files.Count-gt0)}
+}
+
+function Preserve-SCWorktreeCandidate([string]$StateRoot,$Worktree) {
+    # Commit dirty bytes before teardown. A clean checkout may already contain
+    # worker commits; absence of a new commit never proves absence of a candidate.
+    if(Test-Path -LiteralPath $Worktree.path){[void](Save-SCWorktreeWork $Worktree "Preserve $($Worktree.taskId) before teardown")}
+    if(-not(Test-SCBranchExists $StateRoot ([string]$Worktree.branch))){return $null}
+    $candidate=Get-SCWorktreeCandidate $StateRoot $Worktree
+    $ancestor=Invoke-SCGitCapture $StateRoot @('merge-base','--is-ancestor',[string]$candidate.commit,'HEAD')
+    if($ancestor.exitCode-notin@(0,1)){throw "Cannot check candidate integration: $($ancestor.output)"}
+    $task=$null;try{$task=Get-SCTask ([string]$Worktree.taskId)}catch{}
+    $credited=$task-and[string]$task.status-eq'complete'
+    if(-not$candidate.material-or($ancestor.exitCode-eq0-and$credited)){return $null}
+    $slug=([string]$Worktree.taskId -replace '[^A-Za-z0-9_.-]','-')
+    $id=New-SCId 'candidate'
+    $ref="preserved/$slug/$id"
+    $res=Invoke-SCGitCapture $StateRoot @('branch',$ref,[string]$candidate.commit)
+    if($res.exitCode-ne0){throw "Cannot preserve candidate ref: $($res.output)"}
+    $record=[ordered]@{schemaVersion=1;id=$id;taskId=[string]$Worktree.taskId;createdAt=[datetimeoffset]::UtcNow.ToString('o');authority='observed';branch=$ref;commit=$candidate.commit;baseCommit=$candidate.baseCommit;changedFiles=@($candidate.changedFiles);integrated=($ancestor.exitCode-eq0);taskStatus=if($task){[string]$task.status}else{'unknown'};runId=if($task){$task.latestRunId}else{$null};validationId=if($task){$task.latestValidationId}else{$null};completionCredited=[bool]$credited}
+    Write-SCJson (Join-Path $StateRoot ".statefulclanker/preserved-candidates/$id.json") $record
+    if($task){Set-SCProperty $task 'latestPreservedCandidateId' $id;Save-SCTask $task}
+    Add-SCEvent 'worktree.candidate.preserved' "Preserved candidate for $($Worktree.taskId); validation and integration status remain explicit." $record
+    return $record
 }
 
 function Remove-SCWorktree([string]$StateRoot, [string]$TaskId, [switch]$KeepBranch) {
     $slug = ($TaskId -replace '[^A-Za-z0-9_.-]', '-')
     $path = Join-Path (Get-SCWorktreeRoot $StateRoot) $slug
     $branch = "sc/task/$slug"
+    $expectedRoot=[IO.Path]::GetFullPath((Get-SCWorktreeRoot $StateRoot)).TrimEnd([char[]]'\/')+[IO.Path]::DirectorySeparatorChar
+    if(-not[IO.Path]::GetFullPath($path).StartsWith($expectedRoot,[StringComparison]::OrdinalIgnoreCase)){throw 'Worktree cleanup path escapes the worktree root.'}
+    # Fail closed: if saving bytes or their durable recovery record fails, keep
+    # the worktree/ref and let the caller report the preservation failure.
+    if((Test-Path -LiteralPath $path)-or(Test-SCBranchExists $StateRoot $branch)){
+        [void](Preserve-SCWorktreeCandidate $StateRoot ([pscustomobject]@{taskId=$TaskId;path=$path;branch=$branch;baseCommit=$null}))
+    }
     if (Test-Path -LiteralPath $path) {
         $result=Invoke-SCGitCapture $StateRoot @('worktree','remove','--force',$path)
         if ($result.exitCode -ne 0 -and (Test-Path -LiteralPath $path)) {
-            Remove-Item -Recurse -Force -LiteralPath $path -ErrorAction SilentlyContinue
+            throw "Worktree cleanup failed; candidate and worktree retained: $($result.output)"
         }
     }
     & git -C $StateRoot worktree prune 2>$null | Out-Null
@@ -372,6 +427,7 @@ function Complete-SCParallelChild([string]$StateRoot, $Run, [switch]$NoMerge) {
     }
     try {
         $entry.committed = Save-SCWorktreeWork $Run.worktree "$($Run.taskId): $($task.title)"
+        if(-not$entry.committed){$entry.committed=[bool](Get-SCWorktreeCandidate $StateRoot $Run.worktree).material}
         if (-not $entry.committed) {
             $entry.reason = 'validated but changed no files - check the provider could actually write'
             Stop-SCUnintegratedTask $Run.taskId $entry.reason

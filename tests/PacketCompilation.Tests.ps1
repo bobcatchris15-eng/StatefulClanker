@@ -100,6 +100,15 @@ try{
     Assert-True ($continuationText-match'ACCEPTANCE_FAILED') 'Projection-backed continuation text omitted the correction reason.'
     Assert-True ((New-SCWorkerPrompt $after)-match[regex]::Escape([string]$after.ir.execution.projectionHash)) 'Cold worker prompt did not contain the same execution projection used by retry continuation.'
 
+    Assert-True ($after.runtimeIdentity.harnessSha256-eq(Get-SCFileHashValue $harness)) 'receipt does not identify actual harness file'
+    $errorSignal=Publish-SCExecutionSignal -Kind validation_error -Task $task4 -Component validator -Scope task -Authority observed -Payload @{verdict='ERROR';summary='reviewer offline'}
+    Set-SCProperty $task4 'latestPreservedCandidateId' 'preserved-proof'
+    Write-SCJson (Get-SCPath 'preserved-candidates/preserved-proof.json') @{id='preserved-proof';taskId=$task4.id;commit='candidate-proof';branch='preserved/proof';authority='observed';taskStatus='needs_rework'}
+    $errorPacket=New-SCCompilation $task4
+    Assert-True ($errorPacket.ir.execution.acceptanceFeedback.kind-eq'validation_error') 'compiled packet lost infrastructure acceptance feedback'
+    $errorContinuation=New-SCWorkerContinuationMessage $errorPacket
+    Assert-True ($errorContinuation-match'candidate-proof'-and$errorContinuation-match'reviewer offline') 'retry continuation dropped preserved candidate or reviewer ERROR'
+    Assert-True ($after.runtimeIdentity.filesOnDisk.Count-gt0-and$after.runtimeIdentity.identityBasis-match'files on disk') 'runtime identity missing qualified library hashes'
     $task4.instruction='materially changed task definition'
     Save-SCTask $task4
     $staleProjection=Get-SCExecutionProjection $task4

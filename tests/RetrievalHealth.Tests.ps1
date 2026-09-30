@@ -26,12 +26,22 @@ try{
     Assert-True ([string]$packet.items[0].path-eq'src\allowed.txt') 'worktree file was not projected relative to work root'
     Assert-True ([int]$packet.health.excludedByBoundaryCount-eq1) 'control-state exclusion was not counted'
     Assert-True (-not[bool]$packet.health.allUsefulRetrievalCollapsed) 'mixed retrieval incorrectly reported collapse'
+    Assert-True ($packet.health.deliveryState-eq'delivered') 'successful delivery state missing'
 
     $task2=[pscustomobject]@{id='t-2';title='blocked';instruction='read';acceptance=@();dependsOn=@();relations=@();retrieval=@($secret);evidence=@();sources=@();provider=$null;role='worker';humanGate=$false}
     Write-SCJson (Get-SCPath 'tasks/t-2.json') $task2
     $packet2=Get-SCRetrievalPacket $task2
     Assert-True ([bool]$packet2.health.allUsefulRetrievalCollapsed) 'fully excluded retrieval did not report collapse'
+    Assert-True ($packet2.health.deliveryState-eq'boundary-excluded') 'boundary exclusion confused with unmatched selector'
+    $task2.retrieval=@();$none=Get-SCRetrievalPacket $task2
+    Assert-True ($none.health.deliveryState-eq'not-requested'-and-not$none.health.allUsefulRetrievalCollapsed) 'absent selectors reported as failure'
+    $task2.retrieval=@((Join-Path $workRoot 'missing.txt'));$missing=Get-SCRetrievalPacket $task2
+    Assert-True ($missing.health.deliveryState-eq'unmatched') 'unmatched selector diagnosis missing'
+    New-Item -ItemType Directory -Force -Path (Join-Path $workRoot '.git')|Out-Null
+    'private'|Set-Content (Join-Path $workRoot '.git/config')
+    $task2.retrieval=@((Join-Path $workRoot '.git/config'));$private=Get-SCRetrievalPacket $task2
+    Assert-True ($private.health.deliveryState-eq'boundary-excluded') 'worker-local control file escaped retrieval boundary'
     $signals=@(Get-SCSignalsForAudience task 't-2' 'current_attempt')
-    Assert-True (@($signals|Where-Object{$_.kind-eq'retrieval_anomaly'}).Count-eq1) 'retrieval anomaly was not addressed to the task'
+    Assert-True (@($signals|Where-Object{$_.kind-eq'retrieval_anomaly'}).Count-eq3) 'retrieval anomalies were not addressed to the task'
     Write-Host 'PASS: worktree retrieval is allowed inside state-root worktrees while control state stays excluded.'
 }finally{Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue}

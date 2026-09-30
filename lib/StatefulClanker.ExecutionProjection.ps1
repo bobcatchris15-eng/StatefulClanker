@@ -7,10 +7,14 @@ function Get-SCExecutionProjection {
         $fresh=Test-SCSignalFreshness $signal $Task
         if([bool]$fresh.fresh){$signals+=$signal}
     }
-    $signals=@($signals|Sort-Object {[datetimeoffset]::Parse([string]$_.createdAt)})
+    $signals=@($signals|Sort-Object {([datetimeoffset]$_.createdAt)})
 
     $corrective=@()
+    $passed=@($signals|Where-Object{$_.kind-eq'validation_passed'}|Select-Object -Last 1)
+    $latestAcceptance=@($signals|Where-Object{$_.kind-in@('validation_passed','validator_rejection','validation_error')}|Select-Object -Last 1)
     foreach($signal in @($signals|Where-Object{[string]$_.authority-eq'corrective'})){
+        if($passed.Count-and([datetimeoffset]$signal.createdAt)-le([datetimeoffset]$passed[0].createdAt)){continue}
+        if($signal.kind-eq'validator_rejection'-and$latestAcceptance.Count-and$signal.id-ne$latestAcceptance[0].id){continue}
         $payload=Get-SCSignalValue $signal 'payload'
         $source=Get-SCSignalValue $signal 'source'
         $corrective+=,[ordered]@{
@@ -46,7 +50,7 @@ function Get-SCExecutionProjection {
     $depIds=@($Task.dependsOn|Where-Object{-not[string]::IsNullOrWhiteSpace([string]$_)})
     $cfg=Get-SCConfig
     $legacyBudget=if($cfg.PSObject.Properties['dependencyResultBudgetChars']){[int]$cfg.dependencyResultBudgetChars}else{8000}
-    $legacyShare=if($depIds.Count-gt0){[Math]::Max(256,[Math]::Floor($legacyBudget/$depIds.Count))}else{0}
+    $legacyShare=if($depIds.Count-gt0){[Math]::Max(0,[Math]::Floor($legacyBudget/$depIds.Count))}else{0}
     foreach($depId in $depIds){
         try{$dep=Get-SCTask ([string]$depId)}catch{$dep=$null}
         if($null-eq$dep){
@@ -56,6 +60,8 @@ function Get-SCExecutionProjection {
         $latestRunId=if($dep.PSObject.Properties['latestRunId']){[string]$dep.latestRunId}else{$null}
         $latestValidationId=if($dep.PSObject.Properties['latestValidationId']){[string]$dep.latestValidationId}else{$null}
         $manifest=Get-SCLatestCompletionManifest $dep
+        $manifestStatus=if($manifest){'current'}else{'missing'}
+        if($manifest-and(($manifest.PSObject.Properties['taskDefinitionHash']-and[string]$manifest.taskDefinitionHash-ne(Get-SCTaskDefinitionHash $dep))-or($manifest.PSObject.Properties['taskControlRevision']-and[int]$manifest.taskControlRevision-ne(Get-SCTaskControlRevision $dep)))){$manifestStatus='stale';$manifest=$null}
         if($manifest){
             $dependencyKnowledge+=,[ordered]@{
                 id=[string]$dep.id
@@ -65,17 +71,23 @@ function Get-SCExecutionProjection {
                 latestRunId=$latestRunId
                 latestValidationId=$latestValidationId
                 manifestId=[string]$manifest.id
+                manifestStatus=$manifestStatus
                 changedFiles=@($manifest.changedFiles)
                 artifacts=@($manifest.artifacts)
                 conclusions=@($manifest.conclusions)
                 validation=$manifest.validation
                 warningsForSuccessor=@($manifest.warningsForSuccessor)
+                uncertainties=@(Get-SCManifestField $manifest 'uncertainties')
+                negativeFindings=@(Get-SCManifestField $manifest 'negativeFindings')
+                sourceIdentity=Get-SCManifestField $manifest 'sourceIdentity'
                 evidenceRefs=@($manifest.evidenceRefs)
                 compatibilitySynthesized=$false
             }
         }else{
             $legacyResult=$null;$legacyTruncated=$false
-            if($latestRunId-and$legacyShare-gt0){
+            $receipt=$null;$legacyValidation=$null
+            if($latestValidationId){$legacyValidation=Read-SCJson (Get-SCPath ("validations/{0}.json"-f$latestValidationId))}
+            if($latestRunId){
                 try{
                     $receipt=Read-SCJson (Get-SCPath ("runs/{0}.json"-f$latestRunId))
                     if($receipt){
@@ -94,15 +106,19 @@ function Get-SCExecutionProjection {
                 latestRunId=$latestRunId
                 latestValidationId=$latestValidationId
                 manifestId=$null
+                manifestStatus=$manifestStatus
                 changedFiles=@()
                 artifacts=@()
                 conclusions=@()
-                validation=[ordered]@{id=$latestValidationId;verdict=$null}
+                validation=[ordered]@{id=$latestValidationId;verdict=Get-SCManifestField $legacyValidation 'verdict';kind=Get-SCManifestField $legacyValidation 'validationKind';rejectionReasons=@(Get-SCManifestField $legacyValidation 'rejectionReasons');acceptanceEvidence=@(Get-SCManifestField $legacyValidation 'acceptanceEvidence')}
                 warningsForSuccessor=@()
                 evidenceRefs=@()
                 compatibilitySynthesized=$true
                 legacyResult=$legacyResult
                 legacyResultTruncated=$legacyTruncated
+                exitCode=Get-SCManifestField $receipt 'exitCode'
+                candidateClaim=Get-SCManifestField $receipt 'candidateClaim'
+                contextRequests=@(Get-SCManifestField $receipt 'contextRequests')
             }
         }
     }
@@ -110,6 +126,12 @@ function Get-SCExecutionProjection {
     $lastRun=@($signals|Where-Object{[string]$_.kind-in@('worker_run_completed','worker_run_failed')}|Select-Object -Last 1)
     $lastValidation=@($signals|Where-Object{[string]$_.kind-in@('validation_passed','validator_rejection','validation_error')}|Select-Object -Last 1)
     $latestCorrection=if($corrective.Count-gt0){$corrective[-1]}else{$null}
+    $acceptanceFeedback=if($lastValidation.Count){[ordered]@{kind=[string]$lastValidation[0].kind;authority=[string]$lastValidation[0].authority;createdAt=[string]$lastValidation[0].createdAt;validationId=Get-SCSignalValue $lastValidation[0].source 'validationId';payload=$lastValidation[0].payload}}else{$null}
+    $preservedCandidates=@()
+    if($Task.PSObject.Properties['latestPreservedCandidateId']-and$Task.latestPreservedCandidateId){
+        $preserved=Read-SCJson (Get-SCPath ("preserved-candidates/{0}.json"-f$Task.latestPreservedCandidateId))
+        if($preserved){$preservedCandidates+=,$preserved}
+    }
     $continuationEvidence=@()
     foreach($item in @($corrective|Select-Object -Last 3)){
         $continuationEvidence+=@($item.evidenceRefs)
@@ -141,6 +163,8 @@ function Get-SCExecutionProjection {
             latestValidationAt=if($lastValidation.Count){[string]$lastValidation[0].createdAt}else{$null}
         }
         correctiveFeedback=@($corrective)
+        acceptanceFeedback=$acceptanceFeedback
+        preservedCandidates=@($preservedCandidates)
         priorAttemptKnowledge=@($prior)
         continuation=$continuation
         dependencyKnowledge=@($dependencyKnowledge)

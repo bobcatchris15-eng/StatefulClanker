@@ -335,7 +335,7 @@ function New-SCWorkerToolRecord([string]$Capability,[string]$WireName,[string]$D
 function Get-SCIntrinsicWorkerToolRecords($Task,[string]$Stage='worker') {
     $candidates=@(
       (New-SCWorkerToolRecord 'builtin.read_file' 'read_file' 'Read a UTF-8 text file inside the worker root.' @{type='object';properties=@{path=@{type='string'};startLine=@{type='integer'};maxLines=@{type='integer'}};required=@('path')}),
-      (New-SCWorkerToolRecord 'builtin.search_text' 'search_text' 'Search text recursively or within a path.' @{type='object';properties=@{pattern=@{type='string'};path=@{type='string'};maxResults=@{type='integer'}};required=@('pattern')}),
+      (New-SCWorkerToolRecord 'builtin.search_text' 'search_text' 'Search for a literal substring recursively or within a path. Patterns are not regular expressions. Returns matches and search coverage.' @{type='object';properties=@{pattern=@{type='string'};path=@{type='string'};maxResults=@{type='integer'}};required=@('pattern')}),
       (New-SCWorkerToolRecord 'builtin.write_file' 'write_file' 'Write complete UTF-8 text content to a file inside the worker root.' @{type='object';properties=@{path=@{type='string'};content=@{type='string'}};required=@('path','content')}),
       (New-SCWorkerToolRecord 'builtin.replace_text' 'replace_text' 'Replace one exact text block in a file. Fails unless the old text occurs exactly once.' @{type='object';properties=@{path=@{type='string'};old=@{type='string'};new=@{type='string'}};required=@('path','old','new')}),
       (New-SCWorkerToolRecord 'builtin.run_command' 'run_command' 'Run a bounded PowerShell command in the worker root. Use Windows/PowerShell syntax and Out-Null, not /dev/null; absolute file paths must remain in this worker root.' @{type='object';properties=@{command=@{type='string'};timeoutSeconds=@{type='integer'}};required=@('command')}),
@@ -343,7 +343,7 @@ function Get-SCIntrinsicWorkerToolRecords($Task,[string]$Stage='worker') {
       (New-SCWorkerToolRecord 'intent.human.read' 'read_human_intent' 'Read an authoritative durable human/source artifact by human:<id> reference. Read-only.' @{type='object';properties=@{sourceRef=@{type='string';description='human:<id> optionally with #Lx-Ly'}};required=@('sourceRef')}),
       (New-SCWorkerToolRecord 'intent.normalized.read' 'read_normalized_intent' 'Read the current orchestrator-owned normalized Intent Contract plus current direct human directives. Read-only.' @{type='object';properties=@{}}),
       (New-SCWorkerToolRecord 'rpk.record_lesson' 'record_lesson' 'Record a durable Reflexive Project Knowledge lesson (trap, correction, file relationship, API quirk, or process rule) for future workers. Do not store guesses or generic advice. Limited to a few calls per session.' @{type='object';properties=@{title=@{type='string'};body=@{type='string';description='Capped to ~1500 characters.'};paths=@{type='array';items=@{type='string'};description='Project-relative paths this lesson concerns, must resolve inside the worker root.'};tags=@{type='array';items=@{type='string'}}};required=@('title','body')}),
-      (New-SCWorkerToolRecord 'builtin.finish' 'finish' 'Submit the current work as a completion candidate. summary is required; expectedArtifacts and verification are claims for the harness to verify independently. Reviews may still use VERDICT lines in summary.' @{type='object';properties=@{summary=@{type='string'};expectedArtifacts=@{type='array';description='Exact project-relative paths that should exist in the submitted candidate; paths only, not prose.';items=@{type='string'}};verification=@{type='array';description='Commands/checks actually performed, stated compactly. Do not claim checks you did not run.';items=@{type='string'}}};required=@('summary')})
+      (New-SCWorkerToolRecord 'builtin.finish' 'finish' 'Submit the current work as a completion candidate. summary is required; expectedArtifacts and verification are claims for the harness to verify independently. Reviews may still use VERDICT lines in summary.' @{type='object';properties=@{summary=@{type='string'};expectedArtifacts=@{type='array';description='Exact project-relative paths that should exist in the submitted candidate; paths only, not prose.';items=@{type='string'}};verification=@{type='array';description='Commands/checks actually performed, stated compactly. Do not claim checks you did not run.';items=@{type='string'}};warningsForSuccessor=@{type='array';description='Advisory limitations a successor must preserve; at most 8 entries of 500 characters.';items=@{type='string'}};uncertainties=@{type='array';description='Unresolved or untested claims; advisory, not acceptance evidence.';items=@{type='string'}};negativeFindings=@{type='array';description='Ruled-out alternatives with evidence anchors; advisory.';items=@{type='string'}}};required=@('summary')})
     )
     return @($candidates|Where-Object{Test-SCWorkerCapabilityAllowed ([string]$_.capability) $Task $Stage})
 }
@@ -354,7 +354,7 @@ function Get-SCWorkerToolRecords($Task,[string]$Stage='worker') {
     }
     return @($records)
 }
-function Get-SCArgValue($ToolArgs,[string]$Name,$Default=$null){if($ToolArgs-and$ToolArgs.PSObject.Properties[$Name]){return $ToolArgs.$Name};return $Default}
+function Get-SCArgValue($ToolArgs,[string]$Name,$Default=$null){if($ToolArgs-is[System.Collections.IDictionary]){if($ToolArgs.Contains($Name)){return $ToolArgs[$Name]}}elseif($ToolArgs-and$ToolArgs.PSObject.Properties[$Name]){return $ToolArgs.$Name};return $Default}
 function Write-SCWorkerToolFailure($Task,[string]$Stage,[string]$ToolName,[string]$Result,[int]$Step) {
     if(-not$Result.StartsWith('TOOL_ERROR:')){return}
     Add-SCEvent 'worker.tool_error' $Result @{taskId=$Task.id;stage=$Stage;tool=$ToolName;step=$Step;error=$Result}
@@ -393,7 +393,31 @@ function Invoke-SCWorkerTool([string]$Name,$ToolArgs,$Task,[string]$Stage,$Regis
     if([string]$record.kind-eq'mcp'){return Invoke-SCMcpSourceTool ([string]$record.source) ([string]$record.externalTool) $ToolArgs}
     switch($Name){
       'read_file' { $path=Resolve-SCWorkerToolPath ([string](Get-SCArgValue $ToolArgs 'path')) $Task 'read_file' -Stage $Stage -WorkerSessionId $WorkerSessionId;$start=[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'startLine' 1));$max=[Math]::Min(2000,[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'maxLines' 400)));$lines=@(Get-Content -LiteralPath $path -Encoding UTF8);$slice=@($lines|Select-Object -Skip ($start-1) -First $max);return (($slice|ForEach-Object -Begin{$n=$start} -Process{"{0,5}: {1}"-f$n,$_ ;$n++})-join"`n") }
-      'search_text' { $pattern=[string](Get-SCArgValue $ToolArgs 'pattern');$rel=[string](Get-SCArgValue $ToolArgs 'path' '.');$root=Resolve-SCWorkerToolPath $rel $Task 'search_text' -Stage $Stage -WorkerSessionId $WorkerSessionId;$max=[Math]::Min(500,[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'maxResults' 100)));$files=if(Test-Path -LiteralPath $root -PathType Leaf){@((Get-Item -LiteralPath $root))}else{@(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue|Where-Object{$_.FullName -notmatch '[\\/]\.git[\\/]|[\\/]\.statefulclanker[\\/]'} )};$hits=@();foreach($f in $files){try{foreach($m in @(Select-String -LiteralPath $f.FullName -Pattern $pattern -SimpleMatch -ErrorAction Stop)){ $hits+=("{0}:{1}: {2}"-f($f.FullName.Substring((Get-SCRoot).Length).TrimStart([char[]]'\/')),$m.LineNumber,$m.Line.Trim());if($hits.Count-ge$max){break}}}catch{};if($hits.Count-ge$max){break}};return ($hits-join"`n") }
+      'search_text' {
+        $pattern=[string](Get-SCArgValue $ToolArgs 'pattern');$rel=[string](Get-SCArgValue $ToolArgs 'path' '.')
+        $root=Resolve-SCWorkerToolPath $rel $Task 'search_text' -Stage $Stage -WorkerSessionId $WorkerSessionId
+        $max=[Math]::Min(500,[Math]::Max(1,[int](Get-SCArgValue $ToolArgs 'maxResults' 100)))
+        $work=[IO.Path]::GetFullPath((Get-SCRoot)).TrimEnd([char[]]'\/')
+        $enumerationErrors=@();$excluded=0
+        $found=if(Test-Path -LiteralPath $root -PathType Leaf){@((Get-Item -LiteralPath $root))}else{@(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue -ErrorVariable enumerationErrors)}
+        $files=@($found|Where-Object{
+            $relative=[IO.Path]::GetRelativePath($work,$_.FullName)
+            if($relative-match '(^|[\\/])(\.git|\.statefulclanker)([\\/]|$)'){$excluded++;return $false}
+            return $true
+        })
+        $hits=@();$searched=0;$readErrors=0;$limited=$false
+        foreach($f in $files){
+            try{
+                $matches=@(Select-String -LiteralPath $f.FullName -Pattern $pattern -SimpleMatch -ErrorAction Stop);$searched++
+                foreach($m in $matches){
+                    if($hits.Count-ge$max){$limited=$true;break}
+                    $hits+=("{0}:{1}: {2}"-f([IO.Path]::GetRelativePath($work,$f.FullName)),$m.LineNumber,$m.Line.Trim())
+                }
+            }catch{$readErrors++}
+            if($limited){break}
+        }
+        return ConvertTo-SCJson ([ordered]@{matching='literal';matches=@($hits);filesSearched=$searched;filesExcluded=$excluded;readErrors=$readErrors;enumerationErrors=@($enumerationErrors).Count;limitReached=$limited}) 8
+      }
       'write_file' { $path=Resolve-SCWorkerToolPath ([string](Get-SCArgValue $ToolArgs 'path')) $Task 'write_file' -AllowMissing -Stage $Stage -WorkerSessionId $WorkerSessionId;Assert-SCWorkerMutablePath $path $Task 'write_file' $Stage $WorkerSessionId;$parent=Split-Path -Parent $path;if($parent-and-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null};[IO.File]::WriteAllText($path,[string](Get-SCArgValue $ToolArgs 'content'),(New-Object Text.UTF8Encoding($false)));return 'written' }
       'replace_text' { $path=Resolve-SCWorkerToolPath ([string](Get-SCArgValue $ToolArgs 'path')) $Task 'replace_text' -Stage $Stage -WorkerSessionId $WorkerSessionId;Assert-SCWorkerMutablePath $path $Task 'replace_text' $Stage $WorkerSessionId;$old=[string](Get-SCArgValue $ToolArgs 'old');$new=[string](Get-SCArgValue $ToolArgs 'new');$text=[IO.File]::ReadAllText($path);$first=$text.IndexOf($old,[StringComparison]::Ordinal);if($first-lt0){throw 'old text not found'};$second=$text.IndexOf($old,$first+$old.Length,[StringComparison]::Ordinal);if($second-ge0){throw 'old text occurs more than once'};$updated=$text.Substring(0,$first)+$new+$text.Substring($first+$old.Length);[IO.File]::WriteAllText($path,$updated,(New-Object Text.UTF8Encoding($false)));return 'replaced' }
       'run_command' { $command=[string](Get-SCArgValue $ToolArgs 'command');Assert-SCWorkerCommandSafe $command $Task $Stage $WorkerSessionId;$timeout=[int](Get-SCArgValue $ToolArgs 'timeoutSeconds' 120);return ConvertTo-SCModelText (Invoke-SCBoundedCommand $command $timeout) 6 }
@@ -407,7 +431,7 @@ function Invoke-SCWorkerTool([string]$Name,$ToolArgs,$Task,[string]$Stage,$Regis
 }
 function New-SCDirectWorkerSystemPrompt([string]$ToolMode,$Registry) {
     $available=@($Registry|ForEach-Object{"$($_.wireName) [$($_.capability)]"}) -join ', '
-    $common="You are a bounded StatefulClanker implementation worker. Complete only the supplied task. CURRENT HUMAN DIRECTIVES and normalized Intent are authoritative and read-only. You may inspect direct human artifacts and the orchestrator's normalized interpretation through authorized read-only tools when needed. Inspect before editing. Prefer small exact changes. Test when practical. Never silently reinterpret specification authority. FILESYSTEM BOUNDARY: operate only inside the current project/worktree. Do not read or write project data through parent, absolute, user-profile, temp, or other outside paths; do not mutate .statefulclanker or .git control state directly; and do not terminate StatefulClanker processes. Installed executables may live outside the project, but their file arguments must remain inside the project. Boundary violations hard-trip the operator safety latch. If materially ambiguous after inspecting available authority, finish with INTENT_QUESTION: <question> or INTENT_CONFLICT: <conflict>. If required context is missing, finish with CONTEXT_REQUEST: <specific context>. Do not plan unrelated work. When you discover a durable project-specific trap, correction, file relationship, API quirk, or process rule that future workers should know, write a concise Reflexive Project Knowledge lesson when the authorized project_lesson_write tool is available; do not store guesses or generic programming advice. When reviewing a stale lesson, confirm or reject it only after checking current project evidence. For artifact-producing tasks, do not call finish until you have actually changed the required worktree artifacts. When calling finish, include expectedArtifacts and verification when you can; those are claims that StatefulClanker will check independently before spending critic inference. Only these tools are authorized for this invocation: $available"
+    $common="You are a bounded StatefulClanker implementation worker. Complete only the supplied task. CURRENT HUMAN DIRECTIVES and normalized Intent are authoritative and read-only. You may inspect direct human artifacts and the orchestrator's normalized interpretation through authorized read-only tools when needed. Inspect before editing. Prefer small exact changes. Test when practical. Never silently reinterpret specification authority. FILESYSTEM BOUNDARY: operate only inside the current project/worktree. Do not read or write project data through parent, absolute, user-profile, temp, or other outside paths; do not mutate .statefulclanker or .git control state directly; and do not terminate StatefulClanker processes. Installed executables may live outside the project, but their file arguments must remain inside the project. Boundary violations hard-trip the operator safety latch. If materially ambiguous after inspecting available authority, finish with INTENT_QUESTION: <question> or INTENT_CONFLICT: <conflict>. If required context is missing, finish with CONTEXT_REQUEST: <specific context>. Do not plan unrelated work. When you discover a durable project-specific trap, correction, file relationship, API quirk, or process rule that future workers should know, write a concise Reflexive Project Knowledge lesson when the authorized record_lesson tool is available; do not store guesses or generic programming advice. When reviewing a stale lesson, confirm or reject it only after checking current project evidence. For artifact-producing tasks, do not call finish until you have actually changed the required worktree artifacts. When calling finish, include expectedArtifacts and verification when you can; those are claims that StatefulClanker will check independently before spending critic inference. Only these tools are authorized for this invocation: $available"
     if($ToolMode-eq'text'){return $common+"`nThis endpoint uses the text tool protocol. On every turn output exactly one compact JSON object and no markdown. Tool call: {`"tool`":`"<authorized tool name>`",`"arguments`":{...}}. Finish: {`"final`":`"summary`"}."}
     return $common
 }
@@ -919,14 +943,20 @@ function Add-SCWorkerSessionMessage([string]$SessionId,$Message) {
     $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return}
     $messages=@($s.messages);$messages+=,$Message;Set-SCProperty $s 'messages' @($messages);Save-SCWorkerSession $s
 }
-function Set-SCWorkerCandidateClaim([string]$SessionId,$Args,[string]$FallbackSummary=$null) {
+function Get-SCBoundedCandidateNotes($CandidateArgs,[string]$Name) {
+    foreach($note in @(Get-SCArgValue $CandidateArgs $Name @())|Select-Object -First 8){
+        $text=[string]$note
+        if(-not[string]::IsNullOrWhiteSpace($text)){if($text.Length-gt500){$text=$text.Substring(0,485)+' [truncated]'};$text}
+    }
+}
+function Set-SCWorkerCandidateClaim([string]$SessionId,$CandidateArgs,[string]$FallbackSummary=$null) {
     $s=Get-SCWorkerSession $SessionId;if($null-eq$s){return}
-    $summary=if($Args){[string](Get-SCArgValue $Args 'summary' $FallbackSummary)}else{$FallbackSummary}
-    $expected=if($Args){@(Get-SCArgValue $Args 'expectedArtifacts' @())}else{@()}
-    $verification=if($Args){@(Get-SCArgValue $Args 'verification' @())}else{@()}
+    $summary=if($CandidateArgs){[string](Get-SCArgValue $CandidateArgs 'summary' $FallbackSummary)}else{$FallbackSummary}
+    $expected=if($CandidateArgs){@(Get-SCArgValue $CandidateArgs 'expectedArtifacts' @())}else{@()}
+    $verification=if($CandidateArgs){@(Get-SCArgValue $CandidateArgs 'verification' @())}else{@()}
     $n=if($s.PSObject.Properties['candidateNumber']){[int]$s.candidateNumber+1}else{1}
     Set-SCProperty $s 'candidateNumber' $n
-    Set-SCProperty $s 'candidateClaim' ([pscustomobject][ordered]@{candidateNumber=$n;summary=$summary;expectedArtifacts=@($expected);verification=@($verification);submittedAt=[datetimeoffset]::UtcNow.ToString('o')})
+    Set-SCProperty $s 'candidateClaim' ([pscustomobject][ordered]@{candidateNumber=$n;summary=$summary;expectedArtifacts=@($expected);verification=@($verification);warningsForSuccessor=@(Get-SCBoundedCandidateNotes $CandidateArgs 'warningsForSuccessor');uncertainties=@(Get-SCBoundedCandidateNotes $CandidateArgs 'uncertainties');negativeFindings=@(Get-SCBoundedCandidateNotes $CandidateArgs 'negativeFindings');submittedAt=[datetimeoffset]::UtcNow.ToString('o')})
     Save-SCWorkerSession $s
 }
 function Add-SCWorkerMutationToolCall([string]$SessionId,[string]$ToolName) {

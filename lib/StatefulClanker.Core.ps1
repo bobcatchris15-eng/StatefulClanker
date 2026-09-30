@@ -282,6 +282,28 @@ function ConvertTo-SCRelations($InputRelations) {
     }
     return @($out)
 }
+function Get-SCRuntimeIdentity {
+    $configured=Get-Variable StatefulClankerHome -Scope Script -ErrorAction SilentlyContinue
+    $harnessRoot=if($configured-and$configured.Value){[string]$configured.Value}else{Split-Path -Parent $PSScriptRoot}
+    $files=@()
+    foreach($file in @(Get-ChildItem -LiteralPath (Join-Path $harnessRoot 'lib') -Filter '*.ps1' -File|Sort-Object Name)){
+        $files+=,[ordered]@{path="lib/$($file.Name)";sha256=Get-SCFileHashValue $file.FullName}
+    }
+    $origins=[ordered]@{}
+    foreach($name in @('Read-SCCompactPlan','Get-SCTaskDefinitionHash','Get-SCRetrievalPacket','Invoke-SCProvider')){
+        $command=Get-Command $name -ErrorAction SilentlyContinue
+        if($command-and$command.CommandType-eq'Function'){$origins[$name]=$command.ScriptBlock.File}
+    }
+    $commit=$null
+    if(Get-Command Invoke-SCGitCapture -ErrorAction SilentlyContinue){
+        $gitRoot=Invoke-SCGitCapture $harnessRoot @('rev-parse','--show-toplevel')
+        if($gitRoot.exitCode-eq0-and[IO.Path]::GetFullPath($gitRoot.output.Trim()).TrimEnd([char[]]'\/').Equals([IO.Path]::GetFullPath($harnessRoot).TrimEnd([char[]]'\/'),[StringComparison]::OrdinalIgnoreCase)){
+            $gitCommit=Invoke-SCGitCapture $harnessRoot @('rev-parse','HEAD');if($gitCommit.exitCode-eq0){$commit=$gitCommit.output.Trim()}
+        }
+    }
+    return [ordered]@{harnessHome=$harnessRoot;sourceCommit=$commit;identityBasis='files on disk at compilation; effective function origins';harnessSha256=Get-SCFileHashValue (Join-Path $harnessRoot 'StatefulClanker.ps1');libraryFingerprint=Get-SCHashString (ConvertTo-SCJson $files 8);filesOnDisk=$files;effectiveFunctionOrigins=$origins}
+}
+
 function Get-SCTaskDefinitionHash($Task) {
     $taskRole=if($Task.PSObject.Properties['role']-and$Task.role){[string]$Task.role}else{'worker'}
     $definition=[ordered]@{title=$Task.title;instruction=$Task.instruction;acceptance=@($Task.acceptance);dependsOn=@($Task.dependsOn);relations=if($Task.PSObject.Properties['relations']){@($Task.relations)}else{@()};retrieval=@($Task.retrieval);evidence=@($Task.evidence);provider=$Task.provider;role=$taskRole;humanGate=[bool]$Task.humanGate}

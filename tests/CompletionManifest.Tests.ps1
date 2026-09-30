@@ -18,14 +18,15 @@ try{
         outputKind='change';latestRunId='run-1';latestValidationId='val-1';latestProposalId='proposal-1';targetArtifacts=@('artifact.txt')
     }
     Write-SCJson (Get-SCPath 'tasks/t-1.json') $task
-    Write-SCJson (Get-SCPath 'runs/run-1.json') ([ordered]@{id='run-1';candidateClaim=[ordered]@{summary='Implemented the manifest path';expectedArtifacts=@('artifact.txt');verification=@('unit test')}})
+    Write-SCJson (Get-SCPath 'runs/run-1.json') ([ordered]@{id='run-1';compilationId='compile-1';candidateClaim=[ordered]@{summary='Implemented the manifest path';expectedArtifacts=@('artifact.txt');verification=@('unit test');warningsForSuccessor=@('UI not exercised');uncertainties=@('unknown concurrency limit');negativeFindings=@('old parser defect ruled out: Plan.ps1')}})
+    Write-SCJson (Get-SCPath 'compilations/compile-1.json') @{id='compile-1';runtimeIdentity=@{sourceCommit='source-tip';libraryFingerprint='fingerprint'}}
     Write-SCJson (Get-SCPath 'validations/val-1.json') ([ordered]@{id='val-1';verdict='PASS';validationKind='deterministic'})
     $proposal=[pscustomobject][ordered]@{
         id='proposal-1';taskId='t-1';status='committed'
         evidence=[ordered]@{
             runId='run-1';validationId='val-1';validationVerdict='PASS'
             candidatePreflight=[ordered]@{changedFiles=@('src/a.cs','artifact.txt')}
-            candidateClaim=[ordered]@{summary='Implemented the manifest path';expectedArtifacts=@('artifact.txt');verification=@('unit test')}
+            candidateClaim=[ordered]@{summary='Implemented the manifest path';expectedArtifacts=@('artifact.txt');verification=@('unit test');warningsForSuccessor=@('UI not exercised');uncertainties=@('unknown concurrency limit');negativeFindings=@('old parser defect ruled out: Plan.ps1')}
         }
     }
     Write-SCJson (Get-SCPath 'proposals/proposal-1.json') $proposal
@@ -36,6 +37,10 @@ try{
     Assert-True (@($manifest.artifacts)-contains'artifact.txt') 'artifact list was lost'
     Assert-True ([string]$manifest.validation.verdict-eq'PASS') 'validator verdict was lost'
     Assert-True ([string]$manifest.conclusions[0].authority-eq'advisory') 'worker conclusion was not marked advisory'
+    Assert-True ($manifest.warningsForSuccessor-contains'UI not exercised') 'successor warning was lost'
+    Assert-True ($manifest.uncertainties-contains'unknown concurrency limit') 'uncertainty was lost'
+    Assert-True ($manifest.negativeFindings-contains'old parser defect ruled out: Plan.ps1') 'negative evidence was lost'
+    Assert-True ($manifest.sourceIdentity.sourceCommit-eq'source-tip'-and$manifest.claimAuthority-eq'advisory') 'source identity or claim authority was lost'
     $saved=Get-SCTask 't-1'
     Assert-True (-not[string]::IsNullOrWhiteSpace([string]$saved.latestCompletionManifestId)) 'task did not reference latest completion manifest'
     Assert-True ($null-ne(Get-SCCompletionManifest $saved.latestCompletionManifestId)) 'manifest could not be reloaded'

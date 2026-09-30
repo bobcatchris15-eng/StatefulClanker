@@ -60,6 +60,8 @@ function Write-SCTaskCompletionManifest {
         $conclusions=@()
         if(-not[string]::IsNullOrWhiteSpace($summary)){$conclusions+=,[ordered]@{authority='advisory';summary=$summary;source='worker-candidate-claim'}}
         $workerVerification=if($claim){@(Get-SCManifestField $claim 'verification')}else{@()}
+        $compilationId=Get-SCManifestField $run 'compilationId'
+        $compilation=if($compilationId){Read-SCJson (Get-SCPath ("compilations/{0}.json"-f$compilationId))}else{$null}
 
         $refs=@()
         if($runId){$refs+="run:$runId"}
@@ -88,7 +90,11 @@ function Write-SCTaskCompletionManifest {
             artifacts=@($artifacts)
             conclusions=@($conclusions)
             invariantsDiscovered=@()
-            warningsForSuccessor=@()
+            warningsForSuccessor=@(Get-SCManifestField $claim 'warningsForSuccessor')
+            uncertainties=@(Get-SCManifestField $claim 'uncertainties')
+            negativeFindings=@(Get-SCManifestField $claim 'negativeFindings')
+            sourceIdentity=Get-SCManifestField $compilation 'runtimeIdentity'
+            claimAuthority='advisory'
             workerVerification=@($workerVerification)
             mechanicalAcceptance=if($proposalEvidence){Get-SCManifestField $proposalEvidence 'mechanicalAcceptance'}else{$null}
             evidenceRefs=@($refs)

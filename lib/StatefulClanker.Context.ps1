@@ -25,7 +25,10 @@ function Test-SCRetrievalPathAllowed([string]$FullPath) {
     $state=[IO.Path]::GetFullPath((Get-SCDir));$state=$state.TrimEnd([char[]]@('\','/'))
     $sep=[IO.Path]::DirectorySeparatorChar
     $insideWork=$full.Equals($work,[StringComparison]::OrdinalIgnoreCase)-or$full.StartsWith(($work+$sep),[StringComparison]::OrdinalIgnoreCase)
-    if($insideWork){return $true}
+    if($insideWork){
+        $relative=[IO.Path]::GetRelativePath($work,$full)
+        return ($relative-notmatch '(^|[\\/])(\.git|\.statefulclanker)([\\/]|$)')
+    }
     $insideState=$full.Equals($state,[StringComparison]::OrdinalIgnoreCase)-or$full.StartsWith(($state+$sep),[StringComparison]::OrdinalIgnoreCase)
     return (-not$insideState)
 }
@@ -67,6 +70,7 @@ function Get-SCRetrievalPacket($Task) {
         requestedCount=$requestedCount;sourceRefCount=@($sourceRefs).Count;selectorCount=@($selectors).Count
         matchedSelectorCount=@($matchedSelectors|Select-Object -Unique).Count;includedItemCount=@($items).Count
         excludedByBoundaryCount=@($excluded).Count;unmatchedSelectorCount=@($unmatched).Count;unmatchedSourceRefCount=@($unmatchedSources).Count
+        deliveryState=if($requestedCount-eq0){'not-requested'}elseif(@($items).Count-gt0){if($remaining-le0-or@($items|Where-Object{$_.truncated}).Count-gt0){'partial'}else{'delivered'}}elseif($remaining-le0){'budget-exhausted'}elseif(@($excluded).Count-gt0){'boundary-excluded'}else{'unmatched'}
         allUsefulRetrievalCollapsed=($requestedCount-gt0-and@($items).Count-eq0)
     }
     $packet=[ordered]@{budgetChars=$budget;usedChars=($budget-$remaining);remainingChars=$remaining;budgetExhausted=($remaining-le0);unmatchedSelectors=@($unmatched);unmatchedSourceRefs=@($unmatchedSources);excludedByBoundary=@($excluded);health=$health;items=@($items)}
@@ -210,6 +214,8 @@ function New-SCCompilation($Task) {
             projectionHash=$executionProjection.hash
             diagnostics=$executionProjection.executionDiagnostics
             correctiveFeedback=@($executionProjection.correctiveFeedback)
+            acceptanceFeedback=$executionProjection.acceptanceFeedback
+            preservedCandidates=@($executionProjection.preservedCandidates)
             priorAttemptKnowledge=@($executionProjection.priorAttemptKnowledge)
             continuation=$executionProjection.continuation
             retrievalHealth=$executionProjection.retrievalHealth
@@ -220,6 +226,7 @@ function New-SCCompilation($Task) {
     }
     $contextFingerprint=Get-SCHashString (ConvertTo-SCJson $ir 24)
     $receipt=[ordered]@{schemaVersion=2;id=$compilationId;taskId=$Task.id;compiledAt=$ir.compiledAt;inputFingerprint=$inputFingerprint;contextFingerprint=$contextFingerprint;readSet=$readSet;executionProjection=[ordered]@{id=$executionProjection.id;hash=$executionProjection.hash};retrievalStats=[ordered]@{budgetChars=$retrieved.budgetChars;usedChars=$retrieved.usedChars;budgetExhausted=$retrieved.budgetExhausted;unmatchedSelectors=@($retrieved.unmatchedSelectors);itemCount=@($retrieved.items).Count;truncatedCount=@($retrieved.items|Where-Object{$_.truncated}).Count;excludedByBoundaryCount=if($retrieved.PSObject.Properties['health']){[int]$retrieved.health.excludedByBoundaryCount}else{0};health=if($retrieved.PSObject.Properties['health']){$retrieved.health}else{$null}};contextFaults=@($contextFaults);ir=$ir}
+    $receipt['runtimeIdentity']=Get-SCRuntimeIdentity
     Write-SCJson (Get-SCPath ("compilations/{0}.json"-f$compilationId)) $receipt;Set-SCProperty $Task 'latestCompilationId' $compilationId;Save-SCTask $Task
     if($receipt.retrievalStats.unmatchedSelectors.Count-gt 0){Add-SCEvent 'context.selector_unmatched' "Compilation $compilationId had unmatched selectors." @{taskId=$Task.id;compilationId=$compilationId;selectors=@($receipt.retrievalStats.unmatchedSelectors)}}
     if(@($receipt.contextFaults).Count-gt 0){Add-SCEvent 'context.fault' "Compilation $compilationId had $(@($receipt.contextFaults).Count) context source fault(s)." @{taskId=$Task.id;compilationId=$compilationId;faults=@($receipt.contextFaults)}}
@@ -274,6 +281,8 @@ function New-SCWorkerContinuationMessage($Compilation,[string]$Cause='retry') {
         projectionHash=$execution.projectionHash
         continuation=$execution.continuation
         correctiveFeedback=@($execution.correctiveFeedback)
+        acceptanceFeedback=Get-SCManifestField $execution 'acceptanceFeedback'
+        preservedCandidates=@(Get-SCManifestField $execution 'preservedCandidates')
         priorAttemptKnowledge=@($execution.priorAttemptKnowledge|Select-Object -Last 4)
     }
     return "STATEFULCLANKER CONTINUATION UPDATE. The refreshed compiled packet is authoritative for this retry. Preserve correct existing work, address the current evidence, and do not restart from memory alone."+[Environment]::NewLine+(ConvertTo-SCModelText $state 14)

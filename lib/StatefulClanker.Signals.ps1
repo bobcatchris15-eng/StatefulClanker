@@ -174,6 +174,10 @@ function Test-SCSignalFreshness($Signal,$Task=$null) {
         elseif((Get-SCTaskDefinitionHash $Task)-ne[string]$definitionHash){$reasons.Add('task definition changed')}
     }
     $fileHashes=Get-SCSignalValue $freshness 'fileHashes'
+    $controlRevision=Get-SCSignalValue $freshness 'taskControlRevision'
+    if($null-ne$controlRevision-and$Task-and(Get-SCTaskControlRevision $Task)-ne[int]$controlRevision){$reasons.Add('task control revision changed')}
+    $directionRevision=Get-SCSignalValue $freshness 'directionRevision'
+    if($null-ne$directionRevision-and[int](Get-SCState).directionRevision-ne[int]$directionRevision){$reasons.Add('human direction changed')}
     if($fileHashes){
         foreach($entry in @(Get-SCSignalEntries $fileHashes)){
             $full=Join-Path (Get-SCRoot) ([string]$entry.Name)
@@ -200,7 +204,13 @@ function Publish-SCExecutionSignal {
         if($SourceExtra){foreach($p in (ConvertTo-SCSignalMap $SourceExtra 'sourceExtra' $true).GetEnumerator()){$source[$p.Key]=$p.Value}}
         $address=[ordered]@{type='task';id=[string]$Task.id}
         if($Qualifier){$address['qualifier']=$Qualifier}
-        if($null-eq$Freshness){$Freshness=[ordered]@{taskDefinitionHash=Get-SCTaskDefinitionHash $Task}}
+        if($null-eq$Freshness){
+            $Freshness=[ordered]@{taskDefinitionHash=Get-SCTaskDefinitionHash $Task}
+            if($Authority-eq'corrective'-or$Kind-in@('validation_error','retrieval_anomaly')){
+                $Freshness['taskControlRevision']=Get-SCTaskControlRevision $Task
+                $Freshness['directionRevision']=[int](Get-SCState).directionRevision
+            }
+        }
         $signal=New-SCSignalEnvelope -Domain execution -Kind $Kind -Source $source -Subject @{type='task';id=[string]$Task.id} -Audience @($address) -Authority $Authority -Scope $Scope -Freshness $Freshness -Payload $Payload
         Write-SCSignal $signal|Out-Null
         return $signal
