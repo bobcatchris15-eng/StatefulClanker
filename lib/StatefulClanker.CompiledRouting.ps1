@@ -59,6 +59,12 @@ function Invoke-SCProviderViaCompiledRouter($Task,[string]$Prompt,[string]$Stage
     }
 
     $toolMode=if($negotiated.data -and $negotiated.data.PSObject.Properties['toolMode']){[string]$negotiated.data.toolMode}else{'text'}
+    if($Stage-eq'run' -and $WorkerSessionId){
+        $session=Get-SCWorkerSession $WorkerSessionId
+        # A durable transcript fixes its wire protocol. The gateway enforces
+        # native compatibility and defers if only text routes remain available.
+        if($session -and $session.PSObject.Properties['toolMode']){$toolMode=[string]$session.toolMode}
+    }
     $routerConfig=[ordered]@{
         type='api'
         routerManaged=$true

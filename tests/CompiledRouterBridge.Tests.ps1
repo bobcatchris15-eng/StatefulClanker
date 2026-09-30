@@ -10,6 +10,7 @@ function Get-SCConfig { return [pscustomobject]@{routing=[pscustomobject]@{maxRo
 function Get-SCProjectRoutingAllowlist { return @('a::m1','b::m2') }
 function Get-SCRouteSnapshotReceipt { return [pscustomobject]@{selectedAt=[datetimeoffset]::UtcNow.ToString('o')} }
 function Get-SCWorkerSessionRoutePin([string]$SessionId) { return [pscustomobject]@{endpoint='pool:a::m1';connection='a';model='m1'} }
+function Get-SCWorkerSession([string]$SessionId) { return $null }
 $script:lastPin=$null
 function Set-SCWorkerSessionRoutePin([string]$SessionId,[string]$Endpoint,[string]$Connection,[string]$Model) {
     $script:lastPin=[pscustomobject]@{endpoint=$Endpoint;connection=$Connection;model=$Model}
