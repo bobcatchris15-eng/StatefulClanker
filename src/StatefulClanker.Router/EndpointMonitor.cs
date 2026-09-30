@@ -76,7 +76,7 @@ public sealed class EndpointMonitor
                 if(!connections.TryGetValue(name,out var c)) continue;
                 var fp=_store.ConnectionFingerprint(c);
                 if(!string.Equals(fp,entry.configFingerprint,StringComparison.OrdinalIgnoreCase))
-                    _engine.MarkHealthy(key);
+                    _engine.TryExpireCooldown(key,now);
                 continue;
             }
 
@@ -89,7 +89,7 @@ public sealed class EndpointMonitor
             // free inference just to test the bucket.
             if(string.Equals(entry.scope,"endpoint",StringComparison.OrdinalIgnoreCase))
             {
-                _engine.MarkHealthy(key);
+                _engine.TryExpireCooldown(key,now);
                 continue;
             }
 
@@ -97,7 +97,7 @@ public sealed class EndpointMonitor
             // The next real inference is authoritative.
             if(entry.reason=="billing_exhausted")
             {
-                _engine.MarkHealthy(key);
+                _engine.TryExpireCooldown(key,now);
                 continue;
             }
 

@@ -581,6 +581,8 @@ public sealed class RouterEngine
         return s.Length<=max?s:s[..max];
     }
 
+    internal bool TryExpireCooldown(string key,DateTimeOffset now) => _healthReducer.TryExpireCooldown(key,now);
+
     public void CorrectPermissionScopes() => _healthReducer.NormalizeExpiredCooldowns();
 
     void NormalizeExpiredCooldowns()

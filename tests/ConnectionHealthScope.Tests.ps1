@@ -56,6 +56,19 @@ try {
  # Exercise the real metadata polling path, not only its policy helper.
  $engine=[StatefulClanker.Router.RouterEngine]::new($store)
  $monitor=[StatefulClanker.Router.EndpointMonitor]::new($engine)
+ [void]$reducer.RegisterFailure('connection:monitor-budget','connection','billing_exhausted','API budget exhausted.',$null)
+ $tickDoc=$store.LoadHealth();$tickEntry=$tickDoc.endpoints['connection:monitor-budget'];$tickEntry.retryAfter=[datetimeoffset]::UtcNow.AddMinutes(5).ToString('O');$tickEntry.nextProbeAt=[datetimeoffset]::UtcNow.AddMinutes(-1).ToString('O');$tickEntry.lastSuccess='2022-01-01T00:00:00Z';$store.SaveHealth($tickDoc)
+ [void]$monitor.TickAsync([Threading.CancellationToken]::None).GetAwaiter().GetResult()
+ Check ($store.LoadHealth().endpoints['connection:monitor-budget'].state -eq 'cooldown') 'monitor stale probe timer cleared future billing cooldown'
+ foreach($key in @('pool:monitor::m','connection:monitor-budget')){
+  $scope=if($key.StartsWith('pool:')){'endpoint'}else{'connection'};$klass=if($scope -eq 'endpoint'){'timeout'}else{'billing_exhausted'}
+  [void]$reducer.RegisterFailure($key,$scope,$klass,'timeout',$null)
+  $tickDoc=$store.LoadHealth();$tickDoc.endpoints[$key].retryAfter=[datetimeoffset]::UtcNow.AddMinutes(-1).ToString('O');$tickDoc.endpoints[$key].nextProbeAt=$tickDoc.endpoints[$key].retryAfter;$tickDoc.endpoints[$key].lastSuccess='2022-01-01T00:00:00Z';$store.SaveHealth($tickDoc)
+  [void]$monitor.TickAsync([Threading.CancellationToken]::None).GetAwaiter().GetResult()
+  Check ($store.LoadHealth().endpoints[$key].state -eq 'healthy' -and $store.LoadHealth().endpoints[$key].lastSuccess -eq '2022-01-01T00:00:00Z') 'monitor expiry fabricated success'
+ }
+ Check ($store.LoadHealth().endpoints['connection:retry-auth'].state -eq 'quarantined') 'monitor tick unblocked auth'
+ Check ($store.LoadHealth().endpoints['connection:retry-permission'].state -eq 'quarantined') 'monitor tick unblocked account restriction'
  $observe=$monitor.GetType().GetMethod('ObserveOneConnectionAsync',[Reflection.BindingFlags]'Instance,NonPublic')
  foreach($status in @(403,404,429,500)){
   $listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0);$listener.Start();$port=$listener.LocalEndpoint.Port;$listener.Stop()
