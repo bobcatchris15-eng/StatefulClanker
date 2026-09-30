@@ -76,7 +76,7 @@ public sealed class EndpointMonitor
                 if(!connections.TryGetValue(name,out var c)) continue;
                 var fp=_store.ConnectionFingerprint(c);
                 if(!string.Equals(fp,entry.configFingerprint,StringComparison.OrdinalIgnoreCase))
-                    _engine.TryExpireCooldown(key,now);
+                    _engine.MarkHealthy(key);
                 continue;
             }
 
