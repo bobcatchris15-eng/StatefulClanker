@@ -26,6 +26,7 @@ public sealed class RoutingHealthReducer
             e.scope=scope;
             e.state="healthy";
             e.reason=null;
+            e.accountPermissionEvidence=null;
             e.failures=0;
             e.probeFailures=0;
             e.retryAfter=null;
@@ -57,11 +58,13 @@ public sealed class RoutingHealthReducer
             if(!doc.endpoints.TryGetValue(key,out var e)) e=new HealthEntry();
             e.scope=scope;
             e.reason=failureClass;
+            e.accountPermissionEvidence=failureClass=="permission" && scope=="connection"
+                ? FailurePolicy.HasAccountPermissionEvidence(message) : null;
             e.failures=Math.Max(0,e.failures)+1;
             e.lastFailure=DateTimeOffset.UtcNow.ToString("O");
             e.message=Bound(message,500);
 
-            var hard=failureClass is "auth" or "permission" or "configuration";
+            var hard=failureClass is "auth" or "configuration" || (failureClass=="permission" && scope=="connection");
             var quota=QuotaIntelligence.ObserveFailure(connection?.presetId,failureClass,message);
             if(HasQuotaSignal(quota)) e.quota=quota;
 
@@ -124,6 +127,36 @@ public sealed class RoutingHealthReducer
         foreach(var kv in snapshot.endpoints)
         {
             var e=kv.Value;
+            // Legacy permission entries lacked evidence of account-wide failure.
+            // Without the original endpoint, let the next real inference establish
+            // its own restriction rather than guessing a model or retaining a block.
+            if(kv.Key.StartsWith("connection:",StringComparison.OrdinalIgnoreCase) &&
+               e.reason=="permission" && e.state!="healthy" &&
+               FailurePolicy.ScopeFor("permission",e.message)=="endpoint")
+            {
+                var recovered=_store.UpdateHealth(doc =>
+                {
+                    if(!doc.endpoints.TryGetValue(kv.Key,out var current) ||
+                       current.reason!="permission" || current.state=="healthy" ||
+                       current.accountPermissionEvidence==true ||
+                       FailurePolicy.ScopeFor("permission",current.message)!="endpoint") return false;
+                    current.state="healthy";
+                    current.reason=null;
+                    current.failures=0;
+                    current.probeFailures=0;
+                    current.retryAfter=null;
+                    current.nextProbeAt=null;
+                    current.message=null;
+                    current.accountPermissionEvidence=null;
+                    current.lastSuccess=DateTimeOffset.UtcNow.ToString("O");
+                    return true;
+                });
+                if(recovered) Append("health_recovered",kv.Key,"connection",new()
+                {
+                    ["reason"]="policy-scope-corrected",["healthKey"]=kv.Key
+                });
+                continue;
+            }
             if(!string.Equals(e.state,"cooldown",StringComparison.OrdinalIgnoreCase)) continue;
             var raw=e.retryAfter ?? e.nextProbeAt;
             if(!DateTimeOffset.TryParse(raw,out var due) || due>now) continue;

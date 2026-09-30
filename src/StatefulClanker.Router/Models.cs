@@ -115,6 +115,7 @@ public sealed class HealthEntry
     public string? nextProbeAt { get; set; }
     public string? retryAfter { get; set; }
     public string? configFingerprint { get; set; }
+    public bool? accountPermissionEvidence { get; set; }
     public string? message { get; set; }
     public QuotaObservation? quota { get; set; }
 }

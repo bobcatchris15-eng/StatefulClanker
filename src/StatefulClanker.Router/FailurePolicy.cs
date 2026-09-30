@@ -59,12 +59,19 @@ public static partial class FailurePolicy
         "malformed_response" or "empty_response" or "protocol_error" or "session_incompatible" or
         "context_too_large" or "bad_request" or "billing_exhausted" or "auth" or "permission" or "configuration";
 
-    public static string ScopeFor(string failureClass) => failureClass switch
+    public static string ScopeFor(string failureClass,string? message=null) => failureClass switch
     {
-        "auth" or "permission" or "configuration" or "billing_exhausted" => "connection",
+        "auth" or "configuration" or "billing_exhausted" => "connection",
+        "permission" => HasAccountPermissionEvidence(message)?"connection":"endpoint",
         "rate_limited" or "capacity" or "model_unavailable" or "malformed_response" or "empty_response" or "protocol_error" or "timeout" or "server_error" => "endpoint",
         _ => "request"
     };
+
+    public static bool HasAccountPermissionEvidence(string? message) =>
+        Regex.IsMatch(message ?? "", @"(?i)active OpenCode Go subscription is required|active subscription.{0,40}required.{0,40}(?:all models|this account)|account.{0,40}(?:disabled|suspended|expired|inactive)|(?:invalid|revoked|disabled|expired) (?:api key|credential)|(?:api key|credential).{0,30}(?:invalid|revoked|disabled|expired)");
+
+    public static bool IsCredentialProbeFailure(string failureClass,string? message) =>
+        failureClass=="auth" || (failureClass=="permission" && HasAccountPermissionEvidence(message));
 
     public static TimeSpan Delay(string failureClass,string? text,int failures=1)
     {

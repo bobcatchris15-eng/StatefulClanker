@@ -402,7 +402,7 @@ public sealed class InferenceGateway : IDisposable
             responseEvidence.durationSeconds=Math.Round(stopwatch.Elapsed.TotalSeconds,3);
             var klass=FailurePolicy.Classify(ex.Message);
             if(klass=="request_error") klass="transport";
-            var scope=klass=="transport"?"endpoint":FailurePolicy.ScopeFor(klass);
+            var scope=klass=="transport"?"endpoint":FailurePolicy.ScopeFor(klass,ex.Message);
             var healthChanged=scope is not ("request" or "harness");
             RouterResponse? healthOutcome=null;
             if(healthChanged) healthOutcome=_engine.Failure(leaseToken,route.RouteName,klass,ex.Message);
@@ -441,12 +441,12 @@ public sealed class InferenceGateway : IDisposable
     NormalizedInferenceResult ProviderFailure(EndpointRoute route,IProviderAdapter adapter,string? leaseToken,int? status,string diagnosticText)
     {
         var klass=FailurePolicy.Classify(diagnosticText,status);
-        var scope=FailurePolicy.ScopeFor(klass);
+        var scope=FailurePolicy.ScopeFor(klass,diagnosticText);
         var adapterSuspect=klass!="context_too_large" && (status is 400 or 422 || klass is "bad_request" or "protocol_error" or "malformed_response");
         if(status is 400 or 422) scope="request";
         var healthChanged=scope is not ("request" or "harness");
         var healthOutcome=healthChanged?_engine.Failure(leaseToken,route.RouteName,klass,diagnosticText):null;
-        var failed=BaseResult(route,adapter.Id,adapter.SourcePath,Diagnosis(klass,scope,adapterSuspect,healthChanged,ReasonCode(klass,status??0,adapterSuspect),Bound(diagnosticText,1000)));
+        var failed=BaseResult(route,adapter.Id,adapter.SourcePath,Diagnosis(klass,scope,adapterSuspect,healthChanged,ReasonCode(klass,status??0,adapterSuspect,scope),Bound(diagnosticText,1000)));
         failed.healthChanged=healthChanged;
         failed.failoverAllowed=!adapterSuspect && FailurePolicy.CanFailover(klass);
         failed.nextRetryAt=healthOutcome is null?null:ReadString(healthOutcome.data,"retryAfter")??ReadString(healthOutcome.data,"nextProbeAt");
@@ -557,12 +557,13 @@ public sealed class InferenceGateway : IDisposable
             summary=Bound(summary,1000)
         };
 
-    static string ReasonCode(string klass,int status,bool adapterSuspect)
+    static string ReasonCode(string klass,int status,bool adapterSuspect,string scope)
     {
         if(adapterSuspect && status is 400 or 422) return "REQUEST_SHAPE_REJECTED";
         return klass switch
         {
-            "auth" or "permission" => "AUTHENTICATION_REJECTED",
+            "auth" => "AUTHENTICATION_REJECTED",
+            "permission" => scope=="connection"?"ACCOUNT_ACCESS_RESTRICTED":"MODEL_ACCESS_RESTRICTED",
             "rate_limited" => "RATE_LIMITED",
             "billing_exhausted" => "BILLING_OR_QUOTA_EXHAUSTED",
             "model_unavailable" => "MODEL_UNAVAILABLE",

@@ -16,6 +16,7 @@ public sealed class RouterEngine
         _store=store;
         _signals=new SignalStore(store.Root);
         _healthReducer=new RoutingHealthReducer(store,_signals);
+        CorrectPermissionScopes();
         RestoreLeases();
         ReapExpiredLeases();
     }
@@ -354,7 +355,7 @@ public sealed class RouterEngine
         if(route is null) return RouterResponse.Fail("A valid lease or endpoint is required.");
 
         var klass=string.IsNullOrWhiteSpace(failureClass)?FailurePolicy.Classify(message):failureClass!;
-        var scope=FailurePolicy.ScopeFor(klass);
+        var scope=FailurePolicy.ScopeFor(klass,message);
         if(scope=="request")
         {
             EmitRoutingSignal("route_failed",route,scope,new(){{"failureClass",klass},{"message",Bound(message,500)},{"healthChanged",false}},"router","health");
@@ -579,6 +580,8 @@ public sealed class RouterEngine
         var s=text.Replace("\r"," ").Replace("\n"," ").Trim();
         return s.Length<=max?s:s[..max];
     }
+
+    public void CorrectPermissionScopes() => _healthReducer.NormalizeExpiredCooldowns();
 
     void NormalizeExpiredCooldowns()
     {

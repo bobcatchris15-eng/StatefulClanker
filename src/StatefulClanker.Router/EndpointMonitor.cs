@@ -58,6 +58,7 @@ public sealed class EndpointMonitor
 
     public async Task TickAsync(CancellationToken token=default)
     {
+        _engine.CorrectPermissionScopes();
         _engine.ReapExpiredLeases();
         var health=_store.LoadHealth();
         var connections=_store.LoadConnections().connections;
@@ -131,6 +132,7 @@ public sealed class EndpointMonitor
                         // credential/model is bad without proving the provider host is
                         // down.
                         _engine.MarkHealthy(key);
+                        if(FailurePolicy.IsCredentialProbeFailure(result.FailureClass,result.Message))
                         _engine.RegisterFailureKey(
                             "connection:"+candidate.Key,
                             "connection",
@@ -172,7 +174,7 @@ public sealed class EndpointMonitor
             // A metadata probe is evidence of a broken credential, but its own
             // 429/5xx window is not necessarily the inference window. Record those
             // quota signals without poisoning healthy inference routes.
-            if(!result.Success && result.FailureClass is "auth" or "permission" or "configuration")
+            if(!result.Success && FailurePolicy.IsCredentialProbeFailure(result.FailureClass,result.Message))
                 _engine.RegisterFailureKey(
                     "connection:"+kv.Key,
                     "connection",
@@ -196,8 +198,12 @@ public sealed class EndpointMonitor
         var result=await ProbeAsync(profile,plan,token);
         RecordQuota(name,profile,result.Quota);
         var key="connection:"+name;
-        if(result.Success) _engine.MarkHealthy(key);
-        else _engine.RegisterFailureKey(key,"connection",result.FailureClass,result.Message,profile);
+        var existing=_store.LoadHealth().endpoints.GetValueOrDefault(key);
+        // A metadata success cannot disprove an inference subscription/billing block.
+        if(result.Success && plan.Kind!=ProviderProbeKind.Models && existing?.reason=="auth")
+            _engine.MarkHealthy(key);
+        else if(!result.Success && FailurePolicy.IsCredentialProbeFailure(result.FailureClass,result.Message))
+            _engine.RegisterFailureKey(key,"connection",result.FailureClass,result.Message,profile);
     }
 
     void RecordQuota(string connectionName,ConnectionProfile profile,QuotaObservation quota)

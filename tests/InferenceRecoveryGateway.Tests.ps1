@@ -1,5 +1,5 @@
 <# One inference request must transparently survive a failed endpoint. #>
-param([ValidateSet('embedded','context','output','exhausted','invalid','strict','contextcap','diagnostic','truncated','nocode','timeout')][string]$Case='embedded',[string]$RouterPath)
+param([ValidateSet('embedded','context','output','exhausted','invalid','strict','contextcap','diagnostic','truncated','nocode','timeout','permission')][string]$Case='embedded',[string]$RouterPath)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent $PSScriptRoot
 $router=if($RouterPath){$RouterPath}else{Join-Path $repo 'src\StatefulClanker.Router\bin\Debug\net8.0-windows\StatefulClanker.Router.exe'}
@@ -26,7 +26,7 @@ try{
 
     [ordered]@{schemaVersion=3;entries=[ordered]@{
         'broken::model'=[ordered]@{id='broken::model';connection='broken';model='mock-model';displayName='Broken';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='text';weight=100}
-        'good::model'=[ordered]@{id='good::model';connection='good';model='mock-model';displayName='Good';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='text';weight=1}
+        'good::model'=[ordered]@{id='good::model';connection=$(if($Case -eq 'permission'){'broken'}else{'good'});model='sibling-model';displayName='Good';enabled=$true;workhorse=$true;free=$true;supportsTools=$true;toolMode='text';weight=1}
     }}|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $temp 'endpoints.json') -Encoding UTF8
 
     if($Case -eq 'contextcap'){$catalog=Get-Content -Raw (Join-Path $temp 'endpoints.json')|ConvertFrom-Json;$catalog.entries.'broken::model'|Add-Member contextLength 4100;$catalog|ConvertTo-Json -Depth 20|Set-Content (Join-Path $temp 'endpoints.json')}
@@ -44,7 +44,8 @@ try{
       if($headers.ContainsKey('Content-Length')){$length=[int]$headers['Content-Length']}
       $requestBody=$null;if($length-gt0){$buf=New-Object char[] $length;[void]$reader.ReadBlock($buf,0,$length);$requestBody=(-join $buf)|ConvertFrom-Json}
       if($first-match'^GET '){$status='200 OK';$body='{"data":[{"id":"mock-model"}]}'}
-      elseif($first-match' /a/v1/chat/completions '){if($Case -eq 'timeout'){Start-Sleep -Seconds 8};if($Case -in @('output','exhausted','contextcap','diagnostic','truncated','timeout')){$status='200 OK';if($Case -eq 'exhausted' -or $requestBody.max_tokens -lt 8192){$body='{"usage":{"prompt_tokens":3,"completion_tokens":4096},"choices": [{"finish_reason":"length","message":{"content":null,"reasoning":"private analysis"}}]}';if($Case -eq 'truncated'){$body=@{usage=@{prompt_tokens=3;completion_tokens=4096};choices=@(@{finish_reason='length';message=@{tool_calls=@(@{id='bad';function=@{name='write';arguments='{"path":'}})}})}|ConvertTo-Json -Depth 10 -Compress }}else{$body='{"usage":{"prompt_tokens":3,"completion_tokens":2},"choices": [{"message":{"content":"ROUTED_OK"}}]}'} }elseif($Case -in @('embedded','nocode')){$status='200 OK';$body='{"error":{"message":"JSON error injected into SSE stream","code":502}}';if($Case -eq 'nocode'){$body='{"error":{"message":"bad gateway"}}'}}else{$status='400 Bad Request';$body='{"error":{"message":"maximum context length is 262144 tokens, requested 423601","code":400}}'}}
+      elseif($Case -eq 'permission' -and $requestBody.model -eq 'mock-model'){$status='403 Forbidden';$body='{"error":{"message":"thinkingmachines/inkling:free is only available on agentic harnesses. Try plugging it into a coding agent or productivity app listed on https://openrouter.ai/apps","code":403,"metadata":{"failed_routing_step":"Gate Free Endpoints by Agentic Harness"}}}'}
+      elseif($first-match' /a/v1/chat/completions ' -and $Case -ne 'permission'){if($Case -eq 'timeout'){Start-Sleep -Seconds 8};if($Case -in @('output','exhausted','contextcap','diagnostic','truncated','timeout')){$status='200 OK';if($Case -eq 'exhausted' -or $requestBody.max_tokens -lt 8192){$body='{"usage":{"prompt_tokens":3,"completion_tokens":4096},"choices": [{"finish_reason":"length","message":{"content":null,"reasoning":"private analysis"}}]}';if($Case -eq 'truncated'){$body=@{usage=@{prompt_tokens=3;completion_tokens=4096};choices=@(@{finish_reason='length';message=@{tool_calls=@(@{id='bad';function=@{name='write';arguments='{"path":'}})}})}|ConvertTo-Json -Depth 10 -Compress }}else{$body='{"usage":{"prompt_tokens":3,"completion_tokens":2},"choices": [{"message":{"content":"ROUTED_OK"}}]}'} }elseif($Case -in @('embedded','nocode')){$status='200 OK';$body='{"error":{"message":"JSON error injected into SSE stream","code":502}}';if($Case -eq 'nocode'){$body='{"error":{"message":"bad gateway"}}'}}else{$status='400 Bad Request';$body='{"error":{"message":"maximum context length is 262144 tokens, requested 423601","code":400}}'}}
       else{$status='200 OK';$body='{"model":"mock-model","usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5},"choices":[{"message":{"role":"assistant","content":"ROUTED_OK"}}]}'}
       $bytes=[Text.Encoding]::UTF8.GetBytes($body);$crlf=[string][char]13+[char]10
       $extra=if($status-like'429*'){'Retry-After: 60'+$crlf}else{''}
@@ -113,10 +114,20 @@ try{
             Assert-True ($result.inferenceAttempts[1].maxOutputTokens -eq 8192) 'retry budget did not double'
             Assert-True ((Get-Content -Raw $requestFile|ConvertFrom-Json).maxOutputTokens -eq 4096) 'caller request mutated'
         }else{
-            Assert-True ($result.routeAttempts -eq 2 -and $result.connection -eq 'good') 'fallback did not select second route'
-            Assert-True ($result.routeHistory[0].failureClass -eq $(if($Case -in @('embedded','nocode')){'server_error'}else{'context_too_large'})) 'failure class wrong'
+            Assert-True ($result.routeAttempts -eq 2 -and $result.connection -eq $(if($Case -eq 'permission'){'broken'}else{'good'})) 'fallback did not select second route'
+            Assert-True ($result.routeHistory[0].failureClass -eq $(if($Case -eq 'permission'){'permission'}elseif($Case -in @('embedded','nocode')){'server_error'}else{'context_too_large'})) 'failure class wrong'
             $snapshot=(Call-Router @('snapshot')).data
-            $broken=@($snapshot.routes|Where-Object connection -eq 'broken')[0]
+            $broken=@($snapshot.routes|Where-Object catalogId -eq 'broken::model')[0]
+            if($Case -eq 'permission'){
+                Assert-True ($result.inferenceAttempts[0].diagnosis.scope -eq 'endpoint' -and $result.inferenceAttempts[0].diagnosis.reasonCode -eq 'MODEL_ACCESS_RESTRICTED') 'model permission diagnosis incorrectly claims credential failure'
+                $health=Get-Content -Raw (Join-Path $temp 'routing\health.json')|ConvertFrom-Json
+                Assert-True ($health.endpoints.'pool:broken::model'.state -eq 'cooldown') 'model permission must have bounded cooldown'
+                Assert-True ($null -eq $health.endpoints.'connection:broken' -or $health.endpoints.'connection:broken'.state -eq 'healthy') 'model permission poisoned connection'
+                Assert-True ([bool]@($snapshot.routes|Where-Object catalogId -eq 'good::model')[0].available) 'sibling model unavailable'
+                $signals=Get-ChildItem -LiteralPath $temp -Recurse -Filter '*.jsonl'|ForEach-Object{Get-Content -LiteralPath $_.FullName|ForEach-Object{$_|ConvertFrom-Json}}
+                $failure=@($signals|Where-Object {$_.kind -eq 'health_failure_observed'})
+                Assert-True (@($failure|Where-Object {$_.payload.healthKey -eq 'pool:broken::model'}).Count -gt 0) 'failure signal lacks endpoint health key'
+            }
             Assert-True ([bool]$broken.available -eq ($Case -eq 'context')) 'provider health scope wrong'
         }
     }
