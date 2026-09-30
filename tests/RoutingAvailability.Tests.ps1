@@ -9,9 +9,31 @@ $gateway=Get-Content -Raw -LiteralPath (Join-Path $repo 'src\StatefulClanker.Rou
 $bridge=Get-Content -Raw -LiteralPath (Join-Path $repo 'lib\StatefulClanker.CompiledRouting.ps1')
 
 Write-Host '  ROUTING AVAILABILITY 1: acquire heals expired cooldown state before filtering'
-Assert-True ($engine.Contains('NormalizeExpiredCooldowns();')) 'Acquire/snapshot does not normalize expired cooldowns synchronously.'
-Assert-True ($reducer.Contains('if(!DateTimeOffset.TryParse(raw,out var due) || due>now) continue;')) 'Health reducer does not respect active retry windows.'
-Assert-True ($reducer.Contains('MarkHealthy(kv.Key,"cooldown-expired")')) 'Expired cooldown does not reduce back to healthy.'
+$dll=if($env:SC_TEST_ROUTER_DLL){$env:SC_TEST_ROUTER_DLL}else{Join-Path $repo 'src/StatefulClanker.Router/bin/Debug/net8.0-windows/StatefulClanker.Router.dll'}
+[void][Reflection.Assembly]::LoadFrom($dll)
+$tempRoot=[IO.Path]::GetTempPath()
+$fixture=Join-Path $tempRoot ('sc-availability-'+[guid]::NewGuid().ToString('N'))
+try{
+    New-Item -ItemType Directory -Path $fixture|Out-Null
+    @{schemaVersion=3;entries=@{'mock::one'=@{id='mock::one';connection='mock';model='one';enabled=$true;workhorse=$true;free=$true}}}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $fixture 'endpoints.json')
+    @{schemaVersion=2;connections=@{mock=@{name='mock';presetId='custom';protocol='openai-chat';baseUrl='http://127.0.0.1:1/v1';authKind='none';headers=@{}}}}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $fixture 'connections.json')
+    $store=[StatefulClanker.Router.RouterStore]::new($fixture)
+    $runtime=[StatefulClanker.Router.RouterEngine]::new($store)
+    $healthReducer=[StatefulClanker.Router.RoutingHealthReducer]::new($store,[StatefulClanker.Router.SignalStore]::new($fixture))
+    [void]$healthReducer.RegisterFailure('pool:mock::one','endpoint','timeout','timeout',$null)
+    $health=$store.LoadHealth();$entry=$health.endpoints['pool:mock::one']
+    $entry.retryAfter=[datetimeoffset]::UtcNow.AddMinutes(-1).ToString('O');$entry.lastSuccess='2020-01-01T00:00:00Z';$store.SaveHealth($health)
+    $acquired=$runtime.Acquire($null,$null,$false,'availability-test',$false,$PID)
+    Assert-True $acquired.ok 'Acquire did not make an expired endpoint eligible.'
+    $entry=$store.LoadHealth().endpoints['pool:mock::one']
+    Assert-True ($entry.state -eq 'healthy') 'Expired endpoint remains blocked.'
+    Assert-True ($entry.lastSuccess -eq '2020-01-01T00:00:00Z') 'Cooldown expiry fabricated a successful provider observation.'
+    [void]$runtime.Release([string]$acquired.data.lease)
+}finally{
+    $resolved=[IO.Path]::GetFullPath($fixture)
+    if(-not $resolved.StartsWith([IO.Path]::GetFullPath($tempRoot),[StringComparison]::OrdinalIgnoreCase)){throw 'Unsafe test cleanup path.'}
+    if(Test-Path -LiteralPath $resolved){Remove-Item -LiteralPath $resolved -Recurse -Force}
+}
 
 Write-Host '  ROUTING AVAILABILITY 2: tool capability is negotiated independently of endpoint identity'
 Assert-True ($engine.Contains('requiredToolMode')) 'Acquire cannot enforce negotiated tool-mode compatibility.'
