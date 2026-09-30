@@ -256,7 +256,7 @@ public sealed class InferenceGateway : IDisposable
                 built.message,HttpCompletionOption.ResponseHeadersRead,timeoutCts.Token);
             stopwatch.Stop();
 
-            var body=await ReadBodyBounded(response,timeoutCts.Token);
+            var body=await response.Content.ReadAsStringAsync(timeoutCts.Token);
             responseEvidence=new SanitizedResponseEvidence
             {
                 httpStatus=(int)response.StatusCode,
@@ -526,12 +526,6 @@ public sealed class InferenceGateway : IDisposable
         foreach(var key in new[]{"x-request-id","request-id","cf-ray"})
             if(response.Headers.TryGetValues(key,out var values)) return values.FirstOrDefault();
         return null;
-    }
-
-    static async Task<string> ReadBodyBounded(HttpResponseMessage response,CancellationToken token)
-    {
-        var body=await response.Content.ReadAsStringAsync(token);
-        return body.Length<=16384?body:body[..16384];
     }
 
     static string Bound(string? value,int max)
