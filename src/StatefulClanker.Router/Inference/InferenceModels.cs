@@ -116,7 +116,17 @@ public sealed class NormalizedInferenceResult
     public string? nextRetryAt { get; set; }
     public int routeAttempts { get; set; }
     public List<RoutingAttemptRecord> routeHistory { get; set; } = new();
+    public List<InferenceAttemptRecord> inferenceAttempts { get; set; } = new();
     public string? signalRef { get; set; }
+}
+
+public sealed class InferenceAttemptRecord
+{
+    public string endpoint { get; set; } = "";
+    public int maxOutputTokens { get; set; }
+    public NormalizedUsage usage { get; set; } = new();
+    public SanitizedResponseEvidence response { get; set; } = new();
+    public InferenceDiagnosis diagnosis { get; set; } = new();
 }
 
 public sealed class SanitizedBodyShape
@@ -189,4 +199,7 @@ public sealed record AdapterParseResult(
     bool Success,
     NormalizedInferenceMessage? Assistant,
     NormalizedUsage Usage,
-    string? Error);
+    string? Error,
+    int? ProviderStatus = null,
+    string? FailureClass = null,
+    bool ProviderError = false);

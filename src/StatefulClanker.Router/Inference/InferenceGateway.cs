@@ -34,6 +34,8 @@ public sealed class InferenceGateway : IDisposable
         var maxWait=Math.Clamp(inference.maxRouteWaitSeconds,0,300);
         var deadline=DateTimeOffset.UtcNow.AddSeconds(maxWait);
         var history=new List<RoutingAttemptRecord>();
+        var attempts=new List<InferenceAttemptRecord>();
+        var totalUsage=new NormalizedUsage();
         var requestExcluded=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         NormalizedInferenceResult? last=null;
         var preferred=request.preferred;
@@ -123,6 +125,10 @@ public sealed class InferenceGateway : IDisposable
                 if(!string.IsNullOrWhiteSpace(lease)) _engine.Release(lease);
             }
             started.Stop();
+            attempts.AddRange(result.inferenceAttempts);
+            AddUsage(totalUsage,result.usage);
+            result.usage=CopyUsage(totalUsage);
+            result.inferenceAttempts=new(attempts);
 
             history.Add(new RoutingAttemptRecord
             {
@@ -225,11 +231,68 @@ public sealed class InferenceGateway : IDisposable
     }
 
     async Task<NormalizedInferenceResult> ExecuteAsync(
+        EndpointRoute route,NormalizedInferenceRequest request,bool diagnosticMode,CancellationToken token,string? leaseToken)
+    {
+        for(var index=0;index<request.messages.Count;index++)
+            foreach(var call in request.messages[index].tool_calls??new())
+            {
+                try
+                {
+                    using var arguments=JsonDocument.Parse(call.function.arguments);
+                    if(arguments.RootElement.ValueKind!=JsonValueKind.Object) throw new JsonException();
+                }
+                catch(JsonException)
+                {
+                    var invalid=BaseResult(route,"preflight","",Diagnosis("invalid_tool_arguments","request",false,false,
+                        "INVALID_TOOL_ARGUMENTS",$"Saved input message[{index}] tool call '{call.id}' has invalid JSON object arguments. Repair or replace this worker session before retrying; no provider request was sent."));
+                    invalid.signalRef=EmitSignal(route,invalid,diagnosticMode);
+                    return invalid;
+                }
+            }
+        // The retry budget belongs to this invocation, never to the durable caller transcript.
+        var current=JsonSerializer.Deserialize<NormalizedInferenceRequest>(JsonSerializer.Serialize(request))!;
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(request.timeoutSeconds,15,1800)));
+        var attempts=new List<InferenceAttemptRecord>();
+        var usage=new NormalizedUsage();
+        while(true)
+        {
+            var result=await ExecuteOnceAsync(route,current,diagnosticMode,deadline.Token,leaseToken,token);
+            attempts.Add(new(){endpoint=route.RouteName,maxOutputTokens=current.maxOutputTokens,usage=result.usage,response=result.response,diagnosis=result.diagnosis});
+            AddUsage(usage,result.usage);
+            var nextBudget=Math.Min(16384,(long)current.maxOutputTokens*2);
+            if(route.Endpoint.contextLength is >0 && result.usage.reported && result.usage.promptTokens>0)
+                nextBudget=Math.Min(nextBudget,Math.Max(0,route.Endpoint.contextLength.Value-result.usage.promptTokens));
+            var retry=!diagnosticMode && attempts.Count<3 && result.diagnosis.failureClass=="output_budget_exhausted" && nextBudget>current.maxOutputTokens && !deadline.IsCancellationRequested;
+            if(!retry)
+            {
+                result.usage=CopyUsage(usage);
+                result.inferenceAttempts=attempts;
+                return result;
+            }
+            current.maxOutputTokens=(int)nextBudget;
+        }
+    }
+
+    static void AddUsage(NormalizedUsage total,NormalizedUsage part)
+    {
+        if(!total.reported) total.model=part.model;
+        else if(total.model!=part.model) total.model=null;
+        total.promptTokens+=part.promptTokens;
+        total.completionTokens+=part.completionTokens;
+        total.totalTokens+=part.totalTokens;
+        total.reported|=part.reported;
+    }
+
+    static NormalizedUsage CopyUsage(NormalizedUsage usage) => new(){model=usage.model,promptTokens=usage.promptTokens,completionTokens=usage.completionTokens,totalTokens=usage.totalTokens,reported=usage.reported};
+
+    async Task<NormalizedInferenceResult> ExecuteOnceAsync(
         EndpointRoute route,
         NormalizedInferenceRequest request,
         bool diagnosticMode,
         CancellationToken token,
-        string? leaseToken)
+        string? leaseToken,
+        CancellationToken callerToken)
     {
         IProviderAdapter adapter;
         try{adapter=_adapters.Resolve(route.Connection!);}
@@ -286,9 +349,22 @@ public sealed class InferenceGateway : IDisposable
                     return result;
                 }
 
+                if(parsed.ProviderError)
+                {
+                    var providerFailure=ProviderFailure(route,adapter,leaseToken,
+                        parsed.ProviderStatus,parsed.Error??"Provider returned an error.");
+                    providerFailure.request=built.evidence;
+                    providerFailure.response=responseEvidence;
+                    providerFailure.usage=parsed.Usage;
+                    providerFailure.signalRef=EmitSignal(route,providerFailure,diagnosticMode);
+                    return providerFailure;
+                }
                 var malformed=BaseResult(route,adapter.Id,adapter.SourcePath,
                     Diagnosis("malformed_response","request",true,false,
                         "RESPONSE_SHAPE_UNRECOGNIZED",parsed.Error));
+                if(parsed.FailureClass is not null)
+                    malformed.diagnosis=Diagnosis(parsed.FailureClass,"request",false,false,
+                        parsed.FailureClass=="output_budget_exhausted"?"OUTPUT_BUDGET_EXHAUSTED":"INVALID_TOOL_ARGUMENTS",parsed.Error);
                 malformed.usage=parsed.Usage;
                 malformed.request=built.evidence;
                 malformed.response=responseEvidence;
@@ -299,32 +375,13 @@ public sealed class InferenceGateway : IDisposable
 
             var routingHeaders=string.Join(" ",responseEvidence.headers.Select(kv=>$"{kv.Key}: {kv.Value}"));
             var diagnosticText=$"HTTP {(int)response.StatusCode} {response.ReasonPhrase} {routingHeaders} {body}".Trim();
-            var klass=FailurePolicy.Classify(diagnosticText,(int)response.StatusCode);
-            var scope=FailurePolicy.ScopeFor(klass);
-            var adapterSuspect=(int)response.StatusCode is 400 or 422 ||
-                               klass is "bad_request" or "protocol_error" or "malformed_response";
-            if((int)response.StatusCode is 400 or 422) scope="request";
-            var providerSuspect=scope is not ("request" or "harness");
-            var healthChanged=scope is not ("request" or "harness");
-
-            RouterResponse? healthOutcome=null;
-            if(healthChanged)
-                healthOutcome=_engine.Failure(leaseToken,route.RouteName,klass,diagnosticText);
-
-            var failed=BaseResult(route,adapter.Id,adapter.SourcePath,
-                Diagnosis(klass,scope,adapterSuspect,providerSuspect,
-                    ReasonCode(klass,(int)response.StatusCode,adapterSuspect),
-                    Bound(diagnosticText,1000)));
+            var failed=ProviderFailure(route,adapter,leaseToken,(int)response.StatusCode,diagnosticText);
             failed.request=built.evidence;
             failed.response=responseEvidence;
-            failed.healthChanged=healthChanged;
-            failed.failoverAllowed=!adapterSuspect && FailurePolicy.CanFailover(klass);
-            failed.nextRetryAt=healthOutcome is null?null:
-                ReadString(healthOutcome.data,"retryAfter")??ReadString(healthOutcome.data,"nextProbeAt");
             failed.signalRef=EmitSignal(route,failed,diagnosticMode);
             return failed;
         }
-        catch(TaskCanceledException ex) when(!token.IsCancellationRequested)
+        catch(TaskCanceledException ex) when(!callerToken.IsCancellationRequested)
         {
             stopwatch.Stop();
             responseEvidence.durationSeconds=Math.Round(stopwatch.Elapsed.TotalSeconds,3);
@@ -360,6 +417,10 @@ public sealed class InferenceGateway : IDisposable
             result.signalRef=EmitSignal(route,result,diagnosticMode);
             return result;
         }
+        catch(OperationCanceledException) when(callerToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch(Exception ex)
         {
             stopwatch.Stop();
@@ -377,6 +438,20 @@ public sealed class InferenceGateway : IDisposable
         finally{built?.Dispose();}
     }
 
+    NormalizedInferenceResult ProviderFailure(EndpointRoute route,IProviderAdapter adapter,string? leaseToken,int? status,string diagnosticText)
+    {
+        var klass=FailurePolicy.Classify(diagnosticText,status);
+        var scope=FailurePolicy.ScopeFor(klass);
+        var adapterSuspect=klass!="context_too_large" && (status is 400 or 422 || klass is "bad_request" or "protocol_error" or "malformed_response");
+        if(status is 400 or 422) scope="request";
+        var healthChanged=scope is not ("request" or "harness");
+        var healthOutcome=healthChanged?_engine.Failure(leaseToken,route.RouteName,klass,diagnosticText):null;
+        var failed=BaseResult(route,adapter.Id,adapter.SourcePath,Diagnosis(klass,scope,adapterSuspect,healthChanged,ReasonCode(klass,status??0,adapterSuspect),Bound(diagnosticText,1000)));
+        failed.healthChanged=healthChanged;
+        failed.failoverAllowed=!adapterSuspect && FailurePolicy.CanFailover(klass);
+        failed.nextRetryAt=healthOutcome is null?null:ReadString(healthOutcome.data,"retryAfter")??ReadString(healthOutcome.data,"nextProbeAt");
+        return failed;
+    }
     NormalizedInferenceResult BaseResult(
         EndpointRoute route,string adapterId,string adapterSource,InferenceDiagnosis diagnosis) =>
         new()
@@ -494,6 +569,7 @@ public sealed class InferenceGateway : IDisposable
             "capacity" => "PROVIDER_CAPACITY",
             "timeout" => "TRANSPORT_TIMEOUT",
             "server_error" => "PROVIDER_SERVER_ERROR",
+            "context_too_large" => "CONTEXT_CAPACITY_EXCEEDED",
             "bad_request" => "REQUEST_SHAPE_REJECTED",
             "protocol_error" => "PROTOCOL_REJECTED",
             _ => "INFERENCE_FAILED"

@@ -15,13 +15,13 @@ public static partial class FailurePolicy
     private static partial Regex BillingRx();
     [GeneratedRegex(@"(?i)timed?\s*out|timeout|connection reset|network is unreachable|dns")]
     private static partial Regex TimeoutRx();
-    [GeneratedRegex(@"(?i)\b5\d\d\b|service unavailable|bad gateway|gateway timeout|server error")]
+    [GeneratedRegex(@"(?i)\b5\d\d\b|service unavailable|provider[_ ]unavailable|bad gateway|gateway timeout|server error")]
     private static partial Regex ServerRx();
     [GeneratedRegex(@"(?i)model.*(?:not found|unavailable|does not exist)|\b404\b")]
     private static partial Regex ModelRx();
     [GeneratedRegex(@"(?i)capacity|overloaded|no capacity")]
     private static partial Regex CapacityRx();
-    [GeneratedRegex(@"(?i)context.{0,20}(?:too (?:large|long)|length|window)|maximum context|prompt too long")]
+    [GeneratedRegex(@"(?i)context.{0,20}(?:too (?:large|long)|length|window)|maximum context|prompt too long|input length\s*\d+\s*exceeds\s*(?:the\s*)?maximum\s*\d+")]
     private static partial Regex ContextRx();
     [GeneratedRegex(@"(?i)invalid json|malformed json|could not parse.*json")]
     private static partial Regex MalformedRx();

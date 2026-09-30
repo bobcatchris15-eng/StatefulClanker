@@ -68,18 +68,43 @@ public sealed class OpenAiChatAdapter : IProviderAdapter
 
     public AdapterParseResult ParseSuccess(string body,EndpointEntry endpoint)
     {
+        var usage=new NormalizedUsage{model=endpoint.model};
         try
         {
             using var doc=JsonDocument.Parse(body);
             var root=doc.RootElement;
+            var model=root.TryGetProperty("model",out var modelEl) && modelEl.ValueKind==JsonValueKind.String
+                ? modelEl.GetString()
+                : endpoint.model;
+            usage.model=model;
+            if(root.TryGetProperty("usage",out var usageEl) && usageEl.ValueKind==JsonValueKind.Object)
+            {
+                usage.promptTokens=AdapterJson.Long(usageEl,"prompt_tokens","input_tokens");
+                usage.completionTokens=AdapterJson.Long(usageEl,"completion_tokens","output_tokens");
+                usage.totalTokens=AdapterJson.Long(usageEl,"total_tokens");
+                if(usage.totalTokens<=0) usage.totalTokens=usage.promptTokens+usage.completionTokens;
+                usage.reported=true;
+            }
+            if(root.TryGetProperty("error",out var error) && error.ValueKind==JsonValueKind.Object)
+            {
+                int? status=null;
+                if(error.TryGetProperty("code",out var code))
+                {
+                    if(code.ValueKind==JsonValueKind.Number && code.TryGetInt32(out var number)) status=number;
+                    else if(code.ValueKind==JsonValueKind.String && int.TryParse(code.GetString(),out number)) status=number;
+                }
+                var detail=error.GetRawText();
+                return new(false,null,usage,detail,status,FailurePolicy.Classify(detail,status),true);
+            }
             if(!root.TryGetProperty("choices",out var choices) ||
                choices.ValueKind!=JsonValueKind.Array ||
                choices.GetArrayLength()==0)
-                return new(false,null,new(){model=endpoint.model},"Successful response did not contain choices.");
+                return new(false,null,usage,"Successful response did not contain choices.");
 
             var first=choices[0];
+            var exhausted=first.TryGetProperty("finish_reason",out var finish) && finish.ValueKind==JsonValueKind.String && finish.GetString()=="length";
             if(!first.TryGetProperty("message",out var message))
-                return new(false,null,new(){model=endpoint.model},"Successful response choice did not contain message.");
+                return new(false,null,usage,"Successful response choice did not contain message.");
 
             var assistant=new NormalizedInferenceMessage{role="assistant"};
             if(message.TryGetProperty("content",out var content))
@@ -111,27 +136,30 @@ public sealed class OpenAiChatAdapter : IProviderAdapter
                 }
             }
 
-            var model=root.TryGetProperty("model",out var modelEl) && modelEl.ValueKind==JsonValueKind.String
-                ? modelEl.GetString()
-                : endpoint.model;
-            var usage=new NormalizedUsage{model=model};
-            if(root.TryGetProperty("usage",out var usageEl) && usageEl.ValueKind==JsonValueKind.Object)
-            {
-                usage.promptTokens=AdapterJson.Long(usageEl,"prompt_tokens","input_tokens");
-                usage.completionTokens=AdapterJson.Long(usageEl,"completion_tokens","output_tokens");
-                usage.totalTokens=AdapterJson.Long(usageEl,"total_tokens");
-                if(usage.totalTokens<=0) usage.totalTokens=usage.promptTokens+usage.completionTokens;
-                usage.reported=true;
-            }
             var hasContent=!string.IsNullOrWhiteSpace(assistant.content);
             var hasTools=assistant.tool_calls is {Count:>0};
+            if(hasTools)
+                foreach(var call in assistant.tool_calls!)
+                {
+                    try
+                    {
+                        using var arguments=JsonDocument.Parse(call.function.arguments);
+                        if(arguments.RootElement.ValueKind!=JsonValueKind.Object) throw new JsonException("Tool arguments must be a JSON object.");
+                    }
+                    catch(JsonException)
+                    {
+                        return new(false,null,usage,"Provider returned invalid JSON object tool arguments.",null,
+                            exhausted?"output_budget_exhausted":"invalid_tool_arguments");
+                    }
+                }
             return hasContent||hasTools
                 ? new(true,assistant,usage,null)
-                : new(false,null,usage,"Successful response message contained neither content nor tool_calls.");
+                : new(false,null,usage,"Successful response message contained neither content nor tool_calls.",null,
+                    exhausted?"output_budget_exhausted":null);
         }
         catch(Exception ex)
         {
-            return new(false,null,new(){model=endpoint.model},"Could not parse OpenAI-compatible response: "+ex.Message);
+            return new(false,null,usage,"Could not parse OpenAI-compatible response: "+ex.Message);
         }
     }
 }
