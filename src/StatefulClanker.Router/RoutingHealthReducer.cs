@@ -70,7 +70,7 @@ public sealed class RoutingHealthReducer
 
             var exactAt=FutureTime(quota.nextAvailableAt);
             var explicitDelay=FailurePolicy.ParseExplicitDelay(message);
-            if(hard && explicitDelay is null && exactAt is null)
+            if(hard)
             {
                 e.state="quarantined";
                 e.retryAfter=null;
@@ -148,7 +148,6 @@ public sealed class RoutingHealthReducer
                     current.nextProbeAt=null;
                     current.message=null;
                     current.accountPermissionEvidence=null;
-                    current.lastSuccess=DateTimeOffset.UtcNow.ToString("O");
                     return true;
                 });
                 if(recovered) Append("health_recovered",kv.Key,"connection",new()
@@ -158,6 +157,24 @@ public sealed class RoutingHealthReducer
                 continue;
             }
             if(!string.Equals(e.state,"cooldown",StringComparison.OrdinalIgnoreCase)) continue;
+            if(e.scope=="connection" && (e.reason is "auth" or "configuration" ||
+               e.reason=="permission" && (e.accountPermissionEvidence==true ||
+               FailurePolicy.HasAccountPermissionEvidence(e.message))))
+            {
+                _store.UpdateHealth(doc =>
+                {
+                    if(doc.endpoints.TryGetValue(kv.Key,out var current) && current.state=="cooldown" &&
+                       (current.reason is "auth" or "configuration" || current.reason=="permission" &&
+                       (current.accountPermissionEvidence==true || FailurePolicy.HasAccountPermissionEvidence(current.message))))
+                    {
+                        current.state="quarantined";
+                        current.retryAfter=null;
+                        current.nextProbeAt=null;
+                    }
+                    return 0;
+                });
+                continue;
+            }
             var raw=e.retryAfter ?? e.nextProbeAt;
             if(!DateTimeOffset.TryParse(raw,out var due) || due>now) continue;
             MarkHealthy(kv.Key,"cooldown-expired");

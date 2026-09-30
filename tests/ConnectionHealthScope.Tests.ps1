@@ -9,6 +9,7 @@ Check ($policy::ScopeFor('permission','An active subscription is required for al
 Check ($policy::ScopeFor('permission','An active subscription is required for model fancy-llm.') -eq 'endpoint') 'model subscription poisoned account'
 Check ($policy::ScopeFor('permission','The requested model subscription is expired') -eq 'endpoint') 'expired model subscription poisoned account'
 Check ($policy::ScopeFor('permission','account subscription is inactive') -eq 'connection') 'account subscription ignored'
+foreach($text in @('403 Forbidden: This account model subscription is expired. Other models remain available.','403 Forbidden: account has model foo disabled','active subscription is required for model foo on this account')){Check ($policy::ScopeFor('permission',$text) -eq 'endpoint') 'account/model proximity misclassified'}
 Check ($policy::ScopeFor('auth','HTTP401') -eq 'connection') 'auth must stay connection'
 Check ($policy::ScopeFor('billing_exhausted','API budget exhausted.') -eq 'connection') 'budget must stay connection'
 foreach($klass in @('permission','model_unavailable','rate_limited','server_error')){Check (-not $policy::IsCredentialProbeFailure($klass,'metadata endpoint failed')) 'metadata failure poisoned inference'}
@@ -25,8 +26,16 @@ try {
   [void]$reducer.RegisterFailure(('connection:'+$case[0]),'connection',$case[1],$case[2],$profile)
  }
  [void]$reducer.RegisterFailure('connection:long','connection','permission',(('x'*600)+' An active OpenCode Go subscription is required to use Go models.'),$profile)
+ foreach($klass in @('auth','permission')){
+  $msg=if($klass -eq 'auth'){'401 Invalid API key; Retry-After: 1'}else{'account subscription is inactive; Retry-After: 1'}
+  $hard=$reducer.RegisterFailure(('connection:retry-'+$klass),'connection',$klass,$msg,$profile)
+  Check ($hard.state -eq 'quarantined') 'account restriction timer permits inference'
+ }
+ $legacy=$store.LoadHealth();foreach($klass in @('auth','permission')){$old=$legacy.endpoints['connection:retry-'+$klass];$old.state='cooldown';$old.retryAfter=[datetimeoffset]::UtcNow.AddMinutes(-1).ToString('O')};$legacy.endpoints['connection:model'].lastSuccess='2020-01-01T00:00:00Z';$store.SaveHealth($legacy)
  $reducer.NormalizeExpiredCooldowns()
  $health=$store.LoadHealth()
+ foreach($klass in @('auth','permission')){Check ($health.endpoints['connection:retry-'+$klass].state -eq 'quarantined') 'legacy timer unblocked account restriction'}
+ Check ($health.endpoints['connection:model'].lastSuccess -eq '2020-01-01T00:00:00Z') 'migration fabricated inference success'
  foreach($id in @('model','unknown')){Check ($health.endpoints['connection:'+$id].state -eq 'healthy') 'legacy model/unknown permission not migrated'}
  foreach($id in @('go','auth','budget','long')){Check ($health.endpoints['connection:'+$id].state -ne 'healthy') 'true account block migrated'}
  $quota=[StatefulClanker.Router.QuotaObservation]::new();$quota.source='probe:test';$quota.remaining=10
@@ -40,18 +49,22 @@ try {
   $listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0);$listener.Start();$port=$listener.LocalEndpoint.Port;$listener.Stop()
   $job=Start-Job -ScriptBlock {
    param($port,$status)
-   $l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,$port);$l.Start()
+   $l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,$port);$l.Start();Write-Output 'ready'
    try{$c=$l.AcceptTcpClient();$stream=$c.GetStream();$r=[IO.StreamReader]::new($stream);while($r.ReadLine() -ne ''){}
     $body='{"error":{"message":"metadata endpoint unavailable"}}';$crlf="`r`n"
     $bytes=[Text.Encoding]::ASCII.GetBytes("HTTP/1.1 $status Error$crlf"+"Content-Length: $($body.Length)$crlf"+"Connection: close$crlf$crlf$body")
-    $stream.Write($bytes,0,$bytes.Length);$c.Dispose()
+    $stream.Write($bytes,0,$bytes.Length);$c.Dispose();Write-Output ('sent-'+$status)
    }finally{$l.Stop()}
   } -ArgumentList $port,$status
   try{
-   Start-Sleep -Milliseconds 300
+   $ready=$false;$deadline=[datetimeoffset]::UtcNow.AddSeconds(10)
+   while([datetimeoffset]::UtcNow -lt $deadline){if(@(Receive-Job $job -Keep) -contains 'ready'){$ready=$true;break};Start-Sleep -Milliseconds 50}
+   Check $ready 'metadata server did not become ready'
    $profile=[StatefulClanker.Router.ConnectionProfile]::new();$profile.name="probe$status";$profile.presetId='openrouter';$profile.baseUrl="http://127.0.0.1:$port/api/v1";$profile.authKind='none'
    $connections=[Collections.Generic.Dictionary[string,StatefulClanker.Router.ConnectionProfile]]::new();$connections.Add($profile.name,$profile)
    $task=$observe.Invoke($monitor,@($connections,[datetimeoffset]::UtcNow,[Threading.CancellationToken]::None));[void]$task.GetAwaiter().GetResult()
+   [void](Wait-Job $job -Timeout 5)
+   Check ($job.State -eq 'Completed' -and @(Receive-Job $job -Keep) -contains ('sent-'+$status)) 'metadata HTTP response was not served'
    Check (-not $store.LoadHealth().endpoints.ContainsKey("connection:probe$status")) "metadata HTTP$status poisoned connection"
   }finally{Stop-Job $job -ErrorAction SilentlyContinue;Remove-Job $job -Force -ErrorAction SilentlyContinue}
  }
