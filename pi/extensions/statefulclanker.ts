@@ -150,7 +150,11 @@ class StdioMcpClient {
       try {
         envelope = JSON.parse(line);
       } catch {
-        console.error(`[StatefulClanker stdio] Ignoring non-JSON stdout: ${line}`);
+        // Raw responses can contain hundreds of kilobytes of project history.
+        // Never print them into the TUI or leave startup waiting for a lost reply.
+        const error = new Error(`Malformed MCP response (${line.length} characters).`);
+        console.error(`[StatefulClanker stdio] ${error.message}`);
+        this.failAll(error);
         continue;
       }
 
@@ -842,6 +846,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
   let cursor = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
   let delivering = false;
+  let polling = false;
   let manualQueuedForRoot: string | null = null;
 
   const ensureClient = (cwd: string): StdioMcpClient => {
@@ -871,8 +876,12 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
   const establishCursorAtLiveEdge = async () => {
     if (!client) return;
     try {
-      const current = await controlEventsSince(0);
-      cursor = current.cursor;
+      const result = await client.rpc("tools/call", {
+        name: "control_events_since",
+        arguments: { cursorOnly: true },
+      });
+      const current = parseToolPayload(result);
+      cursor = Number(current?.cursor ?? 0) || 0;
     } catch (error) {
       console.error(
         `[StatefulClanker extension] control cursor unavailable: ${error instanceof Error ? error.message : String(error)}`,
@@ -881,7 +890,8 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
   };
 
   const poll = async () => {
-    if (!client?.alive || delivering) return;
+    if (!client?.alive || delivering || polling) return;
+    polling = true;
     const activeClient = client;
 
     try {
@@ -919,6 +929,7 @@ export default async function statefulClankerExtension(pi: ExtensionAPI) {
       );
     } finally {
       delivering = false;
+      polling = false;
     }
   };
 

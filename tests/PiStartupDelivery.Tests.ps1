@@ -18,6 +18,8 @@ if(Test-Path -LiteralPath $bundledNode){
     Write-Host '  PI STARTUP DELIVERY 1b: bundled runtime receives the guide without a custom message'
     & $bundledNode (Join-Path $repo 'tests\PiStartupDelivery.Runtime.mjs')
     if($LASTEXITCODE-ne0){throw "Pi startup runtime check failed with exit code $LASTEXITCODE."}
+    & $bundledNode (Join-Path $repo 'tests\PiStdioTransport.Runtime.mjs')
+    if($LASTEXITCODE-ne0){throw "Pi stdio/startup regression failed with exit code $LASTEXITCODE."}
 }
 
 Write-Host '  PI STARTUP DELIVERY 2: startup never queues a serialized operator manual into the interactive conversation'

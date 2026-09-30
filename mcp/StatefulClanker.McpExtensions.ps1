@@ -111,12 +111,14 @@ function Get-McpControlCursor([string]$Project) {
     return 0
 }
 function Get-McpControlEventsSince([string]$Project,[long]$Since,[int]$Limit=100,[string]$MinimumLevel=$null) {
+    $currentCursor=Get-McpControlCursor $Project
+    if($currentCursor-gt0-and$Since-ge$currentCursor){return @()}
     $path=Join-Path (Get-McpStateDir $Project) 'control\events.jsonl'
     if(-not(Test-Path -LiteralPath $path)){return @()}
     $rank=@{fyi=0;attention=1;human_required=2};$minRank=0
     if($MinimumLevel){if(-not$rank.ContainsKey($MinimumLevel)){throw "Invalid minimumLevel '$MinimumLevel'."};$minRank=[int]$rank[$MinimumLevel]}
     $out=@();$cap=[Math]::Min(1000,[Math]::Max(1,$Limit))
-    foreach($line in @(Get-Content -LiteralPath $path|Where-Object{$_})) {
+    foreach($line in @(Get-Content -LiteralPath $path -Encoding UTF8|Where-Object{$_})) {
         try{$evt=$line|ConvertFrom-Json}catch{continue}
         if([long]$evt.sequence-le$Since){continue}
         $level=if($evt.PSObject.Properties['level']){[string]$evt.level}else{'fyi'}
@@ -402,7 +404,7 @@ function New-SCExtendedTools {
         @{name='directive_history';description='Audit/debug only: read superseded revisions for a directive. Never treat these as current worker specification.';inputSchema=@{type='object';properties=@{project=@{type='string'};id=@{type='string'}};required=@('id')}},
         @{name='directive_retire';description='Retire a current human directive because the human removed that rule/feature. Requires Intent reconciliation.';inputSchema=@{type='object';properties=@{project=@{type='string'};id=@{type='string'};reason=@{type='string'}};required=@('id')}},
         @{name='intent_apply';description='Commit the complete normalized Intent Contract after reconciling it against ALL current human directives. Clears the directive-reconciliation gate. contract object requires 9 fields: objective (string), requirements (array), constraints (array), invariants (array), nonGoals (array), decisions (array), preferences (array), openQuestions (array), successDefinition (string).';inputSchema=@{type='object';properties=@{project=@{type='string'};contract=@{type='object';description='Intent contract object containing objective, requirements, constraints, invariants, nonGoals, decisions, preferences, openQuestions, successDefinition.'};reason=@{type='string'}};required=@('contract')}},
-        @{name='control_events_since';description='Read durable sequenced control-plane events after a cursor. Keep the returned cursor and use it next time; push notifications are only a wake-up signal.';inputSchema=@{type='object';properties=@{project=@{type='string'};since=@{type='integer';minimum=0};limit=@{type='integer';minimum=1;maximum=1000};minimumLevel=@{type='string';enum=@('fyi','attention','human_required')}}}},
+        @{name='control_events_since';description='Read durable sequenced control-plane events after a cursor. Set cursorOnly at session startup to read the live cursor without historical events. Keep the returned cursor and use it next time; push notifications are only a wake-up signal.';inputSchema=@{type='object';properties=@{project=@{type='string'};since=@{type='integer';minimum=0};limit=@{type='integer';minimum=1;maximum=1000};minimumLevel=@{type='string';enum=@('fyi','attention','human_required')};cursorOnly=@{type='boolean'}}}},
         @{name='control_snapshot';description='Read the current human-facing project snapshot: goal, current directives, Intent, reconciliation gate, task counts, holds, active agents, and event cursor.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
         @{name='autofill_status';description='Inspect the resident autofill supervisor: state (running, paused, idle, blocked, draining, stopped), PID, slot availability, ready task count, and blocking reasons.';inputSchema=@{type='object';properties=@{project=@{type='string'}}}},
         @{name='autofill_control';description='Control the resident autofill supervisor: pause (suspend dispatch and allow manual runs), resume, stop (drain and exit), or trigger_now (immediate dispatch tick).';inputSchema=@{type='object';properties=@{project=@{type='string'};action=@{type='string';enum=@('stop','pause','resume','trigger_now')}};required=@('action')}},
@@ -475,6 +477,7 @@ function Invoke-SCExtendedTool([string]$Name,$Arguments) {
             try{$Arguments.contract|ConvertTo-Json -Depth 30|Set-Content -LiteralPath $temp -Encoding UTF8;$result=Invoke-McpHarness $project @('intent','replace','-Path',$temp,'-Reason',$reason);return New-McpTextResult ([ordered]@{applied=$true;reconciliationCleared=$true;output=$result.stdout})}finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
         }
         'control_events_since' {
+            if($Arguments-and$Arguments.PSObject.Properties['cursorOnly']-and$Arguments.cursorOnly){return New-McpTextResult ([ordered]@{since=0;cursor=Get-McpControlCursor $project;events=@()})}
             $since=0;if($Arguments-and$Arguments.PSObject.Properties['since']-and$null-ne$Arguments.since){$since=[long]$Arguments.since};$limit=100;if($Arguments-and$Arguments.PSObject.Properties['limit']-and$null-ne$Arguments.limit){$limit=[int]$Arguments.limit};$min=Get-McpArgOptional $Arguments 'minimumLevel'
             $events=@(Get-McpControlEventsSince $project $since $limit $min);return New-McpTextResult ([ordered]@{since=$since;cursor=Get-McpControlCursor $project;events=$events})
         }

@@ -6,6 +6,14 @@ param([string]$ProjectPath)
 Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 
+# MCP is UTF-8 regardless of the console code page inherited by a hidden
+# Windows PowerShell child. Best-fit encoding can turn smart quotes into
+# unescaped ASCII quotes after JSON serialization and corrupt the envelope.
+$mcpUtf8=New-Object Text.UTF8Encoding($false)
+[Console]::InputEncoding=$mcpUtf8
+[Console]::OutputEncoding=$mcpUtf8
+$OutputEncoding=$mcpUtf8
+
 . (Join-Path $PSScriptRoot 'StatefulClanker.McpBootstrap.ps1')
 
 if($ProjectPath-and(Test-Path -LiteralPath $ProjectPath -PathType Container)){
