@@ -64,8 +64,11 @@ public sealed class RouterEngine
             }
         }
 
-        if(!string.IsNullOrWhiteSpace(preferred) && allowSet.Length>0 &&
-           !allowSet.Any(a=>string.Equals(a,preferred,StringComparison.OrdinalIgnoreCase)))
+        // Session affinity is advisory. Strict overrides must name an allowed
+        // route, matching the same catalog/pool identities used by selection.
+        if(strictPreferred && !string.IsNullOrWhiteSpace(preferred) && allowSet.Length>0 &&
+           !configured.Any(r=>string.Equals(r.CatalogId,preferred,StringComparison.OrdinalIgnoreCase) ||
+                              string.Equals(r.RouteName,preferred,StringComparison.OrdinalIgnoreCase)))
         {
             EmitRoutingSignal("route_unavailable",null,"request",new(){{"reason","preferred_not_allowed"},{"preferred",preferred}},"router","scheduler");
             return RouterResponse.Fail(

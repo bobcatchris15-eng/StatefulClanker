@@ -101,3 +101,93 @@ foreach($case in $allowlistCases){
 }
 Assert-True ($allowlistFailures.Count-eq0) ($allowlistFailures-join '; ')
 Write-Host 'PASS: real allowlists dispatch with exact negotiation arguments and worker arrays.'
+
+Write-Host '  BRIDGE 4: resumed durable session migrates excluded affinity through actual router acquisition'
+$router=Join-Path $repo 'src\StatefulClanker.Router\bin\Debug\net8.0-windows\StatefulClanker.Router.exe'
+$temp=Join-Path ([IO.Path]::GetTempPath()) ('sc-router-bridge-'+[guid]::NewGuid().ToString('N'))
+$oldRoot=$env:SC_ROUTER_ROOT
+$daemon=$null
+New-Item -ItemType Directory -Force -Path $temp|Out-Null
+Push-Location $temp
+try{
+    $env:SC_ROUTER_ROOT=Join-Path $temp 'router'
+    New-Item -ItemType Directory -Force -Path $env:SC_ROUTER_ROOT|Out-Null
+    @{
+        schemaVersion=2;entries=@{
+            'a::m1'=@{id='a::m1';connection='a';model='m1';enabled=$true;workhorse=$true;supportsTools=$true;toolMode='native'}
+            'b::m2'=@{id='b::m2';connection='b';model='m2';enabled=$true;workhorse=$true;supportsTools=$true;toolMode='native'}
+        }
+    }|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $env:SC_ROUTER_ROOT 'endpoints.json') -Encoding UTF8
+    @{
+        schemaVersion=2;connections=@{
+            a=@{name='a';presetId='custom';protocol='openai-chat';baseUrl='http://127.0.0.1:65531/v1';authKind='none';headers=@{}}
+            b=@{name='b';presetId='custom';protocol='openai-chat';baseUrl='http://127.0.0.1:65532/v1';authKind='none';headers=@{}}
+        }
+    }|ConvertTo-Json -Depth 20|Set-Content -LiteralPath (Join-Path $env:SC_ROUTER_ROOT 'connections.json') -Encoding UTF8
+    $daemon=Start-Process -FilePath $router -ArgumentList 'daemon' -PassThru -WindowStyle Hidden
+    $ready=$false
+    foreach($i in 1..30){
+        Start-Sleep -Milliseconds 100
+        try{$ping=& $router ping|ConvertFrom-Json;if($ping.ok){$ready=$true;break}}catch{}
+    }
+    Assert-True $ready 'Isolated bridge router did not become ready.'
+
+    # Use real durable session/context/pin functions. Only the provider transport
+    # seam is replaced; negotiation and endpoint acquisition use the actual daemon.
+    . (Join-Path $repo 'lib\StatefulClanker.Core.ps1')
+    Set-SCRoots $temp $temp
+    . (Join-Path $repo 'lib\StatefulClanker.WorkerRuntime.ps1')
+    New-Item -ItemType Directory -Force -Path (Join-Path $temp '.statefulclanker')|Out-Null
+    Write-SCJson (Get-SCPath 'state.json') ([ordered]@{
+        schemaVersion=4;revision=0;directionRevision=0;projectId='router-bridge-test';projectRoot=$temp
+        goal='';activePlanId=$null;planApproved=$true
+        createdAt=[datetimeoffset]::UtcNow.ToString('o');updatedAt=[datetimeoffset]::UtcNow.ToString('o')
+    })
+    ''|Set-Content -LiteralPath (Get-SCPath 'events.jsonl') -Encoding UTF8
+    function Get-SCConfig { return [pscustomobject]@{routing=[pscustomobject]@{endpoints=@('b::m2')}} }
+    function Get-SCMachineEndpointCatalogPath { return Join-Path $env:SC_ROUTER_ROOT 'endpoints.json' }
+    function Invoke-SCCompiledRouterCommand([string[]]$Arguments) { return (& $router @Arguments|ConvertFrom-Json) }
+    $resumeId='ws-bridge-resume'
+    $resumeTask=[pscustomobject]@{id='bridge-resume-task';latestWorkerSessionId=$resumeId}
+    $compilation=[pscustomobject]@{id='compiled-resume';inputFingerprint='existing-context'}
+    $continuation='CONTINUATION: preserve existing work and finish validation'
+    Save-SCWorkerSession ([pscustomobject]@{
+        id=$resumeId;taskId=$resumeTask.id;status='validator-error';toolMode='native';workRoot=$temp
+        compilationId=$compilation.id;inputFingerprint=$compilation.inputFingerprint
+        pinnedEndpoint='pool:a::m1';pinnedConnection='a';pinnedModel='m1'
+        messages=@([pscustomobject]@{role='user';content='original task'},[pscustomobject]@{role='assistant';content='existing work and reasoning'})
+        appliedContinuations=@()
+    })
+    Assert-True ((Get-SCReusableWorkerSessionId $resumeTask)-eq$resumeId) 'Existing session could not be resumed.'
+    function Invoke-SCDirectApiProvider($Task,[string]$Prompt,[string]$Stage,$ProviderRecord,[string]$ParentAgentId,$Compilation,[string]$WorkerSessionId,[string]$ContinuationMessage) {
+        Assert-True ($WorkerSessionId-eq$resumeId -and $ProviderRecord.config.sessionId-eq$resumeId) 'Bridge changed resumed worker session identity.'
+        Assert-True ($ContinuationMessage-ceq$continuation) 'Bridge lost continuation argument.'
+        Assert-True ($ProviderRecord.config.preferred-eq'pool:a::m1' -and -not$ProviderRecord.config.strictPreferred) 'Stale session pin was dropped or made strict.'
+        $session=Sync-SCWorkerSessionContext $WorkerSessionId $Task $Compilation $Prompt $ProviderRecord.config.toolMode @() $ContinuationMessage
+        Assert-True (@($session.messages|Where-Object{$_.content-eq'existing work and reasoning'}).Count-eq1) 'Resume discarded the prior transcript.'
+        Assert-True (@($session.messages|Where-Object{$_.content-ceq$ContinuationMessage}).Count-eq1) 'Continuation was not appended exactly once.'
+        $acquire=Invoke-SCCompiledRouterCommand @('acquire','--preferred',$ProviderRecord.config.preferred,'--strict-preferred',([string]$ProviderRecord.config.strictPreferred).ToLowerInvariant(),'--endpoints',($ProviderRecord.config.allowedEndpoints-join','),'--require-tools',([string]($ProviderRecord.config.toolMode-eq'native')).ToLowerInvariant(),'--session',$WorkerSessionId,'--owner-pid',[string]$PID)
+        Assert-True ([bool]$acquire.ok) "Allowed acquisition failed: $($acquire|ConvertTo-Json -Depth 10 -Compress)"
+        try{
+            Assert-True ($acquire.data.endpoint-eq'pool:b::m2' -and -not$acquire.data.preferredHonored) 'Acquisition escaped allowlist or honored excluded affinity.'
+            $snapshot=Invoke-SCCompiledRouterCommand @('snapshot')
+            Assert-True (@($snapshot.data.leases|Where-Object{$_.sessionId-eq$WorkerSessionId -and $_.route-eq'pool:b::m2'}).Count-eq1) 'Allowed lease lost resumed session identity.'
+            Assert-True ((Get-SCWorkerSessionRoutePin $WorkerSessionId).endpoint-eq'pool:a::m1') 'Pin changed before successful provider completion.'
+            return [pscustomobject]@{exitCode=0;stdout='continued';stderr='';endpoint=$acquire.data.endpoint;connection=$acquire.data.connection;model=$acquire.data.model;workerSessionId=$WorkerSessionId;workerSessionResumable=$true;routeAttempts=1;routeHistory=@()}
+        }finally{[void](Invoke-SCCompiledRouterCommand @('release','--lease',$acquire.data.lease))}
+    }
+    $resumedReceipt=Invoke-SCProviderViaCompiledRouter $resumeTask 'original task' 'run' $null $compilation $resumeId $continuation
+    Assert-True ($resumedReceipt.exitCode-eq0) "Resumed bridge dispatch failed: $($resumedReceipt.stderr)"
+    Assert-True ($resumedReceipt.workerSessionId-eq$resumeId) 'Successful receipt changed worker session identity.'
+    $persisted=Get-SCWorkerSession $resumeId
+    Assert-True ($persisted.id-eq$resumeId -and $persisted.workRoot-eq$temp) 'Migration changed session identity or work root.'
+    Assert-True (@($persisted.messages|Where-Object{$_.content-eq'existing work and reasoning'}).Count-eq1) 'Migration discarded prior transcript.'
+    Assert-True (@($persisted.messages|Where-Object{$_.content-ceq$continuation}).Count-eq1) 'Migration discarded or duplicated continuation.'
+    Assert-True ($persisted.pinnedEndpoint-eq'pool:b::m2' -and $persisted.pinnedConnection-eq'b' -and $persisted.pinnedModel-eq'm2') 'Successful bridge completion did not persist the selected allowed route.'
+    Write-Host 'PASS: same durable session resumes, acquires allowed endpoint, preserves transcript and continuation, and updates affinity on successful completion.'
+}finally{
+    if($daemon -and -not$daemon.HasExited){Stop-Process -Id $daemon.Id -Force -ErrorAction SilentlyContinue}
+    $env:SC_ROUTER_ROOT=$oldRoot
+    Pop-Location
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+}

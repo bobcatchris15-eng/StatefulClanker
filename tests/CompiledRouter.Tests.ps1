@@ -215,9 +215,49 @@ try {
     Assert-True (@('pool:free-a::m1','pool:free-a::m2') -contains [string]$allowed.data.endpoint) 'Allowlisted acquire returned an endpoint outside the allowlist.'
     Assert-True ([bool]$allowed.data.allowlistApplied) 'Allowlisted acquire did not report allowlistApplied.'
     [void](Call-Router @('release','--lease',[string]$allowed.data.lease))
-    $outsidePreferredRaw=& $router acquire --endpoints 'free-a::m1,free-a::m2' --preferred 'free-b::m3' --session allow-2 --owner-pid $PID | ConvertFrom-Json
+    $outsidePreferredRaw=& $router acquire --endpoints 'free-a::m1,free-a::m2' --preferred 'free-b::m3' --strict-preferred true --session allow-2 --owner-pid $PID | ConvertFrom-Json
     Assert-True (-not [bool]$outsidePreferredRaw.ok) 'Preferred endpoint outside the allowlist was unexpectedly honored.'
     Assert-True ([string]$outsidePreferredRaw.data.reason -eq 'preferred_not_allowed') 'Preferred-outside-allowlist failure did not report the expected reason.'
+
+    Write-Host '  ROUTER 11B: stale advisory affinity falls back within catalog and pool allowlists'
+    foreach($aliases in @(
+        @{preferred='free-a::m1';allowed='free-b::m3'},
+        @{preferred='pool:free-a::m1';allowed='pool:free-b::m3'}
+    )){
+        $soft=Call-Router @('acquire','--preferred',$aliases.preferred,'--strict-preferred','false','--endpoints',$aliases.allowed,'--require-tools','true','--session','stale-affinity','--owner-pid',[string]$PID)
+        Assert-True ([string]$soft.data.endpoint -eq 'pool:free-b::m3') 'Advisory fallback escaped the sole allowed compatible endpoint.'
+        Assert-True (-not [bool]$soft.data.preferredHonored) 'Excluded advisory preference was reported honored.'
+        Assert-True ([bool]$soft.data.allowlistApplied) 'Advisory fallback lost allowlist enforcement.'
+        [void](Call-Router @('release','--lease',[string]$soft.data.lease))
+        $strict=& $router acquire --preferred $aliases.preferred --strict-preferred true --endpoints $aliases.allowed --session strict-stale-affinity --owner-pid $PID | ConvertFrom-Json
+        Assert-True (-not [bool]$strict.ok -and [string]$strict.data.reason -eq 'preferred_not_allowed') 'Excluded strict preference did not fail closed.'
+        Assert-True ([int](Call-Router @('snapshot')).data.activeLeases -eq 0) 'Excluded strict preference created a lease.'
+    }
+
+    Write-Host '  ROUTER 11C: equivalent allowed endpoint aliases honor strict preferences'
+    foreach($aliases in @(
+        @{preferred='pool:free-b::m3';allowed='free-b::m3'},
+        @{preferred='free-b::m3';allowed='pool:free-b::m3'}
+    )){
+        $alias=Call-Router @('acquire','--preferred',$aliases.preferred,'--strict-preferred','true','--endpoints',$aliases.allowed,'--session','strict-alias','--owner-pid',[string]$PID)
+        Assert-True ([string]$alias.data.endpoint -eq 'pool:free-b::m3' -and [bool]$alias.data.preferredHonored) 'Allowed strict alias was rejected or changed endpoint.'
+        [void](Call-Router @('release','--lease',[string]$alias.data.lease))
+    }
+
+    Write-Host '  ROUTER 11D: negotiation ignores excluded affinity but preserves explicit constraints'
+    $native=Call-Router @('negotiate','--preferred','pool:free-a::m1','--endpoints','free-b::m3')
+    Assert-True ([string]$native.data.toolMode -eq 'native' -and [int]$native.data.configuredCandidates -eq 1) 'Excluded affinity disrupted compatible native negotiation.'
+    $text=Call-Router @('negotiate','--preferred','pool:free-a::m1','--endpoints','pool:free-b::m4')
+    Assert-True ([string]$text.data.toolMode -eq 'text' -and [int]$text.data.nativeCandidates -eq 0) 'Excluded native pin leaked native capability into text-only allowed pool.'
+    $strictNegotiation=& $router negotiate --preferred 'pool:free-a::m1' --strict-preferred true --endpoints 'free-b::m3' | ConvertFrom-Json
+    Assert-True (-not [bool]$strictNegotiation.ok) 'Negotiation relaxed an explicit excluded endpoint.'
+    $connectionNegotiation=& $router negotiate --preferred 'pool:free-a::m1' --connection free-a --endpoints 'free-b::m3' | ConvertFrom-Json
+    Assert-True (-not [bool]$connectionNegotiation.ok -and [string]$connectionNegotiation.data.reason -eq 'no_eligible_endpoint') 'Negotiation escaped explicit connection constraint.'
+    $connectionAcquire=& $router acquire --preferred 'pool:free-a::m1' --connection free-a --endpoints 'free-b::m3' --session constrained-stale --owner-pid $PID | ConvertFrom-Json
+    Assert-True (-not [bool]$connectionAcquire.ok -and [string]$connectionAcquire.data.reason -eq 'no_eligible_endpoint') 'Advisory fallback escaped explicit connection constraint.'
+    $incompatibleAcquire=& $router acquire --preferred 'pool:free-a::m1' --require-tools true --endpoints 'free-b::m4' --session incompatible-stale --owner-pid $PID | ConvertFrom-Json
+    Assert-True (-not [bool]$incompatibleAcquire.ok -and [string]$incompatibleAcquire.data.reason -eq 'no_eligible_endpoint') 'Advisory fallback escaped native-tool compatibility constraint.'
+    Assert-True ([int](Call-Router @('snapshot')).data.activeLeases -eq 0) 'Constraint failure created a lease.'
 
     Write-Host '  ROUTER 12: an allowlist that matches nothing fails explicitly, never falls back to the global pool'
     $noneAllowedRaw=& $router acquire --endpoints 'does-not-exist' --session allow-3 --owner-pid $PID | ConvertFrom-Json
