@@ -2052,7 +2052,8 @@ sealed class MainForm : Form
     // away and never mutates configuration surfaces (refreshConfiguration:false).
     readonly System.Windows.Forms.Timer _timer = new() { Interval = 30000 };
     readonly System.Windows.Forms.Timer _layoutSaveTimer = new() { Interval = 450 };
-    readonly System.Windows.Forms.Timer _watcherDebounce = new() { Interval = 400 };
+    readonly System.Windows.Forms.Timer _watcherRefreshTimer = new() { Interval = 400 };
+    readonly WatcherRefreshGate _watcherRefreshGate = new();
     FileSystemWatcher? _projectWatcher;
     readonly ProjectRefreshQueue _refreshQueue=new();
     int _mcpDiscoveryRunning;
@@ -2072,13 +2073,20 @@ sealed class MainForm : Form
         BuildUi(); RestoreProjects(); Theme.Apply(this); TargetPoolStore.Changed += HandleTargetPoolChanged; FormClosed += (_, _) => TargetPoolStore.Changed -= HandleTargetPoolChanged; _ = RefreshAllAsync(true);
         if (_settings.ActiveProjectPath is { } activeAtStartup && Directory.Exists(activeAtStartup) && AutofillHost.Enabled(activeAtStartup)) _autofill.EnsureStarted(activeAtStartup);
         _layoutSaveTimer.Tick += (_, _) => { _layoutSaveTimer.Stop(); AppStore.Save(_settings); };
-        _watcherDebounce.Tick += async (_, _) => { _watcherDebounce.Stop(); await RefreshAllAsync(false); };
-        _timer.Tick += async (_, _) => { await RefreshAllAsync(false); }; _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
+        _watcherRefreshTimer.Tick += async (_, _) =>
+        {
+            if (!_watcherRefreshGate.TryBeginRefresh()) return;
+            try { await RefreshAllAsync(false); }
+            finally { _watcherRefreshGate.CompleteRefresh(); }
+        };
+        _watcherRefreshTimer.Start();
+        _timer.Tick += (_, _) => _watcherRefreshGate.MarkDirty(); _timer.Start(); Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); }; FormClosing += HandleFormClosing;
         RetargetProjectWatcher(_settings.ActiveProjectPath);
     }
 
     void RetargetProjectWatcher(string? projectPath)
     {
+        _watcherRefreshGate.MarkDirty();
         if (_projectWatcher is not null) { try { _projectWatcher.EnableRaisingEvents = false; } catch { } _projectWatcher.Dispose(); _projectWatcher = null; }
         if (string.IsNullOrWhiteSpace(projectPath) || !Directory.Exists(projectPath)) return;
         var stateDir = System.IO.Path.Combine(projectPath, ".statefulclanker");
@@ -2098,10 +2106,22 @@ sealed class MainForm : Form
 
     void QueueWatcherRefresh()
     {
-        // FileSystemWatcher events arrive off the UI thread. Marshal onto it and
-        // coalesce bursts of changes into a single debounced refresh.
-        if (IsDisposed || Disposing) return;
-        try { BeginInvoke(new Action(() => { _watcherDebounce.Stop(); _watcherDebounce.Start(); })); } catch { }
+        // No UI messages or timer handle churn, even during a worker write storm.
+        _watcherRefreshGate.MarkDirty();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _watcherRefreshGate.Dispose();
+            _watcherRefreshTimer.Dispose();
+            _timer.Dispose();
+            _layoutSaveTimer.Dispose();
+            _projectWatcher?.Dispose();
+            _projectWatcher = null;
+        }
+        base.Dispose(disposing);
     }
 
     static Button Btn(string text, int width = 145) => new() { Text = text, Width = width, Height = 30, Margin = new Padding(0, 2, 5, 0) };
@@ -3032,7 +3052,8 @@ sealed class MainForm : Form
         AppStore.Save(_settings);
         if (!_reallyExit) { e.Cancel = true; Hide(); return; }
         _timer.Stop();
-        _watcherDebounce.Stop();
+        _watcherRefreshTimer.Stop();
+        _watcherRefreshGate.Dispose();
         if (_projectWatcher is not null) { try { _projectWatcher.EnableRaisingEvents = false; } catch { } _projectWatcher.Dispose(); _projectWatcher = null; }
         _terminal.StopSession();
         _autofill.Dispose();
