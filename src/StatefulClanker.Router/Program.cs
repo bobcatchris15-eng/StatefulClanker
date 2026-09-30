@@ -112,6 +112,8 @@ internal static class Program
     static async Task<RouterResponse> SendWithDaemonAsync(string pipeName,RouterRequest request)
     {
         var responseTimeout=500;
+        // Endpoint diagnostics allow a 45-second provider call plus IPC overhead.
+        if(request.op=="test-endpoint") responseTimeout=55000;
         if(request.op=="infer")
         {
             var perAttempt=Math.Clamp(request.inference?.timeoutSeconds??300,15,1800);
@@ -121,7 +123,7 @@ internal static class Program
             responseTimeout=(int)Math.Min(int.MaxValue-1000L,theoretical);
         }
         try { return await RouterPipeClient.SendAsync(pipeName,request,500,responseTimeout); }
-        catch { }
+        catch(RouterConnectionException) { }
 
         var exe=Environment.ProcessPath ?? throw new InvalidOperationException("Cannot determine router executable path.");
         Process.Start(new ProcessStartInfo
@@ -138,7 +140,7 @@ internal static class Program
         {
             await Task.Delay(100);
             try { return await RouterPipeClient.SendAsync(pipeName,request,750,responseTimeout); }
-            catch(Exception ex){last=ex;}
+            catch(RouterConnectionException ex){last=ex;}
         }
         throw new IOException("Router daemon did not become ready.",last);
     }

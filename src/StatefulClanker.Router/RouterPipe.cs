@@ -74,6 +74,13 @@ public sealed class RouterPipeServer
     }
 }
 
+// Only connection failures are safe to retry: once connected, a failed write or
+// missing response may still mean the daemon executed the request.
+public sealed class RouterConnectionException : IOException
+{
+    public RouterConnectionException(Exception inner):base("Could not connect to router daemon.",inner) { }
+}
+
 public static class RouterPipeClient
 {
     static readonly JsonSerializerOptions Json=new(){PropertyNameCaseInsensitive=true};
@@ -85,8 +92,15 @@ public static class RouterPipeClient
         int responseTimeoutMs=3000)
     {
         using var pipe=new NamedPipeClientStream(".",pipeName,PipeDirection.InOut,PipeOptions.Asynchronous);
-        using(var connectCts=new CancellationTokenSource(connectTimeoutMs))
+        try
+        {
+            using var connectCts=new CancellationTokenSource(connectTimeoutMs);
             await pipe.ConnectAsync(connectCts.Token);
+        }
+        catch(Exception ex) when(ex is OperationCanceledException or TimeoutException or IOException)
+        {
+            throw new RouterConnectionException(ex);
+        }
 
         using var reader=new StreamReader(pipe,Encoding.UTF8,false,4096,true);
         using var writer=new StreamWriter(pipe,new UTF8Encoding(false),4096,true){AutoFlush=true};
