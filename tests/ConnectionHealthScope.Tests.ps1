@@ -38,6 +38,18 @@ try {
  Check ($health.endpoints['connection:model'].lastSuccess -eq '2020-01-01T00:00:00Z') 'migration fabricated inference success'
  foreach($id in @('model','unknown')){Check ($health.endpoints['connection:'+$id].state -eq 'healthy') 'legacy model/unknown permission not migrated'}
  foreach($id in @('go','auth','budget','long')){Check ($health.endpoints['connection:'+$id].state -ne 'healthy') 'true account block migrated'}
+ $expired=$store.LoadHealth();$due=$expired.endpoints['pool:mock::m'];$due.retryAfter=[datetimeoffset]::UtcNow.AddMinutes(-1).ToString('O');$due.lastSuccess='2021-01-01T00:00:00Z';$store.SaveHealth($expired)
+ $reducer.NormalizeExpiredCooldowns()
+ Check ($store.LoadHealth().endpoints['pool:mock::m'].lastSuccess -eq '2021-01-01T00:00:00Z') 'cooldown expiry fabricated measured success'
+ $expire=$reducer.GetType().GetMethod('TryExpireCooldown',[Reflection.BindingFlags]'Instance,NonPublic')
+ Check (-not [bool]$expire.Invoke($reducer,@('connection:retry-auth',[datetimeoffset]::UtcNow))) 'stale timer cleared newer auth quarantine'
+ Check (-not [bool]$expire.Invoke($reducer,@('connection:retry-permission',[datetimeoffset]::UtcNow))) 'stale timer cleared newer account quarantine'
+ [void]$reducer.RegisterFailure('pool:future::m','endpoint','timeout','timeout',$null)
+ Check (-not [bool]$expire.Invoke($reducer,@('pool:future::m',[datetimeoffset]::UtcNow))) 'stale timer cleared newer future cooldown'
+ [void]$reducer.RegisterFailure('pool:due::m','endpoint','timeout','timeout',$null)
+ $before=$store.LoadHealth();$before.endpoints['pool:due::m'].retryAfter=[datetimeoffset]::UtcNow.AddMinutes(-1).ToString('O');$store.SaveHealth($before)
+ Check ([bool]$expire.Invoke($reducer,@('pool:due::m',[datetimeoffset]::UtcNow))) 'due cooldown did not expire'
+ Check ($store.LoadHealth().endpoints['pool:due::m'].state -eq 'healthy') 'due cooldown health did not update'
  $quota=[StatefulClanker.Router.QuotaObservation]::new();$quota.source='probe:test';$quota.remaining=10
  $reducer.RecordQuota('connection:go','connection',$quota,$profile)
  Check ($store.LoadHealth().endpoints['connection:go'].state -eq 'quarantined') 'available quota cleared subscription block'
@@ -69,6 +81,7 @@ try {
   }finally{Stop-Job $job -ErrorAction SilentlyContinue;Remove-Job $job -Force -ErrorAction SilentlyContinue}
  }
  $all=Get-ChildItem -LiteralPath $temp -Recurse -File|Where-Object Extension -eq '.jsonl'|ForEach-Object{Get-Content -LiteralPath $_.FullName}
+ Check (($all -join "`n") -match 'cooldown-expired') 'cooldown expiry recovery not audited'
  Check (($all -join "`n") -match 'policy-scope-corrected') 'scope migration not auditable'
  Write-Host 'PASS: connection health scope policy and migration'
 }finally{if(Test-Path -LiteralPath $temp){Remove-Item -LiteralPath $temp -Recurse -Force}}

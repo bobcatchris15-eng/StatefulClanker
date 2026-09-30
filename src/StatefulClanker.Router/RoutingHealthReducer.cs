@@ -177,8 +177,36 @@ public sealed class RoutingHealthReducer
             }
             var raw=e.retryAfter ?? e.nextProbeAt;
             if(!DateTimeOffset.TryParse(raw,out var due) || due>now) continue;
-            MarkHealthy(kv.Key,"cooldown-expired");
+            TryExpireCooldown(kv.Key,now);
         }
+    }
+
+    internal bool TryExpireCooldown(string key,DateTimeOffset now)
+    {
+        var recovered=_store.UpdateHealth(doc =>
+        {
+            if(!doc.endpoints.TryGetValue(key,out var current) ||
+               !string.Equals(current.state,"cooldown",StringComparison.OrdinalIgnoreCase) ||
+               !string.Equals(current.scope,ScopeFromKey(key),StringComparison.OrdinalIgnoreCase) ||
+               !DateTimeOffset.TryParse(current.retryAfter ?? current.nextProbeAt,out var due) || due>now ||
+               current.scope=="connection" && (current.reason is "auth" or "configuration" ||
+               current.reason=="permission" && (current.accountPermissionEvidence==true ||
+               FailurePolicy.HasAccountPermissionEvidence(current.message)))) return false;
+            current.state="healthy";
+            current.reason=null;
+            current.failures=0;
+            current.probeFailures=0;
+            current.retryAfter=null;
+            current.nextProbeAt=null;
+            current.message=null;
+            current.accountPermissionEvidence=null;
+            return true;
+        });
+        if(recovered) Append("health_recovered",key,ScopeFromKey(key),new()
+        {
+            ["reason"]="cooldown-expired",["healthKey"]=key
+        });
+        return recovered;
     }
 
     void Append(string kind,string key,string scope,Dictionary<string,object?> payload)
