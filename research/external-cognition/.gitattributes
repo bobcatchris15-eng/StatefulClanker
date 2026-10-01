@@ -1,2 +1,3 @@
 experiments/** -text whitespace=cr-at-eol,-blank-at-eof
 lab2/** -text whitespace=cr-at-eol,-blank-at-eof
+lab3/** -text whitespace=cr-at-eol,-blank-at-eof

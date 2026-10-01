@@ -1,0 +1,42 @@
+[
+  {
+    "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\runs\\campaign1_frozen\\frozen_source\\experiment.py",
+    "match": true
+  },
+  {
+    "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\runs\\campaign1_frozen\\frozen_source\\DESIGN.md",
+    "match": true
+  },
+  {
+    "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\runs\\campaign1_frozen\\frozen_source\\PLAN.md",
+    "match": true
+  },
+  {
+    "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\runs\\campaign1_frozen\\frozen_source\\PREREGISTRATION.md",
+    "match": true
+  },
+  {
+    "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\runs\\campaign1_frozen\\frozen_source\\METHODS.md",
+    "match": true
+  },
+  {
+    "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\runs\\campaign1_frozen\\frozen_source\\tests\\test_experiment.py",
+    "match": true
+  },
+  {
+    "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\runs\\campaign1_frozen\\prompts\\3101\\producer.txt",
+    "match": true
+  },
+  {
+    "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\runs\\campaign1_frozen\\prompts\\3102\\producer.txt",
+    "match": true
+  },
+  {
+    "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\runs\\campaign1_frozen\\prompts\\3103\\producer.txt",
+    "match": true
+  },
+  {
+    "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\runs\\campaign1_frozen\\initial_campaign.json",
+    "match": true
+  }
+]

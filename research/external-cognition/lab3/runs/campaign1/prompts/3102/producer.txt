@@ -1,0 +1,2 @@
+Infer the two affine coefficient triples from these three labeled observations over mod 11. Return JSON only: {"base_version":0,"u":[a,b,c],"v":[d,e,f]}.
+Observations: [{"xy": [5, 2], "uv": [4, 4]}, {"xy": [6, 7], "uv": [10, 6]}, {"xy": [3, 8], "uv": [2, 10]}]

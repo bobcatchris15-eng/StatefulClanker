@@ -1,3 +1,7 @@
+# Current work: cycle 3 interrupted
+
+Agent-authored causal reasoning experiment built and running, interrupted by quota after9 saved subject responses. [Resume checkpoint](lab3/INTERRUPTED.md); [design](lab3/DESIGN.md); [commands](lab3/README.md). Nine harness tests passed; independent pre-live audit cleared. No live results scored yet.
+
 # Current laboratory: cycle 2
 
 Start with [lab2/RESULTS.md](lab2/RESULTS.md) for outcomes and [lab2/README.md](lab2/README.md) for executable commands. Machine state may be opaque; checked versioned patches, atomic persistence and dependency invalidation implement incremental reasoning. Five specialist roles and 22 fresh Luna-low subjects completed this cycle. Compact chain completed and changed-input suffix recomputation passed; records chain failed its repair. Independent audit and frozen evidence are retained. Thirty tests passed, one symlink test skipped. Native capacity extension remains unestablished.
