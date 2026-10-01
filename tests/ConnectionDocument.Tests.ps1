@@ -12,5 +12,7 @@ try {
  '{"schemaVersion":2,"connections":{"mock":{"name":"mock","apiKeyProtected":"opaque"}}}' | Set-Content -LiteralPath $path
  $doc=$store.LoadConnections()
  if($doc.connections.Count -ne 1 -or $doc.connections['mock'].apiKeyProtected -ne 'opaque'){throw 'Valid profile credentials lost.'}
+ '{"schemaVersion":2,"Connections":{"mock":{"name":"mock","apiKeyProtected":"opaque"}}}' | Set-Content -LiteralPath $path
+ if($store.LoadConnections().connections.Count -ne 1){throw 'Case-insensitive connection document compatibility lost.'}
  'ConnectionDocument tests passed'
 } finally { if(Test-Path -LiteralPath $temp){Remove-Item -LiteralPath $temp -Recurse -Force} }

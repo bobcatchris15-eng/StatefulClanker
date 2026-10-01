@@ -52,9 +52,11 @@ public sealed class RouterStore
         try
         {
             using var document=JsonDocument.Parse(File.ReadAllText(ConnectionPath));
-            if(document.RootElement.ValueKind != JsonValueKind.Object ||
-               !document.RootElement.TryGetProperty("connections",out var connections) ||
-               connections.ValueKind != JsonValueKind.Object)
+            if(document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("Invalid machine connection config: connections must be an object keyed by connection ID.");
+            var connections=document.RootElement.EnumerateObject()
+                .LastOrDefault(p=>string.Equals(p.Name,"connections",StringComparison.OrdinalIgnoreCase)).Value;
+            if(connections.ValueKind != JsonValueKind.Object)
                 throw new InvalidDataException("Invalid machine connection config: connections must be an object keyed by connection ID.");
             return document.RootElement.Deserialize<ConnectionDocument>(Json)
                 ?? throw new InvalidDataException("Invalid machine connection config: empty document.");
