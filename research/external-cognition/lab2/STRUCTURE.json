@@ -1,0 +1,84 @@
+{
+  "evidence": "AST extracted declarations and imports, no inferred call edges",
+  "modules": {
+    "core.py": {
+      "functions": [
+        "_canonical",
+        "_validate_problem",
+        "generate_problem",
+        "initial_frontier",
+        "frontier_step",
+        "_validate_frontier",
+        "oracle",
+        "problem_hash",
+        "initial_state",
+        "_state_shape",
+        "_validate_history_transitions",
+        "apply_patch",
+        "replace_problem",
+        "encode_state",
+        "decode_state"
+      ],
+      "imports": [
+        "from __future__ import annotations",
+        "import hashlib",
+        "import json",
+        "import random",
+        "import struct",
+        "import zlib"
+      ]
+    },
+    "lab.py": {
+      "functions": [
+        "_json_bytes",
+        "_atomic_write",
+        "_inside",
+        "_run_path",
+        "_writer_lock",
+        "_manifest_path",
+        "_state_path",
+        "_read_json",
+        "load_manifest",
+        "load_state",
+        "_load_state_unlocked",
+        "init_chain",
+        "_row_view",
+        "make_prompt",
+        "_make_prompt_locked",
+        "_patch_from_raw",
+        "_response_id",
+        "_receipt_paths",
+        "_recover_runtime",
+        "_next_submission_order",
+        "submit_patch",
+        "_case_id",
+        "_calibration_axis",
+        "prepare_calibration",
+        "load_calibration_key",
+        "score_full",
+        "change_cost",
+        "_recover_change",
+        "summarize",
+        "_read_response_file",
+        "_parser",
+        "main"
+      ],
+      "imports": [
+        "from __future__ import annotations",
+        "import argparse",
+        "import base64",
+        "import contextlib",
+        "import hashlib",
+        "import json",
+        "import os",
+        "import re",
+        "import sys",
+        "import tempfile",
+        "import uuid",
+        "from pathlib import Path",
+        "from typing import Any, Iterator",
+        "import core"
+      ]
+    }
+  }
+}

@@ -1,3 +1,7 @@
+# Current laboratory: cycle 2
+
+Start with [lab2/RESULTS.md](lab2/RESULTS.md) for outcomes and [lab2/README.md](lab2/README.md) for executable commands. Machine state may be opaque; checked versioned patches, atomic persistence and dependency invalidation implement incremental reasoning. Five specialist roles and 22 fresh Luna-low subjects completed this cycle. Compact chain completed and changed-input suffix recomputation passed; records chain failed its repair. Independent audit and frozen evidence are retained. Thirty tests passed, one symlink test skipped. Native capacity extension remains unestablished.
+
 # External cognition research
 First cycle executed 2026-10-01 with five research/debate roles and13 fresh Luna-low subjects. Start with reports/SYNTHESIS.md and reports/final_methods_review.md. Canonical human intent: HUMAN_HANDOFF.md; original contract: CURRENT_WORK.md; current orientation: GENERAL_STATE.md.
 

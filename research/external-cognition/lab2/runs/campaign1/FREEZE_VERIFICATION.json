@@ -1,0 +1,67 @@
+[
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\core.py",
+    "Checked": "research\\external-cognition\\lab2\\runs\\campaign1\\frozen_source\\core.py",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\lab.py",
+    "Checked": "research\\external-cognition\\lab2\\runs\\campaign1\\frozen_source\\lab.py",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\PREREGISTRATION.md",
+    "Checked": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\PREREGISTRATION.md",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\tests\\test_audit.py",
+    "Checked": "research\\external-cognition\\lab2\\runs\\campaign1\\frozen_source\\tests\\test_audit.py",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\tests\\test_core.py",
+    "Checked": "research\\external-cognition\\lab2\\runs\\campaign1\\frozen_source\\tests\\test_core.py",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\tests\\test_lab.py",
+    "Checked": "research\\external-cognition\\lab2\\runs\\campaign1\\frozen_source\\tests\\test_lab.py",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n2_seed1101.txt",
+    "Checked": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n2_seed1101.txt",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n2_seed1102.txt",
+    "Checked": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n2_seed1102.txt",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n4_seed1101.txt",
+    "Checked": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n4_seed1101.txt",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n4_seed1102.txt",
+    "Checked": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n4_seed1102.txt",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n8_seed1101.txt",
+    "Checked": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n8_seed1101.txt",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n8_seed1102.txt",
+    "Checked": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n8_seed1102.txt",
+    "Match": true
+  },
+  {
+    "Original": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\keys.json",
+    "Checked": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\keys.json",
+    "Match": true
+  }
+]

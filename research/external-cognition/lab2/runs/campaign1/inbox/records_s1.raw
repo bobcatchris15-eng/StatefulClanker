@@ -1,0 +1,16 @@
+{
+  "base_version": 1,
+  "frontier": [
+    {
+      "bits": "1000",
+      "boundary": 0,
+      "cost": 7
+    },
+    {
+      "bits": "0101",
+      "boundary": 1,
+      "cost": 9
+    }
+  ],
+  "stage": 1
+}

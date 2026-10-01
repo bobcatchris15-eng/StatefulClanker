@@ -1,0 +1,54 @@
+[
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\core.py",
+    "Hash": "C1594C72DF661FD5F8D152A00AD73E9E9FA46ABFB907B51491139ACB0C962C3B"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\lab.py",
+    "Hash": "9A71E7B7A41C25BDCBB54BC5D3F20C362184C860B012B8052E9050DE2BA3E6C1"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\PREREGISTRATION.md",
+    "Hash": "84263AE64E208B8AC2D9ACE1EB8EAB6F878F12352CFE703191DD85800562CDBA"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\tests\\test_audit.py",
+    "Hash": "A7E8D41971DE3A4714E7E3FEAE57486C36FE8ED1206EAD64EA180808A2F297D5"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\tests\\test_core.py",
+    "Hash": "E66B311414792CB61C47304A93F6187A31A6C87CBD2E1A2FA4F6CED780E355B1"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\tests\\test_lab.py",
+    "Hash": "E543C8709CEC5DB5D3CC596385259E9D8F11CF66D722342AB6082D7BABB0ADE4"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n2_seed1101.txt",
+    "Hash": "0FC90C9647A9B6089444CCFCD954C704D21560E059C8E52A06DA243F87935DEC"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n2_seed1102.txt",
+    "Hash": "31271FEEF3F5BC36E2AE6D3201F057DB1658668B1C29E2A7CF36322DB640190D"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n4_seed1101.txt",
+    "Hash": "CF2D51ED58654DC88C5757701954A47C75D94AAC48B0B8238009BB23D3F4CDCA"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n4_seed1102.txt",
+    "Hash": "C63CDB035D925D2C6B94672D596CBE473134A339F5D560621AA4ABB27D2C0C45"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n8_seed1101.txt",
+    "Hash": "12D8E0BAB4597AE0C29EAD9C0AA346B5BD6D724D6D7986AC53396C1CEC24AF16"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\prompts\\n8_seed1102.txt",
+    "Hash": "9A9F99F3C60A13D3BB6883EA17081E8BA68AC3CE0F49AE49DD8E29A91890F49D"
+  },
+  {
+    "Path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab2\\runs\\campaign1\\calibration_frozen\\keys.json",
+    "Hash": "5BDF9F4B56E2562550B6D4C5F3AEC8B8BA1A68954E43DE1065372A6CB5963037"
+  }
+]

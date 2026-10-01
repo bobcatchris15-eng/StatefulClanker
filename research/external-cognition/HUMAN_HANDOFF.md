@@ -6,3 +6,7 @@ Actual execution authorization: "Have them argue, research, design and execute e
 Clarification: "Up to five, plus any experiment subjects active."
 Interpretation: create durable research workspace, permit peer debate, assign five research roles across available slots, run bounded controlled fresh-agent trials and synthesize defensible findings. Runtime caps total live concurrency at four (coordinator plus three workers). gpt-6-luna low is closest available requested model; exact Luna Light unavailable.
 No authority to publish externally, contact people, purchase services or alter production repository. No arbitrary time or token budget supplied. First research cycle may adapt based on findings; conclusions must record confounds and negative evidence.
+
+## Cycle2 handoff
+Human: "Build it up. The external reasoning state really does not need to be human-inspectable either".
+Interpretation: implement the next experiment and allow machine-only stored state; don't impose readable rationales. Packed store and numeric observations supported; hidden neural state access unavailable. Native Luna-low subjects preserved. New lab2 isolates new artifacts from cycle1 evidence.

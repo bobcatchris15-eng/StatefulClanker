@@ -1,0 +1,28 @@
+{
+  "accepted_transitions": 4,
+  "arm": "checked",
+  "calls": 5,
+  "codec": "packed",
+  "final_score": {
+    "bits": "10000001",
+    "cost": 11
+  },
+  "malformed_responses": 0,
+  "next_stage": 4,
+  "outcome": "complete_correct",
+  "raw_response_bytes": 346,
+  "raw_response_characters": 346,
+  "rejected_responses": 1,
+  "repair_attempts_after_rejection": 0,
+  "representation": "vector",
+  "resource_counters": {
+    "sampling_settings": null,
+    "tokens": null
+  },
+  "run_id": "vector",
+  "schema_version": 1,
+  "stages": 4,
+  "store_bytes": 266,
+  "tokens": null,
+  "version": 4
+}

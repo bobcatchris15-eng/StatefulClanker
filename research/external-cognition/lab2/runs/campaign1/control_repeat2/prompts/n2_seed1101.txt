@@ -1,0 +1,42 @@
+Solve the complete task. Return exactly the required JSON object.
+{
+  "problem": {
+    "final_boundary": 0,
+    "schema_version": 1,
+    "seed": 1101,
+    "stages": [
+      {
+        "index": 0,
+        "parity": 1,
+        "wx": 7,
+        "wy": 6
+      },
+      {
+        "index": 1,
+        "parity": 0,
+        "wx": 3,
+        "wy": 3
+      }
+    ]
+  },
+  "required_output": {
+    "format": "one JSON object only; no prose",
+    "schema": {
+      "bits": "string",
+      "cost": "integer"
+    }
+  },
+  "rules": {
+    "boundary_after_stage": "y",
+    "final": "Ending boundary must equal final_boundary.",
+    "initial": {
+      "bits": "",
+      "boundary": 0,
+      "cost": 0
+    },
+    "stage_transition": "For prior boundary b and choice x,y in {0,1}, require (b+x+y) mod 2 == stage.parity; the outgoing boundary is y; add wx*x + wy*y and append x then y.",
+    "ties": "choose lexicographically smallest complete bits string among minimum-cost solutions."
+  },
+  "schema": "cycle2-full-answer-v1",
+  "task": "Find the minimum-cost complete bit string for this binary chain."
+}

@@ -1,0 +1,27 @@
+{
+  "accepted_transitions": 2,
+  "arm": "checked",
+  "calls": 4,
+  "codec": "json",
+  "final_score": null,
+  "legacy_receipts_without_submission_order": 4,
+  "malformed_responses": 0,
+  "next_stage": 2,
+  "outcome": "incomplete",
+  "raw_response_bytes": 560,
+  "raw_response_characters": 560,
+  "rejected_responses": 2,
+  "repair_attempts_after_rejection": 1,
+  "repair_order_basis": "legacy_mtime_ns_fallback",
+  "representation": "records",
+  "resource_counters": {
+    "sampling_settings": null,
+    "tokens": null
+  },
+  "run_id": "records",
+  "schema_version": 1,
+  "stages": 4,
+  "store_bytes": 464,
+  "tokens": null,
+  "version": 2
+}
