@@ -46,7 +46,24 @@ public sealed class RouterStore
     }
 
     public EndpointCatalog LoadEndpoints() => WithLock(() => Load<EndpointCatalog>(EndpointPath) ?? new());
-    public ConnectionDocument LoadConnections() => WithLock(() => Load<ConnectionDocument>(ConnectionPath) ?? new());
+    public ConnectionDocument LoadConnections() => WithLock(() =>
+    {
+        if(!File.Exists(ConnectionPath)) return new ConnectionDocument();
+        try
+        {
+            using var document=JsonDocument.Parse(File.ReadAllText(ConnectionPath));
+            if(document.RootElement.ValueKind != JsonValueKind.Object ||
+               !document.RootElement.TryGetProperty("connections",out var connections) ||
+               connections.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("Invalid machine connection config: connections must be an object keyed by connection ID.");
+            return document.RootElement.Deserialize<ConnectionDocument>(Json)
+                ?? throw new InvalidDataException("Invalid machine connection config: empty document.");
+        }
+        catch(JsonException ex)
+        {
+            throw new InvalidDataException("Invalid machine connection config: JSON or profile schema is invalid.",ex);
+        }
+    });
     public RoutingHealthDocument LoadHealth() => WithLock(() => Load<RoutingHealthDocument>(HealthPath) ?? new());
     public RoundRobinDocument LoadCursor() => WithLock(() => Load<RoundRobinDocument>(CursorPath) ?? new());
     public LeaseDocument LoadLeases() => WithLock(() => Load<LeaseDocument>(LeasePath) ?? new());
