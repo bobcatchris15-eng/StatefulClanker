@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { suppressKeylessAuth } from "./keyless-auth.mjs";
 
 type McpTool = {
   name: string;
@@ -841,6 +842,12 @@ async function formatControlMessage(client: StdioMcpClient, events: ControlEvent
 }
 
 export default async function statefulClankerExtension(pi: ExtensionAPI) {
+  pi.on("before_provider_headers", (event, ctx) => {
+    const path = join(process.env.LOCALAPPDATA || "", "StatefulClanker", "pi", "models.json");
+    if (!existsSync(path)) return;
+    const catalog = JSON.parse(readFileSync(path, "utf8"));
+    suppressKeylessAuth(event.headers, ctx.model?.provider, catalog.providers);
+  });
   let client: StdioMcpClient | null = null;
   let root: string | null = null;
   let cursor = 0;

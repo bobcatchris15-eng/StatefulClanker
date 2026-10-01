@@ -80,8 +80,8 @@ foreach($connectionName in $groups.Keys){
         models=@()
     }
     if($authKind-eq'none' -or -not$hasKey){
-        # Pi requires an apiKey field when defining custom models even for local/keyless
-        # services. This placeholder is never sent as Bearer because authHeader is false.
+        # Pi requires an apiKey field. The extension suppresses SDK Bearer auth
+        # for this placeholder through before_provider_headers.
         $provider.apiKey='statefulclanker-keyless'
     }elseif($protocol-eq'anthropic-messages' -or $protocol-eq'gemini-native'){
         # Pi's native Anthropic/Google transports consume apiKey themselves and emit
