@@ -117,6 +117,7 @@
     "candidate_count": 1,
     "dispatch_count": 12,
     "no_stale_forks_created": true,
+    "original_proposal_pairs_each_imply_unique_solution": true,
     "reviewers_challenged_wrong_v_claims": true,
     "runtime_evaluation_matches_independent_target": true,
     "six_accepted_events_per_case": true,
@@ -490,6 +491,12 @@
       ],
       "saved_replay_equals_verification": true,
       "saved_replay_has_internal_event_ids": false,
+      "solution_implied_by_original_proposal_pair": [
+        [
+          6,
+          1
+        ]
+      ],
       "stored_candidates": [],
       "stored_reviews": [
         {
@@ -870,6 +877,12 @@
       ],
       "saved_replay_equals_verification": true,
       "saved_replay_has_internal_event_ids": false,
+      "solution_implied_by_original_proposal_pair": [
+        [
+          1,
+          6
+        ]
+      ],
       "stored_candidates": [
         {
           "candidate": {
