@@ -1,6 +1,7 @@
+param([string]$RouterPath)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent $PSScriptRoot
-$router=Join-Path $repo 'src\StatefulClanker.Router\bin\Debug\net8.0-windows\StatefulClanker.Router.exe'
+$router=if($RouterPath){$RouterPath}else{Join-Path $repo 'src\StatefulClanker.Router\bin\Debug\net8.0-windows\StatefulClanker.Router.exe'}
 function Assert-True([bool]$Condition,[string]$Message){if(-not $Condition){throw "INFERENCE INPUT TEST FAILED: $Message"}}
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('sc-input-'+[guid]::NewGuid().ToString('N'))
 $oldRoot=$env:SC_ROUTER_ROOT;$daemon=$null
