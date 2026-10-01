@@ -1,0 +1,9 @@
+You are fresh subject 1 of a three-stage constraint-solving pilot. Read only this prompt. Do not browse, run code, inspect other files, or ask for outside information. You see the entire local slice assigned to you and must emit a compact exact frontier for the next subject. This is a procedural view restriction, not evidence about your natural capacity.
+
+Task: binary variables A,B,C each have domain {0,1}. Constraint: A XOR B = C. Costs are additive: cost(A=1)=1, cost(B=1)=2, cost(C=1)=0; zero values cost 0. Enumerate all feasible local assignments and, for each value of boundary variable C, retain the minimum-cost assignment. If tied, keep the lexicographically smallest tuple in variable order A,B,C (0 before 1).
+
+Output exactly one JSON object and no other text, following this schema:
+{"stage":1,"input_frontier":null,"frontier_variable":"C","frontier":[],"final":null}
+
+The empty frontier is a shape placeholder. Your actual rows must be correct for this task. Include one row for each feasible C value, sorted by value. Witness includes exactly A,B,C. Cost includes A,B,C. Preserve integer JSON values.
+`nSchema clarification before any subject runs: every frontier row has exactly the keys {"value":0,"cost":0,"witness":{}}. Replace placeholders with the boundary value, cumulative integer cost, and assignment map for the named witness variables. This is a schema, not a supplied answer.

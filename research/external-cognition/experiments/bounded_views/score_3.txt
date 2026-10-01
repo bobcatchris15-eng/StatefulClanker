@@ -1,0 +1,2 @@
+REJECT stage 3: prior frontier was not accepted/correct; response differs from exact stage oracle (includes schema, costs, frontier, witness, and final checks)
+Evaluator action: preserve prior accepted state unchanged; commit no patch.

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "problem_id": "B",
+  "source_facts": {
+    "projects": [
+      {"id": "A", "cost": 2, "value": 6},
+      {"id": "B", "cost": 3, "value": 9},
+      {"id": "C", "cost": 2, "value": 5},
+      {"id": "D", "cost": 4, "value": 11},
+      {"id": "E", "cost": 1, "value": 3},
+      {"id": "F", "cost": 3, "value": 8},
+      {"id": "G", "cost": 1, "value": 4},
+      {"id": "H", "cost": 2, "value": 5}
+    ],
+    "budget": 10,
+    "mandatory": ["E"],
+    "dependencies": {"B": ["A"], "F": ["D"], "H": ["C"]},
+    "incompatible_pairs": [["A", "D"], ["B", "F"], ["C", "E"]]
+  },
+  "candidate_ledger": [
+    {"selected": ["A", "B", "E"], "cost": 6, "value": 18},
+    {"selected": ["A", "B", "E", "G"], "cost": 7, "value": 22},
+    {"selected": ["A", "E"], "cost": 3, "value": 9},
+    {"selected": ["A", "E", "G"], "cost": 4, "value": 13},
+    {"selected": ["D", "E"], "cost": 5, "value": 14},
+    {"selected": ["D", "E", "F"], "cost": 8, "value": 22},
+    {"selected": ["D", "E", "F", "G"], "cost": 9, "value": 26},
+    {"selected": ["D", "E", "G"], "cost": 6, "value": 18},
+    {"selected": ["E"], "cost": 1, "value": 3},
+    {"selected": ["E", "G"], "cost": 2, "value": 7}
+  ],
+  "winner": {"selected": ["D", "E", "F", "G"], "cost": 9, "value": 26},
+  "reasoning_note": "E is mandatory, so C is excluded by incompatibility and H is then excluded by its dependency on C. The remaining feasible sets reduce to E with optional A and dependent B, or E with D and optional dependent F; A conflicts with D and B conflicts with F. G is independently optional. I enumerated these combinations, retained those within budget, and ordered each sorted ID list lexicographically."
+}

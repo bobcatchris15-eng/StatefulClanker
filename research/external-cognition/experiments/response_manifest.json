@@ -1,0 +1,50 @@
+[
+  {
+    "File": "a_control_phase1.json",
+    "Bytes": 2048,
+    "Characters": 2048,
+    "SHA256": "1D612975072857F6F6C72613AE9EEF159CB83768CC28A7DB7E33D84C7A08EBBD"
+  },
+  {
+    "File": "a_control_phase2.json",
+    "Bytes": 2729,
+    "Characters": 2729,
+    "SHA256": "770ED42CBDE3D30232B908532A6BC7A8EFF23F916B4C8A578B565F78789201F1"
+  },
+  {
+    "File": "a_state_phase1.json",
+    "Bytes": 2182,
+    "Characters": 2182,
+    "SHA256": "FE2072EF4F96443ACE56C183CBA392B0894BEA794210ABD07045A48C6D9B5DD9"
+  },
+  {
+    "File": "a_state_phase2.json",
+    "Bytes": 2783,
+    "Characters": 2783,
+    "SHA256": "4E91CCAA09AA97725842C03D5D6A7F60AEF6EA582660F8133F2DF4BDA6263D5D"
+  },
+  {
+    "File": "b_control_phase1.json",
+    "Bytes": 1680,
+    "Characters": 1680,
+    "SHA256": "F209DC21895F48E5D7FD1865F010188FA5E5D2663A3EF39CC113856B0B3E6B7E"
+  },
+  {
+    "File": "b_control_phase2.json",
+    "Bytes": 2260,
+    "Characters": 2260,
+    "SHA256": "688109F4E00E631FE5045D0B825AE5A023B3E6CD6B4278DD32C7B5F3E10426AF"
+  },
+  {
+    "File": "b_state_phase1.json",
+    "Bytes": 1687,
+    "Characters": 1687,
+    "SHA256": "8D22A3DC212DA6F33EFFB30AB8C9A3B5446118D765A8563440403CF6AC8FE11F"
+  },
+  {
+    "File": "b_state_phase2.json",
+    "Bytes": 2181,
+    "Characters": 2181,
+    "SHA256": "EB163AAAE42C29F2024E1256C7AD2F82D9DB8086ACC46A27301127E95C45A082"
+  }
+]

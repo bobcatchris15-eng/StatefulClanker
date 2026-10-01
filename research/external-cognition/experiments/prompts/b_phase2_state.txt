@@ -1,0 +1,10 @@
+A prior fresh agent left the external state below. Apply the supplied delta as a new fact, preserving provenance and revising any derived candidate set and winner that are no longer valid. Recompute if needed. Use the original tie-break rule: greatest value, then lower cost, then lexicographically smallest sorted project-ID list. Return only valid JSON using this schema:
+{ "schema_version": 1, "problem_id": "...", "applied_delta": {"type":"project_unavailable","project_id":"..."}, "current_state": {"source_facts":{},"candidate_ledger":[{"selected":[],"cost":0,"value":0}],"winner":{"selected":[],"cost":0,"value":0}}, "patch": {"removed_candidates":[],"added_candidates":[],"changed_facts":[],"winner_before":{"selected":[],"cost":0,"value":0},"winner_after":{"selected":[],"cost":0,"value":0},"provenance":"name the delta and explain which invariant was rechecked"}, "reasoning_note":"briefly state how the updated result was checked" }
+
+The ledger must contain every currently feasible selection in lexicographic order. removed_candidates lists old selections made invalid by the delta; added_candidates lists newly feasible selections (normally empty for an added exclusion). Set changed_facts to [{"project_id":"...","availability":"unavailable"}] for this delta. Do not claim a candidate is removed merely because it is no longer optimal.
+
+External state from Phase 1:
+{PASTE THE EXACT SAVED PHASE 1 RESPONSE HERE}
+
+New delta:
+{"type": "project_unavailable", "project_id": "D"}

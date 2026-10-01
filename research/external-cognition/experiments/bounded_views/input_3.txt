@@ -1,0 +1,13 @@
+You are fresh subject 3, the final subject in a three-stage constraint-solving pilot. Read only this prompt and the verbatim prior subject response supplied with it. Do not browse, run code, inspect other files, or ask for outside information. You do not receive the original first or second slice; the prior frontier is your only information about them.
+
+Your local slice has binary variables E,F,G in {0,1}. Constraint: E + F + G = 2. Costs for newly introduced variables: cost(F=1)=2 and cost(G=1)=1; zero values cost 0. E's cost and all earlier costs were already charged in the incoming frontier. Combine each incoming E frontier row with every feasible local assignment agreeing on E. Select the globally minimum cumulative cost complete assignment. If tied, choose lexicographically smallest complete tuple A,B,C,D,E,F,G (0 before 1).
+
+Output exactly one JSON object and no other text:
+{"stage":3,"input_frontier":[],"frontier_variable":null,"frontier":[],"final":{"cost":0,"assignment":{}}}
+
+The empty assignment is a shape placeholder. The final object must contain one exact globally optimal complete assignment and its integer total cost. Echo the incoming frontier exactly in meaning. Do not add any explanation.
+`nSchema clarification before any subject runs: every frontier row has exactly the keys {"value":0,"cost":0,"witness":{}}. Replace placeholders with the boundary value, cumulative integer cost, and assignment map for the named witness variables. This is a schema, not a supplied answer.
+
+--- VERBATIM PRIOR RESPONSE ---
+{"stage":2,"input_frontier":[{"value":0,"cost":0,"witness":{"A":0,"B":0,"C":0}},{"value":1,"cost":1,"witness":{"A":1,"B":0,"C":1}}],"frontier_variable":"E","frontier":[{"value":0,"cost":1,"witness":{"A":0,"B":0,"C":0,"D":1,"E":0}},{"value":1,"cost":1,"witness":{"A":1,"B":0,"C":1,"D":0,"E":1}}],"final":null}
+
