@@ -1,0 +1,48 @@
+{
+  "intent": "PROPOSE",
+  "message_id": "affine-4202-u-proposal",
+  "payload": {
+    "claim": {
+      "claim_id": "u-relation",
+      "dependencies": [
+        {
+          "claim_revision": 1,
+          "resource_id": "problem:affine-4202"
+        }
+      ],
+      "provenance": {
+        "message_id": "affine-4202-u-proposal"
+      },
+      "revision": 1,
+      "state_revision": 1,
+      "status": "active",
+      "value": {
+        "coefficients": [
+          6,
+          10,
+          10
+        ]
+      }
+    }
+  },
+  "problem_id": "affine-4202",
+  "read_refs": [
+    {
+      "resource_id": "problem:affine-4202",
+      "revision": 1,
+      "state_revision": 1
+    },
+    {
+      "resource_id": "claim:u-relation",
+      "revision": 0,
+      "state_revision": 0
+    }
+  ],
+  "recipients": [
+    "v-reviewer",
+    "shared-integrator"
+  ],
+  "reply_to": null,
+  "schema_version": 1,
+  "sender": "u-proposer"
+}

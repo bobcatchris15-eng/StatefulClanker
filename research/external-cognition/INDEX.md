@@ -1,4 +1,12 @@
-# Current work: cycle 3 interrupted
+# Current work: parallel shared reasoning protocol
+
+## Current checkpoint: cycle 4 completed (2026-10-01)
+Lab4 provider-neutral structured shared-state protocol and twelve-call native Luna-low pilot complete. All twelve envelopes accepted. Original proposals correct 2/4; cross-review challenged both wrong relations and supported both correct relations, with one correct replacement candidate. Shared integrators 2/2 correct; raw-facts controls 2/2 correct: no observed accuracy advantage. 23 integrated tests passed before freeze; 16 frozen file/snapshot hashes and both event replays match. Changed-premise proposals remain potential forks; explicit evidence-backed workability decision is required to archive, and history stays retained. Native fork exploration was not exercised. Canonical report lab4/RESULTS.md; independent audit lab4/RESULTS_AUDIT.md. Local model runtime and larger controlled benchmark remain future work; no scheduler active. Earlier active/interrupted entries below are historical, superseded by this checkpoint and Lab3 completed report (21 outputs, checkpoint 78b94b0).
+
+
+Cycle3 complete: [results](lab3/RESULTS.md), [independent audit](lab3/RESULTS_AUDIT.md). Cycle4 under implementation/review: [protocol](lab4/PROTOCOL.md), [design](lab4/DESIGN.md), [registered pilot](lab4/PREREGISTRATION.md). Forks preserve stale reasoning until an explicit evidence-backed disposition.
+
+# Historical cycle 3 interruption
 
 Agent-authored causal reasoning experiment built and running, interrupted by quota after9 saved subject responses. [Resume checkpoint](lab3/INTERRUPTED.md); [design](lab3/DESIGN.md); [commands](lab3/README.md). Nine harness tests passed; independent pre-live audit cleared. No live results scored yet.
 

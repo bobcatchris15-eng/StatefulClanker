@@ -1,4 +1,8 @@
 # Orchestrator state — external cognition research
+
+## Current checkpoint: cycle 4 completed (2026-10-01)
+Lab4 provider-neutral structured shared-state protocol and twelve-call native Luna-low pilot complete. All twelve envelopes accepted. Original proposals correct 2/4; cross-review challenged both wrong relations and supported both correct relations, with one correct replacement candidate. Shared integrators 2/2 correct; raw-facts controls 2/2 correct: no observed accuracy advantage. 23 integrated tests passed before freeze; 16 frozen file/snapshot hashes and both event replays match. Changed-premise proposals remain potential forks; explicit evidence-backed workability decision is required to archive, and history stays retained. Native fork exploration was not exercised. Canonical report lab4/RESULTS.md; independent audit lab4/RESULTS_AUDIT.md. Local model runtime and larger controlled benchmark remain future work; no scheduler active. Earlier active/interrupted entries below are historical, superseded by this checkpoint and Lab3 completed report (21 outputs, checkpoint 78b94b0).
+
 Schema v1, 2026-10-01. Canonical goal in CURRENT_WORK and HUMAN_HANDOFF. Existing repository code not a dependency. Native collaboration APIs replace legacy subagent type registration. Scope research/external-cognition only; existing untracked user work preserved.
 ## Task topology
 Human hypothesis -> three initial debate roles -> formal conditions / independent audit -> frozen pilot1 and bounded-view pilot2 -> fresh subjects -> deterministic scoring -> independent results audit -> recovery pilot3 -> synthesis.
@@ -26,3 +30,6 @@ Design -> engine tests/harness and independent methods preregistration -> pre-li
 
 ## Cycle 3 quota interruption checkpoint
 Lab3 built and pre-live independently cleared;9 tests passed. Frozen campaign has9 saved/submitted fresh responses. Three agents reported quota errors; one had saved an answer before failing, two produced no output. Twelve semantic responses remain of21. No live offline scoring yet. Infrastructure interruption is not reasoning failure. Resume exact schedule and frozen runtime via lab3/INTERRUPTED.md; no semantic feedback/replacements. No scheduler active. Work incomplete, not hypothesis confirmation.
+
+## Cycle 4 DAG/current topology
+Humanrefinement -> architecture/schema+preregistration -> protocol.py structuralstore(SQLite) + pilot.py domainadapter, independenttests -> independent preliveaudit -> frozen2cases -> parallelproposers -> crossreview envelopes -> shared/rawintegrators -> offlineevaluation/audit -> checkpoint. Separate cycle3audit of21completedoutputs proceeds without feedback to subjects. No productioncode dependency; lab4adapter consumes lab3.make_case only. NativeLuna-low remains route; localbackend untested.

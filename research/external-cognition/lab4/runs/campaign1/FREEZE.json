@@ -1,0 +1,89 @@
+{
+  "utc": "2026-10-01T21:07:32.934591+00:00",
+  "model": "gpt-6-luna",
+  "effort": "low",
+  "call_ceiling": 12,
+  "fresh_context": true,
+  "files": [
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\protocol.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\protocol.py",
+      "sha256": "f048db11c158c9d83a22df1eef85f9a2767c726be872fb2df575233cac296278"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\pilot.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\pilot.py",
+      "sha256": "fa6672fbd598cecad0149f69c5559d1eb3e377d668faefa5653a42a295dc53b6"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\PROTOCOL.md",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\PROTOCOL.md",
+      "sha256": "130b763d354b9f29bcdc97c8dcae4c41970b809801ab7fe80c710000ce2a7a33"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\DESIGN.md",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\DESIGN.md",
+      "sha256": "fcec1edc6ef41eda2daa2bf14a2d030b6314ccc0e32f1e9317d56fb41928e30a"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\PREREGISTRATION.md",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\PREREGISTRATION.md",
+      "sha256": "42c56325f8007cc0bdc1c9ed5da51bdfc507fa1f111eb7573060dff92fa0eaaf"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\PRELIVE_AUDIT.md",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\PRELIVE_AUDIT.md",
+      "sha256": "cae36df30ea591d74c034ae8800d7547f863c1571c82ff5fa3e73f1931dfc9ea"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_pilot.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\tests\\test_pilot.py",
+      "sha256": "1de6ef877dea83dcd3f31cb6f41dfdde5e21efc4a29e55d760aa8b5cfdd66101"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_protocol.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\tests\\test_protocol.py",
+      "sha256": "22ab0e7892fbade3a16118aca1cf51b15ad641c710f451ef226ee21ce1da9884"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\experiment.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\dependencies\\lab3_experiment.py",
+      "sha256": "7b31e04860e5f6fe480871e450674f652a3b60e2a52b54d835f113ea3c96de89"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\run.json",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\runs\\campaign1\\run.json",
+      "sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\cases\\4201\\problem.json",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\runs\\campaign1\\cases\\4201\\problem.json",
+      "sha256": "d4c78699cb30fa47dc5ee12c66f9f267caee12e458e3008e804f7f2825dc4f2b"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\cases\\4202\\problem.json",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\runs\\campaign1\\cases\\4202\\problem.json",
+      "sha256": "3cb1fbf700ea32f2d7b9c388c4c63226ab3f6542c43bd436455947dd8cf66bdd"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\prompts\\4201\\u-proposer.txt",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\runs\\campaign1\\prompts\\4201\\u-proposer.txt",
+      "sha256": "b0874c2ff955d333e21da7313701ff8a3df17f49a7b4103300a5a15d8dfa250a"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\prompts\\4201\\v-proposer.txt",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\runs\\campaign1\\prompts\\4201\\v-proposer.txt",
+      "sha256": "cab8586dd9608f37a3af3b9eced311a269703baee26d2bb2bf3ce4da6e432939"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\prompts\\4202\\u-proposer.txt",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\runs\\campaign1\\prompts\\4202\\u-proposer.txt",
+      "sha256": "31bb4f2f58adc66a5f2a581d7d15807b65201e7996e938ae1f1ed76f5621959a"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\prompts\\4202\\v-proposer.txt",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\campaign1\\frozen_source\\runs\\campaign1\\prompts\\4202\\v-proposer.txt",
+      "sha256": "21dd08de6a151d10c9a0fa103f5652f726af15a7f1011326f357f3026e384083"
+    }
+  ]
+}

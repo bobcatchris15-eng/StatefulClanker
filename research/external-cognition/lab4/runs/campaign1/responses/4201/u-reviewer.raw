@@ -1,0 +1,38 @@
+{
+  "intent": "CHALLENGE",
+  "message_id": "affine-4201-u-reviewer-report",
+  "payload": {
+    "assessment": {
+      "assessment": "challenge",
+      "basis_refs": [
+        "observation-1",
+        "observation-2",
+        "observation-3"
+      ]
+    },
+    "target": {
+      "resource_id": "claim:v-relation",
+      "revision": 1,
+      "state_revision": 1
+    }
+  },
+  "problem_id": "affine-4201",
+  "read_refs": [
+    {
+      "resource_id": "problem:affine-4201",
+      "revision": 1,
+      "state_revision": 1
+    },
+    {
+      "resource_id": "claim:v-relation",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": "affine-4201-v-proposal",
+  "schema_version": 1,
+  "sender": "u-reviewer"
+}

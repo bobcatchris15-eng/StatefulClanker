@@ -1,3 +1,16 @@
+# Current research orientation
+
+## Current checkpoint: cycle 4 completed (2026-10-01)
+Lab4 provider-neutral structured shared-state protocol and twelve-call native Luna-low pilot complete. All twelve envelopes accepted. Original proposals correct 2/4; cross-review challenged both wrong relations and supported both correct relations, with one correct replacement candidate. Shared integrators 2/2 correct; raw-facts controls 2/2 correct: no observed accuracy advantage. 23 integrated tests passed before freeze; 16 frozen file/snapshot hashes and both event replays match. Changed-premise proposals remain potential forks; explicit evidence-backed workability decision is required to archive, and history stays retained. Native fork exploration was not exercised. Canonical report lab4/RESULTS.md; independent audit lab4/RESULTS_AUDIT.md. Local model runtime and larger controlled benchmark remain future work; no scheduler active. Earlier active/interrupted entries below are historical, superseded by this checkpoint and Lab3 completed report (21 outputs, checkpoint 78b94b0).
+
+Schema v2,2026-10-01. Earlier checkpoints below are historical.
+
+Goal: fresh reasoning produced by native reasoning across a shared external workspace, eventually allowing local/smaller models to cooperate on harder problems. Standardized goal-specific message envelopes and typed claims/dependencies provide a repeatable interface; no universal cognition ontology or deterministic inference claim. Human inspectability optional.
+
+Verified cycle3 complete:21 semantic responses, independently audited. Correct initial relationships3/3; intact/raw controls each1/3; altered conditional answers2/3; intended revised answer1/3. Original revision scoring defect preserved; working evaluator v1.1 adds corrected intended-world field,11 tests pass. Current report lab3/RESULTS.md, checkpoint78b94b0.
+
+Active cycle4: SQLite structural-only event/claim protocol plus two-case12-call native pilot. Parallel participants receive the complete public problem and cross-communicate through structured envelopes. Coherent stale proposals retained as potential forks, with captured premises; explicit evidence-backed administrator disposition, no automatic discard. Engine tests and pre-live review in progress; no lab4 subjects yet. Route gpt-6-luna low; local model execution untested. No scheduler active.
+
 # Research state — external cognition
 Schema v1. Date 2026-10-01. Evidence status and applicability separate.
 ## Human goal
@@ -25,3 +38,5 @@ Executable stdlib laboratory in lab2; opaque packed and JSON stores, compact vec
 
 ## Cycle 3 quota interruption checkpoint
 Lab3 built and pre-live independently cleared;9 tests passed. Frozen campaign has9 saved/submitted fresh responses. Three agents reported quota errors; one had saved an answer before failing, two produced no output. Twelve semantic responses remain of21. No live offline scoring yet. Infrastructure interruption is not reasoning failure. Resume exact schedule and frozen runtime via lab3/INTERRUPTED.md; no semantic feedback/replacements. No scheduler active. Work incomplete, not hypothesis confirmation.
+
+User success refinement: accuracy superiority is not required. Primary goal is useful repeatable cooperative reasoning by local/smaller models within an explicit resource envelope. Matching a reference solver or reaching a preregistered useful partial success threshold can qualify. Controls diagnose contributions rather than impose superiority. The illustrative 50% requires a specified denominator/benchmark; no such local benchmark has yet run.

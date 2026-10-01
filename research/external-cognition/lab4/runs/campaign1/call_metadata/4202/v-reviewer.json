@@ -1,0 +1,12 @@
+{
+  "captured_at": "2026-10-01T21:15:19.589325+00:00",
+  "effort": "low",
+  "finished_at": "2026-10-01T21:15:19.384774+00:00",
+  "model": "gpt-6-luna",
+  "prompt_sha256": "4d6f4fdbb6b5cd150ca936c7cdff01cb324114972e5f08296e7f0a0a71517d17",
+  "provider": "native",
+  "raw_sha256": "f12d0f24545f1723dad08bf0787d8fce3bf4956615cfc5438af39ec42e9e1546",
+  "role": "v-reviewer",
+  "seed": 4202,
+  "started_at": "2026-10-01T21:14:31.985204+00:00"
+}

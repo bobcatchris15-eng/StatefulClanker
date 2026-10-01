@@ -1,4 +1,8 @@
 # External cognition research — Current Work
+
+## Current checkpoint: cycle 4 completed (2026-10-01)
+Lab4 provider-neutral structured shared-state protocol and twelve-call native Luna-low pilot complete. All twelve envelopes accepted. Original proposals correct 2/4; cross-review challenged both wrong relations and supported both correct relations, with one correct replacement candidate. Shared integrators 2/2 correct; raw-facts controls 2/2 correct: no observed accuracy advantage. 23 integrated tests passed before freeze; 16 frozen file/snapshot hashes and both event replays match. Changed-premise proposals remain potential forks; explicit evidence-backed workability decision is required to archive, and history stays retained. Native fork exploration was not exercised. Canonical report lab4/RESULTS.md; independent audit lab4/RESULTS_AUDIT.md. Local model runtime and larger controlled benchmark remain future work; no scheduler active. Earlier active/interrupted entries below are historical, superseded by this checkpoint and Lab3 completed report (21 outputs, checkpoint 78b94b0).
+
 Date: 2026-10-01
 Human hypothesis: Reasoning or cognition state can be represented externally, and changed incrementally and coherently to advance the reasoning by models that are not capable of holding the full representation internally.
 Authority: Research scholarly articles, forums, technical sources; debate directly; design and execute local experiments with native agents. User explicitly authorized Luna workers and peer communication. No external posting or paid services.
@@ -20,3 +24,10 @@ User reframes hypothesis as fresh reasoning produced by native reasoning. Build 
 
 ## Cycle 3 quota interruption checkpoint
 Lab3 built and pre-live independently cleared;9 tests passed. Frozen campaign has9 saved/submitted fresh responses. Three agents reported quota errors; one had saved an answer before failing, two produced no output. Twelve semantic responses remain of21. No live offline scoring yet. Infrastructure interruption is not reasoning failure. Resume exact schedule and frozen runtime via lab3/INTERRUPTED.md; no semantic feedback/replacements. No scheduler active. Work incomplete, not hypothesis confirmation.
+
+## Current refined contract: cycle 4
+User resumed frozen cycle3 and refines goal toward local/smaller models coordinating in parallel on harder problems. Working objective: standardized repeatable external reasoning workspace, full problem access, goal-specific structured cross-communication. Implement bounded provider-neutral protocol in lab4, then two-case12-call native pilot with parallel proposals/reviews and shared-vs-raw final controls. Shared state stores model-authored claims/provenance/dependencies, structural-only commits, stale reads and conflict handling, deterministic envelope encoding and event replay; no claim inference is deterministic. Local runtime itself not yet specified or tested. Cycle3 has21 outputs and offline live audit in progress; retain original scores and any evaluator defects separately.
+
+User fork refinement: stale PROPOSE is held as a potential fork with coherent historical premises and proposed snapshot; main unchanged. Explicit designated-admin archival requires evidence plus prevailing-workable attestation, not automatic structural judgment. Full branch merging remains outside this first protocol. Root final contract in lab4/PROTOCOL.md.
+
+User success refinement: accuracy superiority is not required. Primary goal is useful repeatable cooperative reasoning by local/smaller models within an explicit resource envelope. Matching a reference solver or reaching a preregistered useful partial success threshold can qualify. Controls diagnose contributions rather than impose superiority. The illustrative 50% requires a specified denominator/benchmark; no such local benchmark has yet run.

@@ -1,0 +1,211 @@
+This is the complete public problem packet. Every participant receives the same raw observations and target image. All arithmetic is modulo 11. The declared family is u=(a*x+b*y+c) mod 11 and v=(d*x+e*y+f) mod 11.
+
+PUBLIC PROBLEM (immutable):
+{
+  "affine_family": "u=(a*x+b*y+c) mod 11; v=(d*x+e*y+f) mod 11",
+  "answer_requirements": {
+    "instruction": "Infer the two affine relations, then solve for the unique target input (x,y) modulo 11.",
+    "status_solved": {
+      "status": "solved",
+      "x": "integer residue 0..10",
+      "y": "integer residue 0..10"
+    },
+    "status_underdetermined": {
+      "status": "underdetermined"
+    }
+  },
+  "modulus": 11,
+  "observations": [
+    {
+      "observation_id": "observation-1",
+      "uv": [
+        0,
+        8
+      ],
+      "xy": [
+        7,
+        8
+      ]
+    },
+    {
+      "observation_id": "observation-2",
+      "uv": [
+        0,
+        0
+      ],
+      "xy": [
+        9,
+        9
+      ]
+    },
+    {
+      "observation_id": "observation-3",
+      "uv": [
+        8,
+        3
+      ],
+      "xy": [
+        1,
+        8
+      ]
+    }
+  ],
+  "problem_id": "affine-4202",
+  "target_uv": [
+    10,
+    9
+  ]
+}
+
+Return exactly one JSON envelope using the supplied schema and references. Do not add prose outside the JSON.
+You are u-reviewer; independently review the peer claim for coordinate v.
+Assigned peer proposal (read this exact value and state revision):
+{
+  "claim_id": "v-relation",
+  "dependencies": [
+    {
+      "claim_revision": 1,
+      "resource_id": "problem:affine-4202"
+    }
+  ],
+  "provenance": {
+    "message_id": "affine-4202-v-proposal"
+  },
+  "revision": 1,
+  "state_revision": 1,
+  "status": "active",
+  "value": {
+    "coefficients": [
+      8,
+      5,
+      4
+    ]
+  }
+}
+
+Assess the proposed coefficients against the complete public observations. Use observation IDs as basis_refs. Return either one CHALLENGE envelope with assessment, or one REPORT_EVIDENCE envelope with report.assessment. assessment is one of supported, challenge, underdetermined. A corrected_claim is optional; if supplied it must have status candidate and remains an uncommitted proposal. Never state that a structurally recorded claim has been chosen automatically.
+Copy exactly one envelope below. Use CHALLENGE only to record an objection; use REPORT_EVIDENCE for a supported or underdetermined review. If you use a corrected_claim, edit only its three coefficients and keep status=candidate; otherwise remove the corrected_claim field. Edit assessment and basis_refs to reflect your evidence, then copy every other field exactly.
+
+CHALLENGE template:
+{
+  "intent": "CHALLENGE",
+  "message_id": "affine-4202-u-reviewer-report",
+  "payload": {
+    "assessment": {
+      "assessment": "supported|challenge|underdetermined",
+      "basis_refs": [
+        "observation-1",
+        "observation-2",
+        "observation-3"
+      ]
+    },
+    "corrected_claim": {
+      "claim_id": "v-relation",
+      "dependencies": [
+        {
+          "claim_revision": 1,
+          "resource_id": "problem:affine-4202"
+        }
+      ],
+      "provenance": {
+        "message_id": "affine-4202-u-reviewer-report"
+      },
+      "revision": 1,
+      "state_revision": 1,
+      "status": "candidate",
+      "value": {
+        "coefficients": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "target": {
+      "resource_id": "claim:v-relation",
+      "revision": 1,
+      "state_revision": 1
+    }
+  },
+  "problem_id": "affine-4202",
+  "read_refs": [
+    {
+      "resource_id": "problem:affine-4202",
+      "revision": 1,
+      "state_revision": 1
+    },
+    {
+      "resource_id": "claim:v-relation",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": "affine-4202-v-proposal",
+  "schema_version": 1,
+  "sender": "u-reviewer"
+}
+
+REPORT_EVIDENCE template:
+{
+  "intent": "REPORT_EVIDENCE",
+  "message_id": "affine-4202-u-reviewer-report",
+  "payload": {
+    "corrected_claim": {
+      "claim_id": "v-relation",
+      "dependencies": [
+        {
+          "claim_revision": 1,
+          "resource_id": "problem:affine-4202"
+        }
+      ],
+      "provenance": {
+        "message_id": "affine-4202-u-reviewer-report"
+      },
+      "revision": 1,
+      "state_revision": 1,
+      "status": "candidate",
+      "value": {
+        "coefficients": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "report": {
+      "assessment": "supported|challenge|underdetermined",
+      "basis_refs": [
+        "observation-1",
+        "observation-2",
+        "observation-3"
+      ],
+      "target": {
+        "resource_id": "claim:v-relation",
+        "revision": 1,
+        "state_revision": 1
+      }
+    }
+  },
+  "problem_id": "affine-4202",
+  "read_refs": [
+    {
+      "resource_id": "problem:affine-4202",
+      "revision": 1,
+      "state_revision": 1
+    },
+    {
+      "resource_id": "claim:v-relation",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": "affine-4202-v-proposal",
+  "schema_version": 1,
+  "sender": "u-reviewer"
+}
