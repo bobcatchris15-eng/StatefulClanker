@@ -156,6 +156,16 @@ Project-local CLI providers remain available only when explicitly requested as c
 
 ## Packaging
 
+### Inference validation and tool output recovery
+
+Shell diagnostics can use `infer --request-file request.json`. Tool definitions use the normalized shape `{ "type": "function", "function": { "name": "read_file", "parameters": { "type": "object", "properties": { "path": { "type": "string" } } } } }`. Flat definitions are rejected before IPC with `INVALID_INFERENCE_REQUEST`; malformed files receive the same structured diagnosis. Text-mode clients may omit tools or send `tools: null` for compatibility.
+
+Corrupt saved tool calls receive `CORRUPT_INPUT_TOOL_CALL` with class `corrupt_input` before any route acquisition or provider request. They are never retried or attributed to an endpoint. Repair or replace that session before retrying it.
+
+Malformed provider tool calls retain the `INVALID_TOOL_ARGUMENTS` reason code but use class `provider_tool_output_invalid` and endpoint scope. The router rejects the entire invalid response without executing, repairing, or persisting its tool calls. It permits one same-endpoint retry within the shared timeout and existing three-HTTP-attempt cap, then may fail over within the caller's allowed routes and route-attempt limit. Exact endpoints and strict pins never migrate.
+
+Each observed malformed tool response increments the endpoint's `toolOutputFailures` and `consecutiveToolOutputFailures`, records `lastToolOutputFailure`, and applies a temporary cooldown of 60, 120, 240, 480, then at most 900 seconds. A successful inference clears the streak but retains cumulative history. Metadata probes do not clear the streak. Both `health.json` and route snapshots expose these counters; snapshot `quality` remains visible when an endpoint is healthy again. Usage and response evidence remain attached to every HTTP attempt, including failed retries.
+
 Build and test updates outside the live installation. A new client executable can still contact an old daemon because the named pipe is keyed by machine state root, not executable path; isolated tests must use a temporary `SC_ROUTER_ROOT`.
 
 For deployment, pause dispatch across affected projects and wait for active inference and worker leases to drain. Back up the router and changed harness/MCP files, stop the idle daemon, replace files, and verify the new daemon PID and artifact hash. Restart MCP and any harness process that already loaded changed PowerShell functions. Embedded Pi can recreate a stopped MCP child on its next tool call without discarding its persisted conversation. Preserve existing project holds and pause state; deployment is not permission to resume tasks. Keep the old file bundle for rollback.

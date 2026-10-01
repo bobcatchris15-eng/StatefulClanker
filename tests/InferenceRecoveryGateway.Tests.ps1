@@ -1,5 +1,5 @@
 <# One inference request must transparently survive a failed endpoint. #>
-param([ValidateSet('embedded','context','output','exhausted','invalid','strict','contextcap','diagnostic','truncated','nocode','timeout','permission')][string]$Case='embedded',[string]$RouterPath)
+param([ValidateSet('embedded','context','output','exhausted','invalid','strict','contextcap','diagnostic','truncated','nocode','timeout','permission','malformed','malformed-recovered','malformed-strict','malformed-mixed','malformed-limit')][string]$Case='embedded',[string]$RouterPath)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent $PSScriptRoot
 $router=if($RouterPath){$RouterPath}else{Join-Path $repo 'src\StatefulClanker.Router\bin\Debug\net8.0-windows\StatefulClanker.Router.exe'}
@@ -34,6 +34,7 @@ try{
     @'
 param([int]$Port,[string]$Case)
 $listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,$Port);$listener.Start()
+$badAttempts=0
 try{
   while($true){
     $client=$listener.AcceptTcpClient();$stream=$client.GetStream()
@@ -44,6 +45,11 @@ try{
       if($headers.ContainsKey('Content-Length')){$length=[int]$headers['Content-Length']}
       $requestBody=$null;if($length-gt0){$buf=New-Object char[] $length;[void]$reader.ReadBlock($buf,0,$length);$requestBody=(-join $buf)|ConvertFrom-Json}
       if($first-match'^GET '){$status='200 OK';$body='{"data":[{"id":"mock-model"}]}'}
+      elseif($Case -like 'malformed*' -and $first-match' /a/v1/chat/completions '){
+        $badAttempts++;$status='200 OK'
+        $body=if($Case -eq 'malformed-recovered' -and $badAttempts -gt 1){'{"usage":{"prompt_tokens":3,"completion_tokens":2},"choices":[{"message":{"content":"ROUTED_OK"}}]}'}else{'{"usage":{"prompt_tokens":3,"completion_tokens":4},"choices":[{"finish_reason":"error","message":{"tool_calls":[{"id":"bad","function":{"name":"write_file","arguments":"{\"path\":"}}]}}]}'}
+        if($Case -eq 'malformed-mixed' -and $badAttempts -eq 1){$body='{"usage":{"prompt_tokens":3,"completion_tokens":4096},"choices":[{"finish_reason":"length","message":{"content":null,"reasoning":"analysis"}}]}'}
+      }
       elseif($Case -eq 'permission' -and $requestBody.model -eq 'mock-model'){$status='403 Forbidden';$body='{"error":{"message":"thinkingmachines/inkling:free is only available on agentic harnesses. Try plugging it into a coding agent or productivity app listed on https://openrouter.ai/apps","code":403,"metadata":{"failed_routing_step":"Gate Free Endpoints by Agentic Harness"}}}'}
       elseif($first-match' /a/v1/chat/completions ' -and $Case -ne 'permission'){if($Case -eq 'timeout'){Start-Sleep -Seconds 8};if($Case -in @('output','exhausted','contextcap','diagnostic','truncated','timeout')){$status='200 OK';if($Case -eq 'exhausted' -or $requestBody.max_tokens -lt 8192){$body='{"usage":{"prompt_tokens":3,"completion_tokens":4096},"choices": [{"finish_reason":"length","message":{"content":null,"reasoning":"private analysis"}}]}';if($Case -eq 'truncated'){$body=@{usage=@{prompt_tokens=3;completion_tokens=4096};choices=@(@{finish_reason='length';message=@{tool_calls=@(@{id='bad';function=@{name='write';arguments='{"path":'}})}})}|ConvertTo-Json -Depth 10 -Compress }}else{$body='{"usage":{"prompt_tokens":3,"completion_tokens":2},"choices": [{"message":{"content":"ROUTED_OK"}}]}'} }elseif($Case -in @('embedded','nocode')){$status='200 OK';$body='{"error":{"message":"JSON error injected into SSE stream","code":502}}';if($Case -eq 'nocode'){$body='{"error":{"message":"bad gateway"}}'}}else{$status='400 Bad Request';$body='{"error":{"message":"maximum context length is 262144 tokens, requested 423601","code":400}}'}}
       else{$status='200 OK';$body='{"model":"mock-model","usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5},"choices":[{"message":{"role":"assistant","content":"ROUTED_OK"}}]}'}
@@ -72,6 +78,17 @@ try{
         sessionKey='recovery-test'
     }|ConvertTo-Json -Depth 20 -Compress|Set-Content -LiteralPath $requestFile -Encoding UTF8
 
+    if($Case -like 'malformed*'){
+        $catalog=Get-Content -Raw (Join-Path $temp 'endpoints.json')|ConvertFrom-Json
+        foreach($entry in $catalog.entries.PSObject.Properties.Value){$entry.toolMode='native'}
+        $catalog|ConvertTo-Json -Depth 20|Set-Content (Join-Path $temp 'endpoints.json')
+        $q=Get-Content -Raw $requestFile|ConvertFrom-Json;$q.toolMode='native'
+        $q.tools=@(@{type='function';function=@{name='write_file';description='write';parameters=@{type='object';properties=@{path=@{type='string'};content=@{type='string'}};required=@('path','content')}}})
+        $q.messages=@(@{role='assistant';tool_calls=@(@{id='prior';type='function';function=@{name='write_file';arguments='{"path":"old","content":"ok"}'}})},@{role='tool';tool_call_id='prior';content='written'},@{role='user';content='write another file'})
+        if($Case -eq 'malformed-limit'){$q.maxRouteAttempts=1}
+        $q|ConvertTo-Json -Depth 20|Set-Content $requestFile
+    }
+
     $ready=$false
     foreach($i in 1..30){Start-Sleep -Milliseconds 100;try{if((Call-Router @('ping')).ok){$ready=$true;break}}catch{}}
     Assert-True $ready 'router daemon did not become ready'
@@ -82,13 +99,35 @@ try{
         $q|ConvertTo-Json -Depth 20|Set-Content $requestFile
     }
     $callArgs=@('infer','--request-file',$requestFile,'--owner-pid',[string]$PID,'--preferred','pool:broken::model')
-    if($Case -in @('strict','timeout')){$callArgs+=@('--strict-preferred','true')}
+    if($Case -in @('strict','timeout','malformed-strict')){$callArgs+=@('--strict-preferred','true')}
     $clock=[Diagnostics.Stopwatch]::StartNew()
     if($Case -eq 'diagnostic'){$callArgs=@('test-endpoint','--endpoint','pool:broken::model')}
     $result=(Call-Router $callArgs).data
-    if($Case -eq 'invalid'){
-        Assert-True (-not $result.ok -and $result.diagnosis.reasonCode -eq 'INVALID_TOOL_ARGUMENTS') 'corrupt transcript not rejected locally'
+    if($Case -like 'malformed*'){
+        Assert-True ($result.inferenceAttempts.Count -eq $(if($Case -eq 'malformed'){3}elseif($Case -eq 'malformed-mixed'){4}else{2})) 'malformed output retry/failover count wrong'
+        $firstToolFailure=if($Case -eq 'malformed-mixed'){1}else{0}
+        Assert-True ($result.inferenceAttempts[$firstToolFailure].diagnosis.reasonCode -eq 'INVALID_TOOL_ARGUMENTS' -and $result.inferenceAttempts[$firstToolFailure].diagnosis.class -eq 'provider_tool_output_invalid' -and $result.inferenceAttempts[$firstToolFailure].diagnosis.scope -eq 'endpoint') 'provider output conflated with input corruption'
+        if($Case -in @('malformed-strict','malformed-limit')){Assert-True (-not $result.ok -and $result.routeAttempts -eq 1) 'strict pin or attempt limit escaped'}
+        else{Assert-True ($result.ok -and $result.assistant.content -eq 'ROUTED_OK') 'malformed output failed to recover'}
+        if($Case -eq 'malformed-mixed'){
+            Assert-True ($result.routeAttempts -eq 2 -and $result.usage.completionTokens -eq 4106) 'mixed recovery lost usage or failed to bound endpoint attempts'
+            Assert-True ($result.inferenceAttempts[1].maxOutputTokens -eq 8192 -and $result.inferenceAttempts[2].maxOutputTokens -eq 8192) 'tool retry changed output budget'
+        }
+        if($Case -eq 'malformed-limit'){Assert-True ($result.routeExhausted) 'route limit not reported exhausted'}
+        if($Case -eq 'malformed'){Assert-True ($result.connection -eq 'good' -and $result.routeAttempts -eq 2 -and $result.usage.completionTokens -eq 10) 'malformed failover lost routing or usage'}
+        if($Case -eq 'malformed-recovered'){Assert-True ($result.connection -eq 'broken' -and $result.usage.completionTokens -eq 6) 'one retry did not recover same endpoint'}
+        $health=Get-Content -Raw (Join-Path $temp 'routing\health.json')|ConvertFrom-Json
+        $quality=$health.endpoints.'pool:broken::model'
+        Assert-True ($quality.toolOutputFailures -eq $(if($Case -eq 'malformed-recovered'){1}else{2})) 'endpoint quality count missing'
+        Assert-True ($quality.consecutiveToolOutputFailures -eq $(if($Case -eq 'malformed-recovered'){0}else{2})) 'quality streak did not recover correctly'
+        Assert-True ($quality.state -eq $(if($Case -eq 'malformed-recovered'){'healthy'}else{'cooldown'})) 'quality cooldown state wrong'
+        $routeQuality=@((Call-Router @('snapshot')).data.routes|Where-Object catalogId -eq 'broken::model')[0].quality
+        Assert-True ($routeQuality.toolOutputFailures -eq $quality.toolOutputFailures -and $routeQuality.consecutiveToolOutputFailures -eq $quality.consecutiveToolOutputFailures) 'snapshot hides endpoint quality history'
+        Assert-True ($null -eq $health.endpoints.'connection:broken' -or $health.endpoints.'connection:broken'.state -eq 'healthy') 'quality failure poisoned connection'
+    }elseif($Case -eq 'invalid'){
+        Assert-True (-not $result.ok -and $result.diagnosis.reasonCode -eq 'CORRUPT_INPUT_TOOL_CALL') 'corrupt transcript not rejected locally'
         Assert-True ($null -eq $result.response.httpStatus) 'corrupt transcript reached provider'
+        Assert-True ($result.routeAttempts -eq 0 -and $result.inferenceAttempts.Count -eq 0) 'corrupt input acquired or attempted an endpoint'
         Assert-True (-not [string]::IsNullOrWhiteSpace($result.signalRef)) 'local corruption diagnosis not signalled'
     }elseif($Case -in @('contextcap','diagnostic')){
         Assert-True (-not $result.ok -and $result.diagnosis.reasonCode -eq 'OUTPUT_BUDGET_EXHAUSTED') 'output cap/diagnostic diagnosis wrong'

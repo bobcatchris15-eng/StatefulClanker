@@ -42,8 +42,10 @@ Assert-True ($bridge.Contains("@('negotiate')")) 'PowerShell bridge does not neg
 Assert-True (-not $bridge.Contains("@('acquire'")) 'PowerShell bridge still owns endpoint acquisition.'
 
 Write-Host '  ROUTING AVAILABILITY 3: transient provider failures stay granular'
-Assert-True ($policy.Contains('"billing_exhausted" => "connection"')) 'Credential/account-wide scope mapping changed unexpectedly.'
-Assert-True ($policy.Contains('"protocol_error" or "timeout" or "server_error" => "endpoint"')) 'Timeout/5xx failures are still connection-wide.'
+Assert-True ([StatefulClanker.Router.FailurePolicy]::ScopeFor('billing_exhausted') -eq 'connection') 'Credential/account-wide scope mapping changed unexpectedly.'
+foreach($failure in @('protocol_error','timeout','server_error','provider_tool_output_invalid')){
+    Assert-True ([StatefulClanker.Router.FailurePolicy]::ScopeFor($failure) -eq 'endpoint') 'Provider failures must remain endpoint-local.'
+}
 Assert-True ($gateway.Contains('requestExcluded.Add(route.RouteName)')) 'Request-scoped incompatibility cannot move to another endpoint without poisoning health.'
 
 Write-Host '  ROUTING AVAILABILITY 4: inference owns wait/failover and returns one scheduler result'

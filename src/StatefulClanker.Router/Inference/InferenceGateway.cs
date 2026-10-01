@@ -25,6 +25,8 @@ public sealed class InferenceGateway : IDisposable
     public async Task<RouterResponse> InferAsync(RouterRequest request,CancellationToken token=default)
     {
         if(request.inference is null) return RouterResponse.Fail("inference request is required.");
+        if(InferenceRequestValidator.Validate(request.inference) is { } invalid)
+            return RouterResponse.Ok(RecordInputFailure(request.inference,invalid));
         if(!string.IsNullOrWhiteSpace(request.endpoint))
             return await InferExactAsync(request.endpoint,request.inference,token);
 
@@ -154,7 +156,7 @@ public sealed class InferenceGateway : IDisposable
             // Request-scoped failures such as context/session incompatibility may
             // be worth trying on another model without poisoning global endpoint
             // health. Exclude only those routes for the remainder of this request.
-            if(!result.healthChanged)
+            if(!result.healthChanged || result.diagnosis.failureClass=="provider_tool_output_invalid")
                 requestExcluded.Add(route.RouteName);
 
             preferred=null;
@@ -178,6 +180,8 @@ public sealed class InferenceGateway : IDisposable
         NormalizedInferenceRequest? request,
         CancellationToken token=default)
     {
+        if(request is not null && InferenceRequestValidator.Validate(request) is { } invalid)
+            return RouterResponse.Ok(RecordInputFailure(request,invalid));
         if(string.IsNullOrWhiteSpace(endpoint)) return RouterResponse.Fail("endpoint is required.");
         if(request is null) return RouterResponse.Fail("inference request is required.");
         var route=_engine.FindRoute(endpoint);
@@ -233,28 +237,15 @@ public sealed class InferenceGateway : IDisposable
     async Task<NormalizedInferenceResult> ExecuteAsync(
         EndpointRoute route,NormalizedInferenceRequest request,bool diagnosticMode,CancellationToken token,string? leaseToken)
     {
-        for(var index=0;index<request.messages.Count;index++)
-            foreach(var call in request.messages[index].tool_calls??new())
-            {
-                try
-                {
-                    using var arguments=JsonDocument.Parse(call.function.arguments);
-                    if(arguments.RootElement.ValueKind!=JsonValueKind.Object) throw new JsonException();
-                }
-                catch(JsonException)
-                {
-                    var invalid=BaseResult(route,"preflight","",Diagnosis("invalid_tool_arguments","request",false,false,
-                        "INVALID_TOOL_ARGUMENTS",$"Saved input message[{index}] tool call '{call.id}' has invalid JSON object arguments. Repair or replace this worker session before retrying; no provider request was sent."));
-                    invalid.signalRef=EmitSignal(route,invalid,diagnosticMode);
-                    return invalid;
-                }
-            }
+        if(InferenceRequestValidator.Validate(request) is { } invalid)
+            return RecordInputFailure(request,invalid);
         // The retry budget belongs to this invocation, never to the durable caller transcript.
         var current=JsonSerializer.Deserialize<NormalizedInferenceRequest>(JsonSerializer.Serialize(request))!;
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(request.timeoutSeconds,15,1800)));
         var attempts=new List<InferenceAttemptRecord>();
         var usage=new NormalizedUsage();
+        var toolRetryUsed=false;
         while(true)
         {
             var result=await ExecuteOnceAsync(route,current,diagnosticMode,deadline.Token,leaseToken,token);
@@ -263,14 +254,17 @@ public sealed class InferenceGateway : IDisposable
             var nextBudget=Math.Min(16384,(long)current.maxOutputTokens*2);
             if(route.Endpoint.contextLength is >0 && result.usage.reported && result.usage.promptTokens>0)
                 nextBudget=Math.Min(nextBudget,Math.Max(0,route.Endpoint.contextLength.Value-result.usage.promptTokens));
-            var retry=!diagnosticMode && attempts.Count<3 && result.diagnosis.failureClass=="output_budget_exhausted" && nextBudget>current.maxOutputTokens && !deadline.IsCancellationRequested;
+            var toolRetry=result.diagnosis.failureClass=="provider_tool_output_invalid" && !toolRetryUsed;
+            var budgetRetry=result.diagnosis.failureClass=="output_budget_exhausted" && nextBudget>current.maxOutputTokens;
+            var retry=!diagnosticMode && attempts.Count<3 && (toolRetry || budgetRetry) && !deadline.IsCancellationRequested;
             if(!retry)
             {
                 result.usage=CopyUsage(usage);
                 result.inferenceAttempts=attempts;
                 return result;
             }
-            current.maxOutputTokens=(int)nextBudget;
+            if(toolRetry) toolRetryUsed=true;
+            else current.maxOutputTokens=(int)nextBudget;
         }
     }
 
@@ -332,6 +326,9 @@ public sealed class InferenceGateway : IDisposable
             if(response.IsSuccessStatusCode)
             {
                 var parsed=adapter.ParseSuccess(body,route.Endpoint);
+                if(parsed.Success && parsed.Assistant is not null &&
+                    InferenceRequestValidator.Validate(new(){messages=new(){parsed.Assistant}}) is not null)
+                    parsed=new(false,null,parsed.Usage,"Provider returned an invalid tool call name or JSON object arguments.",null,"invalid_tool_arguments");
                 if(parsed.Success && parsed.Assistant is not null)
                 {
                     _engine.Success(leaseToken,route.RouteName);
@@ -365,10 +362,19 @@ public sealed class InferenceGateway : IDisposable
                 if(parsed.FailureClass is not null)
                     malformed.diagnosis=Diagnosis(parsed.FailureClass,"request",false,false,
                         parsed.FailureClass=="output_budget_exhausted"?"OUTPUT_BUDGET_EXHAUSTED":"INVALID_TOOL_ARGUMENTS",parsed.Error);
+                if(parsed.FailureClass=="invalid_tool_arguments")
+                {
+                    malformed.diagnosis=Diagnosis("provider_tool_output_invalid","endpoint",false,true,
+                        "INVALID_TOOL_ARGUMENTS",parsed.Error);
+                    // Keep the lease while a bounded same-endpoint retry runs.
+                    var quality=_engine.RegisterFailureKey(route.RouteName,"endpoint","provider_tool_output_invalid",parsed.Error,route.Connection);
+                    malformed.healthChanged=true;
+                    malformed.nextRetryAt=quality.retryAfter;
+                }
                 malformed.usage=parsed.Usage;
                 malformed.request=built.evidence;
                 malformed.response=responseEvidence;
-                malformed.failoverAllowed=false;
+                malformed.failoverAllowed=parsed.FailureClass=="invalid_tool_arguments" && !diagnosticMode;
                 malformed.signalRef=EmitSignal(route,malformed,diagnosticMode);
                 return malformed;
             }
@@ -465,6 +471,22 @@ public sealed class InferenceGateway : IDisposable
             diagnosis=diagnosis,
             usage=new NormalizedUsage{model=route.Endpoint.model}
         };
+
+    NormalizedInferenceResult RecordInputFailure(NormalizedInferenceRequest request,NormalizedInferenceResult result)
+    {
+        try
+        {
+            var signal=SignalEnvelope.Routing("inference_failed","request",request.sessionKey??"preflight",
+                "router","inference","request",new()
+                {
+                    ["diagnosis"]=result.diagnosis,["healthChanged"]=false,["failoverAllowed"]=false
+                });
+            signal.source["component"]="inference-preflight";
+            result.signalRef=_signals.Append(signal);
+        }
+        catch { }
+        return result;
+    }
 
     string? EmitSignal(EndpointRoute route,NormalizedInferenceResult result,bool diagnosticMode)
     {

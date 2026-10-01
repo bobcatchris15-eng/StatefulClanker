@@ -112,19 +112,22 @@ public sealed class OpenAiChatAdapter : IProviderAdapter
                 if(content.ValueKind==JsonValueKind.String) assistant.content=content.GetString();
                 else if(content.ValueKind!=JsonValueKind.Null) assistant.content=content.GetRawText();
             }
-            if(message.TryGetProperty("tool_calls",out var toolCalls) && toolCalls.ValueKind==JsonValueKind.Array)
+            if(message.TryGetProperty("tool_calls",out var toolCalls) && toolCalls.ValueKind!=JsonValueKind.Null)
             {
+                if(toolCalls.ValueKind!=JsonValueKind.Array)
+                    return new(false,null,usage,"Provider returned invalid tool_calls shape.",null,"invalid_tool_arguments");
                 assistant.tool_calls=new();
                 foreach(var call in toolCalls.EnumerateArray())
                 {
-                    if(!call.TryGetProperty("function",out var fn)) continue;
+                    if(call.ValueKind!=JsonValueKind.Object || !call.TryGetProperty("function",out var fn) || fn.ValueKind!=JsonValueKind.Object)
+                        return new(false,null,usage,"Provider returned invalid tool call function shape.",null,"invalid_tool_arguments");
                     var normalized=new NormalizedToolCall
                     {
-                        id=call.TryGetProperty("id",out var id)?id.GetString()??"":Guid.NewGuid().ToString("N"),
+                        id=call.TryGetProperty("id",out var id) && id.ValueKind==JsonValueKind.String?id.GetString()??"":Guid.NewGuid().ToString("N"),
                         type="function",
                         function=new NormalizedFunctionCall
                         {
-                            name=fn.TryGetProperty("name",out var name)?name.GetString()??"":"",
+                            name=fn.TryGetProperty("name",out var name) && name.ValueKind==JsonValueKind.String?name.GetString()??"":"",
                             arguments=fn.TryGetProperty("arguments",out var args)
                                 ? (args.ValueKind==JsonValueKind.String?args.GetString()??"{}":args.GetRawText())
                                 : "{}"
@@ -143,6 +146,8 @@ public sealed class OpenAiChatAdapter : IProviderAdapter
                 {
                     try
                     {
+                        if(!InferenceRequestValidator.IsValidFunctionName(call.function.name))
+                            throw new JsonException("Invalid tool function name.");
                         using var arguments=JsonDocument.Parse(call.function.arguments);
                         if(arguments.RootElement.ValueKind!=JsonValueKind.Object) throw new JsonException("Tool arguments must be a JSON object.");
                     }

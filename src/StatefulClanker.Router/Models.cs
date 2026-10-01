@@ -109,6 +109,9 @@ public sealed class HealthEntry
     public string? reason { get; set; }
     public int failures { get; set; }
     public int probeFailures { get; set; }
+    public int toolOutputFailures { get; set; }
+    public int consecutiveToolOutputFailures { get; set; }
+    public string? lastToolOutputFailure { get; set; }
     public string? lastFailure { get; set; }
     public string? lastSuccess { get; set; }
     public string? lastProbe { get; set; }

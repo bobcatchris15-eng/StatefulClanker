@@ -57,13 +57,13 @@ public static partial class FailurePolicy
     public static bool CanFailover(string failureClass) => failureClass is
         "rate_limited" or "capacity" or "timeout" or "server_error" or "model_unavailable" or
         "malformed_response" or "empty_response" or "protocol_error" or "session_incompatible" or
-        "context_too_large" or "bad_request" or "billing_exhausted" or "auth" or "permission" or "configuration";
+        "context_too_large" or "bad_request" or "billing_exhausted" or "auth" or "permission" or "configuration" or "provider_tool_output_invalid";
 
     public static string ScopeFor(string failureClass,string? message=null) => failureClass switch
     {
         "auth" or "configuration" or "billing_exhausted" => "connection",
         "permission" => HasAccountPermissionEvidence(message)?"connection":"endpoint",
-        "rate_limited" or "capacity" or "model_unavailable" or "malformed_response" or "empty_response" or "protocol_error" or "timeout" or "server_error" => "endpoint",
+        "rate_limited" or "capacity" or "model_unavailable" or "malformed_response" or "empty_response" or "protocol_error" or "timeout" or "server_error" or "provider_tool_output_invalid" => "endpoint",
         _ => "request"
     };
 
@@ -80,6 +80,7 @@ public static partial class FailurePolicy
 
         return failureClass switch
         {
+            "provider_tool_output_invalid" => TimeSpan.FromSeconds(Math.Min(900,60*Math.Pow(2,Math.Min(4,Math.Max(0,failures-1))))),
             "rate_limited" => TimeSpan.FromSeconds(Math.Min(3600, failures<=1 ? 60 : failures==2 ? 300 : failures==3 ? 900 : 3600)),
             "billing_exhausted" => TimeSpan.FromMinutes(Math.Min(360, 30*Math.Max(1,failures))),
             "server_error" or "timeout" => TimeSpan.FromSeconds(Math.Min(1800, failures<=1 ? 300 : 300*Math.Pow(2,Math.Min(3,failures-1)))),

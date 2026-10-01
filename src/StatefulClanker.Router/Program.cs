@@ -15,7 +15,14 @@ internal static class Program
         if(args.Length>0 && string.Equals(args[0],"daemon",StringComparison.OrdinalIgnoreCase))
             return await RunDaemonAsync(store,pipeName);
 
-        var request=ParseRequest(args);
+        RouterRequest? request;
+        try { request=ParseRequest(args); }
+        catch(Exception ex) when(args.Length>0 && args[0].Equals("infer",StringComparison.OrdinalIgnoreCase) &&
+            ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(RouterResponse.Ok(InferenceRequestValidator.InvalidRequest("Inference request file could not be read or parsed.")),Json));
+            return 0;
+        }
         if(request is null)
         {
             Console.Error.WriteLine("Usage: StatefulClanker.Router <ping|snapshot|negotiate|acquire|release|heartbeat|success|failure|infer|test-endpoint> [options]");
@@ -25,7 +32,8 @@ internal static class Program
         RouterResponse response;
         try
         {
-            response=await SendWithDaemonAsync(pipeName,request);
+            var invalid=request.inference is null?null:InferenceRequestValidator.Validate(request.inference);
+            response=invalid?.diagnosis.failureClass=="invalid_inference_request"?RouterResponse.Ok(invalid):await SendWithDaemonAsync(pipeName,request);
         }
         catch(Exception ex)
         {

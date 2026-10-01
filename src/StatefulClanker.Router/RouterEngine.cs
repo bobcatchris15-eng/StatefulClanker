@@ -341,7 +341,7 @@ public sealed class RouterEngine
     {
         var route=ResolveRoute(token,endpoint,out var lease);
         if(route is null) return RouterResponse.Fail("A valid lease or endpoint is required.");
-        MarkHealthy(route.RouteName);
+        _healthReducer.MarkHealthy(route.RouteName,resetToolQuality:true);
         MarkHealthy("connection:"+route.Endpoint.connection);
         if(!string.IsNullOrWhiteSpace(route.Service)) MarkHealthy("service:"+route.Service);
         EmitRoutingSignal("route_succeeded",route,"endpoint",new(){{"connection",route.Endpoint.connection},{"model",route.Endpoint.model}},"router","health");
@@ -427,6 +427,7 @@ public sealed class RouterEngine
                 leaseCapacity=LeaseCapacity(r),
                 leased=leaseCounts.GetValueOrDefault(r.RouteName)>0,
                 eligibility=RouteDiagnostic(r,health),
+                quality=ToolQualityFor(r,health),
                 health=HealthStateFor(r,health)
             }).ToArray(),
             leases=leases.Values.OrderBy(x=>x.route).ToArray()
@@ -607,7 +608,19 @@ public sealed class RouterEngine
             weight=route.Endpoint.weight,
             available=Available(route,health),
             atCapacity,
-            health=healthState
+            health=healthState,
+            quality=ToolQualityFor(route,health)
+        };
+    }
+
+    static object ToolQualityFor(EndpointRoute route,RoutingHealthDocument health)
+    {
+        health.endpoints.TryGetValue(route.RouteName,out var entry);
+        return new
+        {
+            toolOutputFailures=entry?.toolOutputFailures??0,
+            consecutiveToolOutputFailures=entry?.consecutiveToolOutputFailures??0,
+            lastToolOutputFailure=entry?.lastToolOutputFailure
         };
     }
 

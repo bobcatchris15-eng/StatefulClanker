@@ -113,6 +113,14 @@ public sealed class AnthropicMessagesAdapter : IProviderAdapter
         {
             using var doc=JsonDocument.Parse(body);
             var root=doc.RootElement;
+            var usage=new NormalizedUsage{model=endpoint.model};
+            if(root.TryGetProperty("usage",out var usageEl) && usageEl.ValueKind==JsonValueKind.Object)
+            {
+                usage.promptTokens=AdapterJson.Long(usageEl,"input_tokens");
+                usage.completionTokens=AdapterJson.Long(usageEl,"output_tokens");
+                usage.totalTokens=usage.promptTokens+usage.completionTokens;
+                usage.reported=true;
+            }
             if(!root.TryGetProperty("content",out var content) || content.ValueKind!=JsonValueKind.Array)
                 return new(false,null,new(){model=endpoint.model},"Successful Anthropic response did not contain content.");
 
@@ -131,11 +139,11 @@ public sealed class AnthropicMessagesAdapter : IProviderAdapter
                     var input=part.TryGetProperty("input",out var inputEl)?inputEl.GetRawText():"{}";
                     assistant.tool_calls.Add(new NormalizedToolCall
                     {
-                        id=part.TryGetProperty("id",out var id)?id.GetString()??Guid.NewGuid().ToString("N"):Guid.NewGuid().ToString("N"),
+                        id=part.TryGetProperty("id",out var id) && id.ValueKind==JsonValueKind.String?id.GetString()??Guid.NewGuid().ToString("N"):Guid.NewGuid().ToString("N"),
                         type="function",
                         function=new NormalizedFunctionCall
                         {
-                            name=part.TryGetProperty("name",out var name)?name.GetString()??"":"",
+                            name=part.TryGetProperty("name",out var name) && name.ValueKind==JsonValueKind.String?name.GetString()??"":"",
                             arguments=input
                         }
                     });
@@ -143,14 +151,8 @@ public sealed class AnthropicMessagesAdapter : IProviderAdapter
             }
             assistant.content=textParts.Count>0?string.Join("\n",textParts):"";
 
-            var usage=new NormalizedUsage{model=endpoint.model};
-            if(root.TryGetProperty("usage",out var usageEl) && usageEl.ValueKind==JsonValueKind.Object)
-            {
-                usage.promptTokens=AdapterJson.Long(usageEl,"input_tokens");
-                usage.completionTokens=AdapterJson.Long(usageEl,"output_tokens");
-                usage.totalTokens=usage.promptTokens+usage.completionTokens;
-                usage.reported=true;
-            }
+            if(InferenceRequestValidator.Validate(new(){messages=new(){assistant}}) is not null)
+                return new(false,null,usage,"Provider returned invalid tool call name or JSON object arguments.",null,"invalid_tool_arguments");
             var hasContent=!string.IsNullOrWhiteSpace(assistant.content);
             var hasTools=assistant.tool_calls.Count>0;
             return hasContent||hasTools

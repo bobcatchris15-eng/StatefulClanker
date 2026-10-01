@@ -125,6 +125,15 @@ public sealed class GeminiNativeAdapter : IProviderAdapter
         {
             using var doc=JsonDocument.Parse(body);
             var root=doc.RootElement;
+            var usage=new NormalizedUsage{model=endpoint.model};
+            if(root.TryGetProperty("usageMetadata",out var usageEl) && usageEl.ValueKind==JsonValueKind.Object)
+            {
+                usage.promptTokens=AdapterJson.Long(usageEl,"promptTokenCount");
+                usage.completionTokens=AdapterJson.Long(usageEl,"candidatesTokenCount");
+                usage.totalTokens=AdapterJson.Long(usageEl,"totalTokenCount");
+                if(usage.totalTokens<=0) usage.totalTokens=usage.promptTokens+usage.completionTokens;
+                usage.reported=true;
+            }
             if(!root.TryGetProperty("candidates",out var candidates) ||
                candidates.ValueKind!=JsonValueKind.Array ||
                candidates.GetArrayLength()==0)
@@ -143,10 +152,12 @@ public sealed class GeminiNativeAdapter : IProviderAdapter
             {
                 if(part.TryGetProperty("text",out var text) && text.ValueKind==JsonValueKind.String)
                     textParts.Add(text.GetString()??"");
-                if(part.TryGetProperty("functionCall",out var fc) && fc.ValueKind==JsonValueKind.Object)
+                if(part.TryGetProperty("functionCall",out var fc))
                 {
+                    if(fc.ValueKind!=JsonValueKind.Object)
+                        return new(false,null,usage,"Provider returned invalid functionCall shape.",null,"invalid_tool_arguments");
                     n++;
-                    var name=fc.TryGetProperty("name",out var nameEl)?nameEl.GetString()??"tool":"tool";
+                    var name=fc.TryGetProperty("name",out var nameEl) && nameEl.ValueKind==JsonValueKind.String?nameEl.GetString()??"":"";
                     var args=fc.TryGetProperty("args",out var argsEl)?argsEl.GetRawText():"{}";
                     var call=new NormalizedToolCall
                     {
@@ -163,15 +174,8 @@ public sealed class GeminiNativeAdapter : IProviderAdapter
             }
             assistant.content=textParts.Count>0?string.Join("\n",textParts):"";
 
-            var usage=new NormalizedUsage{model=endpoint.model};
-            if(root.TryGetProperty("usageMetadata",out var usageEl) && usageEl.ValueKind==JsonValueKind.Object)
-            {
-                usage.promptTokens=AdapterJson.Long(usageEl,"promptTokenCount");
-                usage.completionTokens=AdapterJson.Long(usageEl,"candidatesTokenCount");
-                usage.totalTokens=AdapterJson.Long(usageEl,"totalTokenCount");
-                if(usage.totalTokens<=0) usage.totalTokens=usage.promptTokens+usage.completionTokens;
-                usage.reported=true;
-            }
+            if(InferenceRequestValidator.Validate(new(){messages=new(){assistant}}) is not null)
+                return new(false,null,usage,"Provider returned invalid tool call name or JSON object arguments.",null,"invalid_tool_arguments");
             var hasContent=!string.IsNullOrWhiteSpace(assistant.content);
             var hasTools=assistant.tool_calls.Count>0;
             return hasContent||hasTools

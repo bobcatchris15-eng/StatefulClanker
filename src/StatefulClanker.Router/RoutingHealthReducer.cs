@@ -11,7 +11,7 @@ public sealed class RoutingHealthReducer
         _signals=signals;
     }
 
-    public void MarkHealthy(string key,string reason="successful-observation")
+    public void MarkHealthy(string key,string reason="successful-observation",bool resetToolQuality=false)
     {
         var scope=ScopeFromKey(key);
         Append("health_recovered",key,scope,new()
@@ -29,6 +29,7 @@ public sealed class RoutingHealthReducer
             e.accountPermissionEvidence=null;
             e.failures=0;
             e.probeFailures=0;
+            if(resetToolQuality) e.consecutiveToolOutputFailures=0;
             e.retryAfter=null;
             e.nextProbeAt=null;
             e.lastSuccess=DateTimeOffset.UtcNow.ToString("O");
@@ -63,6 +64,12 @@ public sealed class RoutingHealthReducer
             e.failures=Math.Max(0,e.failures)+1;
             e.lastFailure=DateTimeOffset.UtcNow.ToString("O");
             e.message=Bound(message,500);
+            if(failureClass=="provider_tool_output_invalid")
+            {
+                e.toolOutputFailures=Math.Max(0,e.toolOutputFailures)+1;
+                e.consecutiveToolOutputFailures=Math.Max(0,e.consecutiveToolOutputFailures)+1;
+                e.lastToolOutputFailure=e.lastFailure;
+            }
 
             var hard=failureClass is "auth" or "configuration" || (failureClass=="permission" && scope=="connection");
             var quota=QuotaIntelligence.ObserveFailure(connection?.presetId,failureClass,message);
@@ -79,7 +86,8 @@ public sealed class RoutingHealthReducer
             else
             {
                 var at=exactAt ??
-                    DateTimeOffset.UtcNow.Add(explicitDelay ?? FailurePolicy.Delay(failureClass,message,e.failures));
+                    DateTimeOffset.UtcNow.Add(explicitDelay ?? FailurePolicy.Delay(failureClass,message,
+                        failureClass=="provider_tool_output_invalid"?e.consecutiveToolOutputFailures:e.failures));
                 var atText=at.ToUniversalTime().ToString("O");
                 e.state="cooldown";
                 e.retryAfter=atText;
