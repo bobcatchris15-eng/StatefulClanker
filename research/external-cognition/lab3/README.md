@@ -26,3 +26,7 @@ Before JSON parsing, exact submitted bytes are saved beside the campaign as `res
 `summary --campaign FILE` reports schedule hash, planned calls, accepted states, saved arms, and producer attrition. `evaluate --campaign FILE` performs offline-only scoring: producer coefficient truth; consumer true-world answers; altered answers under both true and altered relations; omission classification; revision u correctness, v preservation, and invalidation; and revised-consumer outcomes. Its evaluator enumerates all 121 `(x,y)` pairs. No submit path calls the evaluator, and evaluator results never appear in subject prompts.
 
 Run from the repository root with `python -m unittest discover -s research/external-cognition/lab3/tests -v`.
+
+Post-campaign evaluator note: `evaluate` now reports `consumer_intended_revised_world_correct` alongside the legacy `consumer_true_world_correct`. The new field compares a revised consumer response with the intended +2 u-intercept relation, preserved original v, and the original target `(u,v)`. It does not change the frozen campaign evaluator or any stored run evidence; see `ENGINE_RECEIPT_v1.1.md`.
+
+Post-campaign evaluator note: `evaluate` now reports `consumer_intended_revised_world_correct` alongside the legacy `consumer_true_world_correct`. The new field compares a revised consumer response with the intended +2 u-intercept relation, preserved original v, and original target `(u,v)`. This working-source correction does not alter frozen campaign evaluator or stored run evidence; see `ENGINE_RECEIPT_v1.1.md`.

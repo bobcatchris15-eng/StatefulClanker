@@ -124,6 +124,35 @@ class AffineEvaluatorTests(unittest.TestCase):
             result=experiment.evaluate(path)["cases"]["3101"]["arms"]["omitted"]
             self.assertIsNone(result["true_world_correct"])
 
+    def test_revision_correctness_uses_intended_revised_world_same_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"campaign.json"; experiment.prepare(path)
+            world=experiment.make_case(3103); u=world["relation"]["u"][:]; v=world["relation"]["v"][:]
+            experiment.submit_producer(path,"3103",{"base_version":0,"u":u,"v":v})
+            intended_u=u[:]; intended_u[2]=(intended_u[2]+2)%11
+            experiment.submit_revision(path,"3103",{"base_version":1,"u":intended_u,"v":v,"invalidate":["answer"]})
+            expected=experiment.relation_solutions({"u":intended_u,"v":v},world["target"]["uv"])
+            self.assertEqual(expected,[(4,10)])
+            experiment.submit_consumer(path,"3103","revised",{"status":"solved","x":4,"y":10})
+            result=experiment.evaluate(path)["cases"]["3103"]["revision"]
+            self.assertTrue(result["consumer_agreement_with_submitted_revision"])
+            self.assertTrue(result["consumer_intended_revised_world_correct"])
+            self.assertFalse(result["consumer_true_world_correct"])
+
+    def test_wrong_accepted_revision_follower_is_not_intended_world_correct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"campaign.json"; experiment.prepare(path)
+            world=experiment.make_case(3101); u=world["relation"]["u"][:]; v=world["relation"]["v"][:]
+            experiment.submit_producer(path,"3101",{"base_version":0,"u":u,"v":v})
+            wrong_u=u[:]; wrong_u[2]=(wrong_u[2]+1)%11
+            experiment.submit_revision(path,"3101",{"base_version":1,"u":wrong_u,"v":v,"invalidate":["answer"]})
+            wrong_solution=experiment.relation_solutions({"u":wrong_u,"v":v},world["target"]["uv"])
+            self.assertEqual(wrong_solution,[(6,2)])
+            experiment.submit_consumer(path,"3101","revised",{"status":"solved","x":6,"y":2})
+            result=experiment.evaluate(path)["cases"]["3101"]["revision"]
+            self.assertTrue(result["consumer_agreement_with_submitted_revision"])
+            self.assertFalse(result["consumer_intended_revised_world_correct"])
+
     def test_consumer_response_schema_is_strict(self):
         self.assertTrue(experiment.validate_consumer_response({"status":"solved","x":0,"y":10}))
         self.assertTrue(experiment.validate_consumer_response({"status":"underdetermined"}))

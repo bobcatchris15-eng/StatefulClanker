@@ -7,6 +7,24 @@
           "status": "solved",
           "x": 2,
           "y": 4
+        },
+        "intact": {
+          "status": "solved",
+          "x": 7,
+          "y": 4
+        },
+        "omitted": {
+          "status": "underdetermined"
+        },
+        "raw": {
+          "status": "solved",
+          "x": 3,
+          "y": 9
+        },
+        "revised": {
+          "status": "solved",
+          "x": 2,
+          "y": 4
         }
       },
       "producer_raw": {
@@ -37,9 +55,9 @@
       },
       "relation": {
         "u": [
-          0,
-          8,
-          5
+          4,
+          9,
+          0
         ],
         "v": [
           2,
@@ -47,20 +65,162 @@
           5
         ]
       },
-      "revision": null,
-      "revision_raw": null,
+      "revision": {
+        "base_version": 1,
+        "invalidate": [
+          "answer"
+        ],
+        "u": [
+          4,
+          9,
+          0
+        ],
+        "v": [
+          2,
+          4,
+          5
+        ]
+      },
+      "revision_raw": {
+        "base_version": 1,
+        "invalidate": [
+          "answer"
+        ],
+        "u": [
+          4,
+          9,
+          0
+        ],
+        "v": [
+          2,
+          4,
+          5
+        ]
+      },
+      "revision_relation": {
+        "u": [
+          4,
+          9,
+          0
+        ],
+        "v": [
+          2,
+          4,
+          5
+        ]
+      },
       "seed": 3101,
-      "version": 1
+      "version": 2
     },
     "3102": {
       "cached_answer": null,
-      "consumer_raw": {},
-      "producer_raw": null,
-      "relation": null,
-      "revision": null,
-      "revision_raw": null,
+      "consumer_raw": {
+        "altered": {
+          "status": "solved",
+          "x": 5,
+          "y": 6
+        },
+        "intact": {
+          "status": "solved",
+          "x": 8,
+          "y": 7
+        },
+        "omitted": {
+          "status": "underdetermined"
+        },
+        "raw": {
+          "status": "underdetermined"
+        },
+        "revised": {
+          "status": "solved",
+          "x": 9,
+          "y": 8
+        }
+      },
+      "producer_raw": {
+        "base_version": 0,
+        "u": [
+          7,
+          2,
+          9
+        ],
+        "v": [
+          3,
+          2,
+          7
+        ]
+      },
+      "producer_raw_bytes": "{\"base_version\":0,\"u\":[7,2,9],\"v\":[3,2,7]}",
+      "producer_relation": {
+        "u": [
+          7,
+          2,
+          9
+        ],
+        "v": [
+          3,
+          2,
+          7
+        ]
+      },
+      "relation": {
+        "u": [
+          7,
+          2,
+          0
+        ],
+        "v": [
+          3,
+          2,
+          7
+        ]
+      },
+      "revision": {
+        "base_version": 1,
+        "invalidate": [
+          "answer"
+        ],
+        "u": [
+          7,
+          2,
+          0
+        ],
+        "v": [
+          3,
+          2,
+          7
+        ]
+      },
+      "revision_raw": {
+        "base_version": 1,
+        "invalidate": [
+          "answer"
+        ],
+        "u": [
+          7,
+          2,
+          0
+        ],
+        "v": [
+          3,
+          2,
+          7
+        ]
+      },
+      "revision_relation": {
+        "u": [
+          7,
+          2,
+          0
+        ],
+        "v": [
+          3,
+          2,
+          7
+        ]
+      },
       "seed": 3102,
-      "version": 0
+      "version": 2
     },
     "3103": {
       "cached_answer": null,

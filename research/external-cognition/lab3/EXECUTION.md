@@ -5,3 +5,5 @@ Planned ceiling: 21 fresh gpt-6-luna low subjects, fork none. Three cases, initi
 Preflight runs/campaign1 contains only empty-state/prompt fixtures generated before final formula/scoring fixes. It has no subject calls and is excluded from live results. Live run uses runs/campaign1_frozen after independent clearance.
 
 Quota interruption: nine saved responses at positions1–9. Agents9–11 reported quota errors; position9 had already written its raw output, which was preserved and submitted without a retry. Positions10–11 have no output;12–21 not dispatched. All9 structurally submitted. No live correctness evaluation or feedback. Twelve semantic responses remain. See INTERRUPTED.md for continuation.
+
+Resumed on explicit user instruction. All21 semantic slots now have one saved/submitted response;23 dispatch records include2 quota attempts without outputs and1 interrupted-but-saved response. Offline frozen evaluation saved after all responses; independent audit finds stale revision correctness field, preserved unchanged. No correctness feedback or answer repairs. Canonical result RESULTS.md; audit RESULTS_AUDIT.md.

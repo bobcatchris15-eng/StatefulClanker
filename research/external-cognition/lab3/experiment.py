@@ -179,6 +179,8 @@ def evaluate(campaign):
                 row["revision"]["consumer_agreement_with_submitted_revision"]=response_agreement(response,solutions)["agreement"]
                 row["revision"]["conditional_solution_set"]=[list(p) for p in solutions]
                 row["revision"]["consumer_true_world_correct"]=answer==expected if answer is not None else False
+                intended_solutions=relation_solutions({"u":revised_u,"v":old["v"]},target)
+                row["revision"]["consumer_intended_revised_world_correct"]=(tuple(answer) in intended_solutions) if answer is not None else False
                 row["revision"]["consumer_conditional_solution_count"]=len(solutions)
         results[key]=row
     return {"offline_only":True,"cases":results}

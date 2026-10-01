@@ -1,0 +1,834 @@
+{
+  "source": "independent brute-force enumeration over all 121 (x,y) residues; world inputs regenerated with frozen_source/experiment.py make_case",
+  "planned_calls": 21,
+  "dispatch_records": 23,
+  "raw_inbox_files": 21,
+  "dispatch_status_counts": {
+    "response_saved_and_structurally_submitted": 20,
+    "quota_error_after_raw_save_structurally_submitted": 1,
+    "quota_error_no_response": 2
+  },
+  "provenance": {
+    "frozen_snapshot_files_checked": 10,
+    "frozen_snapshots_match": true,
+    "hash_registry_items_checked": 42,
+    "hash_registry_matches": true,
+    "dispatch_prompt_and_response_hashes_match": true,
+    "raw_inbox_paths_are_contiguous_1_to_21": true,
+    "position09_status": "quota_error_after_raw_save_structurally_submitted",
+    "position09_no_retry_record": true,
+    "quota_no_output_dispatches": [
+      {
+        "order": 10,
+        "case": 3101,
+        "arm": "omitted",
+        "status": "quota_error_no_response"
+      },
+      {
+        "order": 11,
+        "case": 3101,
+        "arm": "intact",
+        "status": "quota_error_no_response"
+      }
+    ]
+  },
+  "cases": {
+    "3101": {
+      "world_relation": {
+        "u": [
+          0,
+          8,
+          5
+        ],
+        "v": [
+          2,
+          4,
+          5
+        ]
+      },
+      "target": {
+        "uv": [
+          0,
+          3
+        ],
+        "original_xy": [
+          3,
+          9
+        ]
+      },
+      "producer_response": {
+        "base_version": 0,
+        "u": [
+          0,
+          8,
+          5
+        ],
+        "v": [
+          2,
+          4,
+          5
+        ]
+      },
+      "producer_relation_exact": true,
+      "arms": {
+        "intact": {
+          "raw_response": {
+            "status": "solved",
+            "x": 7,
+            "y": 4
+          },
+          "presented_relation": {
+            "u": [
+              0,
+              8,
+              5
+            ],
+            "v": [
+              2,
+              4,
+              5
+            ]
+          },
+          "conditional_solution_set": [
+            [
+              3,
+              9
+            ]
+          ],
+          "matches_presented_relation": false,
+          "matches_original_world_xy": false
+        },
+        "altered": {
+          "raw_response": {
+            "status": "solved",
+            "x": 2,
+            "y": 4
+          },
+          "presented_relation": {
+            "u": [
+              0,
+              8,
+              6
+            ],
+            "v": [
+              2,
+              4,
+              5
+            ]
+          },
+          "conditional_solution_set": [
+            [
+              6,
+              2
+            ]
+          ],
+          "matches_presented_relation": false,
+          "matches_original_world_xy": false
+        },
+        "omitted": {
+          "raw_response": {
+            "status": "underdetermined"
+          },
+          "presented_relation": null,
+          "conditional_solution_set": null,
+          "matches_presented_relation": null,
+          "matches_original_world_xy": null
+        },
+        "raw": {
+          "raw_response": {
+            "status": "solved",
+            "x": 3,
+            "y": 9
+          },
+          "presented_relation": {
+            "u": [
+              0,
+              8,
+              5
+            ],
+            "v": [
+              2,
+              4,
+              5
+            ]
+          },
+          "conditional_solution_set": [
+            [
+              3,
+              9
+            ]
+          ],
+          "matches_presented_relation": true,
+          "matches_original_world_xy": true
+        }
+      },
+      "revision": {
+        "producer_response": {
+          "base_version": 1,
+          "u": [
+            4,
+            9,
+            0
+          ],
+          "v": [
+            2,
+            4,
+            5
+          ],
+          "invalidate": [
+            "answer"
+          ]
+        },
+        "submitted_relation": {
+          "u": [
+            4,
+            9,
+            0
+          ],
+          "v": [
+            2,
+            4,
+            5
+          ]
+        },
+        "intended_relation": {
+          "u": [
+            0,
+            8,
+            7
+          ],
+          "v": [
+            2,
+            4,
+            5
+          ]
+        },
+        "u_exact_intended": false,
+        "v_preserved": true,
+        "invalidate_declared": true,
+        "consumer_raw_response": {
+          "status": "solved",
+          "x": 2,
+          "y": 4
+        },
+        "original_target_uv": [
+          0,
+          3
+        ],
+        "actual_submitted_relation_solution_set": [
+          [
+            2,
+            4
+          ]
+        ],
+        "intended_revised_relation_solution_set": [
+          [
+            9,
+            6
+          ]
+        ],
+        "consumer_matches_actual_submitted_relation": true,
+        "consumer_matches_intended_revised_relation": false,
+        "consumer_matches_original_xy_wrong_revision_metric": false
+      },
+      "saved_evaluation_case": {
+        "producer_relation": {
+          "u_exact": true,
+          "v_exact": true,
+          "joint_exact": true
+        },
+        "arms": {
+          "altered": {
+            "response_correct_under_conditioned_relation": false,
+            "conditional_solution_count": 1,
+            "conditional_solution_set": [
+              [
+                6,
+                2
+              ]
+            ],
+            "true_world_correct": false
+          },
+          "intact": {
+            "response_correct_under_conditioned_relation": false,
+            "conditional_solution_count": 1,
+            "conditional_solution_set": [
+              [
+                3,
+                9
+              ]
+            ],
+            "true_world_correct": false
+          },
+          "omitted": {
+            "classification": "underdetermined",
+            "true_world_correct": null,
+            "true_world_answer": [
+              3,
+              9
+            ]
+          },
+          "raw": {
+            "response_correct_under_conditioned_relation": true,
+            "conditional_solution_count": 1,
+            "conditional_solution_set": [
+              [
+                3,
+                9
+              ]
+            ],
+            "true_world_correct": true
+          }
+        },
+        "revision": {
+          "u_exact": false,
+          "v_preserved": true,
+          "cache_invalidated": true,
+          "consumer_agreement_with_submitted_revision": true,
+          "conditional_solution_set": [
+            [
+              2,
+              4
+            ]
+          ],
+          "consumer_true_world_correct": false,
+          "consumer_conditional_solution_count": 1
+        }
+      }
+    },
+    "3102": {
+      "world_relation": {
+        "u": [
+          7,
+          2,
+          9
+        ],
+        "v": [
+          3,
+          2,
+          7
+        ]
+      },
+      "target": {
+        "uv": [
+          2,
+          1
+        ],
+        "original_xy": [
+          8,
+          7
+        ]
+      },
+      "producer_response": {
+        "base_version": 0,
+        "u": [
+          7,
+          2,
+          9
+        ],
+        "v": [
+          3,
+          2,
+          7
+        ]
+      },
+      "producer_relation_exact": true,
+      "arms": {
+        "intact": {
+          "raw_response": {
+            "status": "solved",
+            "x": 8,
+            "y": 7
+          },
+          "presented_relation": {
+            "u": [
+              7,
+              2,
+              9
+            ],
+            "v": [
+              3,
+              2,
+              7
+            ]
+          },
+          "conditional_solution_set": [
+            [
+              8,
+              7
+            ]
+          ],
+          "matches_presented_relation": true,
+          "matches_original_world_xy": true
+        },
+        "altered": {
+          "raw_response": {
+            "status": "solved",
+            "x": 5,
+            "y": 6
+          },
+          "presented_relation": {
+            "u": [
+              7,
+              2,
+              10
+            ],
+            "v": [
+              3,
+              2,
+              7
+            ]
+          },
+          "conditional_solution_set": [
+            [
+              5,
+              6
+            ]
+          ],
+          "matches_presented_relation": true,
+          "matches_original_world_xy": false
+        },
+        "omitted": {
+          "raw_response": {
+            "status": "underdetermined"
+          },
+          "presented_relation": null,
+          "conditional_solution_set": null,
+          "matches_presented_relation": null,
+          "matches_original_world_xy": null
+        },
+        "raw": {
+          "raw_response": {
+            "status": "underdetermined"
+          },
+          "presented_relation": {
+            "u": [
+              7,
+              2,
+              9
+            ],
+            "v": [
+              3,
+              2,
+              7
+            ]
+          },
+          "conditional_solution_set": [
+            [
+              8,
+              7
+            ]
+          ],
+          "matches_presented_relation": false,
+          "matches_original_world_xy": null
+        }
+      },
+      "revision": {
+        "producer_response": {
+          "base_version": 1,
+          "u": [
+            7,
+            2,
+            0
+          ],
+          "v": [
+            3,
+            2,
+            7
+          ],
+          "invalidate": [
+            "answer"
+          ]
+        },
+        "submitted_relation": {
+          "u": [
+            7,
+            2,
+            0
+          ],
+          "v": [
+            3,
+            2,
+            7
+          ]
+        },
+        "intended_relation": {
+          "u": [
+            7,
+            2,
+            0
+          ],
+          "v": [
+            3,
+            2,
+            7
+          ]
+        },
+        "u_exact_intended": true,
+        "v_preserved": true,
+        "invalidate_declared": true,
+        "consumer_raw_response": {
+          "status": "solved",
+          "x": 9,
+          "y": 8
+        },
+        "original_target_uv": [
+          2,
+          1
+        ],
+        "actual_submitted_relation_solution_set": [
+          [
+            2,
+            5
+          ]
+        ],
+        "intended_revised_relation_solution_set": [
+          [
+            2,
+            5
+          ]
+        ],
+        "consumer_matches_actual_submitted_relation": false,
+        "consumer_matches_intended_revised_relation": false,
+        "consumer_matches_original_xy_wrong_revision_metric": false
+      },
+      "saved_evaluation_case": {
+        "producer_relation": {
+          "u_exact": true,
+          "v_exact": true,
+          "joint_exact": true
+        },
+        "arms": {
+          "altered": {
+            "response_correct_under_conditioned_relation": true,
+            "conditional_solution_count": 1,
+            "conditional_solution_set": [
+              [
+                5,
+                6
+              ]
+            ],
+            "true_world_correct": false
+          },
+          "intact": {
+            "response_correct_under_conditioned_relation": true,
+            "conditional_solution_count": 1,
+            "conditional_solution_set": [
+              [
+                8,
+                7
+              ]
+            ],
+            "true_world_correct": true
+          },
+          "omitted": {
+            "classification": "underdetermined",
+            "true_world_correct": null,
+            "true_world_answer": [
+              8,
+              7
+            ]
+          },
+          "raw": {
+            "response_correct_under_conditioned_relation": false,
+            "conditional_solution_count": 1,
+            "conditional_solution_set": [
+              [
+                8,
+                7
+              ]
+            ],
+            "true_world_correct": false
+          }
+        },
+        "revision": {
+          "u_exact": true,
+          "v_preserved": true,
+          "cache_invalidated": true,
+          "consumer_agreement_with_submitted_revision": false,
+          "conditional_solution_set": [
+            [
+              2,
+              5
+            ]
+          ],
+          "consumer_true_world_correct": false,
+          "consumer_conditional_solution_count": 1
+        }
+      }
+    },
+    "3103": {
+      "world_relation": {
+        "u": [
+          8,
+          1,
+          5
+        ],
+        "v": [
+          9,
+          7,
+          7
+        ]
+      },
+      "target": {
+        "uv": [
+          5,
+          3
+        ],
+        "original_xy": [
+          5,
+          4
+        ]
+      },
+      "producer_response": {
+        "base_version": 0,
+        "u": [
+          8,
+          1,
+          5
+        ],
+        "v": [
+          9,
+          7,
+          7
+        ]
+      },
+      "producer_relation_exact": true,
+      "arms": {
+        "intact": {
+          "raw_response": {
+            "status": "solved",
+            "x": 8,
+            "y": 2
+          },
+          "presented_relation": {
+            "u": [
+              8,
+              1,
+              5
+            ],
+            "v": [
+              9,
+              7,
+              7
+            ]
+          },
+          "conditional_solution_set": [
+            [
+              5,
+              4
+            ]
+          ],
+          "matches_presented_relation": false,
+          "matches_original_world_xy": false
+        },
+        "altered": {
+          "raw_response": {
+            "status": "solved",
+            "x": 10,
+            "y": 7
+          },
+          "presented_relation": {
+            "u": [
+              8,
+              1,
+              6
+            ],
+            "v": [
+              9,
+              7,
+              7
+            ]
+          },
+          "conditional_solution_set": [
+            [
+              10,
+              7
+            ]
+          ],
+          "matches_presented_relation": true,
+          "matches_original_world_xy": false
+        },
+        "omitted": {
+          "raw_response": {
+            "status": "underdetermined"
+          },
+          "presented_relation": null,
+          "conditional_solution_set": null,
+          "matches_presented_relation": null,
+          "matches_original_world_xy": null
+        },
+        "raw": {
+          "raw_response": {
+            "status": "underdetermined"
+          },
+          "presented_relation": {
+            "u": [
+              8,
+              1,
+              5
+            ],
+            "v": [
+              9,
+              7,
+              7
+            ]
+          },
+          "conditional_solution_set": [
+            [
+              5,
+              4
+            ]
+          ],
+          "matches_presented_relation": false,
+          "matches_original_world_xy": null
+        }
+      },
+      "revision": {
+        "producer_response": {
+          "base_version": 1,
+          "u": [
+            8,
+            1,
+            7
+          ],
+          "v": [
+            9,
+            7,
+            7
+          ],
+          "invalidate": [
+            "answer"
+          ]
+        },
+        "submitted_relation": {
+          "u": [
+            8,
+            1,
+            7
+          ],
+          "v": [
+            9,
+            7,
+            7
+          ]
+        },
+        "intended_relation": {
+          "u": [
+            8,
+            1,
+            7
+          ],
+          "v": [
+            9,
+            7,
+            7
+          ]
+        },
+        "u_exact_intended": true,
+        "v_preserved": true,
+        "invalidate_declared": true,
+        "consumer_raw_response": {
+          "status": "solved",
+          "x": 4,
+          "y": 10
+        },
+        "original_target_uv": [
+          5,
+          3
+        ],
+        "actual_submitted_relation_solution_set": [
+          [
+            4,
+            10
+          ]
+        ],
+        "intended_revised_relation_solution_set": [
+          [
+            4,
+            10
+          ]
+        ],
+        "consumer_matches_actual_submitted_relation": true,
+        "consumer_matches_intended_revised_relation": true,
+        "consumer_matches_original_xy_wrong_revision_metric": false
+      },
+      "saved_evaluation_case": {
+        "producer_relation": {
+          "u_exact": true,
+          "v_exact": true,
+          "joint_exact": true
+        },
+        "arms": {
+          "altered": {
+            "response_correct_under_conditioned_relation": true,
+            "conditional_solution_count": 1,
+            "conditional_solution_set": [
+              [
+                10,
+                7
+              ]
+            ],
+            "true_world_correct": false
+          },
+          "intact": {
+            "response_correct_under_conditioned_relation": false,
+            "conditional_solution_count": 1,
+            "conditional_solution_set": [
+              [
+                5,
+                4
+              ]
+            ],
+            "true_world_correct": false
+          },
+          "omitted": {
+            "classification": "underdetermined",
+            "true_world_correct": null,
+            "true_world_answer": [
+              5,
+              4
+            ]
+          },
+          "raw": {
+            "response_correct_under_conditioned_relation": false,
+            "conditional_solution_count": 1,
+            "conditional_solution_set": [
+              [
+                5,
+                4
+              ]
+            ],
+            "true_world_correct": false
+          }
+        },
+        "revision": {
+          "u_exact": true,
+          "v_preserved": true,
+          "cache_invalidated": true,
+          "consumer_agreement_with_submitted_revision": true,
+          "conditional_solution_set": [
+            [
+              4,
+              10
+            ]
+          ],
+          "consumer_true_world_correct": false,
+          "consumer_conditional_solution_count": 1
+        }
+      }
+    }
+  },
+  "summary": {
+    "producer_exact": 3,
+    "intact_true_world_correct": 1,
+    "raw_true_world_correct": 1,
+    "altered_conditional_correct": 2,
+    "omitted_underdetermined": 3,
+    "revision_u_intended": 2,
+    "revision_v_preserved": 3,
+    "revision_invalidation_declared": 3,
+    "revision_answer_agrees_actual": 2,
+    "revision_answer_agrees_intended": 1
+  }
+}

@@ -1,3 +1,7 @@
+# Historical interruption record - campaign now completed
+
+The user authorized continuation; all21 responses are now preserved and audited. This file retains the earlier resume checkpoint below. Current result: RESULTS.md. No outstanding subject calls.
+
 # Cycle 3 quota interruption checkpoint
 
 The executable harness is implemented and pre-live independently cleared. Nine tests passed. The live campaign is incomplete: nine fresh subjects saved exact preserved outputs; agents for positions9–11 reported usage-limit errors. Position9 had saved its raw answer before failing, so that existing answer was preserved and structurally submitted without rerunning it. Positions10–11 produced no response. Infrastructure failures are not reasoning failures or malformed subject outputs. No retries, answer repairs, or extra semantic calls have occurred. No offline live scoring has been run and no final evidence claim is made.

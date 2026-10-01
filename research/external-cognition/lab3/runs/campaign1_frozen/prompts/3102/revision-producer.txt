@@ -1,0 +1,4 @@
+Update the stored relation using u=(a*x+b*y+c) mod 11 and v=(d*x+e*y+f) mod 11 from these authoritative replacement u observations. The prior cached answer is dependent on the old relation and must be invalidated. Preserve untouched v information. Return JSON only: {"base_version":1,"u":[a,b,c],"v":[d,e,f],"invalidate":["answer"]}.
+Prior relation: u=(7, 2, 9); v=(3, 2, 7) mod 11.
+Cached downstream answer: {"status": "solved", "x": 8, "y": 7}
+Replacement observations: [{"xy": [5, 2], "uv": [6, 4]}, {"xy": [6, 7], "uv": [1, 6]}, {"xy": [3, 8], "uv": [4, 10]}]

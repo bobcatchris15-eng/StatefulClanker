@@ -1,0 +1,3 @@
+Solve for integer residues x,y in mod 11 from the supplied relation and target. Return exactly {"status":"solved","x":int,"y":int} or {"status":"underdetermined"}. Return JSON only.
+Use u=(a*x+b*y+c) mod 11 and v=(d*x+e*y+f) mod 11. Relation: u=(7, 2, 0); v=(3, 2, 7) mod 11.
+Target (u,v): [2, 1]
