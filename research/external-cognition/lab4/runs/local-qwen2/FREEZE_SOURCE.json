@@ -1,0 +1,59 @@
+{
+  "utc": "2026-10-01T21:50:50.580956+00:00",
+  "files": [
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\local_runner.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\local-qwen2\\frozen_source\\local_runner.py",
+      "sha256": "d37d6046b1a1d407668e497176290eefbcf543002a0f202099ef6e2fefda962d"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\pilot.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\local-qwen2\\frozen_source\\pilot.py",
+      "sha256": "fa6672fbd598cecad0149f69c5559d1eb3e377d668faefa5653a42a295dc53b6"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\protocol.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\local-qwen2\\frozen_source\\protocol.py",
+      "sha256": "f048db11c158c9d83a22df1eef85f9a2767c726be872fb2df575233cac296278"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\LOCAL_PREREGISTRATION_v2.md",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\local-qwen2\\frozen_source\\LOCAL_PREREGISTRATION_v2.md",
+      "sha256": "c96691db5776f63f4156f09e27b46e7e5bc5ac44571146502454e5371bb550af"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\LOCAL_RUNTIME_DISCOVERY.json",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\local-qwen2\\frozen_source\\LOCAL_RUNTIME_DISCOVERY.json",
+      "sha256": "d5b50188e1fa038a8e5345873b16c7d685247681782b60a3ad71ae28402f2071"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\LOCAL_PRELIVE_AUDIT_v2.md",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\local-qwen2\\frozen_source\\LOCAL_PRELIVE_AUDIT_v2.md",
+      "sha256": "1153da5ee64031f7bc9f08dc4f0010031f2b721df4348c7903f3d09e4ef45f16"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_local_runner.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\local-qwen2\\frozen_source\\tests\\test_local_runner.py",
+      "sha256": "1907b4b45b6b5ded87d6fa442a6409edae848b476da414a8c090234d1a0cf564"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_pilot.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\local-qwen2\\frozen_source\\tests\\test_pilot.py",
+      "sha256": "1de6ef877dea83dcd3f31cb6f41dfdde5e21efc4a29e55d760aa8b5cfdd66101"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_protocol.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\local-qwen2\\frozen_source\\tests\\test_protocol.py",
+      "sha256": "22ab0e7892fbade3a16118aca1cf51b15ad641c710f451ef226ee21ce1da9884"
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\experiment.py",
+      "snapshot": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\runs\\local-qwen2\\frozen_source\\dependencies\\lab3_experiment.py",
+      "sha256": "7b31e04860e5f6fe480871e450674f652a3b60e2a52b54d835f113ea3c96de89"
+    }
+  ],
+  "prelive_tests": "33 passed",
+  "model": "qwen3.5-9b-FLM",
+  "context_length": 70728,
+  "max_tokens": 512
+}

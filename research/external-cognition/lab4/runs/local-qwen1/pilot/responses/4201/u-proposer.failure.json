@@ -1,0 +1,17 @@
+{
+  "captured_at": "2026-10-01T21:40:43.542349+00:00",
+  "checkpoint": "qwen3.5:9b",
+  "device": "npu",
+  "duration_seconds": 300.1020178999752,
+  "failed": true,
+  "finished_at": "2026-10-01T21:40:43.509863+00:00",
+  "max_tokens": 4096,
+  "model": "qwen3.5-9b-FLM",
+  "provider": "Lemonade-local",
+  "reason": "transport_failure: TimeoutError: timed out",
+  "recipe": "flm",
+  "role": "u-proposer",
+  "seed": 4201,
+  "started_at": "2026-10-01T21:35:43.406159+00:00",
+  "temperature": 0
+}

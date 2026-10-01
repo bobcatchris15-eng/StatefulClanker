@@ -1,0 +1,19 @@
+{
+  "captured_at": "2026-10-01T21:56:56.837857+00:00",
+  "checkpoint": "qwen3.5:9b",
+  "device": "npu",
+  "duration_seconds": 128.06997179996688,
+  "effort": "low",
+  "failure": "http_status_failure",
+  "finished_at": "2026-10-01T21:56:56.832446+00:00",
+  "max_tokens": 512,
+  "model": "qwen3.5-9b-FLM",
+  "prompt_sha256": "21dd08de6a151d10c9a0fa103f5652f726af15a7f1011326f357f3026e384083",
+  "provider": "Lemonade-local",
+  "raw_sha256": null,
+  "recipe": "flm",
+  "role": "v-proposer",
+  "seed": 4202,
+  "started_at": "2026-10-01T21:54:48.749514+00:00",
+  "temperature": 0
+}

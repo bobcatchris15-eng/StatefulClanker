@@ -1,0 +1,97 @@
+This is the complete public problem packet. Every participant receives the same raw observations and target image. All arithmetic is modulo 11. The declared family is u=(a*x+b*y+c) mod 11 and v=(d*x+e*y+f) mod 11.
+
+PUBLIC PROBLEM (immutable):
+{
+  "affine_family": "u=(a*x+b*y+c) mod 11; v=(d*x+e*y+f) mod 11",
+  "answer_requirements": {
+    "instruction": "Infer the two affine relations, then solve for the unique target input (x,y) modulo 11.",
+    "status_solved": {
+      "status": "solved",
+      "x": "integer residue 0..10",
+      "y": "integer residue 0..10"
+    },
+    "status_underdetermined": {
+      "status": "underdetermined"
+    }
+  },
+  "modulus": 11,
+  "observations": [
+    {
+      "observation_id": "observation-1",
+      "uv": [
+        0,
+        8
+      ],
+      "xy": [
+        7,
+        8
+      ]
+    },
+    {
+      "observation_id": "observation-2",
+      "uv": [
+        0,
+        0
+      ],
+      "xy": [
+        9,
+        9
+      ]
+    },
+    {
+      "observation_id": "observation-3",
+      "uv": [
+        8,
+        3
+      ],
+      "xy": [
+        1,
+        8
+      ]
+    }
+  ],
+  "problem_id": "affine-4202",
+  "target_uv": [
+    10,
+    9
+  ]
+}
+
+Return exactly one JSON envelope using the supplied schema and references. Do not add prose outside the JSON.
+You are v-reviewer; independently review the peer claim for coordinate u.
+No structurally accepted peer claim is available in your directed mailbox. The proposer call may have failed or been rejected. Use REPORT_EVIDENCE with no corrected_claim to report evidence from the full observations; do not invent a target claim or read reference.
+Copy this exact envelope and fill assessment/basis_refs from your review; leave other fields unchanged.
+
+{
+  "intent": "REPORT_EVIDENCE",
+  "message_id": "affine-4202-v-reviewer-report",
+  "payload": {
+    "report": {
+      "assessment": "supported|challenge|underdetermined",
+      "basis_refs": [
+        "observation-1",
+        "observation-2",
+        "observation-3"
+      ],
+      "target": {
+        "resource_id": "problem:affine-4202",
+        "revision": 1,
+        "state_revision": 1
+      }
+    }
+  },
+  "problem_id": "affine-4202",
+  "read_refs": [
+    {
+      "resource_id": "problem:affine-4202",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": null,
+  "schema_version": 1,
+  "sender": "v-reviewer"
+}

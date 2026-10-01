@@ -1,0 +1,33 @@
+{
+  "intent": "REPORT_EVIDENCE",
+  "message_id": "affine-4202-u-reviewer-report",
+  "payload": {
+    "report": {
+      "assessment": "supported",
+      "basis_refs": [
+        "observation-1",
+        "observation-2",
+        "observation-3"
+      ],
+      "target": {
+        "resource_id": "problem:affine-4202",
+        "revision": 1,
+        "state_revision": 1
+      }
+    }
+  },
+  "problem_id": "affine-4202",
+  "read_refs": [
+    {
+      "resource_id": "problem:affine-4202",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": null,
+  "schema_version": 1,
+  "sender": "u-reviewer"
+}

@@ -1,0 +1,283 @@
+{
+  "cases": {
+    "4201": {
+      "candidates": [],
+      "conditions": {
+        "enumerated_from_submitted_relations": {
+          "solution_count": 0,
+          "solution_set": []
+        },
+        "raw-integrator": {
+          "accepted_by_store": true,
+          "answer": [
+            9,
+            5
+          ],
+          "core_receipt": {
+            "accepted": true,
+            "event_seq": 2,
+            "message_id": "affine-4201-raw-integrator-conclusion"
+          },
+          "intent_matches_scheduled_role": true,
+          "message_id_matches_scheduled_role": true,
+          "problem_id_matches_case": true,
+          "protocol_valid": true,
+          "raw_answer_matches_true_target": false,
+          "schema_valid": true,
+          "sender_matches_scheduled_role": true,
+          "status": "solved",
+          "structurally_parseable": true,
+          "true_target_xy": [
+            2,
+            10
+          ],
+          "true_world_correct": false
+        },
+        "shared-integrator": {
+          "accepted_by_store": true,
+          "answer": [
+            9,
+            5
+          ],
+          "core_receipt": {
+            "accepted": true,
+            "event_seq": 3,
+            "message_id": "affine-4201-shared-integrator-conclusion"
+          },
+          "intent_matches_scheduled_role": true,
+          "message_id_matches_scheduled_role": true,
+          "problem_id_matches_case": true,
+          "protocol_valid": true,
+          "raw_answer_matches_true_target": false,
+          "schema_valid": true,
+          "sender_matches_scheduled_role": true,
+          "status": "solved",
+          "structurally_parseable": true,
+          "true_target_xy": [
+            2,
+            10
+          ],
+          "true_world_correct": false
+        }
+      },
+      "failed_calls": [],
+      "proposals": {
+        "u": {
+          "accepted_by_store": false,
+          "accepted_claim_relation_matches_observations": false,
+          "claim_identity_matches_scheduled_role": false,
+          "coefficients": null,
+          "coefficients_match_generated_world": null,
+          "core_receipt": {
+            "accepted": false,
+            "code": "INVALID_JSON",
+            "event_seq": null,
+            "message_id": null
+          },
+          "message_id_matches_scheduled_role": false,
+          "protocol_valid": false,
+          "relation_matches_public_observations": null,
+          "sender_matches_scheduled_role": false,
+          "structurally_parseable": false
+        },
+        "v": {
+          "accepted_by_store": false,
+          "accepted_claim_relation_matches_observations": false,
+          "claim_identity_matches_scheduled_role": false,
+          "coefficients": null,
+          "coefficients_match_generated_world": null,
+          "core_receipt": {
+            "accepted": false,
+            "code": "INVALID_JSON",
+            "event_seq": null,
+            "message_id": null
+          },
+          "message_id_matches_scheduled_role": false,
+          "protocol_valid": false,
+          "relation_matches_public_observations": null,
+          "sender_matches_scheduled_role": false,
+          "structurally_parseable": false
+        }
+      },
+      "reviews": [
+        {
+          "assessment": "supported",
+          "basis_refs": [
+            "observation-1",
+            "observation-2",
+            "observation-3"
+          ],
+          "has_corrected_candidate": false,
+          "intent": "REPORT_EVIDENCE",
+          "message_id_matches_scheduled_role": true,
+          "problem_id_matches_case": true,
+          "receipt": {
+            "accepted": true,
+            "event_seq": 1,
+            "message_id": "affine-4201-u-reviewer-report"
+          },
+          "role": "u-reviewer",
+          "sender_matches_scheduled_role": true,
+          "structurally_parseable": true
+        },
+        {
+          "assessment": null,
+          "basis_refs": null,
+          "has_corrected_candidate": false,
+          "intent": null,
+          "message_id_matches_scheduled_role": false,
+          "problem_id_matches_case": false,
+          "receipt": {
+            "accepted": false,
+            "code": "INVALID_JSON",
+            "event_seq": null,
+            "message_id": null
+          },
+          "role": "v-reviewer",
+          "sender_matches_scheduled_role": false,
+          "structurally_parseable": false
+        }
+      ]
+    },
+    "4202": {
+      "candidates": [],
+      "conditions": {
+        "enumerated_from_submitted_relations": {
+          "solution_count": 0,
+          "solution_set": []
+        },
+        "raw-integrator": {
+          "accepted_by_store": true,
+          "answer": [
+            1,
+            3
+          ],
+          "core_receipt": {
+            "accepted": true,
+            "event_seq": 4,
+            "message_id": "affine-4202-raw-integrator-conclusion"
+          },
+          "intent_matches_scheduled_role": true,
+          "message_id_matches_scheduled_role": true,
+          "problem_id_matches_case": true,
+          "protocol_valid": true,
+          "raw_answer_matches_true_target": false,
+          "schema_valid": true,
+          "sender_matches_scheduled_role": true,
+          "status": "solved",
+          "structurally_parseable": true,
+          "true_target_xy": [
+            8,
+            4
+          ],
+          "true_world_correct": false
+        },
+        "shared-integrator": {
+          "accepted_by_store": true,
+          "answer": [
+            1,
+            8
+          ],
+          "core_receipt": {
+            "accepted": true,
+            "event_seq": 3,
+            "message_id": "affine-4202-shared-integrator-conclusion"
+          },
+          "intent_matches_scheduled_role": true,
+          "message_id_matches_scheduled_role": true,
+          "problem_id_matches_case": true,
+          "protocol_valid": true,
+          "raw_answer_matches_true_target": false,
+          "schema_valid": true,
+          "sender_matches_scheduled_role": true,
+          "status": "solved",
+          "structurally_parseable": true,
+          "true_target_xy": [
+            8,
+            4
+          ],
+          "true_world_correct": false
+        }
+      },
+      "failed_calls": [
+        "v-proposer"
+      ],
+      "proposals": {
+        "u": {
+          "accepted_by_store": false,
+          "accepted_claim_relation_matches_observations": false,
+          "claim_identity_matches_scheduled_role": false,
+          "coefficients": null,
+          "coefficients_match_generated_world": null,
+          "core_receipt": {
+            "accepted": false,
+            "code": "INVALID_JSON",
+            "event_seq": null,
+            "message_id": null
+          },
+          "message_id_matches_scheduled_role": false,
+          "protocol_valid": false,
+          "relation_matches_public_observations": null,
+          "sender_matches_scheduled_role": false,
+          "structurally_parseable": false
+        },
+        "v": {
+          "accepted_by_store": false,
+          "accepted_claim_relation_matches_observations": false,
+          "claim_identity_matches_scheduled_role": false,
+          "coefficients": null,
+          "coefficients_match_generated_world": null,
+          "core_receipt": null,
+          "message_id_matches_scheduled_role": false,
+          "protocol_valid": false,
+          "relation_matches_public_observations": null,
+          "sender_matches_scheduled_role": false,
+          "structurally_parseable": false
+        }
+      },
+      "reviews": [
+        {
+          "assessment": "supported",
+          "basis_refs": [
+            "observation-1",
+            "observation-2",
+            "observation-3"
+          ],
+          "has_corrected_candidate": false,
+          "intent": "REPORT_EVIDENCE",
+          "message_id_matches_scheduled_role": true,
+          "problem_id_matches_case": true,
+          "receipt": {
+            "accepted": true,
+            "event_seq": 2,
+            "message_id": "affine-4202-u-reviewer-report"
+          },
+          "role": "u-reviewer",
+          "sender_matches_scheduled_role": true,
+          "structurally_parseable": true
+        },
+        {
+          "assessment": "supported",
+          "basis_refs": [
+            "observation-1",
+            "observation-2",
+            "observation-3"
+          ],
+          "has_corrected_candidate": false,
+          "intent": "REPORT_EVIDENCE",
+          "message_id_matches_scheduled_role": true,
+          "problem_id_matches_case": true,
+          "receipt": {
+            "accepted": true,
+            "event_seq": 1,
+            "message_id": "affine-4202-v-reviewer-report"
+          },
+          "role": "v-reviewer",
+          "sender_matches_scheduled_role": true,
+          "structurally_parseable": true
+        }
+      ]
+    }
+  },
+  "offline_only": true
+}

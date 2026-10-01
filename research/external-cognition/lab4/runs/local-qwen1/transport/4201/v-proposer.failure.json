@@ -1,0 +1,10 @@
+{
+  "duration_seconds": 300.0959488999797,
+  "failed": true,
+  "finished_at": "2026-10-01T21:40:43.516878+00:00",
+  "http_status": null,
+  "reason": "transport_failure: TimeoutError: timed out",
+  "role": "v-proposer",
+  "seed": 4201,
+  "started_at": "2026-10-01T21:35:43.406527+00:00"
+}

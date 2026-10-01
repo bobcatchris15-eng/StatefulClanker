@@ -1,0 +1,13 @@
+{
+  "body_sha256": "9b7fcc706f4e66bd82a44d3cd985219b0b1532a843e4941ee8ab16cabab27bf2",
+  "headers": {
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Session-Id, X-Account-Session-Id, mcp-protocol-version, traceparent, Mcp-Session-Id",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Connection": "close",
+    "Content-Length": "1629",
+    "Content-Type": "application/json",
+    "Vary": "Origin"
+  },
+  "received_at": "2026-10-01T21:51:43.247758+00:00",
+  "status": 200
+}

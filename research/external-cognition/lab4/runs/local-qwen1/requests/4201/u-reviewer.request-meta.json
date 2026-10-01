@@ -1,0 +1,18 @@
+{
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "max_tokens": 4096,
+  "method": "POST",
+  "model": "qwen3.5-9b-FLM",
+  "prompt_bytes_sha256": "98e00025fe4480235228829b827d9879c55b835ea187f674f7feb36f501d5e03",
+  "prompt_sha256": "98e00025fe4480235228829b827d9879c55b835ea187f674f7feb36f501d5e03",
+  "request_sha256": "29151022fbb5478538835662e7ef620f922676900af7ff807e2955bf4d25c87a",
+  "response_format": null,
+  "role": "u-reviewer",
+  "seed": 4201,
+  "stream": false,
+  "temperature": 0,
+  "timeout_seconds": 300,
+  "url": "http://127.0.0.1:13305/api/v1/chat/completions"
+}

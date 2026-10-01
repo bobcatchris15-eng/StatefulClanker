@@ -1,0 +1,1 @@
+{"model": "qwen3.5-9b-FLM", "messages": [{"role": "user", "content": "Reply with exactly ALPHA."}], "max_tokens": 32, "temperature": 0, "stream": false}

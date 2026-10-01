@@ -1,0 +1,15 @@
+{
+  "checkpoint": "qwen3.5:9b",
+  "context_length": 70728,
+  "device": "npu",
+  "finished_at": "2026-10-01T21:35:43.396293+00:00",
+  "health_sha256": "e2c4ec5568082dd5319ddeb61b5e32d678c8f2ae909a9b7d339c40be882c903c",
+  "model_id": "qwen3.5-9b-FLM",
+  "models_sha256": "a80413e4c88f14478078ed7c85616474b2f6470c9e2e91d15141241dd2b52513",
+  "ready": true,
+  "reasons": [],
+  "recipe": "flm",
+  "slots_consumed": 0,
+  "started_at": "2026-10-01T21:35:43.286025+00:00",
+  "version": "11.9.0"
+}

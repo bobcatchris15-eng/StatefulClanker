@@ -1,0 +1,1914 @@
+{
+  "aggregate": {
+    "accepted_protocol_event_count": 7,
+    "committed_claim_count": 0,
+    "fork_count": 0,
+    "http200_invalid_json_content_count": 4,
+    "http500_count": 1,
+    "integrator_correct": 0,
+    "integrator_outputs": 4,
+    "public_coefficients": {
+      "4201": {
+        "u": [
+          [
+            3,
+            5,
+            4
+          ]
+        ],
+        "v": [
+          [
+            7,
+            2,
+            10
+          ]
+        ]
+      },
+      "4202": {
+        "u": [
+          [
+            6,
+            10,
+            10
+          ]
+        ],
+        "v": [
+          [
+            10,
+            5,
+            8
+          ]
+        ]
+      }
+    },
+    "public_target_solutions": {
+      "4201": [
+        [
+          2,
+          10
+        ]
+      ],
+      "4202": [
+        [
+          8,
+          4
+        ]
+      ]
+    }
+  },
+  "calls": [
+    {
+      "alias_allowed": true,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": true,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": false,
+      "content_length_bytes": 1239,
+      "content_tail": "=> a*8 + c = -5 = 6.\n            \n            Substitute b=5 into Eq1: a*5 + 7*5 + c = 10 => a*5 + c = -32+4? \n            32 mod 11 is 9 (since 33-1). So -9 = 2.\n            Let's",
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "a861877cbd98ba3814b7bfe568ec92fadeec552d3f68d1ab4659cc2004dcb357",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": false,
+        "code": "INVALID_JSON",
+        "event_seq": null,
+        "message_id": null
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "u-proposer",
+      "seed": "4201",
+      "usage": {
+        "completion_tokens": 512,
+        "decoding_duration": 61.603264,
+        "decoding_speed_tps": 8.311247923486652,
+        "kv_token_occupancy_rate_percentage": 1.9384119510650635,
+        "load_duration": 5e-07,
+        "prefill_duration_ttft": 2.675477248,
+        "prefill_speed_tps": 321.0642141106333,
+        "prompt_tokens": 859,
+        "total_tokens": 1371
+      }
+    },
+    {
+      "alias_allowed": true,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": false,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": false,
+      "content_length_bytes": 978,
+      "content_tail": "-relation\", \n      \"revision\": 0, \n      \"state_revision\": 0 \n    }\n  ], \n\"recipients\":[\n\n\"u-reviewer\",\"shared-integrator\"], \n\nreply_to: null, schema_version:1,sender:\"v-proposer\"}",
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "9b7fcc706f4e66bd82a44d3cd985219b0b1532a843e4941ee8ab16cabab27bf2",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": false,
+        "code": "INVALID_JSON",
+        "event_seq": null,
+        "message_id": null
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "v-proposer",
+      "seed": "4201",
+      "usage": {
+        "completion_tokens": 371,
+        "decoding_duration": 45.399292,
+        "decoding_speed_tps": 8.171933606365492,
+        "kv_token_occupancy_rate_percentage": 1.7376428842544556,
+        "load_duration": 0.0001936,
+        "prefill_duration_ttft": 2.89782144,
+        "prefill_speed_tps": 296.08449580661534,
+        "prompt_tokens": 858,
+        "total_tokens": 1229
+      }
+    },
+    {
+      "alias_allowed": true,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": false,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": true,
+      "content_length_bytes": 657,
+      "envelope": {
+        "intent": "REPORT_EVIDENCE",
+        "message_id": "affine-4201-u-reviewer-report",
+        "payload": {
+          "report": {
+            "assessment": "supported",
+            "basis_refs": [
+              "observation-1",
+              "observation-2",
+              "observation-3"
+            ],
+            "target": {
+              "resource_id": "problem:affine-4201",
+              "revision": 1,
+              "state_revision": 1
+            }
+          }
+        },
+        "read_refs": [
+          {
+            "resource_id": "problem:affine-4201",
+            "revision": 1,
+            "state_revision": 1
+          }
+        ],
+        "recipients": [
+          "shared-integrator"
+        ],
+        "sender": "u-reviewer"
+      },
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "426ce516256b58bb81efa2c472d0774567c8a0c8880d0769a413afb3a55199ff",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": true,
+        "event_seq": 1,
+        "message_id": "affine-4201-u-reviewer-report"
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "u-reviewer",
+      "seed": "4201",
+      "usage": {
+        "completion_tokens": 241,
+        "decoding_duration": 29.006878,
+        "decoding_speed_tps": 8.308374310396314,
+        "kv_token_occupancy_rate_percentage": 1.4576970338821411,
+        "load_duration": 4.7e-06,
+        "prefill_duration_ttft": 2.484092416,
+        "prefill_speed_tps": 318.0235948194288,
+        "prompt_tokens": 790,
+        "total_tokens": 1031
+      }
+    },
+    {
+      "alias_allowed": true,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": false,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": false,
+      "content_length_bytes": 655,
+      "content_tail": "-4201\",\n      \"revision\": 1,\n      \"state_revision\": 1\n    }\n  ],\n  \"recipients\": [\n    \"shared-integrator\"\n  ],\n  \"reply_to\": null,\n  \"schema_version\": 1,\n  \"sender\": \"v-reviewer\"",
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "4a7eab6dc233c09df58bb7e45c52fbc12aaed95839f7d9d6f9ebac62cb1fef7a",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": false,
+        "code": "INVALID_JSON",
+        "event_seq": null,
+        "message_id": null
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "v-reviewer",
+      "seed": "4201",
+      "usage": {
+        "completion_tokens": 239,
+        "decoding_duration": 28.423892,
+        "decoding_speed_tps": 8.408419227036184,
+        "kv_token_occupancy_rate_percentage": 1.4548693895339966,
+        "load_duration": 3.2e-06,
+        "prefill_duration_ttft": 2.40722176,
+        "prefill_speed_tps": 328.1791537145294,
+        "prompt_tokens": 790,
+        "total_tokens": 1029
+      }
+    },
+    {
+      "alias_allowed": true,
+      "answer_matches_independent_public_target": false,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": false,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": true,
+      "content_length_bytes": 464,
+      "envelope": {
+        "intent": "CONCLUDE",
+        "message_id": "affine-4201-shared-integrator-conclusion",
+        "payload": {
+          "conclusion": {
+            "status": "solved",
+            "x": 9,
+            "y": 5
+          }
+        },
+        "read_refs": [
+          {
+            "resource_id": "problem:affine-4201",
+            "revision": 1,
+            "state_revision": 1
+          }
+        ],
+        "recipients": [
+          "shared-integrator"
+        ],
+        "sender": "shared-integrator"
+      },
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "49f0be880805629a121c80d94ebd66162ac18ee283c7c370fb550bcd396343a0",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": true,
+        "event_seq": 3,
+        "message_id": "affine-4201-shared-integrator-conclusion"
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "shared-integrator",
+      "seed": "4201",
+      "usage": {
+        "completion_tokens": 184,
+        "decoding_duration": 21.857112,
+        "decoding_speed_tps": 8.418312538271296,
+        "kv_token_occupancy_rate_percentage": 2.393677234649658,
+        "load_duration": 3.2e-06,
+        "prefill_duration_ttft": 3.865985024,
+        "prefill_speed_tps": 390.327430300982,
+        "prompt_tokens": 1509,
+        "total_tokens": 1693
+      }
+    },
+    {
+      "alias_allowed": true,
+      "answer_matches_independent_public_target": false,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": false,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": true,
+      "content_length_bytes": 458,
+      "envelope": {
+        "intent": "CONCLUDE",
+        "message_id": "affine-4201-raw-integrator-conclusion",
+        "payload": {
+          "conclusion": {
+            "status": "solved",
+            "x": 9,
+            "y": 5
+          }
+        },
+        "read_refs": [
+          {
+            "resource_id": "problem:affine-4201",
+            "revision": 1,
+            "state_revision": 1
+          }
+        ],
+        "recipients": [
+          "shared-integrator"
+        ],
+        "sender": "raw-integrator"
+      },
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "d67dcd1ec5de18c66ba596ebe0a3c4f83407c1619b28fc841ba48723947ca8c3",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": true,
+        "event_seq": 2,
+        "message_id": "affine-4201-raw-integrator-conclusion"
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "raw-integrator",
+      "seed": "4201",
+      "usage": {
+        "completion_tokens": 185,
+        "decoding_duration": 22.671118,
+        "decoding_speed_tps": 8.160162194030308,
+        "kv_token_occupancy_rate_percentage": 1.4110394716262817,
+        "load_duration": 2.8e-06,
+        "prefill_duration_ttft": 2.564544512,
+        "prefill_speed_tps": 317.0153593341101,
+        "prompt_tokens": 813,
+        "total_tokens": 998
+      }
+    },
+    {
+      "alias_allowed": true,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": true,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": false,
+      "content_length_bytes": 1099,
+      "content_tail": "o.\n\nEquation from Obs2: c = -(9a+9b) = -9(a+b) = 2(a+b). (Since -9=2 mod 11).\nSo c = 2a + 2b.\n\nEquation from Obs3: u=8, x=1, y=8.\n8 = a(1) + b(8) + c\nSubstitute c:\n8 = a + 8b + (2a",
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "f5681c4bb5d9621bcb6138ea6952877ecb2fd5d6f124819cbbb470ee4fa78c39",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": false,
+        "code": "INVALID_JSON",
+        "event_seq": null,
+        "message_id": null
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "u-proposer",
+      "seed": "4202",
+      "usage": {
+        "completion_tokens": 512,
+        "decoding_duration": 60.760432,
+        "decoding_speed_tps": 8.426536532854144,
+        "kv_token_occupancy_rate_percentage": 1.9369980096817017,
+        "load_duration": 4e-07,
+        "prefill_duration_ttft": 2.480055296,
+        "prefill_speed_tps": 345.9600281428564,
+        "prompt_tokens": 858,
+        "total_tokens": 1370
+      }
+    },
+    {
+      "error_body": "{\"error\":\"runlist failed execution\"}",
+      "failure": {
+        "duration_seconds": 128.06997179996688,
+        "failed": true,
+        "finished_at": "2026-10-01T21:56:56.832446+00:00",
+        "http_response_sha256": "249f97049e35941d33b05f5aa0627fe3b89dbb5efb9e1e52f9c9d4984871aaf5",
+        "http_status": 500,
+        "reason": "http_status_failure",
+        "role": "v-proposer",
+        "seed": 4202,
+        "started_at": "2026-10-01T21:54:48.749514+00:00"
+      },
+      "failure_hash_matches": true,
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_response_sha256": "249f97049e35941d33b05f5aa0627fe3b89dbb5efb9e1e52f9c9d4984871aaf5",
+      "http_status": 500,
+      "no_call_or_content_record": true,
+      "one_user_message_only": true,
+      "pilot_failure_exists": true,
+      "prompt_hash_matches": true,
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "role": "v-proposer",
+      "seed": "4202"
+    },
+    {
+      "alias_allowed": true,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": false,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": true,
+      "content_length_bytes": 657,
+      "envelope": {
+        "intent": "REPORT_EVIDENCE",
+        "message_id": "affine-4202-u-reviewer-report",
+        "payload": {
+          "report": {
+            "assessment": "supported",
+            "basis_refs": [
+              "observation-1",
+              "observation-2",
+              "observation-3"
+            ],
+            "target": {
+              "resource_id": "problem:affine-4202",
+              "revision": 1,
+              "state_revision": 1
+            }
+          }
+        },
+        "read_refs": [
+          {
+            "resource_id": "problem:affine-4202",
+            "revision": 1,
+            "state_revision": 1
+          }
+        ],
+        "recipients": [
+          "shared-integrator"
+        ],
+        "sender": "u-reviewer"
+      },
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "4a74ced591766b1e740e3df56a7ef64ba3f8bdf1a0accaa897a2f0384e01ef7b",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": true,
+        "event_seq": 2,
+        "message_id": "affine-4202-u-reviewer-report"
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "u-reviewer",
+      "seed": "4202",
+      "usage": {
+        "completion_tokens": 241,
+        "decoding_duration": 28.730576,
+        "decoding_speed_tps": 8.388275960774333,
+        "kv_token_occupancy_rate_percentage": 1.4562832117080688,
+        "load_duration": 3.6e-06,
+        "prefill_duration_ttft": 2.41771392,
+        "prefill_speed_tps": 326.34133983891695,
+        "prompt_tokens": 789,
+        "total_tokens": 1030
+      }
+    },
+    {
+      "alias_allowed": true,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": false,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": true,
+      "content_length_bytes": 657,
+      "envelope": {
+        "intent": "REPORT_EVIDENCE",
+        "message_id": "affine-4202-v-reviewer-report",
+        "payload": {
+          "report": {
+            "assessment": "supported",
+            "basis_refs": [
+              "observation-1",
+              "observation-2",
+              "observation-3"
+            ],
+            "target": {
+              "resource_id": "problem:affine-4202",
+              "revision": 1,
+              "state_revision": 1
+            }
+          }
+        },
+        "read_refs": [
+          {
+            "resource_id": "problem:affine-4202",
+            "revision": 1,
+            "state_revision": 1
+          }
+        ],
+        "recipients": [
+          "shared-integrator"
+        ],
+        "sender": "v-reviewer"
+      },
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "c925feb817f321b56e181f978d5afca3520b9b0603be672a34743bdf8f08e9e7",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": true,
+        "event_seq": 1,
+        "message_id": "affine-4202-v-reviewer-report"
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "v-reviewer",
+      "seed": "4202",
+      "usage": {
+        "completion_tokens": 241,
+        "decoding_duration": 28.646108,
+        "decoding_speed_tps": 8.413010242089431,
+        "kv_token_occupancy_rate_percentage": 1.4562832117080688,
+        "load_duration": 0.0002226,
+        "prefill_duration_ttft": 2.646314496,
+        "prefill_speed_tps": 298.1505037260696,
+        "prompt_tokens": 789,
+        "total_tokens": 1030
+      }
+    },
+    {
+      "alias_allowed": true,
+      "answer_matches_independent_public_target": false,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": false,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": true,
+      "content_length_bytes": 464,
+      "envelope": {
+        "intent": "CONCLUDE",
+        "message_id": "affine-4202-shared-integrator-conclusion",
+        "payload": {
+          "conclusion": {
+            "status": "solved",
+            "x": 1,
+            "y": 8
+          }
+        },
+        "read_refs": [
+          {
+            "resource_id": "problem:affine-4202",
+            "revision": 1,
+            "state_revision": 1
+          }
+        ],
+        "recipients": [
+          "shared-integrator"
+        ],
+        "sender": "shared-integrator"
+      },
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "3d0ffeb10b7790909ccebce091fc1e8b6b67b0de8da4d6608772715d4fd4aaf4",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": true,
+        "event_seq": 3,
+        "message_id": "affine-4202-shared-integrator-conclusion"
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "shared-integrator",
+      "seed": "4202",
+      "usage": {
+        "completion_tokens": 184,
+        "decoding_duration": 22.37414,
+        "decoding_speed_tps": 8.223779774328756,
+        "kv_token_occupancy_rate_percentage": 2.734419107437134,
+        "load_duration": 0.0001609,
+        "prefill_duration_ttft": 4.815941632,
+        "prefill_speed_tps": 363.3764970015318,
+        "prompt_tokens": 1750,
+        "total_tokens": 1934
+      }
+    },
+    {
+      "alias_allowed": true,
+      "answer_matches_independent_public_target": false,
+      "call_receipt_matches": true,
+      "call_request_hash_matches": true,
+      "call_response_hash_matches": true,
+      "cap_hit": false,
+      "content_equals_pilot_raw": true,
+      "content_hash_matches_call": true,
+      "content_json_parses": true,
+      "content_length_bytes": 458,
+      "envelope": {
+        "intent": "CONCLUDE",
+        "message_id": "affine-4202-raw-integrator-conclusion",
+        "payload": {
+          "conclusion": {
+            "status": "solved",
+            "x": 1,
+            "y": 3
+          }
+        },
+        "read_refs": [
+          {
+            "resource_id": "problem:affine-4202",
+            "revision": 1,
+            "state_revision": 1
+          }
+        ],
+        "recipients": [
+          "shared-integrator"
+        ],
+        "sender": "raw-integrator"
+      },
+      "finish_reason": "stop",
+      "frozen_config_matches": true,
+      "http_body_hash_matches": true,
+      "http_content_equals_content_raw": true,
+      "http_response_sha256": "baaba0fe2b54fc411c6a5221a42d34b7ae4657c9193ddf53db1cf2b9cf7c1f0c",
+      "http_status": 200,
+      "one_user_message_only": true,
+      "possibly_truncated": false,
+      "prompt_hash_matches": true,
+      "protocol_raw_matches_content": true,
+      "receipt": {
+        "accepted": true,
+        "event_seq": 4,
+        "message_id": "affine-4202-raw-integrator-conclusion"
+      },
+      "request_content_equals_prompt_file": true,
+      "request_hash_matches": true,
+      "request_model": "qwen3.5-9b-FLM",
+      "returned_model": "qwen3.5:9b",
+      "role": "raw-integrator",
+      "seed": "4202",
+      "usage": {
+        "completion_tokens": 185,
+        "decoding_duration": 22.30918,
+        "decoding_speed_tps": 8.292550420947789,
+        "kv_token_occupancy_rate_percentage": 1.4096256494522095,
+        "load_duration": 8e-07,
+        "prefill_duration_ttft": 2.505206784,
+        "prefill_speed_tps": 324.1249405781587,
+        "prompt_tokens": 812,
+        "total_tokens": 997
+      }
+    }
+  ],
+  "cases": {
+    "4201": {
+      "accepted_protocol_submission_count": 3,
+      "current_claim_count": 0,
+      "evaluation_answers": {
+        "raw-integrator": [
+          9,
+          5
+        ],
+        "shared-integrator": [
+          9,
+          5
+        ]
+      },
+      "evaluation_correctness": {
+        "raw-integrator": false,
+        "shared-integrator": false
+      },
+      "evaluation_protocol_valid": {
+        "raw-integrator": true,
+        "shared-integrator": true
+      },
+      "event_count": 3,
+      "event_integrity_checks": [
+        {
+          "canonical_hash_matches": true,
+          "event_seq": 1,
+          "message_id": "affine-4201-u-reviewer-report",
+          "raw_is_protocol_submission": true,
+          "raw_seq_matches_accepted_submission": true
+        },
+        {
+          "canonical_hash_matches": true,
+          "event_seq": 2,
+          "message_id": "affine-4201-raw-integrator-conclusion",
+          "raw_is_protocol_submission": true,
+          "raw_seq_matches_accepted_submission": true
+        },
+        {
+          "canonical_hash_matches": true,
+          "event_seq": 3,
+          "message_id": "affine-4201-shared-integrator-conclusion",
+          "raw_is_protocol_submission": true,
+          "raw_seq_matches_accepted_submission": true
+        }
+      ],
+      "events": [
+        {
+          "event_hash": "56033377dc50090c27c84564e744917523486861692bbc9594dd8f7e8fa9f7c6",
+          "event_seq": 1,
+          "message_id": "affine-4201-u-reviewer-report"
+        },
+        {
+          "event_hash": "d8c63a325b675dc25d9bb6eff53928cab6f48ddeea20df1291b5e8b7d3fba956",
+          "event_seq": 2,
+          "message_id": "affine-4201-raw-integrator-conclusion"
+        },
+        {
+          "event_hash": "3481c05dba48e372ab4b031ffdcf3b849b671cce80b2642718eb321926b1497b",
+          "event_seq": 3,
+          "message_id": "affine-4201-shared-integrator-conclusion"
+        }
+      ],
+      "fork_count": 0,
+      "independent_answer_correctness": {
+        "raw-integrator": false,
+        "shared-integrator": false
+      },
+      "protocol_submission_count": 6,
+      "public_coefficients_satisfying_observations": {
+        "u": [
+          [
+            3,
+            5,
+            4
+          ]
+        ],
+        "v": [
+          [
+            7,
+            2,
+            10
+          ]
+        ]
+      },
+      "public_packet_equals_native_campaign": true,
+      "public_target_solutions": [
+        [
+          2,
+          10
+        ]
+      ],
+      "rejection_codes": [
+        "INVALID_JSON",
+        "INVALID_JSON",
+        "INVALID_JSON"
+      ],
+      "replay_matches_independent_event_projection": true,
+      "roles": {
+        "raw-integrator": {
+          "alias_allowed": true,
+          "answer_matches_independent_public_target": false,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": false,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": true,
+          "content_length_bytes": 458,
+          "envelope": {
+            "intent": "CONCLUDE",
+            "message_id": "affine-4201-raw-integrator-conclusion",
+            "payload": {
+              "conclusion": {
+                "status": "solved",
+                "x": 9,
+                "y": 5
+              }
+            },
+            "read_refs": [
+              {
+                "resource_id": "problem:affine-4201",
+                "revision": 1,
+                "state_revision": 1
+              }
+            ],
+            "recipients": [
+              "shared-integrator"
+            ],
+            "sender": "raw-integrator"
+          },
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "d67dcd1ec5de18c66ba596ebe0a3c4f83407c1619b28fc841ba48723947ca8c3",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": true,
+            "event_seq": 2,
+            "message_id": "affine-4201-raw-integrator-conclusion"
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "raw-integrator",
+          "seed": "4201",
+          "usage": {
+            "completion_tokens": 185,
+            "decoding_duration": 22.671118,
+            "decoding_speed_tps": 8.160162194030308,
+            "kv_token_occupancy_rate_percentage": 1.4110394716262817,
+            "load_duration": 2.8e-06,
+            "prefill_duration_ttft": 2.564544512,
+            "prefill_speed_tps": 317.0153593341101,
+            "prompt_tokens": 813,
+            "total_tokens": 998
+          }
+        },
+        "shared-integrator": {
+          "alias_allowed": true,
+          "answer_matches_independent_public_target": false,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": false,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": true,
+          "content_length_bytes": 464,
+          "envelope": {
+            "intent": "CONCLUDE",
+            "message_id": "affine-4201-shared-integrator-conclusion",
+            "payload": {
+              "conclusion": {
+                "status": "solved",
+                "x": 9,
+                "y": 5
+              }
+            },
+            "read_refs": [
+              {
+                "resource_id": "problem:affine-4201",
+                "revision": 1,
+                "state_revision": 1
+              }
+            ],
+            "recipients": [
+              "shared-integrator"
+            ],
+            "sender": "shared-integrator"
+          },
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "49f0be880805629a121c80d94ebd66162ac18ee283c7c370fb550bcd396343a0",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": true,
+            "event_seq": 3,
+            "message_id": "affine-4201-shared-integrator-conclusion"
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "shared-integrator",
+          "seed": "4201",
+          "usage": {
+            "completion_tokens": 184,
+            "decoding_duration": 21.857112,
+            "decoding_speed_tps": 8.418312538271296,
+            "kv_token_occupancy_rate_percentage": 2.393677234649658,
+            "load_duration": 3.2e-06,
+            "prefill_duration_ttft": 3.865985024,
+            "prefill_speed_tps": 390.327430300982,
+            "prompt_tokens": 1509,
+            "total_tokens": 1693
+          }
+        },
+        "u-proposer": {
+          "alias_allowed": true,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": true,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": false,
+          "content_length_bytes": 1239,
+          "content_tail": "=> a*8 + c = -5 = 6.\n            \n            Substitute b=5 into Eq1: a*5 + 7*5 + c = 10 => a*5 + c = -32+4? \n            32 mod 11 is 9 (since 33-1). So -9 = 2.\n            Let's",
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "a861877cbd98ba3814b7bfe568ec92fadeec552d3f68d1ab4659cc2004dcb357",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": false,
+            "code": "INVALID_JSON",
+            "event_seq": null,
+            "message_id": null
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "u-proposer",
+          "seed": "4201",
+          "usage": {
+            "completion_tokens": 512,
+            "decoding_duration": 61.603264,
+            "decoding_speed_tps": 8.311247923486652,
+            "kv_token_occupancy_rate_percentage": 1.9384119510650635,
+            "load_duration": 5e-07,
+            "prefill_duration_ttft": 2.675477248,
+            "prefill_speed_tps": 321.0642141106333,
+            "prompt_tokens": 859,
+            "total_tokens": 1371
+          }
+        },
+        "u-reviewer": {
+          "alias_allowed": true,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": false,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": true,
+          "content_length_bytes": 657,
+          "envelope": {
+            "intent": "REPORT_EVIDENCE",
+            "message_id": "affine-4201-u-reviewer-report",
+            "payload": {
+              "report": {
+                "assessment": "supported",
+                "basis_refs": [
+                  "observation-1",
+                  "observation-2",
+                  "observation-3"
+                ],
+                "target": {
+                  "resource_id": "problem:affine-4201",
+                  "revision": 1,
+                  "state_revision": 1
+                }
+              }
+            },
+            "read_refs": [
+              {
+                "resource_id": "problem:affine-4201",
+                "revision": 1,
+                "state_revision": 1
+              }
+            ],
+            "recipients": [
+              "shared-integrator"
+            ],
+            "sender": "u-reviewer"
+          },
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "426ce516256b58bb81efa2c472d0774567c8a0c8880d0769a413afb3a55199ff",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": true,
+            "event_seq": 1,
+            "message_id": "affine-4201-u-reviewer-report"
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "u-reviewer",
+          "seed": "4201",
+          "usage": {
+            "completion_tokens": 241,
+            "decoding_duration": 29.006878,
+            "decoding_speed_tps": 8.308374310396314,
+            "kv_token_occupancy_rate_percentage": 1.4576970338821411,
+            "load_duration": 4.7e-06,
+            "prefill_duration_ttft": 2.484092416,
+            "prefill_speed_tps": 318.0235948194288,
+            "prompt_tokens": 790,
+            "total_tokens": 1031
+          }
+        },
+        "v-proposer": {
+          "alias_allowed": true,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": false,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": false,
+          "content_length_bytes": 978,
+          "content_tail": "-relation\", \n      \"revision\": 0, \n      \"state_revision\": 0 \n    }\n  ], \n\"recipients\":[\n\n\"u-reviewer\",\"shared-integrator\"], \n\nreply_to: null, schema_version:1,sender:\"v-proposer\"}",
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "9b7fcc706f4e66bd82a44d3cd985219b0b1532a843e4941ee8ab16cabab27bf2",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": false,
+            "code": "INVALID_JSON",
+            "event_seq": null,
+            "message_id": null
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "v-proposer",
+          "seed": "4201",
+          "usage": {
+            "completion_tokens": 371,
+            "decoding_duration": 45.399292,
+            "decoding_speed_tps": 8.171933606365492,
+            "kv_token_occupancy_rate_percentage": 1.7376428842544556,
+            "load_duration": 0.0001936,
+            "prefill_duration_ttft": 2.89782144,
+            "prefill_speed_tps": 296.08449580661534,
+            "prompt_tokens": 858,
+            "total_tokens": 1229
+          }
+        },
+        "v-reviewer": {
+          "alias_allowed": true,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": false,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": false,
+          "content_length_bytes": 655,
+          "content_tail": "-4201\",\n      \"revision\": 1,\n      \"state_revision\": 1\n    }\n  ],\n  \"recipients\": [\n    \"shared-integrator\"\n  ],\n  \"reply_to\": null,\n  \"schema_version\": 1,\n  \"sender\": \"v-reviewer\"",
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "4a7eab6dc233c09df58bb7e45c52fbc12aaed95839f7d9d6f9ebac62cb1fef7a",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": false,
+            "code": "INVALID_JSON",
+            "event_seq": null,
+            "message_id": null
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "v-reviewer",
+          "seed": "4201",
+          "usage": {
+            "completion_tokens": 239,
+            "decoding_duration": 28.423892,
+            "decoding_speed_tps": 8.408419227036184,
+            "kv_token_occupancy_rate_percentage": 1.4548693895339966,
+            "load_duration": 3.2e-06,
+            "prefill_duration_ttft": 2.40722176,
+            "prefill_speed_tps": 328.1791537145294,
+            "prompt_tokens": 790,
+            "total_tokens": 1029
+          }
+        }
+      }
+    },
+    "4202": {
+      "accepted_protocol_submission_count": 4,
+      "current_claim_count": 0,
+      "evaluation_answers": {
+        "raw-integrator": [
+          1,
+          3
+        ],
+        "shared-integrator": [
+          1,
+          8
+        ]
+      },
+      "evaluation_correctness": {
+        "raw-integrator": false,
+        "shared-integrator": false
+      },
+      "evaluation_protocol_valid": {
+        "raw-integrator": true,
+        "shared-integrator": true
+      },
+      "event_count": 4,
+      "event_integrity_checks": [
+        {
+          "canonical_hash_matches": true,
+          "event_seq": 1,
+          "message_id": "affine-4202-v-reviewer-report",
+          "raw_is_protocol_submission": true,
+          "raw_seq_matches_accepted_submission": true
+        },
+        {
+          "canonical_hash_matches": true,
+          "event_seq": 2,
+          "message_id": "affine-4202-u-reviewer-report",
+          "raw_is_protocol_submission": true,
+          "raw_seq_matches_accepted_submission": true
+        },
+        {
+          "canonical_hash_matches": true,
+          "event_seq": 3,
+          "message_id": "affine-4202-shared-integrator-conclusion",
+          "raw_is_protocol_submission": true,
+          "raw_seq_matches_accepted_submission": true
+        },
+        {
+          "canonical_hash_matches": true,
+          "event_seq": 4,
+          "message_id": "affine-4202-raw-integrator-conclusion",
+          "raw_is_protocol_submission": true,
+          "raw_seq_matches_accepted_submission": true
+        }
+      ],
+      "events": [
+        {
+          "event_hash": "9a734329b5d6633953f15d9f83d3dc973d51716b806c339ffff13456558ca779",
+          "event_seq": 1,
+          "message_id": "affine-4202-v-reviewer-report"
+        },
+        {
+          "event_hash": "80fa5e29e5e6ecafb709035dd405c932f0945370793b32c70774cb1eda3a668e",
+          "event_seq": 2,
+          "message_id": "affine-4202-u-reviewer-report"
+        },
+        {
+          "event_hash": "cd0dfbf5665cbb721863afc585cdd5bb3b5e33b5bebc5caa72cf7d8c85137917",
+          "event_seq": 3,
+          "message_id": "affine-4202-shared-integrator-conclusion"
+        },
+        {
+          "event_hash": "eaa9469d2e58dbde3d6ec01e031aae93459f4a16ee7085c97a80cecd24b3e178",
+          "event_seq": 4,
+          "message_id": "affine-4202-raw-integrator-conclusion"
+        }
+      ],
+      "fork_count": 0,
+      "independent_answer_correctness": {
+        "raw-integrator": false,
+        "shared-integrator": false
+      },
+      "protocol_submission_count": 5,
+      "public_coefficients_satisfying_observations": {
+        "u": [
+          [
+            6,
+            10,
+            10
+          ]
+        ],
+        "v": [
+          [
+            10,
+            5,
+            8
+          ]
+        ]
+      },
+      "public_packet_equals_native_campaign": true,
+      "public_target_solutions": [
+        [
+          8,
+          4
+        ]
+      ],
+      "rejection_codes": [
+        "INVALID_JSON"
+      ],
+      "replay_matches_independent_event_projection": true,
+      "roles": {
+        "raw-integrator": {
+          "alias_allowed": true,
+          "answer_matches_independent_public_target": false,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": false,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": true,
+          "content_length_bytes": 458,
+          "envelope": {
+            "intent": "CONCLUDE",
+            "message_id": "affine-4202-raw-integrator-conclusion",
+            "payload": {
+              "conclusion": {
+                "status": "solved",
+                "x": 1,
+                "y": 3
+              }
+            },
+            "read_refs": [
+              {
+                "resource_id": "problem:affine-4202",
+                "revision": 1,
+                "state_revision": 1
+              }
+            ],
+            "recipients": [
+              "shared-integrator"
+            ],
+            "sender": "raw-integrator"
+          },
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "baaba0fe2b54fc411c6a5221a42d34b7ae4657c9193ddf53db1cf2b9cf7c1f0c",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": true,
+            "event_seq": 4,
+            "message_id": "affine-4202-raw-integrator-conclusion"
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "raw-integrator",
+          "seed": "4202",
+          "usage": {
+            "completion_tokens": 185,
+            "decoding_duration": 22.30918,
+            "decoding_speed_tps": 8.292550420947789,
+            "kv_token_occupancy_rate_percentage": 1.4096256494522095,
+            "load_duration": 8e-07,
+            "prefill_duration_ttft": 2.505206784,
+            "prefill_speed_tps": 324.1249405781587,
+            "prompt_tokens": 812,
+            "total_tokens": 997
+          }
+        },
+        "shared-integrator": {
+          "alias_allowed": true,
+          "answer_matches_independent_public_target": false,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": false,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": true,
+          "content_length_bytes": 464,
+          "envelope": {
+            "intent": "CONCLUDE",
+            "message_id": "affine-4202-shared-integrator-conclusion",
+            "payload": {
+              "conclusion": {
+                "status": "solved",
+                "x": 1,
+                "y": 8
+              }
+            },
+            "read_refs": [
+              {
+                "resource_id": "problem:affine-4202",
+                "revision": 1,
+                "state_revision": 1
+              }
+            ],
+            "recipients": [
+              "shared-integrator"
+            ],
+            "sender": "shared-integrator"
+          },
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "3d0ffeb10b7790909ccebce091fc1e8b6b67b0de8da4d6608772715d4fd4aaf4",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": true,
+            "event_seq": 3,
+            "message_id": "affine-4202-shared-integrator-conclusion"
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "shared-integrator",
+          "seed": "4202",
+          "usage": {
+            "completion_tokens": 184,
+            "decoding_duration": 22.37414,
+            "decoding_speed_tps": 8.223779774328756,
+            "kv_token_occupancy_rate_percentage": 2.734419107437134,
+            "load_duration": 0.0001609,
+            "prefill_duration_ttft": 4.815941632,
+            "prefill_speed_tps": 363.3764970015318,
+            "prompt_tokens": 1750,
+            "total_tokens": 1934
+          }
+        },
+        "u-proposer": {
+          "alias_allowed": true,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": true,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": false,
+          "content_length_bytes": 1099,
+          "content_tail": "o.\n\nEquation from Obs2: c = -(9a+9b) = -9(a+b) = 2(a+b). (Since -9=2 mod 11).\nSo c = 2a + 2b.\n\nEquation from Obs3: u=8, x=1, y=8.\n8 = a(1) + b(8) + c\nSubstitute c:\n8 = a + 8b + (2a",
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "f5681c4bb5d9621bcb6138ea6952877ecb2fd5d6f124819cbbb470ee4fa78c39",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": false,
+            "code": "INVALID_JSON",
+            "event_seq": null,
+            "message_id": null
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "u-proposer",
+          "seed": "4202",
+          "usage": {
+            "completion_tokens": 512,
+            "decoding_duration": 60.760432,
+            "decoding_speed_tps": 8.426536532854144,
+            "kv_token_occupancy_rate_percentage": 1.9369980096817017,
+            "load_duration": 4e-07,
+            "prefill_duration_ttft": 2.480055296,
+            "prefill_speed_tps": 345.9600281428564,
+            "prompt_tokens": 858,
+            "total_tokens": 1370
+          }
+        },
+        "u-reviewer": {
+          "alias_allowed": true,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": false,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": true,
+          "content_length_bytes": 657,
+          "envelope": {
+            "intent": "REPORT_EVIDENCE",
+            "message_id": "affine-4202-u-reviewer-report",
+            "payload": {
+              "report": {
+                "assessment": "supported",
+                "basis_refs": [
+                  "observation-1",
+                  "observation-2",
+                  "observation-3"
+                ],
+                "target": {
+                  "resource_id": "problem:affine-4202",
+                  "revision": 1,
+                  "state_revision": 1
+                }
+              }
+            },
+            "read_refs": [
+              {
+                "resource_id": "problem:affine-4202",
+                "revision": 1,
+                "state_revision": 1
+              }
+            ],
+            "recipients": [
+              "shared-integrator"
+            ],
+            "sender": "u-reviewer"
+          },
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "4a74ced591766b1e740e3df56a7ef64ba3f8bdf1a0accaa897a2f0384e01ef7b",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": true,
+            "event_seq": 2,
+            "message_id": "affine-4202-u-reviewer-report"
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "u-reviewer",
+          "seed": "4202",
+          "usage": {
+            "completion_tokens": 241,
+            "decoding_duration": 28.730576,
+            "decoding_speed_tps": 8.388275960774333,
+            "kv_token_occupancy_rate_percentage": 1.4562832117080688,
+            "load_duration": 3.6e-06,
+            "prefill_duration_ttft": 2.41771392,
+            "prefill_speed_tps": 326.34133983891695,
+            "prompt_tokens": 789,
+            "total_tokens": 1030
+          }
+        },
+        "v-proposer": {
+          "error_body": "{\"error\":\"runlist failed execution\"}",
+          "failure": {
+            "duration_seconds": 128.06997179996688,
+            "failed": true,
+            "finished_at": "2026-10-01T21:56:56.832446+00:00",
+            "http_response_sha256": "249f97049e35941d33b05f5aa0627fe3b89dbb5efb9e1e52f9c9d4984871aaf5",
+            "http_status": 500,
+            "reason": "http_status_failure",
+            "role": "v-proposer",
+            "seed": 4202,
+            "started_at": "2026-10-01T21:54:48.749514+00:00"
+          },
+          "failure_hash_matches": true,
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_response_sha256": "249f97049e35941d33b05f5aa0627fe3b89dbb5efb9e1e52f9c9d4984871aaf5",
+          "http_status": 500,
+          "no_call_or_content_record": true,
+          "one_user_message_only": true,
+          "pilot_failure_exists": true,
+          "prompt_hash_matches": true,
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "role": "v-proposer",
+          "seed": "4202"
+        },
+        "v-reviewer": {
+          "alias_allowed": true,
+          "call_receipt_matches": true,
+          "call_request_hash_matches": true,
+          "call_response_hash_matches": true,
+          "cap_hit": false,
+          "content_equals_pilot_raw": true,
+          "content_hash_matches_call": true,
+          "content_json_parses": true,
+          "content_length_bytes": 657,
+          "envelope": {
+            "intent": "REPORT_EVIDENCE",
+            "message_id": "affine-4202-v-reviewer-report",
+            "payload": {
+              "report": {
+                "assessment": "supported",
+                "basis_refs": [
+                  "observation-1",
+                  "observation-2",
+                  "observation-3"
+                ],
+                "target": {
+                  "resource_id": "problem:affine-4202",
+                  "revision": 1,
+                  "state_revision": 1
+                }
+              }
+            },
+            "read_refs": [
+              {
+                "resource_id": "problem:affine-4202",
+                "revision": 1,
+                "state_revision": 1
+              }
+            ],
+            "recipients": [
+              "shared-integrator"
+            ],
+            "sender": "v-reviewer"
+          },
+          "finish_reason": "stop",
+          "frozen_config_matches": true,
+          "http_body_hash_matches": true,
+          "http_content_equals_content_raw": true,
+          "http_response_sha256": "c925feb817f321b56e181f978d5afca3520b9b0603be672a34743bdf8f08e9e7",
+          "http_status": 200,
+          "one_user_message_only": true,
+          "possibly_truncated": false,
+          "prompt_hash_matches": true,
+          "protocol_raw_matches_content": true,
+          "receipt": {
+            "accepted": true,
+            "event_seq": 1,
+            "message_id": "affine-4202-v-reviewer-report"
+          },
+          "request_content_equals_prompt_file": true,
+          "request_hash_matches": true,
+          "request_model": "qwen3.5-9b-FLM",
+          "returned_model": "qwen3.5:9b",
+          "role": "v-reviewer",
+          "seed": "4202",
+          "usage": {
+            "completion_tokens": 241,
+            "decoding_duration": 28.646108,
+            "decoding_speed_tps": 8.413010242089431,
+            "kv_token_occupancy_rate_percentage": 1.4562832117080688,
+            "load_duration": 0.0002226,
+            "prefill_duration_ttft": 2.646314496,
+            "prefill_speed_tps": 298.1505037260696,
+            "prompt_tokens": 789,
+            "total_tokens": 1030
+          }
+        }
+      }
+    }
+  },
+  "frozen_inputs": [
+    {
+      "expected_sha256": "c96691db5776f63f4156f09e27b46e7e5bc5ac44571146502454e5371bb550af",
+      "input_key": "LOCAL_PREREGISTRATION_v2.md",
+      "matches": true,
+      "snapshot_sha256": "c96691db5776f63f4156f09e27b46e7e5bc5ac44571146502454e5371bb550af"
+    },
+    {
+      "expected_sha256": "d5b50188e1fa038a8e5345873b16c7d685247681782b60a3ad71ae28402f2071",
+      "input_key": "LOCAL_RUNTIME_DISCOVERY.json",
+      "matches": true,
+      "snapshot_sha256": "d5b50188e1fa038a8e5345873b16c7d685247681782b60a3ad71ae28402f2071"
+    },
+    {
+      "expected_sha256": "5a5ca7dccba6946525d9845594b4a04cb7446c476a2deec7e7bc2cccb7c625c7",
+      "input_key": "pilot/prompt_hashes.json",
+      "matches": true,
+      "snapshot_sha256": "5a5ca7dccba6946525d9845594b4a04cb7446c476a2deec7e7bc2cccb7c625c7"
+    },
+    {
+      "expected_sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a",
+      "input_key": "pilot/run.json",
+      "matches": true,
+      "snapshot_sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a"
+    }
+  ],
+  "frozen_sources": [
+    {
+      "current_matches": true,
+      "expected_sha256": "d37d6046b1a1d407668e497176290eefbcf543002a0f202099ef6e2fefda962d",
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\local_runner.py",
+      "snapshot_matches": true
+    },
+    {
+      "current_matches": true,
+      "expected_sha256": "fa6672fbd598cecad0149f69c5559d1eb3e377d668faefa5653a42a295dc53b6",
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\pilot.py",
+      "snapshot_matches": true
+    },
+    {
+      "current_matches": true,
+      "expected_sha256": "f048db11c158c9d83a22df1eef85f9a2767c726be872fb2df575233cac296278",
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\protocol.py",
+      "snapshot_matches": true
+    },
+    {
+      "current_matches": true,
+      "expected_sha256": "c96691db5776f63f4156f09e27b46e7e5bc5ac44571146502454e5371bb550af",
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\LOCAL_PREREGISTRATION_v2.md",
+      "snapshot_matches": true
+    },
+    {
+      "current_matches": true,
+      "expected_sha256": "d5b50188e1fa038a8e5345873b16c7d685247681782b60a3ad71ae28402f2071",
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\LOCAL_RUNTIME_DISCOVERY.json",
+      "snapshot_matches": true
+    },
+    {
+      "current_matches": true,
+      "expected_sha256": "1153da5ee64031f7bc9f08dc4f0010031f2b721df4348c7903f3d09e4ef45f16",
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\LOCAL_PRELIVE_AUDIT_v2.md",
+      "snapshot_matches": true
+    },
+    {
+      "current_matches": true,
+      "expected_sha256": "1907b4b45b6b5ded87d6fa442a6409edae848b476da414a8c090234d1a0cf564",
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_local_runner.py",
+      "snapshot_matches": true
+    },
+    {
+      "current_matches": true,
+      "expected_sha256": "1de6ef877dea83dcd3f31cb6f41dfdde5e21efc4a29e55d760aa8b5cfdd66101",
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_pilot.py",
+      "snapshot_matches": true
+    },
+    {
+      "current_matches": true,
+      "expected_sha256": "22ab0e7892fbade3a16118aca1cf51b15ad641c710f451ef226ee21ce1da9884",
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_protocol.py",
+      "snapshot_matches": true
+    },
+    {
+      "current_matches": true,
+      "expected_sha256": "7b31e04860e5f6fe480871e450674f652a3b60e2a52b54d835f113ea3c96de89",
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\experiment.py",
+      "snapshot_matches": true
+    }
+  ],
+  "limitations": [
+    "Single local qwen3.5:9b / qwen3.5-9b-FLM NPU run; two small synthetic mod-11 cases; 512 completion-token cap; temperature 0; configured context 70728.",
+    "All four final answers are wrong and no claims were committed. This is one run, not evidence that cooperative engines are impossible or that the wider goal fails.",
+    "Eleven HTTP 200 outputs reported token use; the failed HTTP 500 response has no usage, so aggregate usage is partial. Two calls used all 512 completion tokens but finish_reason was stop, not length; both contents are invalid JSON. The artifacts support cap-reaching malformed outputs, but not a definitive claim that the server truncated them.",
+    "The preceding local-qwen1 run is a separate interrupted six-slot attempt with six unattempted slots and no score. Health/models preflight requests are diagnostics, not scheduled inference calls.",
+    "No live stale proposal was induced; fork lifecycle remains supported by mechanical tests only."
+  ],
+  "run_summary": {
+    "500_response_body_retained_without_content_or_protocol_message": true,
+    "actual_request_count": 12,
+    "all_200_content_and_protocol_raw_hashes_match": true,
+    "all_cap_hits_report_finish_reason_stop": true,
+    "all_current_source_and_snapshot_hashes_match": true,
+    "all_frozen_input_snapshots_match": true,
+    "all_http200_returned_aliases_allowed": true,
+    "all_request_prompt_context_and_config_checks_pass": true,
+    "call_ceiling": 12,
+    "checkpoint": "qwen3.5:9b",
+    "completion_cap_hits": [
+      {
+        "completion_tokens": 512,
+        "content_json_parses": false,
+        "finish_reason": "stop",
+        "possibly_truncated": false,
+        "role": "u-proposer",
+        "seed": "4201",
+        "tail": "=> a*8 + c = -5 = 6.\n            \n            Substitute b=5 into Eq1: a*5 + 7*5 + c = 10 => a*5 + c = -32+4? \n            32 mod 11 is 9 (since 33-1). So -9 = 2.\n            Let's"
+      },
+      {
+        "completion_tokens": 512,
+        "content_json_parses": false,
+        "finish_reason": "stop",
+        "possibly_truncated": false,
+        "role": "u-proposer",
+        "seed": "4202",
+        "tail": "o.\n\nEquation from Obs2: c = -(9a+9b) = -9(a+b) = 2(a+b). (Since -9=2 mod 11).\nSo c = 2a + 2b.\n\nEquation from Obs3: u=8, x=1, y=8.\n8 = a(1) + b(8) + c\nSubstitute c:\n8 = a + 8b + (2a"
+      }
+    ],
+    "context_length": 70728,
+    "device": "npu",
+    "distinct_scheduled_slots": 12,
+    "evaluation_hash_matches_complete_receipt": true,
+    "event_hash_raw_and_receipt_seq_checks_pass": true,
+    "frozen_files_count": 10,
+    "http_status_counts": {
+      "200": 11,
+      "500": 1
+    },
+    "manifest_hash_matches_complete_receipt": true,
+    "max_tokens": 512,
+    "model_alias": "qwen3.5-9b-FLM",
+    "partial_usage_totals_match_resource_summary": true,
+    "planned_calls": 12,
+    "preflight_health_models_status": {
+      "health": 200,
+      "models": 200
+    },
+    "protocol_accepted_responses": 7,
+    "protocol_invalid_json_responses": 4,
+    "public_problem_packets_identical_to_native_campaign": true,
+    "readiness_hash_matches_complete_receipt": true,
+    "recipe": "flm",
+    "replay_matches_independent_event_projection": true,
+    "reported_completion_tokens": 3095,
+    "reported_prompt_tokens": 10617,
+    "reported_total_tokens": 13712,
+    "request_url": "http://127.0.0.1:13305/api/v1/chat/completions",
+    "stream": false,
+    "temperature": 0,
+    "timeout_seconds": 300,
+    "usage_response_count": 11
+  },
+  "v1_interrupted": {
+    "attempted": [
+      {
+        "role": "raw-integrator",
+        "seed": "4201",
+        "status": "interrupted_no_collected_outcome"
+      },
+      {
+        "role": "shared-integrator",
+        "seed": "4201",
+        "status": "interrupted_no_collected_outcome"
+      },
+      {
+        "role": "u-proposer",
+        "seed": "4201",
+        "status": "failed"
+      },
+      {
+        "role": "u-reviewer",
+        "seed": "4201",
+        "status": "completed"
+      },
+      {
+        "role": "v-proposer",
+        "seed": "4201",
+        "status": "failed"
+      },
+      {
+        "role": "v-reviewer",
+        "seed": "4201",
+        "status": "completed"
+      }
+    ],
+    "attempted_count": 6,
+    "offline_evaluation": "not run; incomplete schedule",
+    "reason": "User directed direct endpoint test and authorized Lemonade setting adjustments. Coordinator stopped runner before changing runtime. No retry of frozen slots.",
+    "request_json_count": 6,
+    "review_responses": [
+      {
+        "receipt": {
+          "accepted": true,
+          "event_seq": 1,
+          "message_id": "affine-4201-u-reviewer-report"
+        },
+        "role": "u-reviewer"
+      },
+      {
+        "receipt": {
+          "accepted": false,
+          "code": "INVALID_JSON",
+          "event_seq": null,
+          "message_id": null
+        },
+        "role": "v-reviewer"
+      }
+    ],
+    "saved_transport_detail": [
+      {
+        "duration_seconds": 300.1020178999752,
+        "reason": "transport_failure: TimeoutError: timed out",
+        "role": "u-proposer",
+        "status": "failed"
+      },
+      {
+        "duration_seconds": 300.0959488999797,
+        "reason": "transport_failure: TimeoutError: timed out",
+        "role": "v-proposer",
+        "status": "failed"
+      },
+      {
+        "receipt": {
+          "accepted": true,
+          "event_seq": 1,
+          "message_id": "affine-4201-u-reviewer-report"
+        },
+        "role": "u-reviewer",
+        "status": "HTTP 200"
+      },
+      {
+        "receipt": {
+          "accepted": false,
+          "code": "INVALID_JSON",
+          "event_seq": null,
+          "message_id": null
+        },
+        "role": "v-reviewer",
+        "status": "HTTP 200"
+      },
+      {
+        "role": "shared-integrator",
+        "status": "attempted but no collected outcome"
+      },
+      {
+        "role": "raw-integrator",
+        "status": "attempted but no collected outcome"
+      }
+    ],
+    "unattempted_slots": 6
+  }
+}

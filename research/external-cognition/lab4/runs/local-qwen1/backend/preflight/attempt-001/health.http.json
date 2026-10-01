@@ -1,0 +1,11 @@
+{
+  "headers": {
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Session-Id, X-Account-Session-Id, mcp-protocol-version, traceparent, Mcp-Session-Id",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Connection": "close",
+    "Content-Length": "1143",
+    "Content-Type": "application/json",
+    "Vary": "Origin"
+  },
+  "status": 200
+}

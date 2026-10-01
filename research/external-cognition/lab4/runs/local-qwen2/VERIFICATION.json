@@ -1,0 +1,205 @@
+{
+  "files": [
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\local_runner.py",
+      "current_matches": true,
+      "snapshot_matches": true
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\pilot.py",
+      "current_matches": true,
+      "snapshot_matches": true
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\protocol.py",
+      "current_matches": true,
+      "snapshot_matches": true
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\LOCAL_PREREGISTRATION_v2.md",
+      "current_matches": true,
+      "snapshot_matches": true
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\LOCAL_RUNTIME_DISCOVERY.json",
+      "current_matches": true,
+      "snapshot_matches": true
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\LOCAL_PRELIVE_AUDIT_v2.md",
+      "current_matches": true,
+      "snapshot_matches": true
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_local_runner.py",
+      "current_matches": true,
+      "snapshot_matches": true
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_pilot.py",
+      "current_matches": true,
+      "snapshot_matches": true
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab4\\tests\\test_protocol.py",
+      "current_matches": true,
+      "snapshot_matches": true
+    },
+    {
+      "path": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\lab3\\experiment.py",
+      "current_matches": true,
+      "snapshot_matches": true
+    }
+  ],
+  "cases": [
+    {
+      "seed": 4201,
+      "replay_matches": true,
+      "event_hashes": [
+        {
+          "event_seq": 1,
+          "message_id": "affine-4201-u-reviewer-report",
+          "event_hash": "56033377dc50090c27c84564e744917523486861692bbc9594dd8f7e8fa9f7c6"
+        },
+        {
+          "event_seq": 2,
+          "message_id": "affine-4201-raw-integrator-conclusion",
+          "event_hash": "d8c63a325b675dc25d9bb6eff53928cab6f48ddeea20df1291b5e8b7d3fba956"
+        },
+        {
+          "event_seq": 3,
+          "message_id": "affine-4201-shared-integrator-conclusion",
+          "event_hash": "3481c05dba48e372ab4b031ffdcf3b849b671cce80b2642718eb321926b1497b"
+        }
+      ],
+      "claims": 0,
+      "forks": 0
+    },
+    {
+      "seed": 4202,
+      "replay_matches": true,
+      "event_hashes": [
+        {
+          "event_seq": 1,
+          "message_id": "affine-4202-v-reviewer-report",
+          "event_hash": "9a734329b5d6633953f15d9f83d3dc973d51716b806c339ffff13456558ca779"
+        },
+        {
+          "event_seq": 2,
+          "message_id": "affine-4202-u-reviewer-report",
+          "event_hash": "80fa5e29e5e6ecafb709035dd405c932f0945370793b32c70774cb1eda3a668e"
+        },
+        {
+          "event_seq": 3,
+          "message_id": "affine-4202-shared-integrator-conclusion",
+          "event_hash": "cd0dfbf5665cbb721863afc585cdd5bb3b5e33b5bebc5caa72cf7d8c85137917"
+        },
+        {
+          "event_seq": 4,
+          "message_id": "affine-4202-raw-integrator-conclusion",
+          "event_hash": "eaa9469d2e58dbde3d6ec01e031aae93459f4a16ee7085c97a80cecd24b3e178"
+        }
+      ],
+      "claims": 0,
+      "forks": 0
+    }
+  ],
+  "requests": [
+    {
+      "seed": "4201",
+      "role": "raw-integrator",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "0638c7b460436ead098e22a2c0116dab468b3235f30604330fea63ae116c9631"
+    },
+    {
+      "seed": "4201",
+      "role": "shared-integrator",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "891226f07f4ed006d2b13f490437721246f26688b931c9b8c902fbc9a2d9c695"
+    },
+    {
+      "seed": "4201",
+      "role": "u-proposer",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "d9ceb95c9072b3860e2407a25d01346d4f380298d7b5bdde6c01d02b6420fa6f"
+    },
+    {
+      "seed": "4201",
+      "role": "u-reviewer",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "6896f7a6eb54c7632916c0f562ca139935fac4c4213b16b2970054f06dfeb0e6"
+    },
+    {
+      "seed": "4201",
+      "role": "v-proposer",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "e6726f285a4d2b816ef00a88d277ddba7b0da479aaeda9b94c8f02fb0391a995"
+    },
+    {
+      "seed": "4201",
+      "role": "v-reviewer",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "05f72a50b5b9be2034f0f17e0c16fb51c8eeca047752f449de0bdd6644266efb"
+    },
+    {
+      "seed": "4202",
+      "role": "raw-integrator",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "2c553b10dc81f469cdda6dfd0b738dbdf0f58e042d5f0bf0c65dbfab0977d51a"
+    },
+    {
+      "seed": "4202",
+      "role": "shared-integrator",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "892a68b83ab1784e1e7325a29cff320b96a6fa0372c19bd4c0858939118fe2ca"
+    },
+    {
+      "seed": "4202",
+      "role": "u-proposer",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "7852e48c0edf9e8fc555e3ffdd420b5c4abf0a2f1e285dd797b7f7e498b0ccb3"
+    },
+    {
+      "seed": "4202",
+      "role": "u-reviewer",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "04ebe6533ee1dc7a1ac287f7bad366fdf596664270f24299d97f83c92e13ac40"
+    },
+    {
+      "seed": "4202",
+      "role": "v-proposer",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "3a1692fc88b70efc1dd64cc94294807e24e977cb8179773e0ea486248531d59e"
+    },
+    {
+      "seed": "4202",
+      "role": "v-reviewer",
+      "max_tokens": 512,
+      "model": "qwen3.5-9b-FLM",
+      "message_count": 1,
+      "sha256": "2738e352893e631106f358193807047c1d94e0e34a639f12c3cffa0bbd882518"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "intent": "CONCLUDE",
+  "message_id": "affine-4201-raw-integrator-conclusion",
+  "payload": {
+    "conclusion": {
+      "status": "solved",
+      "x": 9,
+      "y": 5
+    }
+  },
+  "problem_id": "affine-4201",
+  "read_refs": [
+    {
+      "resource_id": "problem:affine-4201",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": null,
+  "schema_version": 1,
+  "sender": "raw-integrator"
+}

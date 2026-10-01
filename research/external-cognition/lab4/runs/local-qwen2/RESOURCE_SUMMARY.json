@@ -1,0 +1,12 @@
+{
+  "call_count": 12,
+  "response_with_usage_count": 11,
+  "reported_prompt_tokens": 10617,
+  "reported_completion_tokens": 3095,
+  "reported_total_tokens": 13712,
+  "coverage_note": "11 successful HTTP responses; failed call has no reported usage, so totals are partial.",
+  "at_requested_cap": [
+    "4201/u-proposer",
+    "4202/u-proposer"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "checkpoint": "qwen3.5:9b",
+  "content_sha256": "1fc0de7f8b3d073344ecea88873bf0f489bf96c8fccb4d843e15fa9b8d79dd7f",
+  "device": "npu",
+  "duration_seconds": 28.64512969995849,
+  "finish_reason": "stop",
+  "finished_at": "2026-10-01T21:58:31.559782+00:00",
+  "http_response_sha256": "3d0ffeb10b7790909ccebce091fc1e8b6b67b0de8da4d6608772715d4fd4aaf4",
+  "http_status": 200,
+  "max_tokens": 512,
+  "model": "qwen3.5-9b-FLM",
+  "pilot_receipt": {
+    "accepted": true,
+    "event_seq": 3,
+    "message_id": "affine-4202-shared-integrator-conclusion"
+  },
+  "possibly_truncated": false,
+  "provider": "Lemonade-local",
+  "reasoning_sha256": null,
+  "recipe": "flm",
+  "request_sha256": "892a68b83ab1784e1e7325a29cff320b96a6fa0372c19bd4c0858939118fe2ca",
+  "returned_model": "qwen3.5:9b",
+  "role": "shared-integrator",
+  "seed": 4202,
+  "started_at": "2026-10-01T21:58:02.912502+00:00",
+  "usage": {
+    "completion_tokens": 184,
+    "decoding_duration": 22.37414,
+    "decoding_speed_tps": 8.223779774328756,
+    "kv_token_occupancy_rate_percentage": 2.734419107437134,
+    "load_duration": 0.0001609,
+    "prefill_duration_ttft": 4.815941632,
+    "prefill_speed_tps": 363.3764970015318,
+    "prompt_tokens": 1750,
+    "total_tokens": 1934
+  }
+}

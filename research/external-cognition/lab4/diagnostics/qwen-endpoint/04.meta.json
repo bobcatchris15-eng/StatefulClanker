@@ -1,0 +1,20 @@
+{
+  "started_at": "2026-10-01T21:44:34.467118+00:00",
+  "prompt": "Reply with exactly BETA.",
+  "timeout": 30,
+  "status": 200,
+  "content": "BETA",
+  "usage": {
+    "completion_tokens": 3,
+    "decoding_duration": 0.606123,
+    "decoding_speed_tps": 4.949490449958177,
+    "kv_token_occupancy_rate_percentage": 0.02403574250638485,
+    "load_duration": 7e-07,
+    "prefill_duration_ttft": 1.172628608,
+    "prefill_speed_tps": 11.938988955657477,
+    "prompt_tokens": 14,
+    "total_tokens": 17
+  },
+  "finish_reason": "stop",
+  "elapsed_seconds": 4.546671400079504
+}

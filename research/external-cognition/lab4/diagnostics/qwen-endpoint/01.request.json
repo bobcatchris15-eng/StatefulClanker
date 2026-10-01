@@ -1,0 +1,1 @@
+{"model": "qwen3.5-9b-FLM", "messages": [{"role": "user", "content": "Reply with exactly READY."}], "max_tokens": 16, "temperature": 0, "stream": false}
