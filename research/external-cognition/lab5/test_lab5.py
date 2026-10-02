@@ -38,8 +38,9 @@ class Lab5Tests(unittest.TestCase):
             self.assertTrue((run_dir / "transport" / "gemini.json").is_file())
             for seed in pilot.SEEDS:
                 self.assertTrue((run_dir / "cases" / str(seed) / "problem.json").is_file())
-                self.assertTrue((run_dir / "cases" / str(seed) / "store.sqlite").is_file())
-                self.assertTrue((run_dir / "prompts" / str(seed) / "left-proposer.txt").is_file())
+                for fam in pilot.FAMILIES:
+                    self.assertTrue((run_dir / "cases" / str(seed) / fam / "store.sqlite").is_file())
+                    self.assertTrue((run_dir / "prompts" / str(seed) / fam / "left-proposer.txt").is_file())
     def test_evaluation_locked_until_all_72_outcomes(self):
         with tempfile.TemporaryDirectory() as td:
             run_dir = Path(td) / "run"

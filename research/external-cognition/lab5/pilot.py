@@ -78,11 +78,11 @@ def _run(run_dir: str | Path) -> Path:
     return p
 
 
-def _case(run: Path, seed: int) -> tuple[Path, dict]:
+def _case(run: Path, seed: int, family: str) -> tuple[Path, dict]:
     if seed not in SEEDS:
         raise PilotError("unknown frozen seed")
-    d = run / "cases" / str(seed)
-    raw = (d / "problem.json").read_bytes()
+    d = run / "cases" / str(seed) / family
+    raw = (run / "cases" / str(seed) / "problem.json").read_bytes()
     if _sha(raw) != _read_json(run / "run.json")["case_hashes"][str(seed)]:
         raise PilotError("frozen public case hash mismatch")
     return d, json.loads(raw)
@@ -162,9 +162,13 @@ def prepare(out_dir: str | Path, runtime_dir: str | Path = RUNTIME,
         raise PilotError("FreeDispatch DLL is unavailable")
     for seed in SEEDS:
         src = ROOT / "cases" / f"{seed}.json"
-        _save_once(run / "cases" / str(seed) / "problem.json", src.read_bytes())
+        case_raw = src.read_bytes()
+        _save_once(run / "cases" / str(seed) / "problem.json", case_raw)
         problem = _read_json(run / "cases" / str(seed) / "problem.json")
-        protocol.initialize_store(run / "cases" / str(seed) / "store.sqlite", problem["problem_id"], ROLES, problem)
+        for family in FAMILIES:
+            cdir = run / "cases" / str(seed) / family
+            cdir.mkdir(parents=True, exist_ok=True)
+            protocol.initialize_store(cdir / "store.sqlite", problem["problem_id"], ROLES, problem)
     source_files = sorted([*ROOT.glob("*.py"), ROOT / "DESIGN.md", ROOT / "PREREGISTRATION.md",
                            LAB4_PROTOCOL, Path(__file__).resolve().parents[1] / "lab4" / "PROTOCOL.md"])
     source_hashes = {str(p.relative_to(REPO)) if p.is_relative_to(REPO) else p.name: _sha(p.read_bytes())
@@ -184,8 +188,9 @@ def prepare(out_dir: str | Path, runtime_dir: str | Path = RUNTIME,
     _save_once(run / "initial_prompt_hashes.json", b"{}\n")
     # initial prompts compiled before any participant response and pinned in run manifest
     for seed in SEEDS:
-        for role in PROPOSERS:
-            _prompt(run, seed, role)
+        for family in FAMILIES:
+            for role in PROPOSERS:
+                _prompt(run, seed, family, role)
     prompt_hashes = _read_json(run / "initial_prompt_hashes.json")
     # Separate write-once frozen hash artifact, so later mutable run artifacts cannot
     # silently bless altered proposer prompts.
@@ -206,8 +211,8 @@ def _task(problem: dict) -> str:
             "PUBLIC PROBLEM:\n" + _json(problem))
 
 
-def _role_payload(run: Path, seed: int, role: str) -> tuple[str, dict]:
-    cdir, problem = _case(run, seed)
+def _role_payload(run: Path, seed: int, family: str, role: str) -> tuple[str, dict]:
+    cdir, problem = _case(run, seed, family)
     pid = problem["problem_id"]
     projection = _projection(cdir, pid)
     refs = [_ref_problem(pid)]
@@ -268,13 +273,13 @@ def _role_payload(run: Path, seed: int, role: str) -> tuple[str, dict]:
     return prompt, candidate
 
 
-def _prompt(run: Path, seed: int, role: str) -> Path:
-    raw = (_role_payload(run, seed, role)[0]).encode("utf-8", errors="strict")
-    path = run / "prompts" / str(seed) / f"{role}.txt"
+def _prompt(run: Path, seed: int, family: str, role: str) -> Path:
+    raw = (_role_payload(run, seed, family, role)[0]).encode("utf-8", errors="strict")
+    path = run / "prompts" / str(seed) / family / f"{role}.txt"
     _save_once(path, raw)
     hashes_path = run / "initial_prompt_hashes.json"
     hashes = _read_json(hashes_path)
-    key = f"{seed}/{role}"
+    key = f"{seed}/{family}/{role}"
     digest = _sha(raw)
     if role in PROPOSERS:
         if key in hashes:
@@ -283,7 +288,7 @@ def _prompt(run: Path, seed: int, role: str) -> Path:
         else:
             hashes[key] = digest
             # At prepare time only; later writes of the same digest are idempotent.
-            temp = hashes_path.with_name(f"initial_prompt_hashes_{seed}_{role}.tmp")
+            temp = hashes_path.with_name(f"initial_prompt_hashes_{seed}_{family}_{role}.tmp")
             temp.write_text(_json(hashes), encoding="utf-8")
             try:
                 temp.replace(hashes_path)
@@ -301,7 +306,7 @@ def role_prompt(run_dir: str | Path, seed: int, role: str, family: str = "liquid
         raise PilotError("final prompts are gated on all proposer and reviewer outcomes")
     if role in REVIEWERS and not all(_outcome(run, seed, r, family) for r in PROPOSERS):
         raise PilotError("review prompts are gated on both proposer outcomes")
-    return _prompt(run, seed, role)
+    return _prompt(run, seed, family, role)
 
 
 def final_prompts(run_dir: str | Path, seed: int, family: str = "liquid") -> dict[str, Path]:
@@ -328,11 +333,11 @@ def _verify_frozen(run: Path, seed: int, family: str, role: str) -> tuple[Path, 
         if not path.is_file() or _sha(path.read_bytes()) != digest:
             raise PilotError("frozen source hash mismatch")
     prompt_path = role_prompt(run, seed, role, family)
-    expected_prompt, _ = _role_payload(run, seed, role)
+    expected_prompt, _ = _role_payload(run, seed, family, role)
     prompt_bytes = prompt_path.read_bytes()
     if prompt_bytes != expected_prompt.encode("utf-8"):
         raise PilotError("prompt differs from pinned state snapshot")
-    if role in PROPOSERS and manifest["initial_prompt_hashes"].get(f"{seed}/{role}") != _sha(prompt_bytes):
+    if role in PROPOSERS and manifest["initial_prompt_hashes"].get(f"{seed}/{family}/{role}") != _sha(prompt_bytes):
         raise PilotError("initial prompt hash differs from frozen manifest")
     transport = run / "transport" / f"{family}.json"
     if _sha(transport.read_bytes()) != manifest["transport_hashes"][transport.name]:
@@ -351,7 +356,7 @@ def _expected_headers(env: dict, role: str, seed: int, family: str) -> bool:
             or env.get("sender") != role):
         return False
     # Match the exact pre-call envelope shell and snapshot refs; payload values stay model-authored.
-    template = _role_payload(_run_current, seed, role)[1]
+    template = _role_payload(_run_current, seed, family, role)[1]
     return all(env.get(k) == template.get(k) for k in ("schema_version", "problem_id", "message_id", "sender", "recipients", "intent", "read_refs", "reply_to"))
 
 
@@ -379,7 +384,7 @@ def submit_response(run_dir: str | Path, seed: int, family: str, role: str, raw_
     if raw_path.exists() or (slot / f"{role}.failure.json").exists():
         raise PilotError("role slot already consumed")
     _save_once(raw_path, bytes(raw_bytes))
-    cdir, problem = _case(run, seed)
+    cdir, problem = _case(run, seed, family)
     result = {"schema_version": 1, "seed": seed, "family": family, "role": role,
               "raw_sha256": _sha(bytes(raw_bytes)), "captured_at": datetime.now(timezone.utc).isoformat(),
               "dispatcher": dispatcher_receipt or {}}
@@ -474,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "prepare":
         print(_json(prepare(args.out_dir, args.runtime_dir, args.allowlist_dir, args.dispatch_dll)), end="")
     elif args.cmd == "prompt":
-        print(role_prompt(args.run_dir, args.seed, args.role))
+        print(role_prompt(args.run_dir, args.seed, args.role, args.family))
     elif args.cmd == "dispatch":
         print(_json(dispatch_role(args.run_dir, args.seed, args.family, args.role)), end="")
     else:
