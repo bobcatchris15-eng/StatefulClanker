@@ -419,7 +419,7 @@ def dispatch_role(run_dir: str | Path, seed: int, family: str, role: str) -> dic
         return rec
     external = _read_json(receipt_path)
     content = output / "content.raw"
-    if external.get("status") == "success" and content.is_file():
+    if external.get("status") in ("success", "completed") and content.is_file():
         return submit_response(run, seed, family, role, content.read_bytes(), external)
     # Every attempted dispatch consumes its role slot, even transport/provider failure.
     return record_failure(run, seed, family, role, external.get("failureCode") or "DISPATCH_FAILED",
