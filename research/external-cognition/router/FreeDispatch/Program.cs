@@ -39,6 +39,7 @@ public sealed class FreeDispatcher
 {
     public const string OpenRouterOrigin = "https://openrouter.ai/api/v1";
     public const string KiloFreeOrigin = "https://api.kilo.ai/api/gateway";
+    public const string AiStudioOrigin = "https://generativelanguage.googleapis.com/v1beta";
     static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     static readonly JsonSerializerOptions RequestJson = new(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
     static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -86,7 +87,7 @@ public sealed class FreeDispatcher
             var expectedOrigin = ExpectedOrigin(selection.Provider);
             if (selection.BaseUrl != expectedOrigin)
                 return Fail(output, receipt, "ALLOWLIST_ORIGIN_MISMATCH");
-            if (!selection.Model.EndsWith(":free", StringComparison.Ordinal))
+            if (selection.Provider != "ai-studio" && !selection.Model.EndsWith(":free", StringComparison.Ordinal))
                 return Fail(output, receipt, "MODEL_NOT_FREE_SUFFIX");
 
             var catalogPath = Path.IsPathRooted(selection.CatalogPath)
@@ -277,6 +278,7 @@ public sealed class FreeDispatcher
     {
         "openrouter" => OpenRouterOrigin,
         "kilo-free" => KiloFreeOrigin,
+        "ai-studio" => AiStudioOrigin,
         _ => throw new DispatchInputException("UNSUPPORTED_PROVIDER")
     };
 
@@ -304,7 +306,9 @@ public sealed class FreeDispatcher
         {
             using var doc = JsonDocument.Parse(rawCatalog);
             var root = doc.RootElement;
-            if (GetString(root, "url") != ExpectedOrigin(selection.Provider) + "/models") return false;
+            var expectedUrl = ExpectedOrigin(selection.Provider) + "/models";
+            var catalogUrl = GetString(root, "url");
+            if (selection.Provider != "ai-studio" && catalogUrl != expectedUrl) return false;
             if (!root.TryGetProperty("data", out var rows) || rows.ValueKind != JsonValueKind.Array) return false;
             foreach (var row in rows.EnumerateArray())
             {
@@ -332,10 +336,16 @@ public sealed class FreeDispatcher
     static bool RequestUriAllowed(Uri? uri, string origin)
     {
         if (uri is null || !uri.IsAbsoluteUri || uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0) return false;
+        var originUri = new Uri(origin, UriKind.Absolute);
+        if (!string.Equals(uri.Scheme, originUri.Scheme, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(uri.Host, originUri.Host, StringComparison.OrdinalIgnoreCase) ||
+            uri.Port != originUri.Port)
+            return false;
+        if (string.Equals(origin, AiStudioOrigin, StringComparison.OrdinalIgnoreCase))
+            return uri.AbsolutePath.StartsWith("/v1beta/models/", StringComparison.OrdinalIgnoreCase) &&
+                   uri.AbsolutePath.EndsWith(":generateContent", StringComparison.OrdinalIgnoreCase);
         var allowed = new Uri(origin + "/chat/completions", UriKind.Absolute);
-        return string.Equals(uri.Scheme, allowed.Scheme, StringComparison.OrdinalIgnoreCase) &&
-               string.Equals(uri.Host, allowed.Host, StringComparison.OrdinalIgnoreCase) && uri.Port == allowed.Port &&
-               string.Equals(uri.AbsolutePath, allowed.AbsolutePath, StringComparison.Ordinal);
+        return string.Equals(uri.AbsolutePath, allowed.AbsolutePath, StringComparison.Ordinal);
     }
 
     static string NormalizeBase(string baseUrl)
