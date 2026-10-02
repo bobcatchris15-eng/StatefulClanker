@@ -171,7 +171,7 @@ def prepare(out_dir: str | Path, runtime_dir: str | Path = RUNTIME,
                 "families": list(FAMILIES), "roles": list(ROLES), "schedule": _expected_roles(),
                 "case_hashes": case_hashes, "source_hashes": source_hashes,
                 "transport_hashes": transport_hashes, "runtime_hashes": runtime_hashes,
-                "dispatch_dll": str(dll_path), "policy": {"maxOutputTokens": CAP, "temperature": TEMPERATURE,
+                "dispatch_dll": str(dll_path), "policy": {"maxOutputTokens": CAP, "temperature": str(TEMPERATURE),
                     "timeoutSeconds": TIMEOUT, "one_attempt_per_role": True, "retries": 0,
                     "public_problem_full_access": True, "evaluator_gate": "all 72 outcomes saved"}}
     manifest["freeze_hash"] = _sha(protocol.canonical_bytes(manifest))
@@ -281,23 +281,30 @@ def _prompt(run: Path, seed: int, role: str) -> Path:
     return path
 
 
-def role_prompt(run_dir: str | Path, seed: int, role: str) -> Path:
+def role_prompt(run_dir: str | Path, seed: int, role: str, family: str = "liquid") -> Path:
     run = _run(run_dir)
     if role not in ROLES:
         raise PilotError("unknown role")
-    if role in FINALS and not all(_outcome(run, seed, r) for r in (*PROPOSERS, *REVIEWERS)):
+    if role in FINALS and not all(_outcome(run, seed, r, family) for r in (*PROPOSERS, *REVIEWERS)):
         raise PilotError("final prompts are gated on all proposer and reviewer outcomes")
-    if role in REVIEWERS and not all(_outcome(run, seed, r) for r in PROPOSERS):
+    if role in REVIEWERS and not all(_outcome(run, seed, r, family) for r in PROPOSERS):
         raise PilotError("review prompts are gated on both proposer outcomes")
     return _prompt(run, seed, role)
 
 
-def final_prompts(run_dir: str | Path, seed: int) -> dict[str, Path]:
-    return {r: role_prompt(run_dir, seed, r) for r in FINALS}
+def final_prompts(run_dir: str | Path, seed: int, family: str = "liquid") -> dict[str, Path]:
+    return {r: role_prompt(run_dir, seed, r, family) for r in FINALS}
 
 
-def _outcome(run: Path, seed: int, role: str) -> bool:
-    return (run / "responses" / str(seed) / f"{role}.raw").is_file() or (run / "responses" / str(seed) / f"{role}.failure.json").is_file()
+def _outcome(run: Path, seed: int, role: str, family: str | None = None) -> bool:
+    if family:
+        d = run / "responses" / str(seed) / family
+        return (d / f"{role}.raw").is_file() or (d / f"{role}.failure.json").is_file()
+    for fam in FAMILIES:
+        d = run / "responses" / str(seed) / fam
+        if (d / f"{role}.raw").is_file() or (d / f"{role}.failure.json").is_file():
+            return True
+    return False
 
 
 def _verify_frozen(run: Path, seed: int, family: str, role: str) -> tuple[Path, Path]:
@@ -308,7 +315,7 @@ def _verify_frozen(run: Path, seed: int, family: str, role: str) -> tuple[Path, 
         path = REPO / Path(rel)
         if not path.is_file() or _sha(path.read_bytes()) != digest:
             raise PilotError("frozen source hash mismatch")
-    prompt_path = role_prompt(run, seed, role)
+    prompt_path = role_prompt(run, seed, role, family)
     expected_prompt, _ = _role_payload(run, seed, role)
     prompt_bytes = prompt_path.read_bytes()
     if prompt_bytes != expected_prompt.encode("utf-8"):
@@ -423,7 +430,7 @@ def evaluate(run_dir: str | Path) -> dict:
     if not all(_outcome(run, seed, family_role[0]) for seed in SEEDS for family_role in []):
         pass
     expected = [(s, f, r) for s in SEEDS for f in FAMILIES for r in ROLES]
-    missing = [(s, f, r) for s, f, r in expected if not _outcome(run / "responses" / str(s) / f, s, r)]
+    missing = [(s, f, r) for s, f, r in expected if not _outcome(run, s, r, f)]
     # Access the hidden key only by delegating after the complete-slot gate.
     if missing:
         raise PilotError(f"evaluation locked until all 72 outcomes exist ({len(missing)} missing)")
