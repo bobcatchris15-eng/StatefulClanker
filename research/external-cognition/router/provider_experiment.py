@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent
 PILOT_SOURCE = LAB4 / "pilot.py"
 PREREG_DEFAULT = ROOT / "PROVIDER_PREREGISTRATION.md"
 DISPATCH_PROJECT = ROOT / "FreeDispatch" / "FreeDispatch.csproj"
-MODEL_KEYS = ("liquid", "north", "laguna", "nemotron")
+MODEL_KEYS = ("liquid", "north", "laguna", "nemotron", "inkling", "qwen", "gemma31b", "ultra")
 CONDITIONS = ("full", "payload")
 SEEDS = (4201, 4202)
 ROLES = ("u-proposer", "v-proposer", "u-reviewer", "v-reviewer", "shared-integrator", "raw-integrator")
@@ -33,6 +33,7 @@ PARALLEL_PER_PHASE = 2
 ORIGIN_BY_PROVIDER = {
     "openrouter": "https://openrouter.ai/api/v1",
     "kilo-free": "https://api.kilo.ai/api/gateway",
+    "ai-studio": "https://generativelanguage.googleapis.com/v1beta",
 }
 ALLOWLIST_FIELDS = {"schema_version", "provider", "connection_id", "endpoint_id", "model", "base_url", "catalog_path", "catalog_sha256"}
 
@@ -145,6 +146,9 @@ def parse_payload(raw: bytes, role: str) -> dict[str, Any]:
 def _catalog_zero(row: Any, provider: str) -> bool:
     if type(row) is not dict:
         return False
+    # AI Studio models declare free-tier access via a boolean field rather than zero pricing.
+    if provider == "ai-studio":
+        return row.get("free_tier") is True
     pricing = row.get("pricing")
     if type(pricing) is not dict:
         return False
@@ -170,7 +174,9 @@ def _load_allowlist(path: Path) -> tuple[dict[str, Any], bytes, bytes]:
     if provider not in ORIGIN_BY_PROVIDER or allow.get("base_url") != ORIGIN_BY_PROVIDER[provider]:
         raise ExperimentError("provider origin is not one of the exact free origins")
     model = allow.get("model")
-    if type(model) is not str or not model.endswith(":free"):
+    # AI Studio uses native model IDs (e.g. 'gemini-3.8-flash') without the ':free'
+    # aggregator-routing suffix that OpenRouter/Kilo use to gate zero-cost access.
+    if type(model) is not str or (provider != "ai-studio" and not model.endswith(":free")):
         raise ExperimentError("selected model must have an explicit :free identifier")
     catalog_path = Path(allow["catalog_path"])
     if not catalog_path.is_absolute():
@@ -422,8 +428,9 @@ def prepare(campaign_dir: str | Path, *, allowlist_map_path: str | Path,
             }
             for slot in pilot._schedule():
                 schedule.append({"model_key": model_key, "condition": condition, **slot})
+    _planned_slots = len(MODEL_KEYS) * len(CONDITIONS) * len(SEEDS) * len(ROLES)
     manifest: dict[str, Any] = {
-        "schema": "provider-breadth-campaign-v1", "planned_slots": 96, "call_ceiling": 96,
+        "schema": "provider-breadth-campaign-v1", "planned_slots": _planned_slots, "call_ceiling": _planned_slots,
         "model_keys": list(MODEL_KEYS), "conditions": conditions, "condition_order": conditions,
         "seeds": list(SEEDS), "roles": list(ROLES), "schedule": schedule,
         "routes": routes, "generation_policy": {
@@ -435,7 +442,7 @@ def prepare(campaign_dir: str | Path, *, allowlist_map_path: str | Path,
         "source_manifest": source_manifest, "input_hashes": input_hashes,
         "condition_hashes": condition_hashes,
         "run_policy": "conditions run once in frozen order; a partial condition is preserved and cannot resume",
-        "evaluation_policy": "offline only after all 96 scheduled role slots have outcomes",
+        "evaluation_policy": f"offline only after all {_planned_slots} scheduled role slots have outcomes",
         "frozen_at": _utcnow(),
     }
     manifest["manifest_hash"] = _sha(pilot.protocol.canonical_bytes(manifest))
@@ -922,7 +929,8 @@ def evaluate(campaign_dir: str | Path) -> dict[str, Any]:
     missing = [name for name in manifest["condition_order"]
                if not (campaign / "conditions" / name.split("/")[0] / name.split("/")[1] / "condition_complete.json").is_file()]
     if missing:
-        raise ExperimentError(f"offline evaluation requires all 96 scheduled slots; incomplete conditions: {', '.join(missing)}")
+        planned = manifest.get("planned_slots", "all")
+        raise ExperimentError(f"offline evaluation requires all {planned} scheduled slots; incomplete conditions: {', '.join(missing)}")
     conditions: dict[str, Any] = {}
     total_slots = 0
     for name in manifest["condition_order"]:

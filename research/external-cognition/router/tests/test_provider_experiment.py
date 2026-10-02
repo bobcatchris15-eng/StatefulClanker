@@ -141,8 +141,9 @@ class ProviderExperimentTests(unittest.TestCase):
             prereg.write_text("Frozen test preregistration\n", encoding="utf-8")
             campaign = root / "campaign"
             manifest = experiment.prepare(campaign, allowlist_map_path=allowlists, preregistration=prereg)
-            self.assertEqual(manifest["planned_slots"], 96)
-            self.assertEqual(len(manifest["conditions"]), 8)
+            # 8 models x 2 conditions x 2 seeds x 6 roles = 192 planned slots, 16 conditions
+            self.assertEqual(manifest["planned_slots"], len(experiment.MODEL_KEYS) * len(experiment.CONDITIONS) * len(experiment.SEEDS) * len(experiment.ROLES))
+            self.assertEqual(len(manifest["conditions"]), len(experiment.MODEL_KEYS) * len(experiment.CONDITIONS))
             self.assertEqual(manifest["generation_policy"], {"max_output_tokens": 4096, "temperature": "0.6", "timeout_seconds": 180, "parallel_per_phase": 2, "retry_policy": "none", "one_fresh_user_message": True})
             for model in experiment.MODEL_KEYS:
                 for condition in experiment.CONDITIONS:
@@ -313,7 +314,7 @@ class ProviderExperimentTests(unittest.TestCase):
                     experiment.run_condition(campaign, model, condition, dispatcher=dispatcher)
             report = experiment.evaluate(campaign)
             self.assertTrue(report["offline_only"])
-            self.assertEqual(report["completed_slot_count"], 96)
+            self.assertEqual(report["completed_slot_count"], len(experiment.MODEL_KEYS) * len(experiment.CONDITIONS) * len(experiment.SEEDS) * len(experiment.ROLES))
 
     def test_evaluation_rejects_slot_outcome_tampering_after_completion(self):
         with tempfile.TemporaryDirectory() as td:
@@ -378,7 +379,7 @@ class ProviderExperimentTests(unittest.TestCase):
             self.assertIsNone(receipt["payload_valid"])
             self.assertIsNone(receipt["raw_payload_sha256"])
             report = experiment.evaluate(campaign)
-            self.assertEqual(report["completed_slot_count"], 96)
+            self.assertEqual(report["completed_slot_count"], len(experiment.MODEL_KEYS) * len(experiment.CONDITIONS) * len(experiment.SEEDS) * len(experiment.ROLES))
             self.assertEqual(report["conditions"]["liquid/payload"]["payload_valid_count"], 0)
             self.assertEqual(report["conditions"]["liquid/payload"]["payload_invalid_count"], 0)
 

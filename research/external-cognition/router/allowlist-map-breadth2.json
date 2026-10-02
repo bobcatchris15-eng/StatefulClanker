@@ -1,0 +1,34 @@
+{
+  "liquid": {
+    "allowlist": "allowlists/liquid.json",
+    "allowed_returned_models": []
+  },
+  "north": {
+    "allowlist": "allowlists/north.json",
+    "allowed_returned_models": []
+  },
+  "laguna": {
+    "allowlist": "allowlists/laguna.json",
+    "allowed_returned_models": []
+  },
+  "nemotron": {
+    "allowlist": "allowlists/nemotron.json",
+    "allowed_returned_models": []
+  },
+  "inkling": {
+    "allowlist": "allowlists/inkling.json",
+    "allowed_returned_models": []
+  },
+  "qwen": {
+    "allowlist": "allowlists/qwen.json",
+    "allowed_returned_models": []
+  },
+  "gemma31b": {
+    "allowlist": "allowlists/gemma31b.json",
+    "allowed_returned_models": []
+  },
+  "ultra": {
+    "allowlist": "allowlists/ultra.json",
+    "allowed_returned_models": []
+  }
+}
