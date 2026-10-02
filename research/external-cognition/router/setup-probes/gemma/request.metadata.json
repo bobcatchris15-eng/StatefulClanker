@@ -1,0 +1,13 @@
+{
+  "method": "POST",
+  "uri": "https://openrouter.ai/api/v1/chat/completions",
+  "header_names": [
+    "Authorization",
+    "Content-Length",
+    "Content-Type"
+  ],
+  "header_values_saved": false,
+  "body_sha256": "3e70a5a083087a2729a73f973621738cb838de1fd21491f8a6355606a1b2ec6f",
+  "timeout_seconds": 90,
+  "adapter": "openai-chat"
+}

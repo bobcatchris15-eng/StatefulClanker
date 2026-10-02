@@ -1,0 +1,55 @@
+{
+  "affine_family": "u=(a*x+b*y+c) mod 11; v=(d*x+e*y+f) mod 11",
+  "answer_requirements": {
+    "instruction": "Infer the two affine relations, then solve for the unique target input (x,y) modulo 11.",
+    "status_solved": {
+      "status": "solved",
+      "x": "integer residue 0..10",
+      "y": "integer residue 0..10"
+    },
+    "status_underdetermined": {
+      "status": "underdetermined"
+    }
+  },
+  "modulus": 11,
+  "observations": [
+    {
+      "observation_id": "observation-1",
+      "uv": [
+        10,
+        4
+      ],
+      "xy": [
+        5,
+        7
+      ]
+    },
+    {
+      "observation_id": "observation-2",
+      "uv": [
+        5,
+        4
+      ],
+      "xy": [
+        8,
+        2
+      ]
+    },
+    {
+      "observation_id": "observation-3",
+      "uv": [
+        10,
+        6
+      ],
+      "xy": [
+        8,
+        3
+      ]
+    }
+  ],
+  "problem_id": "affine-4201",
+  "target_uv": [
+    5,
+    0
+  ]
+}

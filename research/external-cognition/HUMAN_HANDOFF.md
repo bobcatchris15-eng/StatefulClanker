@@ -1,5 +1,13 @@
 # Human handoff
 
+## Quota handoff: start at RESUME_MANUAL.md
+
+The user requested a full successor manual on October2 client date. All three active workers then hit quota. Read RESUME_MANUAL.md for exact instructions and authority. Frozen router/runs/breadth1 is independently prelive-cleared and integrity-verified, manifest bd97d69c9e8b4cf5ddf18aa50c7cf5db6254b0ff8c24b08a0394efe52c19800c,96plannedslots, zero startedconditions/slotoutcomes. Eight readiness sends are separate. Lab5 is partial and unaudited; no Lab5 inference. No workers/scheduler are continuing. No experiment was launched during the handoff turn. Earlier entries below are historical.
+
+## Active provider campaign checkpoint (2026-10-01)
+
+Local Qwen replication independently audited and saved at c1e9ef1: all12 outcomes retained, shared0/2 and raw0/2; negative local result does not prove hardware infeasibility. User authorized continued free-provider iteration to achieve completed controlled execution and useful breadth. Thin research dispatcher reuses live credential resolver/provider adapters without production or routing configuration changes. Four catalog-pinned free candidate families, full versus compact payload representations, planned96 slots; prereg router/PROVIDER_PREREGISTRATION.md. Implementation and independent prelive review underway; setup probes and experimental calls have not yet been sent. No paid fallback, hidden retries, or semantic repair. Follow task state in CURRENT_WORK.md; earlier entries are historical.
+
 ## Latest checkpoint: local Qwen replication completed (2026-10-01)
 Local endpoint verified: READY in 2.11 seconds, valid JSON, concurrent short labels. No coordinator Lemonade setting changes; context remains70,728. Native protocol/pilot checkpoints6a0e3a3 andc20813e audited. First local run interrupted on user direction, no score; six attempted slots retained. Separate local-qwen2 cap512 run completed12 outcomes in about8m6s:11 HTTP200,1 HTTP500 runlist error,7 accepted envelopes,4 invalidJSON. All four final envelopes valid but wrong; shared0/2,raw0/2. No relation proposal committed, so useful cooperative local reasoning not demonstrated here.33tests passed; ten frozen source snapshots and both replays match. Canonical local report lab4/LOCAL_RESULTS.md; live independent audit pending. Useful cooperation, matching/partial success within declared resources, remains primarygoal; superiority unnecessary. Next interface calibration: runner assembles deterministic envelope metadata, model supplies compact purpose-specific payload. No harder benchmark or general50% success claim. Earlier active/interrupted entries below are historical.
 

@@ -1,0 +1,135 @@
+{
+  "call_ceiling": 12,
+  "frozen_policy": {
+    "envelope_schema_version": 1,
+    "evaluation": "claims are checked against all public observations; target answers are scored after submission by brute-force enumeration of all 121 coordinate pairs modulo 11",
+    "evaluator_policy": "offline after all twelve call slots are completed or recorded failed",
+    "final_raw_reads": "problem only",
+    "final_shared_reads": "problem plus current claims and exact value/lifecycle revisions",
+    "participants_per_case": [
+      "u-proposer",
+      "v-proposer",
+      "u-reviewer",
+      "v-reviewer",
+      "shared-integrator",
+      "raw-integrator"
+    ],
+    "prompt_materialization": "immutable; phase prompts are saved before their participant call",
+    "prompt_templates": {
+      "final": "Same public problem and final solve instructions for both conditions; shared condition adds projection; raw condition has problem-only refs.",
+      "proposer": "Complete public problem + assigned coordinate + fixed PROPOSE envelope; replace only three coefficient integers.",
+      "reviewer": "Complete public problem + cross-assigned accepted proposal when available + fixed CHALLENGE and REPORT_EVIDENCE envelopes; reviewer supplies assessment/basis references and may retain a candidate correction.",
+      "revision": 1
+    },
+    "proposer_recipients": [
+      "assigned-cross-reviewer",
+      "shared-integrator"
+    ],
+    "raw_response_policy": "save exact bytes before structural parsing; no retries or semantic feedback",
+    "read_refs": {
+      "proposer": "problem 1/1 and own claim absence 0/0",
+      "raw_integrator": "problem 1/1 only",
+      "reviewer": "problem 1/1 and assigned peer claim current exact value/state revisions when present",
+      "shared_integrator": "problem 1/1 and every current claim exact value/state revision"
+    },
+    "rejection_policy": "retain rejected raw bytes and fixed protocol receipt; no automatic repair or resubmission",
+    "reviewer_recipient": "shared-integrator",
+    "u_reviewer_receives": "v-relation",
+    "v_reviewer_receives": "u-relation"
+  },
+  "manifest_hash": "9777427a193a0aff230b14ecff25666f159e265cd43c7b8f5e49c8bb367c476c",
+  "planned_calls": 12,
+  "problem_hashes": {
+    "4201": "d4c78699cb30fa47dc5ee12c66f9f267caee12e458e3008e804f7f2825dc4f2b",
+    "4202": "3cb1fbf700ea32f2d7b9c388c4c63226ab3f6542c43bd436455947dd8cf66bdd"
+  },
+  "route": {
+    "effort": "low",
+    "model": "Luna",
+    "provider": "native"
+  },
+  "schedule": [
+    {
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4201
+    },
+    {
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4201
+    },
+    {
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4201
+    },
+    {
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4201
+    },
+    {
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4201
+    },
+    {
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4201
+    },
+    {
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4202
+    },
+    {
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4202
+    },
+    {
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4202
+    },
+    {
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4202
+    },
+    {
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4202
+    },
+    {
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4202
+    }
+  ],
+  "schema": "lab4-affine-pilot-v1",
+  "seeds": [
+    4201,
+    4202
+  ],
+  "source_hashes": {
+    "lab3/experiment.py": "7b31e04860e5f6fe480871e450674f652a3b60e2a52b54d835f113ea3c96de89",
+    "pilot.py": "fa6672fbd598cecad0149f69c5559d1eb3e377d668faefa5653a42a295dc53b6",
+    "protocol.py": "f048db11c158c9d83a22df1eef85f9a2767c726be872fb2df575233cac296278"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Reply with exactly this JSON object and no other text: {\"ready\":true}"
+    }
+  ],
+  "tools": [],
+  "toolMode": "text",
+  "maxOutputTokens": 64,
+  "temperature": 0,
+  "timeoutSeconds": 90,
+  "sessionKey": "external-cognition-setup",
+  "maxRouteAttempts": 1,
+  "maxRouteWaitSeconds": 0
+}

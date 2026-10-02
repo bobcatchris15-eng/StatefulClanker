@@ -1,0 +1,26 @@
+{
+  "liquid": {
+    "allowlist": "allowlists/liquid.json",
+    "allowed_returned_models": [
+      "liquid/lfm-2.5-2.6b:free"
+    ]
+  },
+  "north": {
+    "allowlist": "allowlists/north.json",
+    "allowed_returned_models": [
+      "cohere/north-mini-code:free"
+    ]
+  },
+  "laguna": {
+    "allowlist": "allowlists/laguna.json",
+    "allowed_returned_models": [
+      "poolside/laguna-xs-2.1:free"
+    ]
+  },
+  "nemotron": {
+    "allowlist": "allowlists/nemotron.json",
+    "allowed_returned_models": [
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+    ]
+  }
+}

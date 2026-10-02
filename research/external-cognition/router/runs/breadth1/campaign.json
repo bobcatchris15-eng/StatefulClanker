@@ -1,0 +1,1069 @@
+{
+  "call_ceiling": 96,
+  "condition_hashes": {
+    "laguna/full": {
+      "condition_doc_sha256": "92869033aff6f438e68706bc2757813f4a5ff7e86e3cc9288f7ba340133e6f83",
+      "initial_prompt_hashes": {
+        "4201/u-proposer": "b0874c2ff955d333e21da7313701ff8a3df17f49a7b4103300a5a15d8dfa250a",
+        "4201/v-proposer": "cab8586dd9608f37a3af3b9eced311a269703baee26d2bb2bf3ce4da6e432939",
+        "4202/u-proposer": "31bb4f2f58adc66a5f2a581d7d15807b65201e7996e938ae1f1ed76f5621959a",
+        "4202/v-proposer": "21dd08de6a151d10c9a0fa103f5652f726af15a7f1011326f357f3026e384083"
+      },
+      "pilot_initial_prompt_hashes_sha256": "5a5ca7dccba6946525d9845594b4a04cb7446c476a2deec7e7bc2cccb7c625c7",
+      "pilot_run_sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a",
+      "prompt_hashes_sha256": "97619d9e21603759335b5477e5f36592d15e2b041b7324c9f5a101846023d65f"
+    },
+    "laguna/payload": {
+      "condition_doc_sha256": "95a7769e8b22b08b03dab98f3f1a654ae67b9180ea0f4a8fe07f2307001953c3",
+      "initial_prompt_hashes": {
+        "4201/u-proposer": "4ffa4e22a7bb1cedd00b5e60759ad90fc2eecb44d60fecd1e62288deca020c52",
+        "4201/v-proposer": "697a00fb47bdc0c413aa9d894015234bcb8f4ff1aef2f7dd51ca344d14b0ebd2",
+        "4202/u-proposer": "e78cac48f98816d935dc657ad4cf96474c735f35e4aceaf705ecd18c0b97686b",
+        "4202/v-proposer": "64d518c5130fcd221bdc34ee8c05e8c9b7157b7d3c47e7508f92ef7a17fa4586"
+      },
+      "pilot_initial_prompt_hashes_sha256": "5a5ca7dccba6946525d9845594b4a04cb7446c476a2deec7e7bc2cccb7c625c7",
+      "pilot_run_sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a",
+      "prompt_hashes_sha256": "d274ef9af367843203b053afed588990141e1a4f1acc5ec10ea7dfdd0a667254"
+    },
+    "liquid/full": {
+      "condition_doc_sha256": "dce7d27514941f9952151ba842306020abcf50bc033dae81d3bc37f026ffc295",
+      "initial_prompt_hashes": {
+        "4201/u-proposer": "b0874c2ff955d333e21da7313701ff8a3df17f49a7b4103300a5a15d8dfa250a",
+        "4201/v-proposer": "cab8586dd9608f37a3af3b9eced311a269703baee26d2bb2bf3ce4da6e432939",
+        "4202/u-proposer": "31bb4f2f58adc66a5f2a581d7d15807b65201e7996e938ae1f1ed76f5621959a",
+        "4202/v-proposer": "21dd08de6a151d10c9a0fa103f5652f726af15a7f1011326f357f3026e384083"
+      },
+      "pilot_initial_prompt_hashes_sha256": "5a5ca7dccba6946525d9845594b4a04cb7446c476a2deec7e7bc2cccb7c625c7",
+      "pilot_run_sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a",
+      "prompt_hashes_sha256": "97619d9e21603759335b5477e5f36592d15e2b041b7324c9f5a101846023d65f"
+    },
+    "liquid/payload": {
+      "condition_doc_sha256": "6aca2131aa4de3bf58173ea46c71dad3dc01d2d7f54c9d462dca9fb8bb3a6484",
+      "initial_prompt_hashes": {
+        "4201/u-proposer": "4ffa4e22a7bb1cedd00b5e60759ad90fc2eecb44d60fecd1e62288deca020c52",
+        "4201/v-proposer": "697a00fb47bdc0c413aa9d894015234bcb8f4ff1aef2f7dd51ca344d14b0ebd2",
+        "4202/u-proposer": "e78cac48f98816d935dc657ad4cf96474c735f35e4aceaf705ecd18c0b97686b",
+        "4202/v-proposer": "64d518c5130fcd221bdc34ee8c05e8c9b7157b7d3c47e7508f92ef7a17fa4586"
+      },
+      "pilot_initial_prompt_hashes_sha256": "5a5ca7dccba6946525d9845594b4a04cb7446c476a2deec7e7bc2cccb7c625c7",
+      "pilot_run_sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a",
+      "prompt_hashes_sha256": "d274ef9af367843203b053afed588990141e1a4f1acc5ec10ea7dfdd0a667254"
+    },
+    "nemotron/full": {
+      "condition_doc_sha256": "c1bdd204afec78e9aca5b2adab17dd218915c7a3fb90448550f043c716b2e162",
+      "initial_prompt_hashes": {
+        "4201/u-proposer": "b0874c2ff955d333e21da7313701ff8a3df17f49a7b4103300a5a15d8dfa250a",
+        "4201/v-proposer": "cab8586dd9608f37a3af3b9eced311a269703baee26d2bb2bf3ce4da6e432939",
+        "4202/u-proposer": "31bb4f2f58adc66a5f2a581d7d15807b65201e7996e938ae1f1ed76f5621959a",
+        "4202/v-proposer": "21dd08de6a151d10c9a0fa103f5652f726af15a7f1011326f357f3026e384083"
+      },
+      "pilot_initial_prompt_hashes_sha256": "5a5ca7dccba6946525d9845594b4a04cb7446c476a2deec7e7bc2cccb7c625c7",
+      "pilot_run_sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a",
+      "prompt_hashes_sha256": "97619d9e21603759335b5477e5f36592d15e2b041b7324c9f5a101846023d65f"
+    },
+    "nemotron/payload": {
+      "condition_doc_sha256": "16345580099a2d1c6dd40b4168beab4793abde977d6f4dc98c9f8b2942ff1d26",
+      "initial_prompt_hashes": {
+        "4201/u-proposer": "4ffa4e22a7bb1cedd00b5e60759ad90fc2eecb44d60fecd1e62288deca020c52",
+        "4201/v-proposer": "697a00fb47bdc0c413aa9d894015234bcb8f4ff1aef2f7dd51ca344d14b0ebd2",
+        "4202/u-proposer": "e78cac48f98816d935dc657ad4cf96474c735f35e4aceaf705ecd18c0b97686b",
+        "4202/v-proposer": "64d518c5130fcd221bdc34ee8c05e8c9b7157b7d3c47e7508f92ef7a17fa4586"
+      },
+      "pilot_initial_prompt_hashes_sha256": "5a5ca7dccba6946525d9845594b4a04cb7446c476a2deec7e7bc2cccb7c625c7",
+      "pilot_run_sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a",
+      "prompt_hashes_sha256": "d274ef9af367843203b053afed588990141e1a4f1acc5ec10ea7dfdd0a667254"
+    },
+    "north/full": {
+      "condition_doc_sha256": "3750e2f3954ac4eea94dc7c1b29ec6e486a43b009239e956d76182a37acaeda3",
+      "initial_prompt_hashes": {
+        "4201/u-proposer": "b0874c2ff955d333e21da7313701ff8a3df17f49a7b4103300a5a15d8dfa250a",
+        "4201/v-proposer": "cab8586dd9608f37a3af3b9eced311a269703baee26d2bb2bf3ce4da6e432939",
+        "4202/u-proposer": "31bb4f2f58adc66a5f2a581d7d15807b65201e7996e938ae1f1ed76f5621959a",
+        "4202/v-proposer": "21dd08de6a151d10c9a0fa103f5652f726af15a7f1011326f357f3026e384083"
+      },
+      "pilot_initial_prompt_hashes_sha256": "5a5ca7dccba6946525d9845594b4a04cb7446c476a2deec7e7bc2cccb7c625c7",
+      "pilot_run_sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a",
+      "prompt_hashes_sha256": "97619d9e21603759335b5477e5f36592d15e2b041b7324c9f5a101846023d65f"
+    },
+    "north/payload": {
+      "condition_doc_sha256": "24473c1d56b2df25cb7825951f20c2555971b57eaaecdaa1b2a187d0814cb86f",
+      "initial_prompt_hashes": {
+        "4201/u-proposer": "4ffa4e22a7bb1cedd00b5e60759ad90fc2eecb44d60fecd1e62288deca020c52",
+        "4201/v-proposer": "697a00fb47bdc0c413aa9d894015234bcb8f4ff1aef2f7dd51ca344d14b0ebd2",
+        "4202/u-proposer": "e78cac48f98816d935dc657ad4cf96474c735f35e4aceaf705ecd18c0b97686b",
+        "4202/v-proposer": "64d518c5130fcd221bdc34ee8c05e8c9b7157b7d3c47e7508f92ef7a17fa4586"
+      },
+      "pilot_initial_prompt_hashes_sha256": "5a5ca7dccba6946525d9845594b4a04cb7446c476a2deec7e7bc2cccb7c625c7",
+      "pilot_run_sha256": "b4a7bc90082a3c9bc74314d96795b27e5b338bf2a6cbab54bc07ac6419088a3a",
+      "prompt_hashes_sha256": "d274ef9af367843203b053afed588990141e1a4f1acc5ec10ea7dfdd0a667254"
+    }
+  },
+  "condition_order": [
+    "liquid/full",
+    "liquid/payload",
+    "north/full",
+    "north/payload",
+    "laguna/full",
+    "laguna/payload",
+    "nemotron/full",
+    "nemotron/payload"
+  ],
+  "conditions": [
+    "liquid/full",
+    "liquid/payload",
+    "north/full",
+    "north/payload",
+    "laguna/full",
+    "laguna/payload",
+    "nemotron/full",
+    "nemotron/payload"
+  ],
+  "evaluation_policy": "offline only after all 96 scheduled role slots have outcomes",
+  "frozen_at": "2026-10-01T22:51:30.247971+00:00",
+  "generation_policy": {
+    "max_output_tokens": 4096,
+    "one_fresh_user_message": true,
+    "parallel_per_phase": 2,
+    "retry_policy": "none",
+    "temperature": "0.6",
+    "timeout_seconds": 180
+  },
+  "input_hashes": {
+    "PROVIDER_PREREGISTRATION.md": "7f10dc997d7a6684e3be0e0100d92e31ea37f8608982f68c147e3a8ce684f2c6",
+    "allowlist-selection-map.json": "b633d990aa29be0018ba45db451298b879e51378ec967826a5c549f6f2f9de00",
+    "allowlists/laguna.allowlist.json": "09f88565232a0626b717db2db61874b29a4d50ca3d6549c7e3452cb2d25c7d1a",
+    "allowlists/laguna.allowlist.source.json": "c6b0b48e79f88dedf1855dd50f3801dbd33b254e0cdcc3308afab2bc6cc4e3e5",
+    "allowlists/liquid.allowlist.json": "99a28f23c6a208b2acc996a52878fd7572635cb24667006c4621f16deb7bfee5",
+    "allowlists/liquid.allowlist.source.json": "bb4afaba824c164a9f1b927e314cb03ac7163575b64c952a067f9d226fe5266a",
+    "allowlists/nemotron.allowlist.json": "39d3318dc2ae861403d62b54985d4da4ede4378b35f6cb52ff3629c06031fcc6",
+    "allowlists/nemotron.allowlist.source.json": "4817171bf4b99839c1c9d0d5ff2625b862d4156825743c1e6195491290adcbff",
+    "allowlists/north.allowlist.json": "1882b519a6c3b0f8f97af799db916ed537e498e9c58b2ba3555aa2d47f730102",
+    "allowlists/north.allowlist.source.json": "a7c54b36778765b43d8d05a0f65fa4daa4201705e6badc73369d16acba920fa4",
+    "catalogs/laguna.catalog.json": "91b0f8dd6199ab37f6a27642ca7e70ae453dd704001c2f7eaf8a04f7da0f9167",
+    "catalogs/liquid.catalog.json": "91b0f8dd6199ab37f6a27642ca7e70ae453dd704001c2f7eaf8a04f7da0f9167",
+    "catalogs/nemotron.catalog.json": "91b0f8dd6199ab37f6a27642ca7e70ae453dd704001c2f7eaf8a04f7da0f9167",
+    "catalogs/north.catalog.json": "91b0f8dd6199ab37f6a27642ca7e70ae453dd704001c2f7eaf8a04f7da0f9167",
+    "conditions/laguna/payload/compile_contexts/4201/u-proposer.json": "0b1c1dea71a166c32561f5b10219731e9d52af71a0b6d77c4611f2f5cbce58ea",
+    "conditions/laguna/payload/compile_contexts/4201/v-proposer.json": "0b1c1dea71a166c32561f5b10219731e9d52af71a0b6d77c4611f2f5cbce58ea",
+    "conditions/laguna/payload/compile_contexts/4202/u-proposer.json": "786a9881dc07c766bc652d4d278080bf02a84a9b3d954a5870a24d166b60d34e",
+    "conditions/laguna/payload/compile_contexts/4202/v-proposer.json": "786a9881dc07c766bc652d4d278080bf02a84a9b3d954a5870a24d166b60d34e",
+    "conditions/liquid/payload/compile_contexts/4201/u-proposer.json": "0b1c1dea71a166c32561f5b10219731e9d52af71a0b6d77c4611f2f5cbce58ea",
+    "conditions/liquid/payload/compile_contexts/4201/v-proposer.json": "0b1c1dea71a166c32561f5b10219731e9d52af71a0b6d77c4611f2f5cbce58ea",
+    "conditions/liquid/payload/compile_contexts/4202/u-proposer.json": "786a9881dc07c766bc652d4d278080bf02a84a9b3d954a5870a24d166b60d34e",
+    "conditions/liquid/payload/compile_contexts/4202/v-proposer.json": "786a9881dc07c766bc652d4d278080bf02a84a9b3d954a5870a24d166b60d34e",
+    "conditions/nemotron/payload/compile_contexts/4201/u-proposer.json": "0b1c1dea71a166c32561f5b10219731e9d52af71a0b6d77c4611f2f5cbce58ea",
+    "conditions/nemotron/payload/compile_contexts/4201/v-proposer.json": "0b1c1dea71a166c32561f5b10219731e9d52af71a0b6d77c4611f2f5cbce58ea",
+    "conditions/nemotron/payload/compile_contexts/4202/u-proposer.json": "786a9881dc07c766bc652d4d278080bf02a84a9b3d954a5870a24d166b60d34e",
+    "conditions/nemotron/payload/compile_contexts/4202/v-proposer.json": "786a9881dc07c766bc652d4d278080bf02a84a9b3d954a5870a24d166b60d34e",
+    "conditions/north/payload/compile_contexts/4201/u-proposer.json": "0b1c1dea71a166c32561f5b10219731e9d52af71a0b6d77c4611f2f5cbce58ea",
+    "conditions/north/payload/compile_contexts/4201/v-proposer.json": "0b1c1dea71a166c32561f5b10219731e9d52af71a0b6d77c4611f2f5cbce58ea",
+    "conditions/north/payload/compile_contexts/4202/u-proposer.json": "786a9881dc07c766bc652d4d278080bf02a84a9b3d954a5870a24d166b60d34e",
+    "conditions/north/payload/compile_contexts/4202/v-proposer.json": "786a9881dc07c766bc652d4d278080bf02a84a9b3d954a5870a24d166b60d34e",
+    "dispatcher-package/FreeDispatch.deps.json": "0e358e4be6df9be50632240dd0d185085c2401e3c95128a28e8d02e329ca31fb",
+    "dispatcher-package/FreeDispatch.dll": "9075737d6d16f610cc95d4ab9cabc426ec9226d08b1fbdb32f1f3f8d55a3ebef",
+    "dispatcher-package/FreeDispatch.runtimeconfig.json": "28329cf08f6505e73806b17558b187c02f0c1c516fe47ebfb7a013d082aaa306",
+    "dispatcher-package/StatefulClanker.Router.deps.json": "9d806b9d29c14f0a3b20b86c1cfe6d8d1fce7c0d26f58444230bffab9a7d7877",
+    "dispatcher-package/StatefulClanker.Router.dll": "de58e1ebdeba0a5211c1eff0e9d11f11f6980f817a733de75c19259e8e9e31e3",
+    "dispatcher-package/StatefulClanker.Router.runtimeconfig.json": "28329cf08f6505e73806b17558b187c02f0c1c516fe47ebfb7a013d082aaa306",
+    "dispatcher-package/System.Security.Cryptography.ProtectedData.dll": "5e04d6cff3b6fe9706908970cd594861f0c08b3824f7827b2331b5f4fcee1bd1"
+  },
+  "manifest_hash": "bd97d69c9e8b4cf5ddf18aa50c7cf5db6254b0ff8c24b08a0394efe52c19800c",
+  "model_keys": [
+    "liquid",
+    "north",
+    "laguna",
+    "nemotron"
+  ],
+  "planned_slots": 96,
+  "preregistration_file": "PROVIDER_PREREGISTRATION.md",
+  "roles": [
+    "u-proposer",
+    "v-proposer",
+    "u-reviewer",
+    "v-reviewer",
+    "shared-integrator",
+    "raw-integrator"
+  ],
+  "routes": {
+    "laguna": {
+      "allowed_returned_models": [
+        "poolside/laguna-xs-2.1:free"
+      ],
+      "base_url": "https://api.kilo.ai/api/gateway",
+      "catalog_sha256": "91b0f8dd6199ab37f6a27642ca7e70ae453dd704001c2f7eaf8a04f7da0f9167",
+      "connection_id": "Kilo Free",
+      "dispatch_allowlist": "allowlists/laguna.allowlist.json",
+      "endpoint_id": "research-laguna",
+      "model": "poolside/laguna-xs-2.1:free",
+      "provider": "kilo-free",
+      "source_allowlist_sha256": "c6b0b48e79f88dedf1855dd50f3801dbd33b254e0cdcc3308afab2bc6cc4e3e5"
+    },
+    "liquid": {
+      "allowed_returned_models": [
+        "liquid/lfm-2.5-2.6b:free"
+      ],
+      "base_url": "https://api.kilo.ai/api/gateway",
+      "catalog_sha256": "91b0f8dd6199ab37f6a27642ca7e70ae453dd704001c2f7eaf8a04f7da0f9167",
+      "connection_id": "Kilo Free",
+      "dispatch_allowlist": "allowlists/liquid.allowlist.json",
+      "endpoint_id": "research-liquid",
+      "model": "liquid/lfm-2.5-2.6b:free",
+      "provider": "kilo-free",
+      "source_allowlist_sha256": "bb4afaba824c164a9f1b927e314cb03ac7163575b64c952a067f9d226fe5266a"
+    },
+    "nemotron": {
+      "allowed_returned_models": [
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+      ],
+      "base_url": "https://api.kilo.ai/api/gateway",
+      "catalog_sha256": "91b0f8dd6199ab37f6a27642ca7e70ae453dd704001c2f7eaf8a04f7da0f9167",
+      "connection_id": "Kilo Free",
+      "dispatch_allowlist": "allowlists/nemotron.allowlist.json",
+      "endpoint_id": "research-nemotron",
+      "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "provider": "kilo-free",
+      "source_allowlist_sha256": "4817171bf4b99839c1c9d0d5ff2625b862d4156825743c1e6195491290adcbff"
+    },
+    "north": {
+      "allowed_returned_models": [
+        "cohere/north-mini-code:free"
+      ],
+      "base_url": "https://api.kilo.ai/api/gateway",
+      "catalog_sha256": "91b0f8dd6199ab37f6a27642ca7e70ae453dd704001c2f7eaf8a04f7da0f9167",
+      "connection_id": "Kilo Free",
+      "dispatch_allowlist": "allowlists/north.allowlist.json",
+      "endpoint_id": "research-north",
+      "model": "cohere/north-mini-code:free",
+      "provider": "kilo-free",
+      "source_allowlist_sha256": "a7c54b36778765b43d8d05a0f65fa4daa4201705e6badc73369d16acba920fa4"
+    }
+  },
+  "run_policy": "conditions run once in frozen order; a partial condition is preserved and cannot resume",
+  "schedule": [
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "liquid",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "liquid",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "north",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "north",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "laguna",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "laguna",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "full",
+      "model_key": "nemotron",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4201-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4201-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4201-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4201
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "u-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4202-proposers",
+      "phase": "propose",
+      "role": "v-proposer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "u-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4202-reviewers",
+      "phase": "review",
+      "role": "v-reviewer",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "shared-integrator",
+      "seed": 4202
+    },
+    {
+      "condition": "payload",
+      "model_key": "nemotron",
+      "parallel_group": "4202-integrators",
+      "phase": "integrate",
+      "role": "raw-integrator",
+      "seed": 4202
+    }
+  ],
+  "schema": "provider-breadth-campaign-v1",
+  "seeds": [
+    4201,
+    4202
+  ],
+  "source_hashes": {
+    "FreeDispatch.csproj": "22a3fb7b46514ca08ce6526f4e4ad2bcd33c978dd798a720d0b3350702e1e9d9",
+    "FreeDispatch/Program.cs": "a1eee8ce9748d7477f98be6611aed231d3c64f67ba0677dd0281ac124b5cffcb",
+    "FreeDispatch/tests/Program.cs": "8088640eb2b938a50b7fff88c1eb741673a1c067d0df06d8d42677982e8c1ddb",
+    "lab3/experiment.py": "7b31e04860e5f6fe480871e450674f652a3b60e2a52b54d835f113ea3c96de89",
+    "pilot.py": "fa6672fbd598cecad0149f69c5559d1eb3e377d668faefa5653a42a295dc53b6",
+    "protocol.py": "f048db11c158c9d83a22df1eef85f9a2767c726be872fb2df575233cac296278",
+    "provider_experiment.py": "ea85f2970efb43e036220182af6458c419c6affbf5cf674d0ec99e652a7f84de",
+    "provider_experiment_tests.py": "197ae792de4cd3fefe53a8c3536100a983c9369cd6f9d8cda5732afb8d78dba3"
+  },
+  "source_manifest": {
+    "dispatcher_command": [
+      "dotnet",
+      "<frozen-package>/FreeDispatch.dll",
+      "dispatch",
+      "--request",
+      "<request>",
+      "--allowlist",
+      "<allowlist>",
+      "--out-dir",
+      "<slot-dir>",
+      "--timeout-seconds",
+      "180"
+    ],
+    "dispatcher_package_hashes": {
+      "FreeDispatch.deps.json": "0e358e4be6df9be50632240dd0d185085c2401e3c95128a28e8d02e329ca31fb",
+      "FreeDispatch.dll": "9075737d6d16f610cc95d4ab9cabc426ec9226d08b1fbdb32f1f3f8d55a3ebef",
+      "FreeDispatch.runtimeconfig.json": "28329cf08f6505e73806b17558b187c02f0c1c516fe47ebfb7a013d082aaa306",
+      "StatefulClanker.Router.deps.json": "9d806b9d29c14f0a3b20b86c1cfe6d8d1fce7c0d26f58444230bffab9a7d7877",
+      "StatefulClanker.Router.dll": "de58e1ebdeba0a5211c1eff0e9d11f11f6980f817a733de75c19259e8e9e31e3",
+      "StatefulClanker.Router.runtimeconfig.json": "28329cf08f6505e73806b17558b187c02f0c1c516fe47ebfb7a013d082aaa306",
+      "System.Security.Cryptography.ProtectedData.dll": "5e04d6cff3b6fe9706908970cd594861f0c08b3824f7827b2331b5f4fcee1bd1"
+    },
+    "dispatcher_package_manifest_sha256": "ea7e496d44125749a872f5d57ba192e7a19ad43027b9823090698fd2b8739d43",
+    "dispatcher_package_sha256": {
+      "FreeDispatch.deps.json": "0e358e4be6df9be50632240dd0d185085c2401e3c95128a28e8d02e329ca31fb",
+      "FreeDispatch.dll": "9075737d6d16f610cc95d4ab9cabc426ec9226d08b1fbdb32f1f3f8d55a3ebef",
+      "FreeDispatch.runtimeconfig.json": "28329cf08f6505e73806b17558b187c02f0c1c516fe47ebfb7a013d082aaa306",
+      "StatefulClanker.Router.deps.json": "9d806b9d29c14f0a3b20b86c1cfe6d8d1fce7c0d26f58444230bffab9a7d7877",
+      "StatefulClanker.Router.dll": "de58e1ebdeba0a5211c1eff0e9d11f11f6980f817a733de75c19259e8e9e31e3",
+      "StatefulClanker.Router.runtimeconfig.json": "28329cf08f6505e73806b17558b187c02f0c1c516fe47ebfb7a013d082aaa306",
+      "System.Security.Cryptography.ProtectedData.dll": "5e04d6cff3b6fe9706908970cd594861f0c08b3824f7827b2331b5f4fcee1bd1"
+    },
+    "dispatcher_project": "C:\\Users\\chris\\StatefulClanker\\research\\external-cognition\\router\\FreeDispatch\\FreeDispatch.csproj",
+    "dispatcher_project_sha256": "22a3fb7b46514ca08ce6526f4e4ad2bcd33c978dd798a720d0b3350702e1e9d9",
+    "dispatcher_source_hashes": {
+      "FreeDispatch/Program.cs": "a1eee8ce9748d7477f98be6611aed231d3c64f67ba0677dd0281ac124b5cffcb",
+      "FreeDispatch/tests/Program.cs": "8088640eb2b938a50b7fff88c1eb741673a1c067d0df06d8d42677982e8c1ddb"
+    },
+    "dotnet_executable": "C:\\Program Files\\dotnet\\dotnet.EXE",
+    "dotnet_sdk_version": "8.0.425"
+  }
+}

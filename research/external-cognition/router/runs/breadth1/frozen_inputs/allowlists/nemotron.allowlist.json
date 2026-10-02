@@ -1,0 +1,10 @@
+{
+  "base_url": "https://api.kilo.ai/api/gateway",
+  "catalog_path": "../catalogs/nemotron.catalog.json",
+  "catalog_sha256": "91b0f8dd6199ab37f6a27642ca7e70ae453dd704001c2f7eaf8a04f7da0f9167",
+  "connection_id": "Kilo Free",
+  "endpoint_id": "research-nemotron",
+  "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  "provider": "kilo-free",
+  "schema_version": 1
+}

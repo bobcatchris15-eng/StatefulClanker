@@ -1,0 +1,15 @@
+{
+  "status": 429,
+  "reason": "Too Many Requests",
+  "safe_headers": {
+    "Date": [
+      "Thu, 01 Oct 2026 22:28:12 GMT"
+    ],
+    "Content-Type": [
+      "application/json"
+    ]
+  },
+  "body_sha256": "c215f382f7b33ec1e10a68f67a5f8a8998aee624a4e4881200a8e7d5a30178a3",
+  "body_complete": true,
+  "transport_error": null
+}
