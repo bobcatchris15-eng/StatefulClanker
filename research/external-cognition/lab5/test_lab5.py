@@ -34,8 +34,8 @@ class Lab5Tests(unittest.TestCase):
             self.assertEqual(manifest["schema"], "lab5-finite-csp-pilot-v1")
             self.assertEqual(manifest["planned_calls"], 72)
             self.assertTrue((run_dir / "run.json").is_file())
-            self.assertTrue((run_dir / "transport" / "liquid.json").is_file())
             self.assertTrue((run_dir / "transport" / "north.json").is_file())
+            self.assertTrue((run_dir / "transport" / "gemini.json").is_file())
             for seed in pilot.SEEDS:
                 self.assertTrue((run_dir / "cases" / str(seed) / "problem.json").is_file())
                 self.assertTrue((run_dir / "cases" / str(seed) / "store.sqlite").is_file())
@@ -63,10 +63,10 @@ class Lab5Tests(unittest.TestCase):
                         pilot.record_failure(run_dir, seed, fam, role, "TEST_FAILURE", "synthetic failure")
             res = pilot.evaluate(run_dir)
             self.assertEqual(res["total_slots"], 72)
-            self.assertIn("liquid", res["families"])
             self.assertIn("north", res["families"])
+            self.assertIn("gemini", res["families"])
             self.assertEqual(res["families"]["north"]["failures"], 36)
-            self.assertEqual(res["families"]["liquid"]["failures"], 36)
+            self.assertEqual(res["families"]["gemini"]["failures"], 36)
 
 
 if __name__ == "__main__":

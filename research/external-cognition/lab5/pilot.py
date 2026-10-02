@@ -25,9 +25,9 @@ ROLES = ("left-proposer", "right-proposer", "left-reviewer", "right-reviewer", "
 PROPOSERS = ("left-proposer", "right-proposer")
 REVIEWERS = ("left-reviewer", "right-reviewer")
 FINALS = ("shared-integrator", "raw-integrator")
-FAMILIES = ("liquid", "north")
+FAMILIES = ("north", "gemini")
 SCHEMA = "lab5-finite-csp-pilot-v1"
-CAP = 4096
+CAP = 8192
 TEMPERATURE = 0.6
 TIMEOUT = 180
 
@@ -122,9 +122,10 @@ def _proposal_for(case_dir: Path, problem_id: str, component: str) -> dict | Non
 
 
 def _expected_roles():
+    fam_a, fam_b = FAMILIES[0], FAMILIES[1]
     return [{"seed": seed, "family": fam, "role": role,
              "parallel_group": f"{seed}-{fam}-{phase}"}
-            for seed_i, seed in enumerate(SEEDS) for fam in (("liquid", "north") if seed_i % 2 == 0 else ("north", "liquid"))
+            for seed_i, seed in enumerate(SEEDS) for fam in ((fam_a, fam_b) if seed_i % 2 == 0 else (fam_b, fam_a))
             for phase, roles in (("propose", PROPOSERS), ("review", REVIEWERS), ("final", FINALS)) for role in roles]
 
 
@@ -144,9 +145,13 @@ def prepare(out_dir: str | Path, runtime_dir: str | Path = RUNTIME,
     catalog_src = ROUTER / "kilo-free-catalog.json"
     catalog_raw = catalog_src.read_bytes()
     _save_once(run / "transport" / "kilo-free-catalog.json", catalog_raw)
+    ai_studio_cat = ROUTER / "ai-studio-free-catalog.json"
+    if ai_studio_cat.is_file():
+        _save_once(run / "transport" / "ai-studio-free-catalog.json", ai_studio_cat.read_bytes())
     for family in FAMILIES:
         selection = _read_json(allowlist_dir / f"{family}.json")
-        selection["catalog_path"] = str((run / "transport" / "kilo-free-catalog.json").resolve())
+        cat_file = "ai-studio-free-catalog.json" if selection.get("provider") == "ai-studio" else "kilo-free-catalog.json"
+        selection["catalog_path"] = str((run / "transport" / cat_file).resolve())
         _save_once(run / "transport" / f"{family}.json", _json(selection).encode())
     if dispatch_dll:
         # External paths are recorded but never modified.
@@ -271,13 +276,19 @@ def _prompt(run: Path, seed: int, role: str) -> Path:
     key = f"{seed}/{role}"
     digest = _sha(raw)
     if role in PROPOSERS:
-        if key in hashes and hashes[key] != digest:
-            raise PilotError("initial prompt hash mismatch")
-        hashes[key] = digest
-        # At prepare time only; later writes of the same digest are idempotent.
-        temp = hashes_path.with_suffix(".tmp")
-        temp.write_text(_json(hashes), encoding="utf-8")
-        temp.replace(hashes_path)
+        if key in hashes:
+            if hashes[key] != digest:
+                raise PilotError("initial prompt hash mismatch")
+        else:
+            hashes[key] = digest
+            # At prepare time only; later writes of the same digest are idempotent.
+            temp = hashes_path.with_name(f"initial_prompt_hashes_{seed}_{role}.tmp")
+            temp.write_text(_json(hashes), encoding="utf-8")
+            try:
+                temp.replace(hashes_path)
+            except OSError:
+                if temp.exists():
+                    temp.unlink()
     return path
 
 

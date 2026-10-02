@@ -124,7 +124,8 @@ public sealed class FreeDispatcher
             IProviderAdapter adapter;
             try { adapter = registry.Resolve(connection); }
             catch (InvalidOperationException) { return Fail(output, receipt, "NO_MATCHING_PROVIDER_ADAPTER"); }
-            if (!string.Equals(adapter.Id, "openai-chat", StringComparison.Ordinal))
+            if (!string.Equals(adapter.Id, "openai-chat", StringComparison.Ordinal) &&
+                !string.Equals(adapter.Id, "gemini-native", StringComparison.Ordinal))
                 return Fail(output, receipt, "UNSUPPORTED_ADAPTER");
 
             var endpoint = new EndpointEntry

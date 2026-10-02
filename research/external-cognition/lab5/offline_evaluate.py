@@ -12,7 +12,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent
 PRIVATE_KEY_PATH = ROOT / "private" / "case-key.json"
 SEEDS = (5103, 5110, 5115, 5121, 5122, 5129)
-FAMILIES = ("liquid", "north")
+FAMILIES = ("north", "gemini")
 ROLES = ("left-proposer", "right-proposer", "left-reviewer", "right-reviewer", "shared-integrator", "raw-integrator")
 PROPOSERS = ("left-proposer", "right-proposer")
 REVIEWERS = ("left-reviewer", "right-reviewer")
