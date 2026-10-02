@@ -1,0 +1,14 @@
+{
+  "method": "POST",
+  "uri": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+  "header_names": [
+    "Content-Length",
+    "Content-Type",
+    "x-goog-api-client",
+    "x-goog-api-key"
+  ],
+  "header_values_saved": false,
+  "body_sha256": "aace8dce9f465e00edca83495e037a63a6398ec3ded28a9c7847b2fe7910ae33",
+  "timeout_seconds": 180,
+  "adapter": "gemini-native"
+}

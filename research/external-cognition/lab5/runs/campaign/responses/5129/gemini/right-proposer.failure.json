@@ -1,0 +1,10 @@
+{
+  "attempted_at": "2026-10-02T19:04:08.590196+00:00",
+  "failure_code": "HTTP_STATUS_FAILURE",
+  "family": "gemini",
+  "outcome": "no_response",
+  "role": "right-proposer",
+  "safe_detail": "sent=True httpStatus=402",
+  "schema_version": 1,
+  "seed": 5129
+}

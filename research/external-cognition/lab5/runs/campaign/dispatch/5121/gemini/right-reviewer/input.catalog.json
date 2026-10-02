@@ -1,0 +1,27 @@
+{
+  "data": [
+    {
+      "capabilities": [
+        "text",
+        "tools",
+        "json_mode"
+      ],
+      "context_length": 1048576,
+      "description": "Fast, efficient Gemini model available on the AI Studio free tier with quota-based access.",
+      "free_tier": true,
+      "free_tier_quota": "subject to rate limits per the AI Studio free tier policy",
+      "id": "gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash",
+      "pricing": {
+        "completion": "0",
+        "prompt": "0"
+      },
+      "provider": "google"
+    }
+  ],
+  "description": "Google AI Studio free-tier models. These models are available at zero cost on the free tier as documented at https://ai.google.dev/gemini-api/docs/pricing. No pricing fields are present because the free-tier access is gated by API quota, not per-token billing.",
+  "provider": "ai-studio",
+  "retrieved_at": "2026-10-02T14:00:00Z",
+  "schema_version": 1,
+  "source": "https://ai.google.dev/gemini-api/docs/pricing"
+}

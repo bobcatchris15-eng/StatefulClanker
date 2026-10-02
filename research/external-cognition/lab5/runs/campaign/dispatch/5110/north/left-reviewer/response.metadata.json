@@ -1,0 +1,15 @@
+{
+  "status": 200,
+  "reason": "OK",
+  "safe_headers": {
+    "Date": [
+      "Fri, 02 Oct 2026 18:51:24 GMT"
+    ],
+    "Content-Type": [
+      "application/json"
+    ]
+  },
+  "body_sha256": "cf566c057c4755ee0ae31385e065cdb9bf7b0d7a870a01503c94a01acae4d7e6",
+  "body_complete": true,
+  "transport_error": null
+}

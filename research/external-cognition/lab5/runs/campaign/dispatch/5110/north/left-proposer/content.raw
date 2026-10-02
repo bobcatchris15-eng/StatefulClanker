@@ -1,0 +1,54 @@
+{
+  "intent": "PROPOSE",
+  "message_id": "csp-5110-left-proposer-1",
+  "payload": {
+    "claim": {
+      "claim_id": "left-tuples",
+      "dependencies": [
+        {
+          "claim_revision": 1,
+          "resource_id": "problem:csp-5110"
+        }
+      ],
+      "provenance": {
+        "message_id": "csp-5110-left-proposer-1"
+      },
+      "revision": 1,
+      "state_revision": 1,
+      "status": "active",
+      "value": {
+        "component": "left",
+        "tuples": [
+          [2,2,0,2],
+          [2,2,0,3]
+        ],
+        "variables": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      }
+    }
+  },
+  "problem_id": "csp-5110",
+  "read_refs": [
+    {
+      "resource_id": "problem:csp-5110",
+      "revision": 1,
+      "state_revision": 1
+    },
+    {
+      "resource_id": "claim:left-tuples",
+      "revision": 0,
+      "state_revision": 0
+    }
+  ],
+  "recipients": [
+    "right-reviewer",
+    "shared-integrator"
+  ],
+  "reply_to": null,
+  "schema_version": 1,
+  "sender": "left-proposer"
+}

@@ -1,0 +1,487 @@
+Solve the finite constraint task from the complete immutable public packet below. Return exactly one JSON protocol envelope matching the supplied template; no prose outside JSON. Do not wrap in markdown code blocks or backticks. Output raw unformatted JSON starting with { and ending with }.
+
+PUBLIC PROBLEM:
+{
+  "answer_requirements": {
+    "format": "Return the requested JSON object only. Integers must be JSON integers.",
+    "global": "Give one complete assignment for a through h satisfying all ten constraints.",
+    "local": "Enumerate every satisfying tuple for your assigned component, in variable order."
+  },
+  "components": {
+    "left": [
+      "a",
+      "b",
+      "c",
+      "d"
+    ],
+    "right": [
+      "e",
+      "f",
+      "g",
+      "h"
+    ]
+  },
+  "constraints": [
+    {
+      "allowed_pairs": [
+        [
+          2,
+          2
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          1,
+          0
+        ]
+      ],
+      "constraint_id": "c1",
+      "variables": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "allowed_pairs": [
+        [
+          2,
+          0
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          3,
+          3
+        ]
+      ],
+      "constraint_id": "c2",
+      "variables": [
+        "b",
+        "c"
+      ]
+    },
+    {
+      "allowed_pairs": [
+        [
+          0,
+          3
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          3,
+          2
+        ]
+      ],
+      "constraint_id": "c3",
+      "variables": [
+        "c",
+        "d"
+      ]
+    },
+    {
+      "allowed_pairs": [
+        [
+          3,
+          2
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          2,
+          2
+        ],
+        [
+          3,
+          3
+        ],
+        [
+          2,
+          1
+        ]
+      ],
+      "constraint_id": "c4",
+      "variables": [
+        "d",
+        "a"
+      ]
+    },
+    {
+      "allowed_pairs": [
+        [
+          0,
+          2
+        ],
+        [
+          2,
+          2
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          3,
+          0
+        ]
+      ],
+      "constraint_id": "c5",
+      "variables": [
+        "e",
+        "f"
+      ]
+    },
+    {
+      "allowed_pairs": [
+        [
+          2,
+          2
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          2,
+          1
+        ]
+      ],
+      "constraint_id": "c6",
+      "variables": [
+        "f",
+        "g"
+      ]
+    },
+    {
+      "allowed_pairs": [
+        [
+          2,
+          3
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          2
+        ]
+      ],
+      "constraint_id": "c7",
+      "variables": [
+        "g",
+        "h"
+      ]
+    },
+    {
+      "allowed_pairs": [
+        [
+          3,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          3,
+          1
+        ]
+      ],
+      "constraint_id": "c8",
+      "variables": [
+        "h",
+        "e"
+      ]
+    },
+    {
+      "allowed_pairs": [
+        [
+          2,
+          0
+        ],
+        [
+          1,
+          2
+        ]
+      ],
+      "constraint_id": "c9",
+      "variables": [
+        "b",
+        "e"
+      ]
+    },
+    {
+      "allowed_pairs": [
+        [
+          3,
+          2
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "constraint_id": "c10",
+      "variables": [
+        "d",
+        "g"
+      ]
+    }
+  ],
+  "domain": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "problem_id": "csp-5110",
+  "schema": "lab5-finite-csp-v1",
+  "seed": 5110,
+  "variables": [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h"
+  ]
+}
+
+
+ROLE TASK:
+Return a complete assignment of all eight variables satisfying the public CSP. The shared integrator may inspect the following protocol projection; challenged claims and reviewer candidates remain visible and are not automatically selected. The raw integrator must solve using only the public facts. Edit only the eight integer values in conclusion.assignment.
+SHARED PROJECTION:
+{
+  "claims": {
+    "left-tuples": {
+      "claim_id": "left-tuples",
+      "dependencies": [
+        {
+          "claim_revision": 1,
+          "resource_id": "problem:csp-5110"
+        }
+      ],
+      "owner": "left-proposer",
+      "provenance": {
+        "message_id": "csp-5110-left-proposer-1"
+      },
+      "revision": 1,
+      "state_revision": 1,
+      "status": "active",
+      "value": {
+        "component": "left",
+        "tuples": [
+          [
+            2,
+            2,
+            0,
+            2
+          ],
+          [
+            2,
+            2,
+            0,
+            3
+          ]
+        ],
+        "variables": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      }
+    },
+    "right-tuples": {
+      "claim_id": "right-tuples",
+      "dependencies": [
+        {
+          "claim_revision": 1,
+          "resource_id": "problem:csp-5110"
+        }
+      ],
+      "owner": "right-proposer",
+      "provenance": {
+        "message_id": "csp-5110-right-proposer-1"
+      },
+      "revision": 1,
+      "state_revision": 1,
+      "status": "active",
+      "value": {
+        "component": "right",
+        "tuples": [
+          [
+            0,
+            2,
+            2,
+            3
+          ]
+        ],
+        "variables": [
+          "e",
+          "f",
+          "g",
+          "h"
+        ]
+      }
+    }
+  },
+  "reviews": [
+    {
+      "intent": "REPORT_EVIDENCE",
+      "message_id": "csp-5110-left-reviewer-1",
+      "payload": {
+        "report": {
+          "assessment": "supported",
+          "basis_refs": [
+            "c1",
+            "c2",
+            "c3",
+            "c4",
+            "c5",
+            "c6",
+            "c7",
+            "c8",
+            "c9",
+            "c10"
+          ],
+          "candidate_tuples": [
+            [
+              0,
+              2,
+              2,
+              3
+            ]
+          ],
+          "target": {
+            "resource_id": "problem:csp-5110",
+            "revision": 1,
+            "state_revision": 1
+          }
+        }
+      },
+      "problem_id": "csp-5110",
+      "read_refs": [
+        {
+          "resource_id": "problem:csp-5110",
+          "revision": 1,
+          "state_revision": 1
+        }
+      ],
+      "recipients": [
+        "shared-integrator"
+      ],
+      "reply_to": null,
+      "schema_version": 1,
+      "sender": "left-reviewer"
+    }
+  ]
+}
+
+
+ENVELOPE TEMPLATE:
+{
+  "intent": "CONCLUDE",
+  "message_id": "csp-5110-shared-integrator-1",
+  "payload": {
+    "conclusion": {
+      "assignment": {
+        "a": 0,
+        "b": 0,
+        "c": 0,
+        "d": 0,
+        "e": 0,
+        "f": 0,
+        "g": 0,
+        "h": 0
+      }
+    }
+  },
+  "problem_id": "csp-5110",
+  "read_refs": [
+    {
+      "resource_id": "problem:csp-5110",
+      "revision": 1,
+      "state_revision": 1
+    },
+    {
+      "resource_id": "claim:left-tuples",
+      "revision": 1,
+      "state_revision": 1
+    },
+    {
+      "resource_id": "claim:right-tuples",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": null,
+  "schema_version": 1,
+  "sender": "shared-integrator"
+}

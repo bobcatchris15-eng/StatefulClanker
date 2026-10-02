@@ -1,0 +1,39 @@
+{
+  "captured_at": "2026-10-02T18:51:37.965340+00:00",
+  "dispatcher": {
+    "adapterSuccess": true,
+    "completionTokens": 7799,
+    "connectionId": "Kilo Free",
+    "contentSha256": "5d3118ef90a6c3611521cc05e358516bddbc5e15974381fc55a2ac7f1817d1da",
+    "durationMilliseconds": 48101,
+    "endpointId": "research-north",
+    "failureCode": null,
+    "finishReason": "stop",
+    "finishedAt": "2026-10-02T18:51:37.9271849+00:00",
+    "httpStatus": 200,
+    "model": "cohere/north-mini-code:free",
+    "promptTokens": 1438,
+    "provider": "kilo-free",
+    "providerError": false,
+    "providerRequestId": null,
+    "requestSha256": "ed8fb75239beba880429023f38339cce9824fecc5df3a84c6226ed6ae4c75866",
+    "responseSha256": "d5875665addcc3e545d32b965399f80cce34d27fc67a86ed6a0334b0064a713a",
+    "returnedModel": "cohere/north-mini-code:free",
+    "schemaVersion": 1,
+    "sent": true,
+    "startedAt": "2026-10-02T18:50:49.7062126+00:00",
+    "status": "completed",
+    "totalTokens": 9237,
+    "usageReported": true
+  },
+  "family": "north",
+  "protocol_receipt": {
+    "accepted": true,
+    "event_seq": 2,
+    "message_id": "csp-5110-right-proposer-1"
+  },
+  "raw_sha256": "5d3118ef90a6c3611521cc05e358516bddbc5e15974381fc55a2ac7f1817d1da",
+  "role": "right-proposer",
+  "schema_version": 1,
+  "seed": 5110
+}

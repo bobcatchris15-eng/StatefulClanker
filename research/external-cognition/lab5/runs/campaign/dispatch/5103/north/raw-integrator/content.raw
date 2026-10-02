@@ -1,0 +1,32 @@
+{
+  "intent": "CONCLUDE",
+  "message_id": "csp-5103-raw-integrator-1",
+  "payload": {
+    "conclusion": {
+      "assignment": {
+        "a": 3,
+        "b": 1,
+        "c": 3,
+        "d": 2,
+        "e": 2,
+        "f": 3,
+        "g": 1,
+        "h": 0
+      }
+    }
+  },
+  "problem_id": "csp-5103",
+  "read_refs": [
+    {
+      "resource_id": "problem:csp-5103",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": null,
+  "schema_version": 1,
+  "sender": "raw-integrator"
+}

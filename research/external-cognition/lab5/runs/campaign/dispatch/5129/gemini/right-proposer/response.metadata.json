@@ -1,0 +1,15 @@
+{
+  "status": 402,
+  "reason": "Payment Required",
+  "safe_headers": {
+    "Date": [
+      "Fri, 02 Oct 2026 19:03:54 GMT"
+    ],
+    "Content-Type": [
+      "application/json; charset=UTF-8"
+    ]
+  },
+  "body_sha256": "9c6227044b7d0fe23be23d8ccea83b6a829f402e052b7b6077801ccb4d0db420",
+  "body_complete": true,
+  "transport_error": null
+}
