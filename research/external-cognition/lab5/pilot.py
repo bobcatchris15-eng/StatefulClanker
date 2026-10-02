@@ -263,10 +263,11 @@ def _role_payload(run: Path, seed: int, family: str, role: str) -> tuple[str, di
                 refs.append(_ref_claim(cid, claim))
         candidate = _env(pid, role, ["shared-integrator"], "CONCLUDE", refs,
                          {"conclusion": {"assignment": {v: 0 for v in problem["variables"]}}})
+        shared_view = {"claims": projection["claims"], "reviews": projection.get("reviews", {})}
         task = ("Return a complete assignment of all eight variables satisfying the public CSP. The shared integrator may inspect "
                 "the following protocol projection; challenged claims and reviewer candidates remain visible and are not automatically selected. "
                 "The raw integrator must solve using only the public facts. Edit only the eight integer values in conclusion.assignment.\n"
-                + ("SHARED PROJECTION:\n" + _json(projection) if role == "shared-integrator" else ""))
+                + ("SHARED PROJECTION:\n" + _json(shared_view) if role == "shared-integrator" else ""))
     else:
         raise PilotError("unknown role")
     prompt = _task(problem) + "\n\nROLE TASK:\n" + task + "\n\nENVELOPE TEMPLATE:\n" + _json(candidate)
