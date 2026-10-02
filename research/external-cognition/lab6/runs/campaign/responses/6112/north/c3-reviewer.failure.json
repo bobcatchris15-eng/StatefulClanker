@@ -1,0 +1,10 @@
+{
+  "attempted_at": "2026-10-02T21:52:55.775102+00:00",
+  "failure_code": "PROVIDER_ERROR",
+  "family": "north",
+  "outcome": "no_response",
+  "role": "c3-reviewer",
+  "safe_detail": "sent=True httpStatus=429",
+  "schema_version": 1,
+  "seed": 6112
+}

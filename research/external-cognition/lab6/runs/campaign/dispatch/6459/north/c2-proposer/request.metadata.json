@@ -1,0 +1,12 @@
+{
+  "method": "POST",
+  "uri": "https://api.kilo.ai/api/gateway/chat/completions",
+  "header_names": [
+    "Content-Length",
+    "Content-Type"
+  ],
+  "header_values_saved": false,
+  "body_sha256": "35ca1532dd27683d60c88bc98bd028ccb5bad2761df0f3fbe5d56bb734004d1d",
+  "timeout_seconds": 180,
+  "adapter": "openai-chat"
+}

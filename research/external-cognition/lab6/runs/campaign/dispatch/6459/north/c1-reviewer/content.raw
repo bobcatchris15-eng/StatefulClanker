@@ -1,0 +1,50 @@
+{
+  "intent": "REPORT_EVIDENCE",
+  "message_id": "csp-6459-c1-reviewer-1",
+  "payload": {
+    "report": {
+      "assessment": "supported",
+      "basis_refs": [
+        "c1",
+        "c2",
+        "c3",
+        "c4",
+        "c5",
+        "c6",
+        "c7",
+        "c8",
+        "c9",
+        "c10",
+        "c11",
+        "c12",
+        "c13",
+        "c14",
+        "c15",
+        "c16",
+        "c17",
+        "c18",
+        "c19",
+        "c20"
+      ],
+      "target": {
+        "resource_id": "problem:csp-6459",
+        "revision": 1,
+        "state_revision": 1
+      }
+    }
+  },
+  "problem_id": "csp-6459",
+  "read_refs": [
+    {
+      "resource_id": "problem:csp-6459",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": null,
+  "schema_version": 1,
+  "sender": "c1-reviewer"
+}

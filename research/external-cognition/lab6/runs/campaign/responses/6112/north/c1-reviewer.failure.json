@@ -1,0 +1,10 @@
+{
+  "attempted_at": "2026-10-02T21:54:13.924238+00:00",
+  "failure_code": "ADAPTER_PARSE_FAILURE",
+  "family": "north",
+  "outcome": "no_response",
+  "role": "c1-reviewer",
+  "safe_detail": "sent=True httpStatus=200",
+  "schema_version": 1,
+  "seed": 6112
+}

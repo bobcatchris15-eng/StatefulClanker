@@ -1,0 +1,71 @@
+{
+  "intent": "REPORT_EVIDENCE",
+  "message_id": "csp-6112-c4-reviewer-1",
+  "payload": {
+    "assessment": {
+      "assessment": "supported",
+      "basis_refs": [
+        "c1",
+        "c2",
+        "c3",
+        "c4"
+      ]
+    },
+    "corrected_claim": {
+      "claim_id": "c1-tuples",
+      "dependencies": [
+        {
+          "claim_revision": 1,
+          "resource_id": "problem:csp-6112"
+        }
+      ],
+      "provenance": {
+        "message_id": "csp-6112-c4-reviewer-1"
+      },
+      "revision": 1,
+      "state_revision": 1,
+      "status": "candidate",
+      "value": {
+        "component": "c1",
+        "tuples": [
+          [
+            3,
+            0,
+            3,
+            1
+          ]
+        ],
+        "variables": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      }
+    },
+    "target": {
+      "resource_id": "claim:c1-tuples",
+      "revision": 1,
+      "state_revision": 1
+    }
+  },
+  "problem_id": "csp-6112",
+  "read_refs": [
+    {
+      "resource_id": "problem:csp-6112",
+      "revision": 1,
+      "state_revision": 1
+    },
+    {
+      "resource_id": "claim:c1-tuples",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": "csp-6112-c1-proposer-1",
+  "schema_version": 1,
+  "sender": "c4-reviewer"
+}

@@ -1,0 +1,40 @@
+{
+  "intent": "CONCLUDE",
+  "message_id": "csp-6582-raw-integrator-1",
+  "payload": {
+    "conclusion": {
+      "assignment": {
+        "a": 3,
+        "b": 2,
+        "c": 1,
+        "d": 2,
+        "e": 0,
+        "f": 1,
+        "g": 3,
+        "h": 2,
+        "i": 0,
+        "j": 3,
+        "k": 0,
+        "l": 2,
+        "m": 0,
+        "n": 1,
+        "o": 3,
+        "p": 2
+      }
+    }
+  },
+  "problem_id": "csp-6582",
+  "read_refs": [
+    {
+      "resource_id": "problem:csp-6582",
+      "revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "recipients": [
+    "shared-integrator"
+  ],
+  "reply_to": null,
+  "schema_version": 1,
+  "sender": "raw-integrator"
+}
