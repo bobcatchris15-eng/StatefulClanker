@@ -27,7 +27,7 @@ REVIEWERS = ("left-reviewer", "right-reviewer")
 FINALS = ("shared-integrator", "raw-integrator")
 FAMILIES = ("north", "gemini")
 SCHEMA = "lab5-finite-csp-pilot-v1"
-CAP = 8192
+CAP = 16384
 TEMPERATURE = 0.6
 TIMEOUT = 180
 
@@ -201,7 +201,8 @@ def prepare(out_dir: str | Path, runtime_dir: str | Path = RUNTIME,
 
 def _task(problem: dict) -> str:
     return ("Solve the finite constraint task from the complete immutable public packet below. "
-            "Return exactly one JSON protocol envelope matching the supplied template; no prose outside JSON.\n\n"
+            "Return exactly one JSON protocol envelope matching the supplied template; no prose outside JSON. "
+            "Do not wrap in markdown code blocks or backticks. Output raw unformatted JSON starting with { and ending with }.\n\n"
             "PUBLIC PROBLEM:\n" + _json(problem))
 
 
@@ -357,6 +358,18 @@ def _expected_headers(env: dict, role: str, seed: int, family: str) -> bool:
 _run_current: Path
 
 
+def _clean_json_bytes(raw_bytes: bytes) -> bytes:
+    data = bytes(raw_bytes).strip()
+    if data.startswith(b"```"):
+        lines = data.splitlines()
+        if lines and lines[0].startswith(b"```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith(b"```"):
+            lines = lines[:-1]
+        data = b"\n".join(lines).strip()
+    return data
+
+
 def submit_response(run_dir: str | Path, seed: int, family: str, role: str, raw_bytes: bytes,
                     dispatcher_receipt: dict | None = None) -> dict:
     run = _run(run_dir)
@@ -370,17 +383,18 @@ def submit_response(run_dir: str | Path, seed: int, family: str, role: str, raw_
     result = {"schema_version": 1, "seed": seed, "family": family, "role": role,
               "raw_sha256": _sha(bytes(raw_bytes)), "captured_at": datetime.now(timezone.utc).isoformat(),
               "dispatcher": dispatcher_receipt or {}}
+    cleaned_bytes = _clean_json_bytes(raw_bytes)
     try:
-        env = protocol.parse_envelope(bytes(raw_bytes))
+        env = protocol.parse_envelope(cleaned_bytes)
     except (protocol.ProtocolError, TypeError, ValueError):
-        receipt = protocol.submit(cdir / "store.sqlite", bytes(raw_bytes))
+        receipt = protocol.submit(cdir / "store.sqlite", cleaned_bytes)
     else:
         global _run_current
         _run_current = run
         if not _expected_headers(env, role, seed, family):
-            receipt = protocol.record_rejection(cdir / "store.sqlite", bytes(raw_bytes), code="ROLE_MISMATCH", parsed=env)
+            receipt = protocol.record_rejection(cdir / "store.sqlite", cleaned_bytes, code="ROLE_MISMATCH", parsed=env)
         else:
-            receipt = protocol.submit(cdir / "store.sqlite", bytes(raw_bytes))
+            receipt = protocol.submit(cdir / "store.sqlite", cleaned_bytes)
     result["protocol_receipt"] = receipt
     _save_once(slot / f"{role}.receipt.json", _json(result).encode())
     return result

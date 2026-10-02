@@ -71,7 +71,15 @@ def evaluate_frozen_run(run_dir: str | Path, key_path: str | Path = PRIVATE_KEY_
                     record["protocol_accepted"] = bool(p_receipt.get("accepted"))
 
                     try:
-                        env = json.loads(raw_bytes.decode("utf-8"))
+                        text = raw_bytes.decode("utf-8").strip()
+                        if text.startswith("```"):
+                            lines = text.splitlines()
+                            if lines and lines[0].startswith("```"):
+                                lines = lines[1:]
+                            if lines and lines[-1].startswith("```"):
+                                lines = lines[:-1]
+                            text = "\n".join(lines).strip()
+                        env = json.loads(text)
                     except Exception:
                         env = None
 
