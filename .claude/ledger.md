@@ -1,49 +1,31 @@
-# Design-doc conformance — orchestrator ledger
-Updated: 2026-09-24 | HEAD: 3f5f684 (fix/rpk-args-commit-freshness-gate, based on origin/main b87df2f) | Graph: n/a
+# Pi extension pivot — orchestrator ledger
+Updated: 2026-10-06 | HEAD: 32dd803 | Graph: n/a
 
 ## Prior effort (archived)
-2026-09-18 terminal/MCP-import/escalation effort — DONE (t1–t7, see git log ~c618fd6).
-Carried forward: escalation notices reach the terminal via a tray-side events.jsonl
-cursor (old D6), NOT the HTTP bridge — so disabling the bridge by default should not
-break escalation. Verify in t1.
+2026-09-24 design-doc conformance on PS harness — superseded by pivot (see git log).
 
 ## Objective
-Bring origin/main closer to STATEFULCLANKER_CONSOLIDATED_DESIGN.md (2026-09-24) on the
-gaps the user picked from the conformance audit. Work lands on
-fix/rpk-args-commit-freshness-gate; the user merges into local main themselves (their
-main is 5 behind with uncommitted edits to DispatchGuard.ps1/WorkerRuntime.ps1 — never touch it).
+Replace the PS/C#/Tray harness with a TypeScript Pi extension at
+pi/extensions/statefulclanker/ per the user's 119-section spec: a parent Pi session
+that works itself and coordinates heterogeneous Pi RPC workers, with durable state in
+.statefulclanker/. Plan: ~/.claude/plans/alright-this-has-become-linear-hennessy.md
 
 ## Decisions
-- D1: Worktrees are created manually from the fix branch (Agent isolation:worktree would
-  base on stale local main). Mode P, budget 3.
-- D2: Keep Pi's "implementation repair" ability — user wants the control-plane escape hatch.
-- D3: Worker HTTP MCP client (WorkerPolicy.ps1) stays: it is interop with external MCP
-  servers, not a duplicate control path. Install-McpServer -Transport http stays (opt-in).
-- D4: HTTP bridge becomes opt-in (tray setting, default off, never started by refresh).
-- D5: Co-op packets excluded from packet compilation — cooperation protocol doesn't exist.
-- D6: Per-project endpoints = optional project allowlist, default all (keeps current
-  machine-wide pool behaviour). Priority = integer weight for weighted round-robin,
-  default equal. Revisit if user wants strict priority tiers.
-- D7: Pin behaviour (#4) undecided by user — do not touch route migration.
+- D1 10-06: delete legacy PS/C#/Tray outright (user). Port shapes before deleting.
+- D2 10-06: endpoint catalog ported to TS in-process, not C# router exe (user).
+- D3 10-06: MVP = spawn+RPC+result slice first (user). Phases P1..P5.
+- D4 10-06: Mode S serial for P1 (t1->t2->t3 depend on each other).
 
 ## Tasks
 | id | targets | status | attempts | last return line |
 |----|---------|--------|----------|------------------|
-| t0 | RPK args, commit freshness, validator-off gate | DONE | 1 | 3f5f684 |
-| t1 | Tray refresh/opt-in HTTP | DONE | 1 | merged 60797aa; needs user visual check |
-| t2 | SubscriptionPump watcher | DONE | 1 | merged 0b20087 |
-| t6 | RPK code graph | DONE | 1 | merged abb7b7c |
-| t3 | Packet: lessons, neighbours, attempt history | DONE | 1 | merged; context faults on RPK failure |
-| t8 | Router weights + project allowlist | DONE | 2 | merged ae92b37; attempt 1 was packet scope (missing Router/Program.cs) |
-| t9 | Boundary violation event + escalation | DONE | 1 | merged; orchestrator added Eventing attention + Pi problem regex (no tray whitelist exists anymore) |
-| t4+t5 | Checkpoints + evidence-based failure/stagnation | DONE | 1 | merged 06ed4b2 |
-| t7 | Lesson MCP tools + worker record_lesson | DONE | 1 | merged c7f0e65; WorkerRuntime conflict w/ t9 resolved (signatures only) |
-
-## Status
-Effort complete 2026-09-24. Final gate on 06ed4b2: router+tray build, 16 suites green. Branch not pushed; user merges.
+| t1 | protocol/ project/ workers/registry | DONE | 1 | STAT: PASS; validate = node --test tests/unit/*.test.ts |
+| t2 | workers/runtime.ts manager.ts, worktrees/create.ts | PENDING | 0 | |
+| t3 | operator.ts worker.ts index.ts ui/ prompts/ + e2e | PENDING | 0 | |
+| p0 | delete legacy, rewrite docs/CLAUDE.md | PENDING (after P3 ports) | 0 | |
 
 ## Unverified assumptions
-- 4 tray tests (OverviewUi, TrayRefreshStability, TraySplitterVisibility, TrayTargetPoolLayout)
-  fail on pristine origin/main (stale source-string contracts). Tray changes are gated by
-  build + smoke only; t1 needs a visual/interactive check by the user.
-- LifecycleIntegration.Tests.ps1 fails "Not initialized" on pristine origin/main — pre-existing, not ours.
+- node:sqlite available in bundled install/pi-runtime/node.exe (check version).
+- Worker->parent result channel: extension_ui notify over RPC is enough; else file drop.
+- Mock provider via pi.registerProvider works in --mode rpc for e2e.
+- Dirty research/ run outputs: user to decide commit vs discard before P0.
