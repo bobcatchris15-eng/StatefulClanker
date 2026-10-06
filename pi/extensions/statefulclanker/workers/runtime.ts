@@ -12,11 +12,42 @@ import { attachJsonlReader } from './jsonl.ts';
  */
 export interface StartOpts {
   piCommand: string; args?: string[]; cwd: string; env?: Record<string, string>;
-  provider: string; model: string; extensionPath: string;
+  provider: string; model: string; thinking?: string; extensionPath: string;
   workerId?: string; projectRoot?: string; taskId?: string;
 }
 
 const SC_PREFIX = 'SC1 ';
+
+export type ProviderSignal = 'rate_limit' | 'auth_error' | 'timeout' | 'malformed_tool_call';
+
+/** Classify error text into a health outcome. Only the category is ever returned, never the text. */
+export function classifyErrorText(text: string): ProviderSignal {
+  const t = text.toLowerCase();
+  if (/malformed|invalid tool|tool call.*(invalid|parse)|failed to parse.*(tool|argument)/.test(t)) return 'malformed_tool_call';
+  if (/\b(401|403)\b|unauthori[sz]ed|forbidden|\bauth/.test(t)) return 'auth_error';
+  if (/\b429\b|rate.?limit|overloaded|quota|too many requests|\b5\d\d\b/.test(t)) return 'rate_limit';
+  return 'timeout';
+}
+
+/**
+ * Provider-error signal from a raw pi RPC event, or null. Shapes (from rpc.md; agent_end message shape inferred):
+ * auto_retry_end {success:false, finalError}; agent_end {willRetry:false, messages:[{role:'assistant', stopReason:'error', errorMessage}]}.
+ */
+export function providerSignal(ev: any): { outcome: ProviderSignal; source: 'retry' | 'agent_end' } | null {
+  if (ev?.type === 'auto_retry_end' && ev.success === false) {
+    return { outcome: classifyErrorText(String(ev.finalError ?? '')), source: 'retry' };
+  }
+  if (ev?.type === 'agent_end' && !ev.willRetry && Array.isArray(ev.messages)) {
+    for (let i = ev.messages.length - 1; i >= 0; i--) {
+      const m = ev.messages[i];
+      if (m?.role !== 'assistant') continue;
+      const txt = String(m.errorMessage ?? '');
+      if (m.stopReason === 'error' || (m.stopReason === 'aborted' && txt)) return { outcome: classifyErrorText(txt), source: 'agent_end' };
+      break;
+    }
+  }
+  return null;
+}
 
 function resolveSpawn(cmd: string, args: string[]): { file: string; args: string[]; shell: boolean } {
   if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd)) {
@@ -42,7 +73,7 @@ export class PiRpcRuntime {
   on(event: string, cb: (...a: any[]) => void): this { this.em.on(event, cb); return this; }
 
   start(o: StartOpts): void {
-    const args = [...(o.args ?? []), '--mode', 'rpc', '--provider', o.provider, '--model', o.model, '-e', o.extensionPath];
+    const args = [...(o.args ?? []), '--mode', 'rpc', '--provider', o.provider, '--model', o.model, ...(o.thinking ? ['--thinking', o.thinking] : []), '-e', o.extensionPath];
     const sp = resolveSpawn(o.piCommand, args);
     const env: Record<string, string | undefined> = { ...process.env, ...(o.env ?? {}) };
     if (o.workerId) env.SC_WORKER_ID = o.workerId;
@@ -84,6 +115,8 @@ export class PiRpcRuntime {
     if (ev.type === 'agent_start') this.streaming = true;
     if (ev.type === 'agent_settled') this.streaming = false;
     if (ev.type === 'extension_ui_request') this.onUi(ev);
+    const sig = providerSignal(ev);
+    if (sig) this.em.emit('signal', sig);
     this.em.emit('event', ev);
   }
 

@@ -5,11 +5,11 @@ import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WorkerManager } from '../../workers/manager.ts';
+import { WorkerManager, spawnSelected } from '../../workers/manager.ts';
+import { CatalogService } from '../../catalog/service.ts';
+import { readFileSync } from 'node:fs';
 import { getWorker } from '../../workers/registry.ts';
 import { readEvents } from '../../protocol/events.ts';
-import { createTask } from '../../project/tasks.ts';
-import { createWorktree } from '../../worktrees/create.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ext = resolve(here, '..', '..', 'index.ts');
@@ -24,19 +24,31 @@ test('real pi worker with mock provider reaches COMPLETE', { timeout: 120000 }, 
   git(root, 'config', 'user.email', 't@t'); git(root, 'config', 'user.name', 't');
   writeFileSync(join(root, 'a.txt'), 'x\n');
   git(root, 'add', '.'); git(root, 'commit', '-qm', 'init');
-  const task = createTask(root, { title: 'mock', objective: 'do mock work', status: 'active' });
-  const wt = createWorktree(root, task.id, 'mock');
   const agentDir = mkdtempSync(join(tmpdir(), 'sc-agent-'));
-  const m = new WorkerManager(root);
+  const machine = mkdtempSync(join(tmpdir(), 'sc-machine-'));
+  const model = { provider: 'scmock', id: 'scmock-1', name: 'SC Mock', reasoning: false, input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8000, maxTokens: 1000 };
+  const catalog = new CatalogService({
+    root, machineDir: machine, workerExtensions: ['scmock'],
+    getContext: () => ({ modelRegistry: { getAvailable: () => [model], getRegisteredProviderIds: () => ['scmock'] } }),
+  });
+  const m = new WorkerManager(root, { catalog });
   const done = new Promise<any>((res, rej) => {
     m.on('result', (_id, r) => res(r));
     setTimeout(() => rej(new Error('timeout waiting for result')), 90000).unref();
   });
-  const id = await m.spawn({
-    taskId: task.id, role: 'worker', provider: 'scmock', model: 'scmock-1', assignment: 'do the mock work', worktree: wt,
+  const sp = await spawnSelected(m, catalog, root, { assignment: 'do the mock work', task_title: 'mock', ability_profile: 'fast' }, {
     extensionPath: ext, piCommand: process.execPath, args: [cli, '-e', mock],
-    env: { PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: '1' },
+    env: { PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: '1', SC_MACHINE_DIR: machine },
   });
+  assert.equal(sp.ok, true, sp.error);
+  const id = sp.worker_id!;
+  const wt = { path: sp.worktree!, branch: git(root, 'branch', '--list', 'clanker/*').replace(/^[*+\s]+/, '') };
+  const receipt = JSON.parse(readFileSync(sp.receipt!, 'utf8'));
+  assert.equal(receipt.selection.chosen.key, 'scmock/scmock-1');
+  assert.match(receipt.selection.reason, /chose scmock\/scmock-1/);
+  assert.equal(receipt.lease.model, 'scmock/scmock-1');
+  assert.equal(catalog.status('scmock/scmock-1').leases.used, 1);
   const rd = m.runtime(id)!;
   let err = '';
   rd.on('stderr', (s: string) => { err += s; });
@@ -47,6 +59,7 @@ test('real pi worker with mock provider reaches COMPLETE', { timeout: 120000 }, 
     assert.equal(w.status, 'COMPLETE');
     const receipts = readdirSync(join(root, '.statefulclanker', 'receipts', 'workers'));
     assert.equal(receipts.length, 1);
+    assert.equal(catalog.status('scmock/scmock-1').leases.used, 0, 'lease released after COMPLETE');
     assert.ok(readEvents(root, { types: ['worker.completed'] }).length >= 1);
     assert.ok(existsSync(wt.path));
     assert.match(git(root, 'branch', '--list', wt.branch), /clanker/);

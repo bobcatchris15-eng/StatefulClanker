@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -7,8 +7,8 @@ import { recordIntent } from './project/intent.ts';
 import { reconstruct } from './project/reconstruct.ts';
 import { createTask, getTask, listTasks, updateTask } from './project/tasks.ts';
 import { renderRack } from './ui/worker-rack.ts';
-import { createWorktree } from './worktrees/create.ts';
-import { WorkerManager } from './workers/manager.ts';
+import { CatalogService } from './catalog/service.ts';
+import { spawnSelected, WorkerManager } from './workers/manager.ts';
 import { getWorker, listWorkers } from './workers/registry.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -16,10 +16,6 @@ const prompt = (n: string) => readFileSync(join(here, 'prompts', n), 'utf8');
 const txt = (s: string) => ({ content: [{ type: 'text' as const, text: s }], details: {} });
 const opt = (t: any) => Type.Optional(t);
 const strs = () => Type.Optional(Type.Array(Type.String()));
-
-function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'task';
-}
 
 export function operatorMode(pi: ExtensionAPI): void {
   let cwd = process.cwd();
@@ -41,9 +37,19 @@ export function operatorMode(pi: ExtensionAPI): void {
     timer.unref();
   }
 
+  let cat: CatalogService | null = null;
+  const workerExtensions = (): string[] => {
+    const f = join(root(), '.statefulclanker', 'config.json');
+    try { if (existsSync(f)) { const c = JSON.parse(readFileSync(f, 'utf8')); if (Array.isArray(c.workerExtensions)) return c.workerExtensions.map(String); } } catch { /* */ }
+    return (process.env.SC_WORKER_EXTENSIONS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  };
+  const catalog = (): CatalogService => cat ??= new CatalogService({
+    root: root(), getContext: () => uiCtx ?? { modelRegistry: { getAvailable: () => [] } }, workerExtensions: workerExtensions(),
+  });
+
   const manager = (): WorkerManager => {
     if (mgr) return mgr;
-    const m = new WorkerManager(root());
+    const m = new WorkerManager(root(), { catalog: catalog() });
     m.on('result', (id: string, r: any, file: string) => {
       const files = r.changed_files?.length ? ` files=${r.changed_files.join(',')}` : '';
       const unres = r.unresolved_questions?.length ? `\nunresolved: ${r.unresolved_questions.join('; ')}` : '';
@@ -68,6 +74,7 @@ export function operatorMode(pi: ExtensionAPI): void {
   pi.on('session_shutdown', async () => {
     if (!mgr) return;
     for (const w of listWorkers(root())) { try { await mgr.runtime(w.id)?.stop(); } catch { /* */ } }
+    mgr.releaseAll();
   });
   pi.on('before_agent_start', async (event: any) => {
     let extra = `${prompt('operator.md')}\n\n${prompt('authority.md')}`;
@@ -77,29 +84,76 @@ export function operatorMode(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: 'worker_spawn', label: 'Spawn Worker',
-    description: 'Create a task + worktree and spawn a worker pi process. Non-blocking; result arrives later.',
+    description: 'Select a model by ability profile (never inherits yours), create task + worktree, spawn a worker. Non-blocking. Use dry_run to inspect the choice.',
     parameters: Type.Object({
-      assignment: Type.String(), provider: Type.String(), model: Type.String(),
+      assignment: Type.String(),
+      model: opt(Type.String({ description: 'Explicit provider/id; only when the human names a model' })),
+      ability_profile: opt(Type.String({ description: 'implementation|research|architecture|review|fast' })),
+      requirements: opt(Type.Object({
+        min: opt(Type.Record(Type.String(), Type.String())), weights: opt(Type.Record(Type.String(), Type.Number())),
+        min_context: opt(Type.Number()),
+      })),
+      preferences: opt(Type.Object({ free_only: opt(Type.Boolean()), prefer_provider: strs(), avoid_provider: strs(), diversity_from: strs() })),
+      relationship: opt(Type.Object({ independent: opt(Type.Boolean()), independent_of: opt(Type.String()) })),
+      dry_run: opt(Type.Boolean()),
       role: opt(Type.String()), task_title: opt(Type.String()), files: strs(),
       worktree_required: opt(Type.Boolean()), expected_outputs: strs(), context_hints: strs(),
     }),
-    async execute(_id: string, p: any) {
-      const r = root();
-      const task = createTask(r, {
-        title: p.task_title ?? p.assignment.slice(0, 60), objective: p.assignment, status: 'active',
-        scope: { files: p.files ?? [], subsystem: '', worktree: '' },
-        expected_outputs: p.expected_outputs ?? [], context_hints: p.context_hints ?? [],
+    async execute(_id: string, p: any, _s: any, _u: any, ctx: any) {
+      if (ctx) uiCtx = ctx;
+      const r = await spawnSelected(manager(), catalog(), root(), p, {
+        extensionPath: join(here, 'index.ts'), piCommand: process.execPath, args: process.argv[1] ? [process.argv[1]] : [],
       });
-      // worker id is allocated inside manager.spawn, so the worktree dir/branch is keyed by task id.
-      const worktree = p.worktree_required === false ? undefined : createWorktree(r, task.id, slugify(p.task_title ?? p.assignment));
-      const id = await manager().spawn({
-        taskId: task.id, role: p.role ?? 'worker', provider: p.provider, model: p.model, assignment: p.assignment,
-        worktree, extensionPath: join(here, 'index.ts'),
-        piCommand: process.execPath, args: process.argv[1] ? [process.argv[1]] : [],
-      });
-      updateTask(r, task.id, { assigned_worker: id, scope: { ...task.scope, worktree: worktree?.path ?? '' } });
+      if (p.dry_run) {
+        const s = r.selection ?? {};
+        return txt(JSON.stringify({ dry_run: true, ok: r.ok, chosen: s.chosen?.key ?? null, reason: s.reason, ranked: s.ranked, excluded: s.excluded, error: r.error }, null, 1));
+      }
+      if (!r.ok) return txt(`error: ${r.error}`);
       draw();
-      return txt(JSON.stringify({ worker_id: id, provider: p.provider, model: p.model, worktree: worktree?.path ?? null, task_id: task.id }));
+      return txt(JSON.stringify({ worker_id: r.worker_id, model: r.model, reason: r.selection?.reason, worktree: r.worktree, task_id: r.task_id }));
+    },
+  });
+
+  const OUTCOMES = ['success', 'rate_limit', 'timeout', 'auth_error', 'malformed_tool_call', 'bad_continuation', 'tool_recovery', 'task_failure'];
+  pi.registerTool({
+    name: 'endpoint_list', label: 'List Endpoints', description: 'Model pool: key, ratings (source-tagged), free, health, lease use/capacity.',
+    parameters: Type.Object({}),
+    async execute(_i: string, _p: any, _s: any, _u: any, ctx: any) {
+      if (ctx) uiCtx = ctx;
+      const { rows, excluded } = catalog().list();
+      const lines = rows.map((x) => `${x.key} free=${x.free} health=${x.health} leases=${x.leases} ratings=${x.ratings}`);
+      const ex = excluded.map((e) => `excluded ${e.key}: ${e.why}`);
+      return txt([...lines, ...ex].join('\n') || '(no models)');
+    },
+  });
+  pi.registerTool({
+    name: 'endpoint_status', label: 'Endpoint Status', description: 'Profile, health, leases and observations for one provider/id.',
+    parameters: Type.Object({ model: Type.String() }),
+    async execute(_i: string, p: any, _s: any, _u: any, ctx: any) {
+      if (ctx) uiCtx = ctx;
+      return txt(JSON.stringify(catalog().status(p.model), null, 1));
+    },
+  });
+  pi.registerTool({
+    name: 'endpoint_report', label: 'Report Endpoint Outcome', description: 'Record an outcome for a model (updates observations and health).',
+    parameters: Type.Object({ model: Type.String(), outcome: Type.String(), task_class: opt(Type.String()), note: opt(Type.String()) }),
+    async execute(_i: string, p: any, _s: any, _u: any, ctx: any) {
+      if (ctx) uiCtx = ctx;
+      if (!OUTCOMES.includes(p.outcome)) return txt(`error: outcome must be one of ${OUTCOMES.join('|')}`);
+      const h = catalog().reportOutcome(p.model, p.outcome, { task_class: p.task_class, note: p.note });
+      return txt(`${p.model} ${h.state} streak=${h.failure_streak}`);
+    },
+  });
+  pi.registerTool({
+    name: 'profile_set', label: 'Set Model Profile', description: 'Write a curated capability profile for a model glob pattern.',
+    parameters: Type.Object({
+      pattern: Type.String(), scope: Type.String({ description: 'machine|project' }),
+      capabilities: opt(Type.Record(Type.String(), Type.String())), quirks: opt(Type.Record(Type.String(), Type.Any())),
+      lease_capacity: opt(Type.Number()),
+    }),
+    async execute(_i: string, p: any) {
+      if (p.scope !== 'machine' && p.scope !== 'project') return txt('error: scope must be machine|project');
+      try { return txt(`wrote ${catalog().setProfile(p)}`); } catch (e) { return txt(`error: ${(e as Error).message}`); }
     },
   });
 

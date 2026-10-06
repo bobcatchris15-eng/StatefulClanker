@@ -5,6 +5,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { listActiveIntent } from './project/intent.ts';
 import { getTask } from './project/tasks.ts';
+import { CatalogService } from './catalog/service.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const prompt = (n: string) => readFileSync(join(here, 'prompts', n), 'utf8');
@@ -61,6 +62,25 @@ export function workerMode(pi: ExtensionAPI): void {
     async execute(_id: string, p: any, _s: any, _u: any, ctx: any) {
       emit(ctx, { kind: 'finish', ...p });
       return txt('result submitted');
+    },
+  });
+
+  const OUTCOMES = ['success', 'rate_limit', 'timeout', 'auth_error', 'malformed_tool_call', 'bad_continuation', 'tool_recovery', 'task_failure'];
+  pi.registerTool({
+    name: 'endpoint_report', label: 'Report Endpoint Outcome',
+    description: 'Report an outcome for your own model (default) so selection can learn. Never include content or secrets.',
+    parameters: Type.Object({
+      model: Type.Optional(Type.String()), outcome: Type.String(),
+      task_class: Type.Optional(Type.String()), note: Type.Optional(Type.String()),
+    }),
+    async execute(_id: string, p: any, _s: any, _u: any, ctx: any) {
+      if (!OUTCOMES.includes(p.outcome)) return txt(`error: outcome must be one of ${OUTCOMES.join('|')}`);
+      const own = ctx?.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const model = p.model ?? own;
+      if (!model) return txt('error: model unknown');
+      const svc = new CatalogService({ root: root(), getContext: () => ctx });
+      const h = svc.reportOutcome(model, p.outcome, { task_class: p.task_class, note: p.note, worker_id: process.env.SC_WORKER_ID });
+      return txt(`${model} ${h.state} streak=${h.failure_streak}`);
     },
   });
 }

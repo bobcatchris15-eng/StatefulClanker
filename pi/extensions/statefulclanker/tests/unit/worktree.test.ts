@@ -13,6 +13,7 @@ test('createWorktree in temp repo', () => {
   writeFileSync(join(root, 'f.txt'), 'x'); g('add', '.'); g('commit', '-qm', 'init');
   const wt = createWorktree(root, 'W01', 'feat');
   assert.equal(wt.branch, 'clanker/w01/feat');
+  assert.equal(wt.path, join(root, '.statefulclanker', 'worktrees', 'W01'));
   assert.equal(wt.base_commit, g('rev-parse', 'HEAD'));
   assert.ok(existsSync(join(wt.path, 'f.txt')));
   assert.ok(readFileSync(join(root, '.git', 'info', 'exclude'), 'utf8').includes('.statefulclanker/worktrees'));
