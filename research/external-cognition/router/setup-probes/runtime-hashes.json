@@ -1,9 +1,0 @@
-{
-  "FreeDispatch.deps.json": "0e358e4be6df9be50632240dd0d185085c2401e3c95128a28e8d02e329ca31fb",
-  "FreeDispatch.dll": "0c157068f8e4043f520510045b1bd98918ba1ddef59e9aed3f55cb3241785491",
-  "FreeDispatch.runtimeconfig.json": "162d81f468bec570ec15e527433f4de5d5729ffe338ab79b22671f38760d34bd",
-  "StatefulClanker.Router.deps.json": "9d806b9d29c14f0a3b20b86c1cfe6d8d1fce7c0d26f58444230bffab9a7d7877",
-  "StatefulClanker.Router.dll": "fff83e02b40422a1e0187d3ee33662bad117d5338ad029978f87dd08ee69c2bb",
-  "StatefulClanker.Router.runtimeconfig.json": "162d81f468bec570ec15e527433f4de5d5729ffe338ab79b22671f38760d34bd",
-  "System.Security.Cryptography.ProtectedData.dll": "5e04d6cff3b6fe9706908970cd594861f0c08b3824f7827b2331b5f4fcee1bd1"
-}

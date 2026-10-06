@@ -1,2 +1,0 @@
-Infer the coefficients in u=(a*x+b*y+c) mod 11 and v=(d*x+e*y+f) mod 11 from these three labeled observations. Return JSON only: {"base_version":0,"u":[a,b,c],"v":[d,e,f]}.
-Observations: [{"xy": [9, 1], "uv": [2, 5]}, {"xy": [9, 4], "uv": [4, 6]}, {"xy": [4, 9], "uv": [0, 5]}]

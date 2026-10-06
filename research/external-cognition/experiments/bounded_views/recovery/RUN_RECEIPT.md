@@ -1,4 +1,0 @@
-# Recovery execution receipt
-2026-10-01. Two fresh gpt-6-luna low subjects, fork none; procedural 20000-character ceiling; assigned-prompt-only read and assigned-output-only write; no browse or computational tools. Both self-report no deviations. Exact response and assembled input files preserved.
-Unchanged original checker: Stage2 REJECT; Stage3 REJECT. Recovery Stage2 E0 row gives cost3 with C1D0E0 (actual cumulative1, also misses lexicographically preferable tied witness); E1 row retains C1D0E1 (even, violates odd constraint) and omits E cost3. Stage3 propagates cost2 invalid global assignment.
-Interpretation: one adaptive generic-feedback repair attempt failed. This is diagnostic, not a population failure rate or a claim that all recovery designs fail. Original negative chain remains unchanged. No rejected state accepted into semantic project knowledge.

@@ -1,1 +1,0 @@
-{"stage":3,"input_frontier":[{"value":0,"cost":3,"witness":{"A":1,"B":0,"C":1,"D":0,"E":0}},{"value":1,"cost":1,"witness":{"A":1,"B":0,"C":1,"D":0,"E":1}}],"frontier_variable":null,"frontier":[],"final":{"cost":2,"assignment":{"A":1,"B":0,"C":1,"D":0,"E":1,"F":0,"G":1}}}

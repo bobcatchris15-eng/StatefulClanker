@@ -1,43 +1,29 @@
-# StatefulClanker — project context
+# StatefulClanker — Pi package
 
-Windows-first PowerShell harness. Durable project state on disk; models are
-disposable cold-start workers. See README.md and docs/ARCHITECTURE.md.
+Pi extension at repo root. Entry `index.ts` (operator vs worker by `SC_WORKER_ID`).
 
 ## Layout
 
-- `StatefulClanker.ps1` — CLI entrypoint. Parses args, dot-sources `lib/`, dispatches.
-- `lib/StatefulClanker.Core.ps1` — state, tasks, events, config, plans.
-- `lib/StatefulClanker.Context.ps1` — retrieval and context compilation.
-- `lib/StatefulClanker.Execution.ps1` — provider dispatch, review, proposals, commit.
-- `mcp/` — direct stdio MCP server plus optional HTTP interoperability transport.
-- `src/StatefulClanker.Tray/` — native Windows tray/cockpit and embedded terminal.
+- `index.ts` — entry + double-load guard; `operator.ts` / `worker.ts` — mode registration
+- `catalog/` — profiles, observations, health, leases, selection, pool
+- `workers/` — spawn manager, runtime, registry; `worktrees/`, `protocol/`, `project/`, `ui/`, `prompts/`
+- `tests/unit`, `tests/e2e` (runs real pi from root node_modules with a mock provider)
+
+## Gotchas
+
+- Erasable TS only (no enums/namespaces/param properties); imports use `.ts` extensions.
+- Worker<->parent channel is `SC1 {json}` lines via notify.
+- Candidate pool == Pi's available models (model registry), nothing else.
+- Tests set `SC_MACHINE_DIR` to isolate machine state.
+- Workers get `-e <this index.ts>`; parentExtensionArgs excludes self. Double-load guard uses `Symbol.for("statefulclanker.loaded")`.
 
 ## VALIDATE
 
 ```
-Fast:    pwsh -NoProfile -File .\tests\Smoke.ps1
-Full:    pwsh -NoProfile -File .\tests\Smoke.ps1
+Fast:    npm run typecheck && npm test
+Full:    npm run validate
 Probe:   none
-Seed:    nothing — the repo is self-contained PowerShell, no vendored toolchain.
-         The smoke test builds its own throwaway project under $env:TEMP and
-         dispatches to tests/MockProvider.cmd, so no real model or network is needed.
-Cost:    ~1 MB per tree, provisioning ~0s. Smoke run ~30s wall.
-Notes:   Smoke is self-cleaning (STEP 8 removes its temp project).
-         It parse-checks every .ps1 in the repo and greps for the
-         bareword-concatenation shape (`return'PASS'`), which PARSES CLEAN but
-         tokenizes into a command name and only fails at runtime. Three shipped
-         bugs of exactly that shape made the harness non-functional; do not
-         remove those guards.
+Seed:    npm install
+Cost:    node_modules ~444 MB per tree; install ~30-60s (npm install, network)
+Notes:   e2e needs no network (mock provider, PI_OFFLINE=1). Needs node >= 22 (type stripping).
 ```
-
-## Gotchas
-
-- Everything is CWD-relative: `Get-SCRoot` is literally `(Get-Location).Path`.
-  Any code entering a project must `Push-Location`/`Pop-Location` around the call.
-- `Add-SCTask` and friends take NO parameters — they read `$Title`, `$Instruction`,
-  `$Accept`, etc. from `StatefulClanker.ps1`'s script scope. They are not callable
-  as ordinary functions; shell out to the CLI instead.
-- `maxConcurrent` in config.json is dead config. Nothing reads it, and there is no
-  locking anywhere. Task status is the only guard against double-running a task.
-- `Set-StrictMode -Version 2.0` is on. Test optional properties with
-  `$x.PSObject.Properties['name']` before reading them.

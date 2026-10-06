@@ -1,3 +1,0 @@
-Solve for integer residues x,y in mod 11 for the target using the observations. Return exactly {"status":"solved","x":int,"y":int} or {"status":"underdetermined"}. Return JSON only.
-Observations: [{"xy": [5, 2], "uv": [4, 4]}, {"xy": [6, 7], "uv": [10, 6]}, {"xy": [3, 8], "uv": [2, 10]}]
-Target (u,v): [2, 1]

@@ -1,15 +1,15 @@
+node_modules/
 .statefulclanker/
-.clanker/
-*.tmp
 *.log
+*.tmp
+.clanker/
+.superpowers/
+research/
+pi/
+install/
+docs/superpowers/
 
-# Installer build output and generated assets
-install/output/
-install/publish/
-install/router-publish/
-install/pi-runtime/
-install/StatefulClanker.ico
-
-# .NET build outputs
-**/bin/
-**/obj/
+# legacy build leftovers (untracked)
+src/
+desktop/
+.pytest_cache/

@@ -1,3 +1,0 @@
-Solve for integer residues x,y in mod 11 from the supplied relation and target. Return exactly {"status":"solved","x":int,"y":int} or {"status":"underdetermined"}. Return JSON only.
-No relation was supplied.
-Target (u,v): [5, 3]

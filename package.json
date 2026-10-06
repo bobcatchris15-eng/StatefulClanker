@@ -1,0 +1,50 @@
+{
+  "name": "statefulclanker",
+  "version": "1.0.0",
+  "description": "Pi package: parent Clanker orchestrating heterogeneous Pi RPC workers with ability-based model selection and durable state",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bobcatchris15-eng/StatefulClanker.git"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "files": [
+    "index.ts",
+    "operator.ts",
+    "worker.ts",
+    "catalog",
+    "protocol",
+    "project",
+    "ui",
+    "workers",
+    "worktrees",
+    "prompts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/unit/*.test.ts",
+    "e2e": "node --test tests/e2e/*.test.ts",
+    "validate": "npm run typecheck && npm test && npm run e2e"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.87.1",
+    "@earendil-works/pi-coding-agent": "^0.87.0",
+    "@types/node": "^24.0.0",
+    "typebox": "*",
+    "typescript": "^5.9.0"
+  }
+}

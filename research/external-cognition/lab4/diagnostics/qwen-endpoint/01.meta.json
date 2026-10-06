@@ -1,7 +1,0 @@
-{
-  "started_at": "2026-10-01T21:43:52.217640+00:00",
-  "url": "http://127.0.0.1:13305/api/v1/chat/completions",
-  "timeout": 60,
-  "status": 200,
-  "elapsed_seconds": 2.110350999981165
-}

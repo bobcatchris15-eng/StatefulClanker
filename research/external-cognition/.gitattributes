@@ -1,7 +1,0 @@
-experiments/** -text whitespace=cr-at-eol,-blank-at-eof
-lab2/** -text whitespace=cr-at-eol,-blank-at-eof
-lab3/** -text whitespace=cr-at-eol,-blank-at-eof
-lab4/** -text whitespace=cr-at-eol,-blank-at-eof
-router/** -text whitespace=cr-at-eol,-blank-at-eof
-lab5/** -text whitespace=cr-at-eol,-blank-at-eof
-RESUME_MANUAL.md -text

@@ -1,1 +1,0 @@
-{"model":"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free","messages":[{"role":"user","content":"Reply with exactly this JSON object and no other text: {\u0022ready\u0022:true}"}],"max_tokens":512,"stream":false,"temperature":0}
