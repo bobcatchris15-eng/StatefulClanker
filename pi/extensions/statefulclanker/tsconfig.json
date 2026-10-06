@@ -12,6 +12,6 @@
     "baseUrl": ".",
     "paths": { "@earendil-works/pi-ai": ["../../../install/pi-runtime/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.d.ts"] }
   },
-  "include": ["*.ts", "protocol", "project", "workers", "worktrees", "tests", "ui"],
+  "include": ["catalog", "*.ts", "protocol", "project", "workers", "worktrees", "tests", "ui"],
   "exclude": ["node_modules"]
 }

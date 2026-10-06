@@ -24,7 +24,7 @@ that works itself and coordinates heterogeneous Pi RPC workers, with durable sta
 | t1 | protocol/ project/ workers/registry | DONE | 1 | STAT: PASS; validate = node --test tests/unit/*.test.ts |
 | t2 | workers/runtime manager status jsonl, worktrees/create | DONE | 1 | STAT: PASS; 9/9 tests; channel = notify "SC1 {json}" |
 | t3 | index operator worker ui prompts reconstruct e2e | DONE | 1 | STAT: PASS; 12 unit + 1 real-pi e2e |
-| t4 | catalog/ (profiles, observations, health, leases, select) | PENDING | 0 | |
+| t4 | catalog/ core | DONE | 1 | STAT: PASS; 27/27; presets mins looser than spec §16 (deliberate: weights carry spec emphasis) |
 | t5 | wire selection into worker_spawn + endpoint tools + RPC health; worktree by worker id | PENDING | 0 | |
 | p0 | delete legacy, rewrite docs/CLAUDE.md | PENDING (after P3 ports) | 0 | |
 
