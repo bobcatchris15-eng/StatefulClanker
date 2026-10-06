@@ -15,6 +15,8 @@ that works itself and coordinates heterogeneous Pi RPC workers, with durable sta
 - D2 10-06: endpoint catalog ported to TS in-process, not C# router exe (user).
 - D3 10-06: MVP = spawn+RPC+result slice first (user). Phases P1..P5.
 - D4 10-06: Mode S serial for P1 (t1->t2->t3 depend on each other).
+- D5 10-06: P2 uses Pi modelRegistry as the pool; drop router connection layer + seed catalogs. Design: pi/extensions/statefulclanker/docs/model-selection.md
+- D6 10-06: profiles machine + project overlay; pool respects scopedModels when set; unknown models eligible, ranked low (user).
 
 ## Tasks
 | id | targets | status | attempts | last return line |
@@ -22,6 +24,8 @@ that works itself and coordinates heterogeneous Pi RPC workers, with durable sta
 | t1 | protocol/ project/ workers/registry | DONE | 1 | STAT: PASS; validate = node --test tests/unit/*.test.ts |
 | t2 | workers/runtime manager status jsonl, worktrees/create | DONE | 1 | STAT: PASS; 9/9 tests; channel = notify "SC1 {json}" |
 | t3 | index operator worker ui prompts reconstruct e2e | DONE | 1 | STAT: PASS; 12 unit + 1 real-pi e2e |
+| t4 | catalog/ (profiles, observations, health, leases, select) | PENDING | 0 | |
+| t5 | wire selection into worker_spawn + endpoint tools + RPC health; worktree by worker id | PENDING | 0 | |
 | p0 | delete legacy, rewrite docs/CLAUDE.md | PENDING (after P3 ports) | 0 | |
 
 ## Unverified assumptions
