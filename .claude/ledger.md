@@ -1,5 +1,5 @@
 # Pi extension pivot — orchestrator ledger
-Updated: 2026-10-06 | HEAD: 32dd803 | Graph: n/a
+Updated: 2026-10-06 | HEAD: e625a63 (v1.0.0, pushed) | Graph: n/a
 
 ## Prior effort (archived)
 2026-09-24 design-doc conformance on PS harness — superseded by pivot (see git log).
@@ -18,7 +18,7 @@ that works itself and coordinates heterogeneous Pi RPC workers, with durable sta
 - D5 10-06: P2 uses Pi modelRegistry as the pool; drop router connection layer + seed catalogs. Design: pi/extensions/statefulclanker/docs/model-selection.md
 - D6 10-06: profiles machine + project overlay; pool respects scopedModels when set; unknown models eligible, ranked low (user).
 - D7 10-06: Pi model library moves to default ~/.pi/agent (user). User copies models.json/settings.json from %LOCALAPPDATA%/StatefulClanker/pi (holds credential refs; not handled by Claude). Sync-PiCatalog retired. Get-Credential.ps1 not needed (user).
-- D8 10-06: repo is a pi package installed from GitHub (user). Root package.json pi.extensions=./index.ts; peers "*"; legacy removed.
+- D8 10-06: repo is a pi package installed from GitHub (user). Root package.json pi.extensions=./index.ts; peers "*"; legacy removed. Released v1.0.0 (user chose 1.0 over 0.1).
 
 ## Tasks
 | id | targets | status | attempts | last return line |
