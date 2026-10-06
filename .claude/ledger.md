@@ -2,6 +2,7 @@
 Updated: 2026-10-06 | HEAD: e625a63 (v1.0.0, pushed) | Graph: n/a
 
 ## Prior effort (archived)
+2026-10-06 legacy leftovers deleted from disk (install/ src/ research/ pi/ desktop/ .clanker/ .superpowers/).
 2026-09-24 design-doc conformance on PS harness — superseded by pivot (see git log).
 
 ## Objective

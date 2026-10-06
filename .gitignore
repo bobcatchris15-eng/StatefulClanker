@@ -2,14 +2,3 @@ node_modules/
 .statefulclanker/
 *.log
 *.tmp
-.clanker/
-.superpowers/
-research/
-pi/
-install/
-docs/superpowers/
-
-# legacy build leftovers (untracked)
-src/
-desktop/
-.pytest_cache/
