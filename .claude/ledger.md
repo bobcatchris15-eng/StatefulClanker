@@ -21,11 +21,11 @@ that works itself and coordinates heterogeneous Pi RPC workers, with durable sta
 |----|---------|--------|----------|------------------|
 | t1 | protocol/ project/ workers/registry | DONE | 1 | STAT: PASS; validate = node --test tests/unit/*.test.ts |
 | t2 | workers/runtime manager status jsonl, worktrees/create | DONE | 1 | STAT: PASS; 9/9 tests; channel = notify "SC1 {json}" |
-| t3 | operator.ts worker.ts index.ts ui/ prompts/ + e2e | PENDING | 0 | |
+| t3 | index operator worker ui prompts reconstruct e2e | DONE | 1 | STAT: PASS; 12 unit + 1 real-pi e2e |
 | p0 | delete legacy, rewrite docs/CLAUDE.md | PENDING (after P3 ports) | 0 | |
 
 ## Unverified assumptions
 - node:sqlite available in bundled install/pi-runtime/node.exe (check version).
-- Worker->parent result channel: extension_ui notify over RPC is enough; else file drop.
-- Mock provider via pi.registerProvider works in --mode rpc for e2e.
+- Worktree dir/branch keyed by task id, not worker id (spec §46 wants worker). Minor; fix in P2.
+- Operator session paths (session_start, before_agent_start, setWidget, worker_spawn in a live parent) never exercised — needs manual run.
 - Dirty research/ run outputs: user to decide commit vs discard before P0.

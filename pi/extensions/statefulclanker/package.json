@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/unit"
+    "test": "node --test tests/unit/*.test.ts",
+    "e2e": "node --test tests/e2e/*.test.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
