@@ -28,4 +28,4 @@ that works itself and coordinates heterogeneous Pi RPC workers, with durable sta
 - node:sqlite available in bundled install/pi-runtime/node.exe (check version).
 - Worktree dir/branch keyed by task id, not worker id (spec §46 wants worker). Minor; fix in P2.
 - Operator session paths (session_start, before_agent_start, setWidget, worker_spawn in a live parent) never exercised — needs manual run.
-- Dirty research/ run outputs: user to decide commit vs discard before P0.
+- research/: breadth1 discarded (user 10-06). RESUME_MANUAL.md edit + untracked runs/breadth2/ remain — go with research/ in P0.
