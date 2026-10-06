@@ -18,7 +18,7 @@ export interface SpawnSpec {
   workerId?: string; thinking?: string; abilityProfile?: string;
   lease?: { lease_id: string; expires_at: number } | null;
   worktree?: { path: string; branch: string; base_commit: string };
-  extensionPath: string; piCommand: string; args?: string[]; env?: Record<string, string>;
+  extensionPath: string; piCommand: string; args?: string[]; env?: Record<string, string>; extraExtensions?: string[];
 }
 export interface ManagerOpts { hangMs?: number; activityThrottleMs?: number; superviseEveryMs?: number; catalog?: CatalogService }
 
@@ -72,7 +72,7 @@ export class WorkerManager {
     rt.on('sc', (payload) => this.onSc(id, e, payload));
     rt.on('exit', (x) => this.onExit(id, e, x));
     rt.start({ piCommand: spec.piCommand, args: spec.args, cwd, env: spec.env, provider: spec.provider, model: spec.model, thinking: spec.thinking,
-      extensionPath: spec.extensionPath, workerId: id, projectRoot: this.root, taskId: spec.taskId });
+      extensionPath: spec.extensionPath, extraExtensions: spec.extraExtensions, workerId: id, projectRoot: this.root, taskId: spec.taskId });
     this.patch(id, { pid: rt.pid });
     appendEvent(this.root, 'worker.started', { id, task_id: spec.taskId, pid: rt.pid });
     const hang = this.opts.hangMs;
@@ -229,7 +229,7 @@ export interface SpawnParams {
   dry_run?: boolean; role?: string; task_title?: string; files?: string[]; worktree_required?: boolean;
   expected_outputs?: string[]; context_hints?: string[];
 }
-export interface SpawnLaunch { extensionPath: string; piCommand: string; args?: string[]; env?: Record<string, string> }
+export interface SpawnLaunch { extensionPath: string; piCommand: string; args?: string[]; env?: Record<string, string>; extraExtensions?: string[] }
 
 /** Trim, strip control chars/newlines/brackets, cap 20 chars. Returns '' when nothing usable. */
 export function sanitizeName(raw: unknown): string {
@@ -291,7 +291,8 @@ export async function spawnSelected(mgr: WorkerManager, catalog: CatalogService,
     const worktree = p.worktree_required === false ? undefined : createWorktree(root, id, slugify(p.task_title ?? p.assignment));
     const receipt = join(ensureLayout(root), 'receipts', 'spawn', `${id}.json`);
     writeJsonAtomic(receipt, { worker_id: id, task_id: task.id, request: { ...p, assignment: undefined, resolved: request },
-      selection: sel, lease, parent_model: parentKey ?? null });
+      selection: sel, lease, parent_model: parentKey ?? null,
+      agent_dir: launch.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? null, extensions: launch.extraExtensions ?? [] });
     await mgr.spawn({
       workerId: id, taskId: task.id, role: p.role ?? 'worker', abilityProfile: request.profile, provider: chosen.provider, model: chosen.id,
       thinking: chosen.thinking ?? 'off', lease, assignment: p.assignment, worktree, ...launch,

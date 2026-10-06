@@ -29,7 +29,6 @@ export interface ServiceOpts {
   /** Supplies the live Pi context (registry, scopedModels, model). Called per resolve. */
   getContext: () => PoolCtx;
   machineDir?: string;
-  workerExtensions?: string[];
   pid?: number;
   isAlive?: (pid: number) => boolean;
   leaseTtlMs?: number;
@@ -64,7 +63,7 @@ export class CatalogService {
   profileFor(m: CandidateModel): ResolvedProfile {
     return resolveProfile(m, this.curated(), aggregate(m.key, readOutcomes(this.dir)));
   }
-  pool() { return buildPool(this.ctx(), { workerExtensions: this.o.workerExtensions }); }
+  pool() { return buildPool(this.ctx()); }
 
   resolve(request: AbilityRequest, opts: { explicit?: string } = {}): Resolution {
     const now = this.now();

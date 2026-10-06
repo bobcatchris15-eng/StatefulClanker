@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CatalogService } from '../../catalog/service.ts';
 import { buildPool } from '../../catalog/pool.ts';
-import { classifyErrorText, providerSignal } from '../../workers/runtime.ts';
+import { classifyErrorText, providerSignal, parentExtensionArgs } from '../../workers/runtime.ts';
 
 const paid = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 };
 const free = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -18,7 +18,7 @@ function setup(opts: { scoped?: any[]; noAuth?: string[]; extProviders?: string[
   writeFileSync(join(dir, 'profiles.json'), JSON.stringify({
     'p1/*': { capabilities: { coding: 'good', tool_use: 'good' } },
     'p2/*': { capabilities: { coding: 'fair', tool_use: 'fair' } },
-    'ext/*': { capabilities: { coding: 'excellent', tool_use: 'excellent' } },
+    'ext/*': { capabilities: { coding: 'poor', tool_use: 'poor' } },
   }));
   const models = [mk('p1', 'big'), mk('p2', 'free', free), mk('ext', 'only')];
   const registry = {
@@ -29,19 +29,23 @@ function setup(opts: { scoped?: any[]; noAuth?: string[]; extProviders?: string[
   };
   let now = 1_000_000;
   const svc = new CatalogService({
-    root, machineDir: dir, workerExtensions: opts.allow, pid: 4242, isAlive: () => false, now: () => now,
+    root, machineDir: dir, pid: 4242, isAlive: () => false, now: () => now,
     getContext: () => ({ modelRegistry: registry, scopedModels: opts.scoped, model: models[0] }),
   });
   return { svc, dir, root, advance: (ms: number) => { now += ms; } };
 }
 
-test('pool: extension-only provider excluded unless allow-listed; scoped intersects', () => {
+test('parentExtensionArgs: three forms, absolute, deduped, self excluded', () => {
+  const cwd = process.cwd();
+  const r = parentExtensionArgs(['node', 'pi', '-e', 'a.ts', '--extension', 'b.ts', '--extension=c.ts', '-e', './a.ts', '-e', 'self/index.ts'], 'self/index.ts');
+  assert.deepEqual(r, [join(cwd, 'a.ts'), join(cwd, 'b.ts'), join(cwd, 'c.ts')]);
+});
+
+test('pool: registered providers not excluded; scoped intersects', () => {
   const { svc } = setup();
   const p = svc.pool();
-  assert.deepEqual(p.candidates.map((c) => c.key).sort(), ['p1/big', 'p2/free']);
-  assert.ok(p.excluded.some((e) => e.key === 'ext/only'));
-  const a = setup({ allow: ['ext'] }).svc.pool();
-  assert.equal(a.candidates.length, 3);
+  assert.deepEqual(p.candidates.map((c) => c.key).sort(), ['ext/only', 'p1/big', 'p2/free']);
+  assert.equal(p.excluded.length, 0);
   const reg = { getAvailable: () => [mk('p1', 'big'), mk('p2', 'free', free)] };
   const s = buildPool({ modelRegistry: reg, scopedModels: [{ model: mk('p2', 'free') }] });
   assert.deepEqual(s.candidates.map((c) => c.key), ['p2/free']);
@@ -54,7 +58,6 @@ test('resolve selects best by profile, never from parent implicitly; excluded li
   assert.equal(r.ok, true);
   assert.equal(r.chosen!.key, 'p1/big');
   assert.match(r.reason, /chose p1\/big/);
-  assert.ok(r.excluded.some((e) => e.key === 'ext/only'));
   const none = svc.resolve({ profile: 'implementation', free_only: true, avoid_provider: ['p2'] });
   assert.equal(none.ok, false);
   assert.match(none.error!, /p2\/free/);

@@ -28,12 +28,12 @@ that works itself and coordinates heterogeneous Pi RPC workers, with durable sta
 | t4 | catalog/ core | DONE | 1 | STAT: PASS; 27/27; presets mins looser than spec §16 (deliberate: weights carry spec emphasis) |
 | t5 | selection wired: pool, CatalogService, worker_spawn, endpoint tools, health feed | DONE | 1 | STAT: PASS; 33 unit + e2e. agent_end error shape inferred, not observed |
 | t6 | worker self-naming + w-NN branches | DONE | 1 | STAT: PASS; 37 unit + e2e |
-| t7 | pool = exactly Pi available (drop workerExtensions exclusion); forward parent --extension args + PI_CODING_AGENT_DIR to workers | PENDING | 0 | |
+| t7 | pool == Pi available; forward parent -e + agent dir | DONE | 1 | STAT: PASS |
 | p0 | delete legacy, rewrite docs/CLAUDE.md | PENDING (after P3 ports) | 0 | |
 
 ## Unverified assumptions
 - node:sqlite available in bundled install/pi-runtime/node.exe (check version).
-- Provider-error signal from agent_end (stopReason/errorMessage) inferred; verify on first real 429. Global-extension providers excluded from pool unless in workerExtensions.
+- Provider-error signal from agent_end (stopReason/errorMessage) inferred; verify on first real 429. 
 - Operator session paths (session_start, before_agent_start, setWidget, worker_spawn in a live parent) never exercised — needs manual run.
 - research/: breadth1 discarded (user 10-06). RESUME_MANUAL.md edit + untracked runs/breadth2/ remain — go with research/ in P0.
 - models.json apiKeys are mostly shell-command refs; likely depend on pi/Get-Credential.ps1 — P0 must NOT delete it until user confirms.

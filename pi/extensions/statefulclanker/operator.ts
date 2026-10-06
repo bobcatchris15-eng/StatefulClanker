@@ -9,6 +9,7 @@ import { createTask, getTask, listTasks, updateTask } from './project/tasks.ts';
 import { renderRack } from './ui/worker-rack.ts';
 import { CatalogService } from './catalog/service.ts';
 import { spawnSelected, WorkerManager } from './workers/manager.ts';
+import { parentExtensionArgs } from './workers/runtime.ts';
 import { getWorker, listWorkers } from './workers/registry.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -38,13 +39,8 @@ export function operatorMode(pi: ExtensionAPI): void {
   }
 
   let cat: CatalogService | null = null;
-  const workerExtensions = (): string[] => {
-    const f = join(root(), '.statefulclanker', 'config.json');
-    try { if (existsSync(f)) { const c = JSON.parse(readFileSync(f, 'utf8')); if (Array.isArray(c.workerExtensions)) return c.workerExtensions.map(String); } } catch { /* */ }
-    return (process.env.SC_WORKER_EXTENSIONS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-  };
   const catalog = (): CatalogService => cat ??= new CatalogService({
-    root: root(), getContext: () => uiCtx ?? { modelRegistry: { getAvailable: () => [] } }, workerExtensions: workerExtensions(),
+    root: root(), getContext: () => uiCtx ?? { modelRegistry: { getAvailable: () => [] } },
   });
 
   const manager = (): WorkerManager => {
@@ -104,6 +100,8 @@ export function operatorMode(pi: ExtensionAPI): void {
       if (ctx) uiCtx = ctx;
       const r = await spawnSelected(manager(), catalog(), root(), p, {
         extensionPath: join(here, 'index.ts'), piCommand: process.execPath, args: process.argv[1] ? [process.argv[1]] : [],
+        extraExtensions: parentExtensionArgs(process.argv, join(here, 'index.ts')),
+        env: process.env.PI_CODING_AGENT_DIR ? { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR } : {},
       });
       if (p.dry_run) {
         const s = r.selection ?? {};

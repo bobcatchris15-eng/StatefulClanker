@@ -30,7 +30,7 @@ test('real pi worker with mock provider reaches COMPLETE', { timeout: 120000 }, 
   const model = { provider: 'scmock', id: 'scmock-1', name: 'SC Mock', reasoning: false, input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8000, maxTokens: 1000 };
   const catalog = new CatalogService({
-    root, machineDir: machine, workerExtensions: ['scmock'],
+    root, machineDir: machine, 
     getContext: () => ({ modelRegistry: { getAvailable: () => [model], getRegisteredProviderIds: () => ['scmock'] } }),
   });
   const m = new WorkerManager(root, { catalog });

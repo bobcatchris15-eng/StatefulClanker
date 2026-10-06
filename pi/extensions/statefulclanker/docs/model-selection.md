@@ -8,7 +8,8 @@ through us.
 - Start from `ctx.modelRegistry.getAvailable()`. These are models whose provider auth is configured.
 - If `ctx.scopedModels` is non-empty (from `enabledModels` or `--models`), intersect with it.
 - Key each model as `provider/id`.
-- Skip providers that exist only through a parent-only `registerProvider` extension. A worker process would not have them.
+- The pool is exactly Pi's available models, scoped by `enabledModels`/`--models`. Nothing else is filtered here (health and leases are handled in select).
+- Workers get the parent's `-e`/`--extension` paths forwarded, so extension-registered providers work. Global and settings-listed extensions load automatically in workers. `PI_CODING_AGENT_DIR` is passed explicitly and recorded, with the extension paths, in the spawn receipt.
 
 ## Profile layers
 Each layer overrides the one before it.

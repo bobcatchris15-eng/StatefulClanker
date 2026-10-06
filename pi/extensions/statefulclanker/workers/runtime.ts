@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { attachJsonlReader } from './jsonl.ts';
 
 /**
@@ -14,6 +14,34 @@ export interface StartOpts {
   piCommand: string; args?: string[]; cwd: string; env?: Record<string, string>;
   provider: string; model: string; thinking?: string; extensionPath: string;
   workerId?: string; projectRoot?: string; taskId?: string;
+  /** Absolute paths of the parent's `-e` extensions, forwarded to the worker. */
+  extraExtensions?: string[];
+}
+
+/**
+ * Extension paths the parent was launched with (`-e <p>`, `--extension <p>`, `--extension=<p>`), absolute
+ * (relative to cwd), deduped, excluding `self` (the statefulclanker index.ts, already passed separately).
+ * Global (~/.pi/agent/extensions) and settings-listed extensions load automatically in child pi processes,
+ * so only CLI-supplied ones need forwarding.
+ */
+export function parentExtensionArgs(argv: string[], self?: string, cwd: string = process.cwd()): string[] {
+  const norm = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const selfAbs = self ? norm(resolve(cwd, self)) : undefined;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (p: string | undefined) => {
+    if (!p) return;
+    const abs = resolve(cwd, p);
+    const k = norm(abs);
+    if (k === selfAbs || seen.has(k)) return;
+    seen.add(k); out.push(abs);
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-e' || a === '--extension') add(argv[++i]);
+    else if (a.startsWith('--extension=')) add(a.slice('--extension='.length));
+  }
+  return out;
 }
 
 const SC_PREFIX = 'SC1 ';
@@ -73,7 +101,7 @@ export class PiRpcRuntime {
   on(event: string, cb: (...a: any[]) => void): this { this.em.on(event, cb); return this; }
 
   start(o: StartOpts): void {
-    const args = [...(o.args ?? []), '--mode', 'rpc', '--provider', o.provider, '--model', o.model, ...(o.thinking ? ['--thinking', o.thinking] : []), '-e', o.extensionPath];
+    const args = [...(o.args ?? []), '--mode', 'rpc', '--provider', o.provider, '--model', o.model, ...(o.thinking ? ['--thinking', o.thinking] : []), '-e', o.extensionPath, ...(o.extraExtensions ?? []).flatMap((p) => ['-e', p])];
     const sp = resolveSpawn(o.piCommand, args);
     const env: Record<string, string | undefined> = { ...process.env, ...(o.env ?? {}) };
     if (o.workerId) env.SC_WORKER_ID = o.workerId;

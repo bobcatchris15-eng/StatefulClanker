@@ -5,7 +5,6 @@ export interface RegistryLike {
   getAvailable(): any[];
   find?(provider: string, id: string): any | undefined;
   hasConfiguredAuth?(model: any): boolean;
-  getRegisteredProviderIds?(): readonly string[];
 }
 export interface PoolCtx {
   modelRegistry: RegistryLike;
@@ -25,13 +24,11 @@ export function toCandidate(m: any): CandidateModel {
 }
 
 /**
- * Candidate pool: registry.getAvailable() (auth configured) intersected with scopedModels (when non-empty).
- * Providers returned by getRegisteredProviderIds() are treated as parent-only extension providers (a worker
- * process would not have them) and excluded unless listed in workerExtensions. NOTE: getRegisteredProviderIds()
- * semantics are inferred from its name/typings; it may also list non-extension registrations, which is why
- * the allow-list exists.
+ * Candidate pool == Pi's available model library: registry.getAvailable() (auth configured) intersected with
+ * scopedModels (when non-empty). Workers load the same library and extension providers as the parent, so
+ * nothing else is filtered here (health/lease filtering stays in select).
  */
-export function buildPool(ctx: PoolCtx, opts: { workerExtensions?: string[] } = {}): PoolResult {
+export function buildPool(ctx: PoolCtx): PoolResult {
   const excluded: { key: string; why: string }[] = [];
   let models: any[] = [...ctx.modelRegistry.getAvailable()];
   const scoped = ctx.scopedModels ?? [];
@@ -44,16 +41,5 @@ export function buildPool(ctx: PoolCtx, opts: { workerExtensions?: string[] } = 
       return false;
     });
   }
-  const reg = new Set(ctx.modelRegistry.getRegisteredProviderIds?.() ?? []);
-  const allow = new Set(opts.workerExtensions ?? []);
-  const candidates: CandidateModel[] = [];
-  for (const m of models) {
-    const c = toCandidate(m);
-    if (reg.has(c.provider) && !allow.has(c.provider)) {
-      excluded.push({ key: c.key, why: `provider ${c.provider} is parent-only extension (not in workerExtensions)` });
-      continue;
-    }
-    candidates.push(c);
-  }
-  return { candidates, excluded };
+  return { candidates: models.map(toCandidate), excluded };
 }
