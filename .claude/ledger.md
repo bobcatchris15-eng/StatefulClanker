@@ -20,7 +20,7 @@ that works itself and coordinates heterogeneous Pi RPC workers, with durable sta
 | id | targets | status | attempts | last return line |
 |----|---------|--------|----------|------------------|
 | t1 | protocol/ project/ workers/registry | DONE | 1 | STAT: PASS; validate = node --test tests/unit/*.test.ts |
-| t2 | workers/runtime.ts manager.ts, worktrees/create.ts | PENDING | 0 | |
+| t2 | workers/runtime manager status jsonl, worktrees/create | DONE | 1 | STAT: PASS; 9/9 tests; channel = notify "SC1 {json}" |
 | t3 | operator.ts worker.ts index.ts ui/ prompts/ + e2e | PENDING | 0 | |
 | p0 | delete legacy, rewrite docs/CLAUDE.md | PENDING (after P3 ports) | 0 | |
 
