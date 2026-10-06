@@ -19,6 +19,11 @@ test('narrow strips', () => {
   assert.ok(l.every((x) => x.length <= 60));
 });
 
+test('name shown after id', () => {
+  const l = renderRack([{ id: 'W03', display_name: 'Rivet', status: 'RUNNING', model: 'm', current_action: 'x' }], 60);
+  assert.equal(l[0], 'W03 Rivet ● RUN m  x');
+});
+
 test('wide boxed', () => {
   const l = renderRack(ws, 110);
   assert.equal(l.length, ws.length + 2);

@@ -36,6 +36,16 @@ export function workerMode(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
+    name: 'worker_name', label: 'Worker Name',
+    description: 'Name yourself (call first, once). Short, 1-2 words, <=20 chars, distinctive. Fixed after first accepted call.',
+    parameters: Type.Object({ name: Type.String() }),
+    async execute(_id: string, p: any, _s: any, _u: any, ctx: any) {
+      emit(ctx, { kind: 'name', name: p.name });
+      return txt('name sent');
+    },
+  });
+
+  pi.registerTool({
     name: 'worker_progress', label: 'Worker Progress',
     description: 'Report status/current action/blocker to the operator.',
     parameters: Type.Object({

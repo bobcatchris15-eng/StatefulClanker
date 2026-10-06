@@ -19,7 +19,7 @@ export function reconstruct(root: string): string {
   for (const t of blocked) L.push(`  ${t.id} ${t.title}${t.unresolved.length ? ` : ${t.unresolved.join('; ')}` : ''}`);
   const workers = listWorkers(root);
   L.push('Workers:'); none(workers);
-  for (const w of workers) L.push(`  ${w.id} ${w.status} ${w.provider}/${w.model} task=${w.task_id}${w.current_action ? ` "${w.current_action}"` : ''}`);
+  for (const w of workers) L.push(`  ${w.id}${w.display_name ? ` ${w.display_name}` : ''} ${w.status} ${w.provider}/${w.model} task=${w.task_id}${w.current_action ? ` "${w.current_action}"` : ''}`);
   L.push('Recent completed:'); none(done);
   for (const t of done) {
     const w = workers.find((x) => x.task_id === t.id);

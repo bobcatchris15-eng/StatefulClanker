@@ -55,6 +55,7 @@ export interface WorkerResult {
 
 export interface Worker {
   id: string;
+  display_name?: string;
   task_id: string;
   role: string;
   ability_profile: string;

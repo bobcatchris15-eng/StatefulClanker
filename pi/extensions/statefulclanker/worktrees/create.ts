@@ -8,7 +8,7 @@ const git = (root: string, ...a: string[]) =>
 export function createWorktree(root: string, workerId: string, slug: string): { path: string; branch: string; base_commit: string } {
   root = resolve(root);
   const path = join(root, '.statefulclanker', 'worktrees', workerId);
-  const branch = `clanker/${workerId.toLowerCase()}/${slug}`;
+  const branch = `clanker/${workerId.toLowerCase().replace(/^w(\d)/, 'w-$1')}/${slug}`;
   const base_commit = git(root, 'rev-parse', 'HEAD');
   const gitDir = resolve(root, git(root, 'rev-parse', '--git-dir'));
   const exFile = join(gitDir, 'info', 'exclude');

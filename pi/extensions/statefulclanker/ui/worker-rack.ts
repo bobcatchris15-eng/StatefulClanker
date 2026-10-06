@@ -1,5 +1,5 @@
 export interface RackWorker {
-  id: string; status: string; model: string; current_action?: string; current_tool?: string; role?: string; task_id?: string;
+  id: string; display_name?: string; status: string; model: string; current_action?: string; current_tool?: string; role?: string; task_id?: string;
 }
 
 export const SYMBOLS: Record<string, { sym: string; label: string }> = {
@@ -16,7 +16,7 @@ function fit(s: string, w: number): string {
 function strip(w: RackWorker): string {
   const st = SYMBOLS[w.status] ?? { sym: '?', label: w.status };
   const act = w.current_action || w.current_tool || '';
-  return `${w.id} ${st.sym} ${st.label} ${w.model}  ${act}`.trimEnd();
+  return `${w.id}${w.display_name ? ` ${w.display_name}` : ''} ${st.sym} ${st.label} ${w.model}  ${act}`.trimEnd();
 }
 
 /** Pure: workers -> display lines. Strips for narrow widths, boxed panel for width >= 100. */

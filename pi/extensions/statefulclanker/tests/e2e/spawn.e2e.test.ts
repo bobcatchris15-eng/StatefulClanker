@@ -9,6 +9,7 @@ import { WorkerManager, spawnSelected } from '../../workers/manager.ts';
 import { CatalogService } from '../../catalog/service.ts';
 import { readFileSync } from 'node:fs';
 import { getWorker } from '../../workers/registry.ts';
+import { renderRack } from '../../ui/worker-rack.ts';
 import { readEvents } from '../../protocol/events.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -57,6 +58,9 @@ test('real pi worker with mock provider reaches COMPLETE', { timeout: 120000 }, 
     assert.equal(r.summary, 'mock work done');
     const w = getWorker(root, id)!;
     assert.equal(w.status, 'COMPLETE');
+    assert.equal(w.display_name, 'Rivet');
+    assert.ok(renderRack([w as any], 80)[0]!.startsWith(`${id} Rivet `));
+    assert.ok(readEvents(root, { types: ['worker.named'] }).length >= 1);
     const receipts = readdirSync(join(root, '.statefulclanker', 'receipts', 'workers'));
     assert.equal(receipts.length, 1);
     assert.equal(catalog.status('scmock/scmock-1').leases.used, 0, 'lease released after COMPLETE');

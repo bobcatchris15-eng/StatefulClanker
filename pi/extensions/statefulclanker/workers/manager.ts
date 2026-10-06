@@ -54,8 +54,9 @@ export class WorkerManager {
     const id = spec.workerId ?? allocateWorkerId(this.root);
     const now = new Date().toISOString();
     const cwd = spec.worktree?.path ?? this.root;
+    const prior = getWorker(this.root, id)?.display_name;
     const w: Worker = {
-      id, task_id: spec.taskId, role: spec.role, ability_profile: spec.abilityProfile ?? spec.role, provider: spec.provider, model: spec.model,
+      id, ...(prior ? { display_name: prior } : {}), task_id: spec.taskId, role: spec.role, ability_profile: spec.abilityProfile ?? spec.role, provider: spec.provider, model: spec.model,
       endpoint_lease: spec.lease ? { endpoint_id: `${spec.provider}/${spec.model}`, worker_id: id, acquired_at: now, expires_at: new Date(spec.lease.expires_at).toISOString() } : null, session_id: null, generation: 1, pid: null, status: 'STARTING', project_root: this.root,
       worktree: spec.worktree ?? null, started_at: now, last_activity: now, current_action: '', current_tool: '',
       context_usage: { tokens_used: 0, context_window: 0, percentage: 0, compactions: 0 },
@@ -123,6 +124,17 @@ export class WorkerManager {
   private onSc(id: string, e: Entry, p: any): void {
     e.lastEvent = Date.now(); e.waiting = false;
     this.setStatus(id, e, deriveStatus(e.st, { type: 'sc', payload: p }));
+    if (p?.kind === 'name') {
+      const cur = getWorker(this.root, id);
+      if (!cur || cur.display_name) return;
+      const taken = listWorkers(this.root).filter((x) => x.id !== id && x.display_name && !['COMPLETE', 'CANCELLED', 'FAILED', 'LOST'].includes(x.status)).map((x) => x.display_name!);
+      const nm = uniqueName(sanitizeName(p.name), taken);
+      if (!nm) return;
+      upsertWorker(this.root, { ...cur, display_name: nm });
+      appendEvent(this.root, 'worker.named', { id, name: nm });
+      this.em.emit('named', id, nm);
+      return;
+    }
     if (p?.kind === 'progress') {
       this.patch(id, { current_action: String(p.action ?? p.summary ?? '') });
       return;
@@ -218,6 +230,23 @@ export interface SpawnParams {
   expected_outputs?: string[]; context_hints?: string[];
 }
 export interface SpawnLaunch { extensionPath: string; piCommand: string; args?: string[]; env?: Record<string, string> }
+
+/** Trim, strip control chars/newlines/brackets, cap 20 chars. Returns '' when nothing usable. */
+export function sanitizeName(raw: unknown): string {
+  return String(raw ?? '').replace(/[\u0000-\u001f\u007f\[\]{}()<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 20).trim();
+}
+
+/** Case-insensitive dedupe against taken names by suffixing -2, -3 (result stays <=20 chars). */
+export function uniqueName(name: string, taken: string[]): string {
+  if (!name) return '';
+  const low = new Set(taken.map((t) => t.toLowerCase()));
+  if (!low.has(name.toLowerCase())) return name;
+  for (let n = 2; ; n++) {
+    const suf = `-${n}`;
+    const cand = name.slice(0, 20 - suf.length).trimEnd() + suf;
+    if (!low.has(cand.toLowerCase())) return cand;
+  }
+}
 
 export function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'task';

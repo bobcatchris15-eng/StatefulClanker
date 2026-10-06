@@ -11,14 +11,17 @@ function stream(model: any, context: any) {
       stopReason: 'pending', timestamp: Date.now(),
     };
     s.push({ type: 'start', partial: out });
-    const hasResult = (context.messages ?? []).some((m: any) => m.role === 'toolResult');
-    if (!hasResult) {
-      const args = { status: 'complete', summary: 'mock work done', changed_files: ['a.txt'], tests_run: ['mock'], confidence: 'high' };
-      out.content.push({ type: 'toolCall', id: 'call_1', name: 'worker_finish', arguments: {} });
+    const nResults = (context.messages ?? []).filter((m: any) => m.role === 'toolResult').length;
+    if (nResults < 2) {
+      const tn = nResults === 0 ? 'worker_name' : 'worker_finish';
+      const args: any = nResults === 0 ? { name: 'Rivet' }
+        : { status: 'complete', summary: 'mock work done', changed_files: ['a.txt'], tests_run: ['mock'], confidence: 'high' };
+      const cid = `call_${nResults + 1}`;
+      out.content.push({ type: 'toolCall', id: cid, name: tn, arguments: {} });
       s.push({ type: 'toolcall_start', contentIndex: 0, partial: out });
       out.content[0].arguments = args;
       s.push({ type: 'toolcall_delta', contentIndex: 0, delta: JSON.stringify(args), partial: out });
-      s.push({ type: 'toolcall_end', contentIndex: 0, toolCall: { type: 'toolCall', id: 'call_1', name: 'worker_finish', arguments: args }, partial: out });
+      s.push({ type: 'toolcall_end', contentIndex: 0, toolCall: { type: 'toolCall', id: cid, name: tn, arguments: args }, partial: out });
       out.stopReason = 'toolUse';
     } else {
       out.content.push({ type: 'text', text: '' });

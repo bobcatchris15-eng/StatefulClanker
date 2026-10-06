@@ -54,9 +54,10 @@ export function operatorMode(pi: ExtensionAPI): void {
       const files = r.changed_files?.length ? ` files=${r.changed_files.join(',')}` : '';
       const unres = r.unresolved_questions?.length ? `\nunresolved: ${r.unresolved_questions.join('; ')}` : '';
       const risks = r.known_risks?.length ? `\nrisks: ${r.known_risks.join('; ')}` : '';
+      const nm = getWorker(root(), id)?.display_name;
       pi.sendMessage({
         customType: 'sc-worker-result', display: true, details: { worker: id, task: r.task_id, receipt: file },
-        content: `Worker ${id} finished task ${r.task_id}: ${r.status}\n${r.summary}${files}${unres}${risks}`,
+        content: `Worker ${id}${nm ? ` (${nm})` : ''} finished task ${r.task_id}: ${r.status}\n${r.summary}${files}${unres}${risks}`,
       }, { deliverAs: 'followUp', triggerTurn: true });
       draw();
     });
@@ -110,7 +111,7 @@ export function operatorMode(pi: ExtensionAPI): void {
       }
       if (!r.ok) return txt(`error: ${r.error}`);
       draw();
-      return txt(JSON.stringify({ worker_id: r.worker_id, model: r.model, reason: r.selection?.reason, worktree: r.worktree, task_id: r.task_id }));
+      return txt(JSON.stringify({ worker_id: r.worker_id, name: null, model: r.model, reason: r.selection?.reason, worktree: r.worktree, task_id: r.task_id }));
     },
   });
 
@@ -157,7 +158,7 @@ export function operatorMode(pi: ExtensionAPI): void {
     },
   });
 
-  const line = (w: any) => `${w.id} ${w.status} ${w.provider}/${w.model} task=${w.task_id}${w.current_action ? ` "${w.current_action}"` : ''}`;
+  const line = (w: any) => `${w.id}${w.display_name ? ` ${w.display_name}` : ''} ${w.status} ${w.provider}/${w.model} task=${w.task_id}${w.current_action ? ` "${w.current_action}"` : ''}`;
   pi.registerTool({
     name: 'worker_list', label: 'List Workers', description: 'List workers with status.', parameters: Type.Object({}),
     async execute() { const ws = listWorkers(root()); return txt(ws.length ? ws.map(line).join('\n') : '(no workers)'); },
