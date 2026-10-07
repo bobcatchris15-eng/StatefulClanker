@@ -6,7 +6,7 @@ import { Type } from 'typebox';
 import { recordIntent } from './project/intent.ts';
 import { reconstruct } from './project/reconstruct.ts';
 import { createTask, getTask, listTasks, updateTask } from './project/tasks.ts';
-import { renderRack } from './ui/worker-rack.ts';
+import { BlinkenState, renderRack, type RackWorker } from './ui/worker-rack.ts';
 import { CatalogService } from './catalog/service.ts';
 import { spawnSelected, WorkerManager } from './workers/manager.ts';
 import { parentExtensionArgs } from './workers/runtime.ts';
@@ -24,18 +24,47 @@ export function operatorMode(pi: ExtensionAPI): void {
   let mgr: WorkerManager | null = null;
   let first = true;
   const root = () => process.env.SC_PROJECT_ROOT ?? cwd;
+  const parentId = 'CLANKER';
+  const blink = new BlinkenState(650);
+  let parentStatus = 'IDLE';
+  let parentTool = '';
 
   let timer: NodeJS.Timeout | null = null;
+  let fadeTimer: NodeJS.Timeout | null = null;
   let last = 0;
+  function parentRow(): RackWorker {
+    const m = uiCtx?.model;
+    return {
+      id: parentId,
+      status: parentStatus,
+      provider: m?.provider ?? '',
+      model: m?.id ?? 'parent',
+      role: 'operator',
+      current_tool: parentTool,
+      current_action: parentTool ? `tool: ${parentTool}` : '',
+    };
+  }
   function drawNow(): void {
     timer = null; last = Date.now();
     if (!uiCtx?.hasUI) return;
-    try { uiCtx.ui.setWidget('sc-rack', renderRack(listWorkers(root()), process.stdout.columns || 80)); } catch { /* ctx stale */ }
+    try {
+      uiCtx.ui.setWidget('sc-rack', renderRack(listWorkers(root()), process.stdout.columns || 80, blink, parentRow()));
+    } catch { /* ctx stale */ }
   }
   function draw(): void {
     if (timer) return;
-    timer = setTimeout(drawNow, Math.max(0, 300 - (Date.now() - last)));
+    timer = setTimeout(drawNow, Math.max(0, 140 - (Date.now() - last)));
     timer.unref();
+  }
+  function fadeLater(): void {
+    if (fadeTimer) clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(() => { fadeTimer = null; draw(); }, blink.pulseMs + 40);
+    fadeTimer.unref();
+  }
+  function see(id: string, ev: any): void {
+    blink.ingest(id, ev);
+    draw();
+    fadeLater();
   }
 
   let cat: CatalogService | null = null;
@@ -57,22 +86,47 @@ export function operatorMode(pi: ExtensionAPI): void {
       }, { deliverAs: 'followUp', triggerTurn: true });
       draw();
     });
-    m.on('event', draw);
-    m.on('exit', draw);
+    m.on('event', (id: string, ev: any) => {
+      blink.ingest(id, ev);
+      if (ev?.type === 'extension_ui_request') {
+        const t = String((ev?.method === 'notify' ? ev?.message : ev?.statusText) ?? '');
+        if (t.startsWith('SC1 ')) blink.transfer(id, parentId);
+      }
+      draw();
+      fadeLater();
+    });
+    m.on('exit', (id: string, x: any) => {
+      if (!x?.expected) blink.pulse(id, 'ERR', Date.now(), 1200);
+      draw();
+      fadeLater();
+    });
     mgr = m;
     return m;
   };
 
   pi.on('session_start', async (_e: any, ctx: any) => {
-    cwd = ctx.cwd ?? cwd; uiCtx = ctx; first = true;
+    cwd = ctx.cwd ?? cwd; uiCtx = ctx; first = true; parentStatus = 'IDLE'; parentTool = '';
     manager().recover();
     drawNow();
   });
   pi.on('session_shutdown', async () => {
+    if (timer) clearTimeout(timer);
+    if (fadeTimer) clearTimeout(fadeTimer);
     if (!mgr) return;
     for (const w of listWorkers(root())) { try { await mgr.runtime(w.id)?.stop(); } catch { /* */ } }
     mgr.releaseAll();
   });
+
+  pi.on('agent_start', (ev: any) => { parentStatus = 'RUNNING'; see(parentId, ev); });
+  pi.on('turn_start', (ev: any) => { parentStatus = 'RUNNING'; see(parentId, ev); });
+  pi.on('message_start', (ev: any) => see(parentId, ev));
+  pi.on('message_update', (ev: any) => see(parentId, ev));
+  pi.on('message_end', (ev: any) => see(parentId, ev));
+  pi.on('tool_execution_start', (ev: any) => { parentTool = String(ev?.toolName ?? ''); see(parentId, ev); });
+  pi.on('tool_execution_update', (ev: any) => see(parentId, ev));
+  pi.on('tool_execution_end', (ev: any) => { see(parentId, ev); parentTool = ''; });
+  pi.on('turn_end', (ev: any) => see(parentId, ev));
+  pi.on('agent_end', (ev: any) => { parentStatus = 'IDLE'; parentTool = ''; see(parentId, ev); });
   pi.on('before_agent_start', async (event: any) => {
     let extra = `${prompt('operator.md')}\n\n${prompt('authority.md')}`;
     if (first) { first = false; extra += `\n\n${reconstruct(root())}`; }
@@ -108,7 +162,9 @@ export function operatorMode(pi: ExtensionAPI): void {
         return txt(JSON.stringify({ dry_run: true, ok: r.ok, chosen: s.chosen?.key ?? null, reason: s.reason, ranked: s.ranked, excluded: s.excluded, error: r.error }, null, 1));
       }
       if (!r.ok) return txt(`error: ${r.error}`);
+      if (r.worker_id) blink.transfer(parentId, r.worker_id);
       draw();
+      fadeLater();
       return txt(JSON.stringify({ worker_id: r.worker_id, name: null, model: r.model, reason: r.selection?.reason, worktree: r.worktree, task_id: r.task_id }));
     },
   });
@@ -174,7 +230,15 @@ export function operatorMode(pi: ExtensionAPI): void {
   const act = (name: string, desc: string, fn: (id: string, text: string) => Promise<unknown>) =>
     pi.registerTool({
       name, label: name, description: desc, parameters: Type.Object({ id: Type.String(), text: Type.String() }),
-      async execute(_i: string, p: any) { try { await fn(p.id, p.text); return txt('sent'); } catch (e) { return txt(`error: ${(e as Error).message}`); } },
+      async execute(_i: string, p: any) {
+        try {
+          await fn(p.id, p.text);
+          blink.transfer(parentId, p.id);
+          draw();
+          fadeLater();
+          return txt('sent');
+        } catch (e) { return txt(`error: ${(e as Error).message}`); }
+      },
     });
   act('worker_message', 'Steer a running worker.', (id, t) => manager().message(id, t));
   act('worker_follow_up', 'Queue a follow-up for a worker.', (id, t) => manager().followUp(id, t));
