@@ -6,7 +6,7 @@ import { Type } from 'typebox';
 import { recordIntent } from './project/intent.ts';
 import { reconstruct } from './project/reconstruct.ts';
 import { createTask, getTask, listTasks, updateTask } from './project/tasks.ts';
-import { renderRack } from './ui/worker-rack.ts';
+import { renderRack, type RackWorker } from './ui/worker-rack.ts';
 import { CatalogService } from './catalog/service.ts';
 import { spawnSelected, WorkerManager, type SpawnLaunch } from './workers/manager.ts';
 import { parentExtensionArgs } from './workers/runtime.ts';
@@ -39,10 +39,42 @@ export function operatorMode(pi: ExtensionAPI): void {
 
   let timer: NodeJS.Timeout | null = null;
   let last = 0;
+  // Supervisor panel: a setWidget component, so width and theme come from the TUI itself
+  // (render(width) / ui.theme) instead of process.stdout.columns. Draw state is pushed into
+  // `rack` and the component is invalidated; it never rebuilds lines with stale ANSI.
+  const rack: { workers: RackWorker[]; comp: { invalidate(): void } | null; tui: { requestRender(): void } | null } =
+    { workers: [], comp: null, tui: null };
+
+  function rackRows(): RackWorker[] {
+    const titles = new Map<string, string>();
+    try { for (const t of listTasks(root())) titles.set(t.id, t.title); } catch { /* no task store yet */ }
+    return listWorkers(root()).map((w: any) => ({ ...w, task_title: w.task_id ? titles.get(w.task_id) : undefined }));
+  }
+  function rackComponent(tui: any): any {
+    rack.tui = tui;
+    const comp = {
+      invalidate(): void { /* data is read fresh in render() */ },
+      render(width: number): string[] {
+        // Theme is read per render so a theme switch is picked up without re-registering the widget.
+        const theme = (uiCtx?.ui?.theme ?? undefined) as any;
+        return renderRack(rack.workers, width, { theme });
+      },
+      dispose(): void { rack.comp = null; },
+    };
+    rack.comp = comp;
+    return comp;
+  }
+  function installWidget(): void {
+    if (!uiCtx?.hasUI || uiCtx.mode !== 'tui') return;
+    try { uiCtx.ui.setWidget('sc-rack', rackComponent); } catch { /* ctx stale */ }
+  }
   function drawNow(): void {
     timer = null; last = Date.now();
     if (!uiCtx?.hasUI) return;
-    try { uiCtx.ui.setWidget('sc-rack', renderRack(listWorkers(root()), process.stdout.columns || 80)); } catch { /* ctx stale */ }
+    rack.workers = rackRows();
+    if (!rack.comp) installWidget();
+    rack.comp?.invalidate();
+    try { rack.tui?.requestRender(); } catch { /* ctx stale */ }
   }
   function draw(): void {
     if (timer) return;
@@ -140,11 +172,14 @@ export function operatorMode(pi: ExtensionAPI): void {
     collabTimer = setInterval(() => { void pumpCollaboration(); }, 500);
     collabTimer.unref();
     void pumpCollaboration();
+    rack.workers = rackRows();
+    installWidget();
     drawNow();
   });
   pi.on('session_shutdown', async () => {
     if (collabTimer) { clearInterval(collabTimer); collabTimer = null; }
     if (!mgr) return;
+    try { uiCtx?.ui?.setWidget('sc-rack', undefined); } catch { /* ctx stale */ }
     for (const w of listWorkers(root())) { try { await mgr.runtime(w.id)?.stop(); } catch { /* */ } }
     mgr.releaseAll();
   });

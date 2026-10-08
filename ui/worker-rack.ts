@@ -1,32 +1,183 @@
+import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
+
 export interface RackWorker {
   id: string; display_name?: string; status: string; model: string; current_action?: string; current_tool?: string; role?: string; task_id?: string;
+  /** Human-readable task/job title. Supplied by the caller (registry has only `task_id`). */
+  task_title?: string;
 }
 
-export const SYMBOLS: Record<string, { sym: string; label: string }> = {
-  STARTING: { sym: '◐', label: 'WAIT' }, RUNNING: { sym: '●', label: 'RUN' }, WAITING: { sym: '◐', label: 'WAIT' },
-  BLOCKED: { sym: '!', label: 'BLOCK' }, COMPLETE: { sym: '✓', label: 'DONE' }, FAILED: { sym: '×', label: 'FAIL' },
-  CANCELLED: { sym: '×', label: 'FAIL' }, LOST: { sym: '×', label: 'FAIL' }, IDLE: { sym: '○', label: 'IDLE' },
+export interface RackTheme {
+  /** Matches Pi's `Theme.fg(token, text)`; tokens are semantic (see pi theme ThemeColor). */
+  fg(token: string, text: string): string;
+}
+
+export interface RackOpts {
+  /** Active Pi theme. When omitted the panel renders plain text (no hardcoded colours). */
+  theme?: RackTheme;
+  /** Max worker rows drawn before an overflow line. Default 8. */
+  maxRows?: number;
+}
+
+export const DEFAULT_MAX_ROWS = 8;
+/** Below this width the box is dropped and rows render as bare stripped lines. */
+export const MIN_BOX_WIDTH = 24;
+
+export const SYMBOLS: Record<string, { sym: string; label: string; token: string }> = {
+  RUNNING: { sym: '●', label: 'RUN', token: 'success' },
+  STARTING: { sym: '◌', label: 'START', token: 'accent' },
+  WAITING: { sym: '◐', label: 'WAIT', token: 'warning' },
+  BLOCKED: { sym: '!', label: 'BLOCK', token: 'error' },
+  COMPLETE: { sym: '✓', label: 'DONE', token: 'success' },
+  FAILED: { sym: '✗', label: 'FAIL', token: 'error' },
+  CANCELLED: { sym: '⊘', label: 'CANCEL', token: 'dim' },
+  LOST: { sym: '⊗', label: 'LOST', token: 'error' },
+  IDLE: { sym: '○', label: 'IDLE', token: 'muted' },
 };
 
-function fit(s: string, w: number): string {
+/** States that count as "in flight" for ordering, job counts and header totals. */
+const ACTIVE = new Set(['STARTING', 'RUNNING', 'WAITING', 'BLOCKED']);
+/** Header segment priority: supervisor wants RUN/WAIT/FAIL visible before the rest. */
+const HEADER_ORDER = ['RUNNING', 'WAITING', 'BLOCKED', 'FAILED', 'LOST', 'STARTING', 'COMPLETE', 'IDLE'];
+const UNKNOWN = { sym: '?', label: '?', token: 'muted' };
+
+const ELL = '…';
+
+function status(w: RackWorker): { sym: string; label: string; token: string } {
+  return SYMBOLS[w.status] ?? { ...UNKNOWN, label: w.status || UNKNOWN.label };
+}
+
+/** ANSI/wide-char aware clip to `w` visible columns. */
+function clip(s: string, w: number): string {
   if (w <= 0) return '';
-  return s.length <= w ? s : w <= 1 ? s.slice(0, w) : s.slice(0, w - 1) + '…';
+  return visibleWidth(s) <= w ? s : truncateToWidth(s, w, ELL);
 }
 
-function strip(w: RackWorker): string {
-  const st = SYMBOLS[w.status] ?? { sym: '?', label: w.status };
+/** ANSI/wide-char aware pad to exactly `w` visible columns. */
+function pad(s: string, w: number): string {
+  const c = clip(s, w);
+  return c + ' '.repeat(Math.max(0, w - visibleWidth(c)));
+}
+
+function jobLabel(w: RackWorker): string {
+  return w.task_title || w.task_id || '';
+}
+
+/** Stable grouping: in-flight workers first, then idle, then finished; id order within a group. */
+function ordered(workers: RackWorker[]): RackWorker[] {
+  const rank = (w: RackWorker): number => {
+    if (ACTIVE.has(w.status)) return 0;
+    if (w.status === 'IDLE') return 1;
+    return 2;
+  };
+  return [...workers].sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id));
+}
+
+/** Compact one-line form used below MIN_BOX_WIDTH and in tests. */
+function compact(w: RackWorker, st: RackTheme | undefined): string {
+  const s = status(w);
   const act = w.current_action || w.current_tool || '';
-  return `${w.id}${w.display_name ? ` ${w.display_name}` : ''} ${st.sym} ${st.label} ${w.model}  ${act}`.trimEnd();
+  const glyph = st ? st.fg(s.token, s.sym) : s.sym;
+  return [w.id, w.display_name ?? '', glyph, s.label, jobLabel(w) || w.model, act].filter(Boolean).join(' ').trimEnd();
 }
 
-/** Pure: workers -> display lines. Strips for narrow widths, boxed panel for width >= 100. */
-export function renderRack(workers: RackWorker[], width: number): string[] {
-  if (workers.length === 0) return [];
-  if (width < 100) return workers.map((w) => fit(strip(w), Math.max(10, width)));
-  const inner = width - 4;
-  const bar = '─'.repeat(width - 2);
-  const out = [`┌${bar}┐`];
-  for (const w of workers) out.push(`│ ${fit(strip(w), inner).padEnd(inner)} │`);
-  out.push(`└${bar}┘`);
-  return out;
+/** `SUPERVISOR · RUN 2 · WAIT 1 · … · jobs 1/3`, sized to `budget` visible columns. */
+function header(workers: RackWorker[], budget: number, st: (t: string, s: string) => string): string {
+  const counts = new Map<string, number>();
+  for (const w of workers) counts.set(w.status, (counts.get(w.status) ?? 0) + 1);
+
+  const segs: string[] = [];
+  let used = 0;
+  for (const s of HEADER_ORDER) {
+    const n = counts.get(s) ?? 0;
+    if (!n) continue;
+    const meta = SYMBOLS[s] ?? UNKNOWN;
+    const seg = `${st('muted', meta.label)} ${st(meta.token, `${n}`)}`;
+    const cost = visibleWidth(seg) + 3; // " · " separator
+    if (used + cost > budget) continue;
+    used += cost;
+    segs.push(seg);
+  }
+  if (!segs.length && budget >= 4) segs.push(st('muted', `n=${workers.length}`));
+  return segs.join(`${st('muted', ' · ')} `);
+}
+
+interface Budget { idW: number; nameW: number; taskW: number; modelW: number; rest: number }
+
+/** Column plan. `rest` is the leftover space after id/name/task/model, i.e. the action column. */
+function plan(rows: RackWorker[], cw: number): Budget {
+  const idW = Math.max(3, ...rows.map((w) => visibleWidth(w.id)));
+  const longest = Math.max(6, ...rows.map((w) => visibleWidth(w.display_name || '')));
+  const nameW = Math.min(20, longest);
+  const used0 = 2 + idW + 1 + nameW; // glyph, space, id, space, name
+  const ACTION_MIN = 10;
+  let rest = cw - used0 - 1; // trailing space after the name
+  const modelMax = Math.min(14, Math.max(0, ...rows.map((w) => visibleWidth(w.model))));
+  let taskW = 0;
+  let modelW = 0;
+  if (rest >= 8 + 1 + modelMax + 1 + ACTION_MIN) taskW = Math.min(28, Math.max(10, Math.floor(rest * 0.35)));
+  else if (rest >= 8 + 1 + ACTION_MIN) taskW = Math.min(20, rest - 1 - ACTION_MIN);
+  if (taskW > 0) rest -= taskW + 1;
+  if (modelMax > 0 && rest >= modelMax + 1 + ACTION_MIN) { modelW = modelMax; rest -= modelMax + 1; }
+  return { idW, nameW, taskW, modelW, rest };
+}
+
+/** One worker row: `<glyph> <id> <name>  <task> <model> ... <action>`. */
+function row(w: RackWorker, b: Budget, st: (t: string, s: string) => string): string {
+  const s = status(w);
+  // Unknown states show their raw name instead of a blank action cell.
+  const act = w.current_action || w.current_tool || (SYMBOLS[w.status] ? '' : w.status);
+  const cells: string[] = [pad(w.id, b.idW), pad(w.display_name || '', b.nameW)];
+  const left = `${st(s.token, s.sym)} ${cells.join(' ')}`;
+  let tail = '';
+  if (b.taskW > 0) tail += `${pad(clip(jobLabel(w), b.taskW), b.taskW)} `;
+  if (b.modelW > 0) tail += `${st('dim', pad(clip(w.model, b.modelW), b.modelW))} `;
+  const space = Math.max(0, b.rest);
+  const action = space > 3 ? st('muted', clip(act, space)) : '';
+  return `${left} ${tail}${' '.repeat(Math.max(0, space - visibleWidth(action)))}${action}`;
+}
+
+/**
+ * Pure: workers -> display lines for an available terminal `width`.
+ * Boxed supervisor panel (header with per-state counts + job count) at width >= MIN_BOX_WIDTH,
+ * bare stripped lines below that. Never emits a line wider than `width`, and always emits
+ * at least one line (idle placeholder when there are no workers).
+ */
+export function renderRack(workers: RackWorker[], width: number, opts: RackOpts = {}): string[] {
+  const W = Math.max(0, Math.floor(width));
+  const theme = opts.theme;
+  const st = (t: string, s: string): string => (theme ? theme.fg(t, s) : s);
+  const rows = ordered(workers ?? []);
+
+  if (W <= 0) return [];
+  if (W < MIN_BOX_WIDTH) {
+    const lines = rows.length ? rows.map((w) => compact(w, theme)) : [st('muted', `○ idle — no workers`)];
+    return lines.map((l) => clip(l, W));
+  }
+
+  const cw = W - 4;
+  const maxRows = Math.max(1, Math.floor(opts.maxRows ?? DEFAULT_MAX_ROWS));
+  const shown = rows.slice(0, maxRows);
+  const hidden = rows.length - shown.length;
+
+  const body: string[] = [];
+  if (!shown.length) body.push(st('muted', '○ idle — no workers spawned'));
+  else {
+    const b = plan(shown, cw);
+    for (const w of shown) body.push(row(w, b, st));
+  }
+  if (hidden > 0) body.push(st('muted', `… +${hidden} more (see /worker_list)`));
+
+  // Header line carries the supervisor totals; the box is closed by a plain rule.
+  const title = st('accent', ' SUPERVISOR ');
+  const activeJobs = new Set(rows.filter((w) => ACTIVE.has(w.status)).map(jobLabel).filter(Boolean)).size;
+  const totalJobs = new Set(rows.map(jobLabel).filter(Boolean)).size;
+  const jobs = ` ${st('muted', 'jobs')} ${st(activeJobs ? 'accent' : 'muted', `${activeJobs}/${totalJobs}`)} `;
+  const headBudget = cw - visibleWidth(title) - visibleWidth(jobs) - 4;
+  const counts = header(rows, headBudget, st);
+  let head = `┌${title}${counts ? `${st('muted', ' · ')}${counts}` : ''}${jobs}`;
+  head += '─'.repeat(Math.max(0, W - 1 - visibleWidth(head))) + '┐';
+  head = clip(head, W);
+
+  const lines = [head, ...body.map((l) => clip(`│ ${pad(l, cw)} │`, W)), `└${'─'.repeat(Math.max(0, W - 2))}┘`];
+  return lines.map((l) => clip(l, W));
 }

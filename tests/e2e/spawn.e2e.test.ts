@@ -62,7 +62,9 @@ test('real pi worker with mock provider reaches COMPLETE', { timeout: 120000 }, 
     const w = getWorker(root, id)!;
     assert.equal(w.status, 'COMPLETE');
     assert.equal(w.display_name, 'Rivet');
-    assert.ok(renderRack([w as any], 80)[0]!.startsWith(`${id} Rivet `));
+    const rack = renderRack([{ ...(w as any), task_title: 'e2e spawn task' }], 80);
+    assert.match(rack[1]!, /W\d\d Rivet/, 'supervisor panel row shows id and display name');
+    assert.match(rack[1]!, /e2e spawn task/);
     assert.ok(readEvents(root, { types: ['worker.named'] }).length >= 1);
     const receipts = readdirSync(join(root, '.statefulclanker', 'receipts', 'workers'));
     assert.equal(receipts.length, 1);
