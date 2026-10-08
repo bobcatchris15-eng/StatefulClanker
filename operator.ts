@@ -6,7 +6,9 @@ import { Type } from 'typebox';
 import { recordIntent } from './project/intent.ts';
 import { reconstruct } from './project/reconstruct.ts';
 import { createTask, getTask, listTasks, updateTask } from './project/tasks.ts';
-import { renderRack, type RackWorker } from './ui/worker-rack.ts';
+import { renderRack, type RackOpts, type RackWorker } from './ui/worker-rack.ts';
+import { DEFAULT_LAMPS, LampBank, LARGE_LAMPS, RackClock } from './ui/lamp-bank.ts';
+import { Key, matchesKey, visibleWidth } from '@earendil-works/pi-tui';
 import { CatalogService } from './catalog/service.ts';
 import { spawnSelected, WorkerManager, type SpawnLaunch } from './workers/manager.ts';
 import { parentExtensionArgs } from './workers/runtime.ts';
@@ -44,11 +46,40 @@ export function operatorMode(pi: ExtensionAPI): void {
   // `rack` and the component is invalidated; it never rebuilds lines with stale ANSI.
   const rack: { workers: RackWorker[]; comp: { invalidate(): void } | null; tui: { requestRender(): void } | null } =
     { workers: [], comp: null, tui: null };
+  // Blinkenlights: per-worker lamp banks plus the animation clock. The banks are stateful
+  // (a lamp is lit per observed status change); the clock is a clamped phase, so the
+  // renderer stays pure and unit-testable.
+  const banks = new LampBank(LARGE_LAMPS);
+  const clock = new RackClock();
+  const TICK_MS = 120;          // ~8fps, well above the 2.5Hz the blink needs
+  const ROWS_EVERY_MS = 500;    // registry re-read while animating
+  let tick: NodeJS.Timeout | null = null;
+  let lastRows = 0;
+  /** True when there is an interactive terminal to animate for. */
+  const animatable = () => Boolean(uiCtx?.hasUI && uiCtx.mode === 'tui');
 
   function rackRows(): RackWorker[] {
     const titles = new Map<string, string>();
     try { for (const t of listTasks(root())) titles.set(t.id, t.title); } catch { /* no task store yet */ }
     return listWorkers(root()).map((w: any) => ({ ...w, task_title: w.task_id ? titles.get(w.task_id) : undefined }));
+  }
+  /** Pull worker rows and light any lamp the new statuses imply. */
+  function syncRows(now: number): void {
+    rack.workers = rackRows();
+    // Idempotent: only a real status change lights a new lamp, so a periodic re-read never
+    // floods a bank. First sight of a worker seeds it, which is what makes a worker that was
+    // already running before the panel mounted show a lit lamp instead of an empty socket.
+    banks.sync(rack.workers, now);
+    banks.prune(rack.workers.map((w) => w.id), 60_000, now);
+    lastRows = now;
+  }
+  function rackOptions(extra: Partial<RackOpts> = {}): RackOpts {
+    return {
+      theme: (uiCtx?.ui?.theme ?? undefined) as any,
+      lamps: (id) => banks.bank(id),
+      phase: clock.phase,
+      ...extra,
+    };
   }
   function rackComponent(tui: any): any {
     rack.tui = tui;
@@ -56,8 +87,7 @@ export function operatorMode(pi: ExtensionAPI): void {
       invalidate(): void { /* data is read fresh in render() */ },
       render(width: number): string[] {
         // Theme is read per render so a theme switch is picked up without re-registering the widget.
-        const theme = (uiCtx?.ui?.theme ?? undefined) as any;
-        return renderRack(rack.workers, width, { theme });
+        return renderRack(rack.workers, width, rackOptions({ maxLamps: DEFAULT_LAMPS }));
       },
       dispose(): void { rack.comp = null; },
     };
@@ -65,21 +95,69 @@ export function operatorMode(pi: ExtensionAPI): void {
     return comp;
   }
   function installWidget(): void {
-    if (!uiCtx?.hasUI || uiCtx.mode !== 'tui') return;
+    if (!animatable()) return;
     try { uiCtx.ui.setWidget('sc-rack', rackComponent); } catch { /* ctx stale */ }
+  }
+  /**
+   * Animation ticker. Advances the blink phase (clamped, so a suspended laptop cannot make
+   * the lamps jump) and asks Pi for a coalesced re-render. Worker rows are re-read on a
+   * slower cadence than the phase advances. Never runs without an interactive TUI, is
+   * unref'd so it cannot hold the process open, and is cleared on shutdown.
+   */
+  function startTicker(): void {
+    if (tick || !animatable()) return;
+    tick = setInterval(() => {
+      const now = Date.now();
+      if (now - lastRows >= ROWS_EVERY_MS) syncRows(now);
+      clock.advance(now);
+      try { rack.tui?.requestRender(); } catch { /* ctx stale */ }
+    }, TICK_MS);
+    tick.unref?.();
+  }
+  function stopTicker(): void {
+    if (!tick) return;
+    clearInterval(tick);
+    tick = null;
   }
   function drawNow(): void {
     timer = null; last = Date.now();
     if (!uiCtx?.hasUI) return;
-    rack.workers = rackRows();
+    syncRows(last);
     if (!rack.comp) installWidget();
     rack.comp?.invalidate();
     try { rack.tui?.requestRender(); } catch { /* ctx stale */ }
+    startTicker();
   }
   function draw(): void {
     if (timer) return;
     timer = setTimeout(drawNow, Math.max(0, 300 - (Date.now() - last)));
     timer.unref();
+  }
+
+  /** Fullscreen mainframe console: the same pure renderer, deeper banks plus the state legend. */
+  function rackConsole(): Promise<void> {
+    if (!animatable()) return Promise.resolve();
+    return uiCtx.ui.custom((tui: any, theme: any, _keyb: any, done: (v: void) => void) => {
+      rack.tui = tui;
+      const comp = {
+        invalidate(): void { /* data is read fresh in render() */ },
+        render(width: number): string[] {
+          const now = Date.now();
+          if (now - lastRows >= ROWS_EVERY_MS) syncRows(now);
+          clock.advance(now);
+          const w = Math.max(0, Math.floor(width));
+          const lines = renderRack(rack.workers, w, rackOptions({ theme, maxRows: 64, maxLamps: LARGE_LAMPS, legend: true }));
+          const hint = (theme as any)?.fg?.('muted', 'esc/q close') ?? 'esc/q close';
+          return [...lines, visibleWidth(hint) <= w ? hint : hint.slice(0, Math.max(0, w - 1))];
+        },
+        handleInput(data: string): void {
+          if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter) || data === 'q' || data === 'Q') done(undefined);
+        },
+        dispose(): void { /* the shared clock and banks outlive this screen */ },
+      };
+      startTicker();
+      return comp;
+    }).then(() => undefined).catch(() => undefined);
   }
 
   let cat: CatalogService | null = null;
@@ -167,17 +245,20 @@ export function operatorMode(pi: ExtensionAPI): void {
 
   pi.on('session_start', async (_e: any, ctx: any) => {
     cwd = ctx.cwd ?? cwd; uiCtx = ctx; first = true;
+    clock.reset();
     manager().recover();
     if (collabTimer) clearInterval(collabTimer);
     collabTimer = setInterval(() => { void pumpCollaboration(); }, 500);
     collabTimer.unref();
     void pumpCollaboration();
-    rack.workers = rackRows();
+    syncRows(Date.now());
     installWidget();
     drawNow();
   });
   pi.on('session_shutdown', async () => {
     if (collabTimer) { clearInterval(collabTimer); collabTimer = null; }
+    stopTicker();
+    banks.clear();
     if (!mgr) return;
     try { uiCtx?.ui?.setWidget('sc-rack', undefined); } catch { /* ctx stale */ }
     for (const w of listWorkers(root())) { try { await mgr.runtime(w.id)?.stop(); } catch { /* */ } }
@@ -261,6 +342,15 @@ export function operatorMode(pi: ExtensionAPI): void {
     async execute(_i: string, p: any) {
       if (p.scope !== 'machine' && p.scope !== 'project') return txt('error: scope must be machine|project');
       try { return txt(`wrote ${catalog().setProfile(p)}`); } catch (e) { return txt(`error: ${(e as Error).message}`); }
+    },
+  });
+
+  pi.registerCommand('rack', {
+    description: 'Blinkenlight supervisor console: full lamp banks per worker plus a state legend (esc to close)',
+    handler: async (_name: string, ctx: any) => {
+      if (ctx) uiCtx = ctx;
+      syncRows(Date.now());
+      await rackConsole();
     },
   });
 

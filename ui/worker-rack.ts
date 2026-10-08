@@ -1,4 +1,5 @@
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
+import { ACTIVE_STATES, blinkOn, DEFAULT_LAMPS, type Bank } from './lamp-bank.ts';
 
 export interface RackWorker {
   id: string; display_name?: string; status: string; model: string; current_action?: string; current_tool?: string; role?: string; task_id?: string;
@@ -16,11 +17,21 @@ export interface RackOpts {
   theme?: RackTheme;
   /** Max worker rows drawn before an overflow line. Default 8. */
   maxRows?: number;
+  /** Lamp bank depth per worker. Default 8; shrinks to 1 on narrow terminals. */
+  maxLamps?: number;
+  /** Per-worker lamp banks (oldest first). Defaults to one lamp per worker from its current status. */
+  lamps?: (id: string) => Bank;
+  /** Blink phase 0..1. Lamps for active workers are lit while `blinkOn(id, phase)`. */
+  phase?: number;
+  /** Draw the state legend inside the box (fullscreen console). */
+  legend?: boolean;
 }
 
 export const DEFAULT_MAX_ROWS = 8;
 /** Below this width the box is dropped and rows render as bare stripped lines. */
 export const MIN_BOX_WIDTH = 24;
+/** Space reserved around a lamp bank cell: one space each side. */
+const BANK_PAD = 2;
 
 export const SYMBOLS: Record<string, { sym: string; label: string; token: string }> = {
   RUNNING: { sym: '●', label: 'RUN', token: 'success' },
@@ -34,13 +45,17 @@ export const SYMBOLS: Record<string, { sym: string; label: string; token: string
   IDLE: { sym: '○', label: 'IDLE', token: 'muted' },
 };
 
-/** States that count as "in flight" for ordering, job counts and header totals. */
-const ACTIVE = new Set(['STARTING', 'RUNNING', 'WAITING', 'BLOCKED']);
 /** Header segment priority: supervisor wants RUN/WAIT/FAIL visible before the rest. */
 const HEADER_ORDER = ['RUNNING', 'WAITING', 'BLOCKED', 'FAILED', 'LOST', 'STARTING', 'COMPLETE', 'IDLE'];
 const UNKNOWN = { sym: '?', label: '?', token: 'muted' };
 
 const ELL = '…';
+/** Dark, unlit socket. Keeps every socket the same column count as a lit lamp. */
+const SOCKET = '·';
+
+/** Lamp glyph density by rank, 0 = newest. */
+const LAMP_SYMS = ['█', '▓', '▒', '░'];
+
 
 function status(w: RackWorker): { sym: string; label: string; token: string } {
   return SYMBOLS[w.status] ?? { ...UNKNOWN, label: w.status || UNKNOWN.label };
@@ -65,19 +80,47 @@ function jobLabel(w: RackWorker): string {
 /** Stable grouping: in-flight workers first, then idle, then finished; id order within a group. */
 function ordered(workers: RackWorker[]): RackWorker[] {
   const rank = (w: RackWorker): number => {
-    if (ACTIVE.has(w.status)) return 0;
+    if (ACTIVE_STATES.has(w.status)) return 0;
     if (w.status === 'IDLE') return 1;
     return 2;
   };
   return [...workers].sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id));
 }
 
+/**
+ * One lamp: a single socket in the worker's bank.
+ * `rank` 0 is the newest lamp. The newest lamp of an active worker blinks with a
+ * per-worker phase offset; every other lamp is lit steadily at a density that
+ * falls off with age. Dark sockets are drawn, not skipped, so the bank never
+ * changes width and the rack reads as a panel of real bulbs.
+ */
+function lamp(w: RackWorker, lampStatus: string, rank: number, phase: number, st: (t: string, s: string) => string): string {
+  const sym = LAMP_SYMS[Math.min(rank, LAMP_SYMS.length - 1)]!;
+  const stateToken = SYMBOLS[lampStatus]?.token ?? UNKNOWN.token;
+  if (rank === 1) return st(stateToken, sym);          // one step back: same hue, half density
+  if (rank >= 2) return st(rank === 2 ? 'dim' : 'muted', sym);
+  const on = !ACTIVE_STATES.has(w.status) || blinkOn(w.id, phase);
+  return on ? st(stateToken, sym) : st('dim', SOCKET);
+}
+
+/** The lamp bank cell: `depth` sockets, newest at the right. */
+function bank(w: RackWorker, depth: number, phase: number, st: (t: string, s: string) => string, opts: RackOpts): string {
+  const lamps = (opts.lamps?.(w.id) ?? [{ status: w.status, at: 0 }]).slice(-depth);
+  const out: string[] = [];
+  for (let slot = 0; slot < depth; slot++) {
+    const fromRight = depth - 1 - slot;
+    const l = lamps[lamps.length - 1 - fromRight];
+    out.push(l ? lamp(w, l.status, fromRight, phase, st) : st('dim', SOCKET));
+  }
+  return out.join('');
+}
+
 /** Compact one-line form used below MIN_BOX_WIDTH and in tests. */
-function compact(w: RackWorker, st: RackTheme | undefined): string {
+function compact(w: RackWorker, depth: number, phase: number, st: (t: string, s: string) => string, opts: RackOpts): string {
   const s = status(w);
   const act = w.current_action || w.current_tool || '';
-  const glyph = st ? st.fg(s.token, s.sym) : s.sym;
-  return [w.id, w.display_name ?? '', glyph, s.label, jobLabel(w) || w.model, act].filter(Boolean).join(' ').trimEnd();
+  const glyph = blinkOn(w.id, phase) || !ACTIVE_STATES.has(w.status) ? st(s.token, s.sym) : st('dim', SOCKET);
+  return [w.id, w.display_name ?? '', glyph, bank(w, depth, phase, st, opts), s.label, jobLabel(w) || w.model, act].filter(Boolean).join(' ').trimEnd();
 }
 
 /** `SUPERVISOR · RUN 2 · WAIT 1 · … · jobs 1/3`, sized to `budget` visible columns. */
@@ -101,14 +144,29 @@ function header(workers: RackWorker[], budget: number, st: (t: string, s: string
   return segs.join(`${st('muted', ' · ')} `);
 }
 
-interface Budget { idW: number; nameW: number; taskW: number; modelW: number; rest: number }
+/** `●RUN ◌START ◐WAIT …` state legend, one coloured glyph+label per state. */
+function legend(st: (t: string, s: string) => string): string {
+  return Object.keys(SYMBOLS)
+    .map((k) => { const m = SYMBOLS[k]!; return `${st(m.token, m.sym)}${st('muted', m.label)}`; })
+    .join(' ');
+}
 
-/** Column plan. `rest` is the leftover space after id/name/task/model, i.e. the action column. */
-function plan(rows: RackWorker[], cw: number): Budget {
+interface Budget { idW: number; nameW: number; taskW: number; modelW: number; lamps: number; rest: number }
+
+/**
+ * Column plan. `rest` is the leftover space after id/name/task/model, i.e. the action
+ * column. The lamp bank is allocated first (it is the whole point of the panel) and
+ * shrinks before any text column does.
+ */
+function plan(rows: RackWorker[], cw: number, wantLamps: number): Budget {
   const idW = Math.max(3, ...rows.map((w) => visibleWidth(w.id)));
   const longest = Math.max(6, ...rows.map((w) => visibleWidth(w.display_name || '')));
   const nameW = Math.min(20, longest);
-  const used0 = 2 + idW + 1 + nameW; // glyph, space, id, space, name
+  // glyph, space, bank, space
+  const fixed = 2 + 1 + wantLamps + 1;
+  // Never let the bank eat the id or name columns: floor it at the text minimum.
+  let lamps = Math.max(1, Math.min(wantLamps, Math.max(1, cw - fixed - idW - 1 - 1 - 6)));
+  const used0 = 2 + lamps + 1 + idW + 1 + nameW; // glyph, bank, id, name
   const ACTION_MIN = 10;
   let rest = cw - used0 - 1; // trailing space after the name
   const modelMax = Math.min(14, Math.max(0, ...rows.map((w) => visibleWidth(w.model))));
@@ -118,16 +176,18 @@ function plan(rows: RackWorker[], cw: number): Budget {
   else if (rest >= 8 + 1 + ACTION_MIN) taskW = Math.min(20, rest - 1 - ACTION_MIN);
   if (taskW > 0) rest -= taskW + 1;
   if (modelMax > 0 && rest >= modelMax + 1 + ACTION_MIN) { modelW = modelMax; rest -= modelMax + 1; }
-  return { idW, nameW, taskW, modelW, rest };
+  return { idW, nameW, taskW, modelW, lamps, rest };
 }
 
-/** One worker row: `<glyph> <id> <name>  <task> <model> ... <action>`. */
-function row(w: RackWorker, b: Budget, st: (t: string, s: string) => string): string {
+/** One worker row: `<glyph> <bank> <id> <name>  <task> <model> ... <action>`. */
+function row(w: RackWorker, b: Budget, phase: number, st: (t: string, s: string) => string, opts: RackOpts): string {
   const s = status(w);
-  // Unknown states show their raw name instead of a blank action cell.
+  // The head glyph blinks only while the worker is actively producing; it is steady
+  // otherwise, so a full rack of blinking glyphs still reads as "these are the live ones".
+  const head = blinkOn(w.id, phase) || !ACTIVE_STATES.has(w.status) ? st(s.token, s.sym) : st('dim', SOCKET);
   const act = w.current_action || w.current_tool || (SYMBOLS[w.status] ? '' : w.status);
   const cells: string[] = [pad(w.id, b.idW), pad(w.display_name || '', b.nameW)];
-  const left = `${st(s.token, s.sym)} ${cells.join(' ')}`;
+  const left = `${head} ${bank(w, b.lamps, phase, st, opts)} ${cells.join(' ')}`;
   let tail = '';
   if (b.taskW > 0) tail += `${pad(clip(jobLabel(w), b.taskW), b.taskW)} `;
   if (b.modelW > 0) tail += `${st('dim', pad(clip(w.model, b.modelW), b.modelW))} `;
@@ -146,11 +206,14 @@ export function renderRack(workers: RackWorker[], width: number, opts: RackOpts 
   const W = Math.max(0, Math.floor(width));
   const theme = opts.theme;
   const st = (t: string, s: string): string => (theme ? theme.fg(t, s) : s);
+  const phase = opts.phase ?? 0;
   const rows = ordered(workers ?? []);
+  const maxLamps = Math.max(1, Math.floor(opts.maxLamps ?? DEFAULT_LAMPS));
 
   if (W <= 0) return [];
   if (W < MIN_BOX_WIDTH) {
-    const lines = rows.length ? rows.map((w) => compact(w, theme)) : [st('muted', `○ idle — no workers`)];
+    const depth = Math.max(1, Math.min(maxLamps, W - 14));
+    const lines = rows.length ? rows.map((w) => compact(w, depth, phase, st, opts)) : [st('muted', '○ idle — no workers')];
     return lines.map((l) => clip(l, W));
   }
 
@@ -162,14 +225,16 @@ export function renderRack(workers: RackWorker[], width: number, opts: RackOpts 
   const body: string[] = [];
   if (!shown.length) body.push(st('muted', '○ idle — no workers spawned'));
   else {
-    const b = plan(shown, cw);
-    for (const w of shown) body.push(row(w, b, st));
+    const b = plan(shown, cw, maxLamps);
+    for (const w of shown) body.push(row(w, b, phase, st, opts));
   }
   if (hidden > 0) body.push(st('muted', `… +${hidden} more (see /worker_list)`));
+  if (opts.legend) body.push(st('muted', `lamp ${SOCKET}=socket █newest ▓▒░aged`));
+  if (opts.legend) body.push(legend(st));
 
   // Header line carries the supervisor totals; the box is closed by a plain rule.
   const title = st('accent', ' SUPERVISOR ');
-  const activeJobs = new Set(rows.filter((w) => ACTIVE.has(w.status)).map(jobLabel).filter(Boolean)).size;
+  const activeJobs = new Set(rows.filter((w) => ACTIVE_STATES.has(w.status)).map(jobLabel).filter(Boolean)).size;
   const totalJobs = new Set(rows.map(jobLabel).filter(Boolean)).size;
   const jobs = ` ${st('muted', 'jobs')} ${st(activeJobs ? 'accent' : 'muted', `${activeJobs}/${totalJobs}`)} `;
   const headBudget = cw - visibleWidth(title) - visibleWidth(jobs) - 4;

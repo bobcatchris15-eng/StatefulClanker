@@ -11,21 +11,27 @@ pi install -l git:github.com/bobcatchris15-eng/StatefulClanker@v1.0.0   # projec
 
 ## Supervisor panel
 
-While the operator is in TUI mode, a boxed supervisor panel renders above the editor via `ctx.ui.setWidget('sc-rack', <component factory>)`.
+While the operator is in TUI mode, a boxed supervisor panel renders above the editor via `ctx.ui.setWidget('sc-rack', <component factory>)`. It is a blinkenlight rack: **every worker carries a bank of lamps** that light up as its state changes and blink while it is live.
 
 ```
-┌ SUPERVISOR · RUN 2 · WAIT 1 · BLOCK 1 · FAIL 1 · jobs 5/8 ──────┐
-│ ● W01 Rivet  Job 1: rebuild the operator… glm-flash  editing ui/… │
-│ ◐ W03 Brace  t-0003                m3-long-model                 │
+┌ SUPERVISOR · RUN 2 · WAIT 1 · BLOCK 1 · jobs 3/8 ───────────────┐
+│ ● ░▒▓█████ W01 Rivet  Job 1: rebuild the operator… glm  editing … │
+│ ◐ ····▓██  W03 Brace  t-0003                      m3-long-model  │
+│ ○ ·······█  W07 Idle                               m5            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+- **Lamp bank** (the point of the panel): `DEFAULT_LAMPS` = 8 sockets per worker in the widget, 24 in `/rack`. Every observed status change lights one new lamp at the right, scrolling the oldest off; lamps fade `█` → `▓` → `▒` → `░` as they age, and unlit sockets render as `·` so the cell keeps a fixed width and the columns never jitter. Lamp colour comes from the same per-state tokens as the head glyph.
+- **Blinking**: the newest lamp of an *active* worker (STARTING/RUNNING/WAITING/BLOCKED) blinks at 2.5 Hz; the row head glyph blinks only for RUNNING/BLOCKED. Idle/done/failed/cancelled/lost lamps hold steady, so a blink means "live right now". Blink phase is offset per worker id (FNV hash) so a rack of lamps does not strobe in unison.
+- **Animation clock**: a 120 ms ticker advances a clamped phase (max 500 ms of dt per tick, so a suspended laptop cannot make lamps jump) and asks Pi for a coalesced `requestRender()`. Worker rows are re-read on a slower 500 ms cadence. The ticker is unref'd, only runs in `mode === 'tui'` with `hasUI`, and is cleared on `session_shutdown`. `renderRack()` stays pure — phase and lamp banks are inputs, never `Date.now()` inside the renderer — so the panel is unit-testable without a terminal.
+- **Seeding**: a worker already running when the panel mounts gets a lamp on first sight, not an empty socket. `LampBank.sync()` is idempotent, so the periodic re-read never floods a bank; banks for departed workers are pruned after 60 s.
+- **`/rack`**: fullscreen console (`ctx.ui.custom()`) reusing the same pure renderer with `maxLamps: 24`, more rows, plus a state legend and lamp key. `esc`/`q`/`enter` closes it. The shared clock and banks outlive the screen.
 - Integration point: `setWidget` with the **component factory** overload (documented in `docs/tui.md`) — Pi has no dock-right primitive, and a `custom()` overlay would steal keyboard focus from the editor, which an always-visible blinkenlight cannot afford. The component factory also hands us the *real* viewport width (`render(width)`) and the active theme, replacing the old `process.stdout.columns` guess and hand-rolled `s.length` truncation (`visibleWidth`/`truncateToWidth` now do the measuring).
-- Blinkenlight glyph + theme token per state: `●` RUN success, `◌` START accent, `◐` WAIT warning, `!` BLOCK error, `✓` DONE success, `✗` FAIL error, `⊘` CANCEL dim, `⊗` LOST error, `○` IDLE muted, `?` unknown. No hardcoded colours — all through `theme.fg(token, …)`.
-- Header counts non-zero states in supervisor priority order (RUN, WAIT, BLOCK, FAIL, LOST, START, DONE, IDLE), dropping the ones that do not fit; `jobs a/b` is distinct active job ids over distinct job ids.
-- Rows sort in-flight workers (STARTING/RUNNING/WAITING/BLOCKED) above IDLE above finished, id order within a group. Columns: glyph, id, display name, task title (falls back to `task_id`), model, current action — each clipped by visible columns.
+- Head glyph + theme token per state: `●` RUN success, `◌` START accent, `◐` WAIT warning, `!` BLOCK error, `✓` DONE success, `✗` FAIL error, `⊘` CANCEL dim, `⊗` LOST error, `○` IDLE muted, `?` unknown. No hardcoded colours — all through `theme.fg(token, …)`.
+- Header counts non-zero states in supervisor priority order (RUN, WAIT, FAIL, LOST, START, DONE), dropping the ones that do not fit; `jobs a/b` is distinct active job ids over distinct job ids.
+- Rows sort in-flight workers above IDLE above finished, id order within a group. Columns: glyph, lamp bank, id, display name, task title (falls back to `task_id`), model, current action — each clipped by visible columns. The bank is allocated space before any text column and shrinks first when the terminal is narrow.
 - Zero workers still renders the box with an idle line (the widget never collapses). Capped at `DEFAULT_MAX_ROWS` (8) rows; overflow shows `… +N more (see /worker_list)`. Below `MIN_BOX_WIDTH` (24) the box is dropped for bare stripped lines.
-- Refresh is event-driven (`worker` events/results/exit) and throttled to ~300 ms; the component reads fresh worker state in `render()` and the theme per render, so a theme switch is picked up without re-registering.
+- State changes are also pushed event-driven (`worker` events/results/exit) and throttled to ~300 ms; the component reads fresh worker state in `render()` and the theme per render, so a theme switch is picked up without re-registering.
 
 ## Tools
 
