@@ -111,6 +111,7 @@ export function operatorMode(pi: ExtensionAPI): void {
           const result = await spawnSelected(manager(), catalog(), root(), {
             assignment: proposalAssignment(q),
             role: 'proposal-helper', ability_profile: q.ability_profile,
+            preferences: { free_only: true },
             task_title: 'Proposal assistance ' + q.paths.join(', ').slice(0, 70),
             files: [], context_hints: ['solicitation:' + q.id],
           }, launch());
