@@ -24,7 +24,7 @@ test('checkout gives one committer but every worker reads the same file', () => 
   assert.throws(() => claimPaths(root, 'W02', ['one.txt']), /held by W01/);
   claimPaths(root, 'W02', ['two.txt']);
   assert.equal(listCheckouts(root).claims.length, 2);
-  assert.equal(hashFile(root, 'one.txt'), '2c8b08da5ce60398e1f19af0e5dccc744df274b826abe585eaba68c5254348069');
+  assert.equal(hashFile(root, 'one.txt'), '2c8b08da5ce60398e1f19af0e5dccc744df274b826abe585eaba68c525434806');
 });
 
 test('proposal does not edit file; owner accepts only against original hash', () => {
