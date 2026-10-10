@@ -7,7 +7,7 @@ import { recordIntent } from './project/intent.ts';
 import { reconstruct } from './project/reconstruct.ts';
 import { createTask, getTask, listTasks, updateTask } from './project/tasks.ts';
 import { renderRack, type RackOpts, type RackWorker } from './ui/worker-rack.ts';
-import { DEFAULT_LAMPS, LampBank, LARGE_LAMPS, RackClock } from './ui/lamp-bank.ts';
+import { DEFAULT_LAMPS, LampField, LARGE_LAMPS, RackClock } from './ui/lamp-bank.ts';
 import { Key, matchesKey, visibleWidth } from '@earendil-works/pi-tui';
 import { CatalogService } from './catalog/service.ts';
 import { spawnSelected, WorkerManager, type SpawnLaunch } from './workers/manager.ts';
@@ -46,12 +46,13 @@ export function operatorMode(pi: ExtensionAPI): void {
   // `rack` and the component is invalidated; it never rebuilds lines with stale ANSI.
   const rack: { workers: RackWorker[]; comp: { invalidate(): void } | null; tui: { requestRender(): void } | null } =
     { workers: [], comp: null, tui: null };
-  // Blinkenlights: per-worker lamp banks plus the animation clock. The banks are stateful
-  // (a lamp is lit per observed status change); the clock is a clamped phase, so the
-  // renderer stays pure and unit-testable.
-  const banks = new LampBank(LARGE_LAMPS);
+  // Blinkenlights: the lamp field (which workers are on the panel and what colour their
+  // bulbs burn) plus the animation clock. The clock is clamped elapsed time, never a
+  // shared phase - every lamp runs its own oscillator against it, so the renderer stays
+  // pure and unit-testable while the rack stays gloriously unsynchronized.
+  const banks = new LampField(LARGE_LAMPS);
   const clock = new RackClock();
-  const TICK_MS = 120;          // ~8fps, well above the 2.5Hz the blink needs
+  const TICK_MS = 100;          // ~10fps: fast enough for the quickest bulb, cheap enough to ignore
   const ROWS_EVERY_MS = 500;    // registry re-read while animating
   let tick: NodeJS.Timeout | null = null;
   let lastRows = 0;
@@ -63,12 +64,10 @@ export function operatorMode(pi: ExtensionAPI): void {
     try { for (const t of listTasks(root())) titles.set(t.id, t.title); } catch { /* no task store yet */ }
     return listWorkers(root()).map((w: any) => ({ ...w, task_title: w.task_id ? titles.get(w.task_id) : undefined }));
   }
-  /** Pull worker rows and light any lamp the new statuses imply. */
+  /** Pull worker rows and refresh the lamp field's view of who is on the panel. */
   function syncRows(now: number): void {
     rack.workers = rackRows();
-    // Idempotent: only a real status change lights a new lamp, so a periodic re-read never
-    // floods a bank. First sight of a worker seeds it, which is what makes a worker that was
-    // already running before the panel mounted show a lit lamp instead of an empty socket.
+    // Idempotent liveness + status sync, so a periodic re-read never disturbs a lamp bank.
     banks.sync(rack.workers, now);
     banks.prune(rack.workers.map((w) => w.id), 60_000, now);
     lastRows = now;
@@ -76,8 +75,7 @@ export function operatorMode(pi: ExtensionAPI): void {
   function rackOptions(extra: Partial<RackOpts> = {}): RackOpts {
     return {
       theme: (uiCtx?.ui?.theme ?? undefined) as any,
-      lamps: (id) => banks.bank(id),
-      phase: clock.phase,
+      nowMs: clock.elapsedMs,
       ...extra,
     };
   }
@@ -99,9 +97,9 @@ export function operatorMode(pi: ExtensionAPI): void {
     try { uiCtx.ui.setWidget('sc-rack', rackComponent); } catch { /* ctx stale */ }
   }
   /**
-   * Animation ticker. Advances the blink phase (clamped, so a suspended laptop cannot make
+   * Animation ticker. Advances clamped animation time (so a suspended laptop cannot make
    * the lamps jump) and asks Pi for a coalesced re-render. Worker rows are re-read on a
-   * slower cadence than the phase advances. Never runs without an interactive TUI, is
+   * slower cadence than time advances. Never runs without an interactive TUI, is
    * unref'd so it cannot hold the process open, and is cleared on shutdown.
    */
   function startTicker(): void {
@@ -134,7 +132,7 @@ export function operatorMode(pi: ExtensionAPI): void {
     timer.unref();
   }
 
-  /** Fullscreen mainframe console: the same pure renderer, deeper banks plus the state legend. */
+  /** Fullscreen mainframe console: the same pure renderer, full lamp banks plus the state legend. */
   function rackConsole(): Promise<void> {
     if (!animatable()) return Promise.resolve();
     return uiCtx.ui.custom((tui: any, theme: any, _keyb: any, done: (v: void) => void) => {

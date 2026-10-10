@@ -69,42 +69,41 @@ test('lamp banks never exceed the requested depth, at any width', () => {
 });
 
 test('every row keeps a fixed-width bank cell so the columns never jitter', () => {
-  const cells = renderRack(ws, 110, { maxLamps: 6 }).slice(1, -1).map((l) => (l.match(/[█▓▒░·]+(?= W\d)/) ?? [''])[0]!.length);
+  const cells = renderRack(ws, 110, { maxLamps: 6 }).slice(1, -1).map((l) => (l.match(/[█▓▒·]+(?= W\d)/) ?? [''])[0]!.length);
   assert.equal(new Set(cells).size, 1);
   assert.ok(cells[0]! > 1);
 });
 
 test('lamp bank is deterministic: same inputs, same bytes', () => {
-  const opts = { maxLamps: 8, phase: 0.25 } as const;
+  const opts = { maxLamps: 6, nowMs: 137 } as const;
   assert.deepEqual(renderRack(ws, 96, opts), renderRack(ws, 96, opts));
 });
 
-test('phase 0 and phase 0.5 differ for at least one blinking worker', () => {
-  const on = renderRack(ws, 96, { maxLamps: 8, phase: 0 }).join('\n');
-  const off = renderRack(ws, 96, { maxLamps: 8, phase: 0.5 }).join('\n');
-  assert.notEqual(on, off);
+test('two animation instants render differently - the rack is never frozen', () => {
+  const a = renderRack(ws, 96, { maxLamps: 6, nowMs: 0 }).join('\n');
+  const b = renderRack(ws, 96, { maxLamps: 6, nowMs: 400 }).join('\n');
+  assert.notEqual(a, b);
 });
 
-test('only active workers blink; idle/finished lamps hold steady', () => {
-  const active = new Set(['RUNNING', 'STARTING', 'WAITING', 'BLOCKED']);
-  const ids: string[] = [];
+test('every worker blinks, including idle and finished ones', () => {
+  // The old model held idle/finished lamps steady. The human's panel has no such rule:
+  // every socket has its own oscillator, and only the duty/dark-cycle rate tracks state.
   for (const w of ws) {
-    const on = renderRack([w], 96, { maxLamps: 6, phase: 0 }).join('');
-    const off = renderRack([w], 96, { maxLamps: 6, phase: 0.5 }).join('');
-    const bankOn = (on.match(/[█▓▒░·]+(?= W\d)/) ?? [''])[0]!;
-    const bankOff = (off.match(/[█▓▒░·]+(?= W\d)/) ?? [''])[0]!;
-    if (active.has(w.status)) ids.push(`${w.id}:${bankOn !== bankOff ? 'blinks' : 'STATIC'}`);
-    else assert.equal(bankOn, bankOff, `${w.id} should hold a steady lamp`);
+    const seen = new Set<string>();
+    for (let k = 0; k < 40; k++) {
+      const line = renderRack([w], 96, { maxLamps: 6, nowMs: k * 97 }).join('');
+      seen.add((line.match(/[█▓▒·]+(?= W\d)/) ?? [''])[0]!);
+    }
+    assert.ok(seen.size > 3, `${w.id} (${w.status}) barely moves: ${[...seen].join(' ')}`);
   }
-  assert.ok(ids.length === 3 && ids.every((x) => x.endsWith(':blinks')), ids.join(' '));
 });
 
-test('golden render: 3 workers at 80 cols, phase pinned', () => {
+test('golden render: 3 workers at 80 cols, animation time pinned', () => {
   const golden = [
     '\u250c SUPERVISOR  \u00b7 RUN 1 \u00b7  DONE 1 \u00b7  IDLE 1 jobs 1/2 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510',
-    '\u2502 \u00b7 \u00b7\u00b7\u00b7\u00b7\u00b7\u00b7 W01 Rivet  Ship the lamp bank  m1                      edit ui/lamp \u2502',
-    '\u2502 \u25cb \u00b7\u00b7\u00b7\u00b7\u00b7\u2588 W03                            m3                                   \u2502',
-    '\u2502 \u2713 \u00b7\u00b7\u00b7\u00b7\u00b7\u2588 W02 Anvil  Review              m2                                   \u2502',
+    '\u2502 \u25cf \u00b7\u00b7\u2592\u00b7\u2593\u00b7 W01 Rivet  Ship the lamp bank  m1                      edit ui/lamp \u2502',
+    '\u2502 \u25cb \u00b7\u00b7\u00b7\u00b7\u00b7\u00b7 W03                            m3                                   \u2502',
+    '\u2502 \u2713 \u2588\u00b7\u00b7\u00b7\u00b7\u2592 W02 Anvil  Review              m2                                   \u2502',
     '\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500┘',
   ];
   const rows: RackWorker[] = [
@@ -112,7 +111,7 @@ test('golden render: 3 workers at 80 cols, phase pinned', () => {
     { id: 'W02', display_name: 'Anvil', status: 'COMPLETE', model: 'm2', task_id: 't-0002', task_title: 'Review' },
     { id: 'W03', status: 'IDLE', model: 'm3' },
   ];
-  assert.deepEqual(renderRack(rows, 80, { maxLamps: 6, phase: 0 }), golden);
+  assert.deepEqual(renderRack(rows, 80, { maxLamps: 6, nowMs: 0 }), golden);
 });
 
 test('long worker names and task titles never widen a line', () => {

@@ -1,5 +1,5 @@
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
-import { ACTIVE_STATES, blinkOn, DEFAULT_LAMPS, type Bank } from './lamp-bank.ts';
+import { activityOf, ACTIVE_STATES, DEFAULT_LAMPS, lampOn } from './lamp-bank.ts';
 
 export interface RackWorker {
   id: string; display_name?: string; status: string; model: string; current_action?: string; current_tool?: string; role?: string; task_id?: string;
@@ -17,12 +17,15 @@ export interface RackOpts {
   theme?: RackTheme;
   /** Max worker rows drawn before an overflow line. Default 8. */
   maxRows?: number;
-  /** Lamp bank depth per worker. Default 8; shrinks to 1 on narrow terminals. */
+  /** Lamp sockets per worker. Default 6; shrinks on narrow terminals. */
   maxLamps?: number;
-  /** Per-worker lamp banks (oldest first). Defaults to one lamp per worker from its current status. */
-  lamps?: (id: string) => Bank;
-  /** Blink phase 0..1. Lamps for active workers are lit while `blinkOn(id, phase)`. */
-  phase?: number;
+  /**
+   * Animation time in ms (see `RackClock.elapsedMs`). Every lamp is an independent
+   * oscillator evaluated at this instant, so the whole rack moves with no shared phase.
+   */
+  nowMs?: number;
+  /** Injectable lamp predicate, for tests. Defaults to the real per-lamp oscillator. */
+  lit?: (id: string, index: number) => boolean;
   /** Draw the state legend inside the box (fullscreen console). */
   legend?: boolean;
 }
@@ -53,8 +56,11 @@ const ELL = '…';
 /** Dark, unlit socket. Keeps every socket the same column count as a lit lamp. */
 const SOCKET = '·';
 
-/** Lamp glyph density by rank, 0 = newest. */
-const LAMP_SYMS = ['█', '▓', '▒', '░'];
+/**
+ * Bulb glyphs, cycled by socket index so a bank reads as a row of different lamps rather
+ * than one repeated character. All are single-width box glyphs.
+ */
+const LAMP_SYMS = ['█', '▓', '▒'];
 
 
 function status(w: RackWorker): { sym: string; label: string; token: string } {
@@ -88,39 +94,31 @@ function ordered(workers: RackWorker[]): RackWorker[] {
 }
 
 /**
- * One lamp: a single socket in the worker's bank.
- * `rank` 0 is the newest lamp. The newest lamp of an active worker blinks with a
- * per-worker phase offset; every other lamp is lit steadily at a density that
- * falls off with age. Dark sockets are drawn, not skipped, so the bank never
- * changes width and the rack reads as a panel of real bulbs.
+ * The lamp bank cell: `depth` fixed sockets, each an independent oscillator.
+ *
+ * No lamp here can see any other lamp. Each has its own period, phase offset, duty,
+ * segment count and per-cycle skip, so at any instant a bank is a random-looking
+ * scatter - which is the entire point. Lit lamps burn the worker's state colour; dark
+ * sockets are drawn, not skipped, so the cell width never changes and the columns
+ * never jitter as lamps switch.
  */
-function lamp(w: RackWorker, lampStatus: string, rank: number, phase: number, st: (t: string, s: string) => string): string {
-  const sym = LAMP_SYMS[Math.min(rank, LAMP_SYMS.length - 1)]!;
-  const stateToken = SYMBOLS[lampStatus]?.token ?? UNKNOWN.token;
-  if (rank === 1) return st(stateToken, sym);          // one step back: same hue, half density
-  if (rank >= 2) return st(rank === 2 ? 'dim' : 'muted', sym);
-  const on = !ACTIVE_STATES.has(w.status) || blinkOn(w.id, phase);
-  return on ? st(stateToken, sym) : st('dim', SOCKET);
-}
-
-/** The lamp bank cell: `depth` sockets, newest at the right. */
-function bank(w: RackWorker, depth: number, phase: number, st: (t: string, s: string) => string, opts: RackOpts): string {
-  const lamps = (opts.lamps?.(w.id) ?? [{ status: w.status, at: 0 }]).slice(-depth);
+function bank(w: RackWorker, depth: number, tMs: number, st: (t: string, s: string) => string, opts: RackOpts): string {
+  const token = SYMBOLS[w.status]?.token ?? UNKNOWN.token;
+  const act = activityOf(w.status);
   const out: string[] = [];
-  for (let slot = 0; slot < depth; slot++) {
-    const fromRight = depth - 1 - slot;
-    const l = lamps[lamps.length - 1 - fromRight];
-    out.push(l ? lamp(w, l.status, fromRight, phase, st) : st('dim', SOCKET));
+  for (let i = 0; i < depth; i++) {
+    const on = opts.lit ? opts.lit(w.id, i) : lampOn(w.id, i, tMs, act);
+    out.push(on ? st(token, LAMP_SYMS[i % LAMP_SYMS.length]!) : st('dim', SOCKET));
   }
   return out.join('');
 }
 
 /** Compact one-line form used below MIN_BOX_WIDTH and in tests. */
-function compact(w: RackWorker, depth: number, phase: number, st: (t: string, s: string) => string, opts: RackOpts): string {
+function compact(w: RackWorker, depth: number, tMs: number, st: (t: string, s: string) => string, opts: RackOpts): string {
   const s = status(w);
   const act = w.current_action || w.current_tool || '';
-  const glyph = blinkOn(w.id, phase) || !ACTIVE_STATES.has(w.status) ? st(s.token, s.sym) : st('dim', SOCKET);
-  return [w.id, w.display_name ?? '', glyph, bank(w, depth, phase, st, opts), s.label, jobLabel(w) || w.model, act].filter(Boolean).join(' ').trimEnd();
+  const glyph = st(s.token, s.sym);
+  return [w.id, w.display_name ?? '', glyph, bank(w, depth, tMs, st, opts), s.label, jobLabel(w) || w.model, act].filter(Boolean).join(' ').trimEnd();
 }
 
 /** `SUPERVISOR · RUN 2 · WAIT 1 · … · jobs 1/3`, sized to `budget` visible columns. */
@@ -180,14 +178,14 @@ function plan(rows: RackWorker[], cw: number, wantLamps: number): Budget {
 }
 
 /** One worker row: `<glyph> <bank> <id> <name>  <task> <model> ... <action>`. */
-function row(w: RackWorker, b: Budget, phase: number, st: (t: string, s: string) => string, opts: RackOpts): string {
+function row(w: RackWorker, b: Budget, tMs: number, st: (t: string, s: string) => string, opts: RackOpts): string {
   const s = status(w);
-  // The head glyph blinks only while the worker is actively producing; it is steady
-  // otherwise, so a full rack of blinking glyphs still reads as "these are the live ones".
-  const head = blinkOn(w.id, phase) || !ACTIVE_STATES.has(w.status) ? st(s.token, s.sym) : st('dim', SOCKET);
+  // The head glyph is steady: it is the meaning anchor. All the motion lives in the lamps,
+  // so state stays readable while the bank flickers asynchronously.
+  const head = st(s.token, s.sym);
   const act = w.current_action || w.current_tool || (SYMBOLS[w.status] ? '' : w.status);
   const cells: string[] = [pad(w.id, b.idW), pad(w.display_name || '', b.nameW)];
-  const left = `${head} ${bank(w, b.lamps, phase, st, opts)} ${cells.join(' ')}`;
+  const left = `${head} ${bank(w, b.lamps, tMs, st, opts)} ${cells.join(' ')}`;
   let tail = '';
   if (b.taskW > 0) tail += `${pad(clip(jobLabel(w), b.taskW), b.taskW)} `;
   if (b.modelW > 0) tail += `${st('dim', pad(clip(w.model, b.modelW), b.modelW))} `;
@@ -206,14 +204,14 @@ export function renderRack(workers: RackWorker[], width: number, opts: RackOpts 
   const W = Math.max(0, Math.floor(width));
   const theme = opts.theme;
   const st = (t: string, s: string): string => (theme ? theme.fg(t, s) : s);
-  const phase = opts.phase ?? 0;
+  const tMs = opts.nowMs ?? 0;
   const rows = ordered(workers ?? []);
   const maxLamps = Math.max(1, Math.floor(opts.maxLamps ?? DEFAULT_LAMPS));
 
   if (W <= 0) return [];
   if (W < MIN_BOX_WIDTH) {
     const depth = Math.max(1, Math.min(maxLamps, W - 14));
-    const lines = rows.length ? rows.map((w) => compact(w, depth, phase, st, opts)) : [st('muted', '○ idle — no workers')];
+    const lines = rows.length ? rows.map((w) => compact(w, depth, tMs, st, opts)) : [st('muted', '○ idle — no workers')];
     return lines.map((l) => clip(l, W));
   }
 
@@ -226,10 +224,10 @@ export function renderRack(workers: RackWorker[], width: number, opts: RackOpts 
   if (!shown.length) body.push(st('muted', '○ idle — no workers spawned'));
   else {
     const b = plan(shown, cw, maxLamps);
-    for (const w of shown) body.push(row(w, b, phase, st, opts));
+    for (const w of shown) body.push(row(w, b, tMs, st, opts));
   }
   if (hidden > 0) body.push(st('muted', `… +${hidden} more (see /worker_list)`));
-  if (opts.legend) body.push(st('muted', `lamp ${SOCKET}=socket █newest ▓▒░aged`));
+  if (opts.legend) body.push(st('muted', `lamp ${SOCKET}=dark socket ${LAMP_SYMS.join('')}=lit, each bulb on its own unsynchronized timer`));
   if (opts.legend) body.push(legend(st));
 
   // Header line carries the supervisor totals; the box is closed by a plain rule.

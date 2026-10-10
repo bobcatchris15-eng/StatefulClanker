@@ -1,103 +1,169 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { visibleWidth } from '@earendil-works/pi-tui';
-import { BLINK_PERIOD_MS, blinkOffset, blinkOn, LampBank, MAX_DT_MS, RackClock } from '../../ui/lamp-bank.ts';
+import {
+  activityOf, DEFAULT_LAMPS, LampField, lampOn, lampSpec, MAX_DT_MS, MAX_PERIOD_MS, MIN_PERIOD_MS, RackClock,
+} from '../../ui/lamp-bank.ts';
 import { renderRack, type RackWorker } from '../../ui/worker-rack.ts';
 
 const W: RackWorker = { id: 'W01', status: 'RUNNING', model: 'm1', task_id: 't-0001' };
+const IDS = ['W01', 'W02', 'W03', 'W04', 'W05', 'W06'];
 
-test('first sight of a worker seeds a lamp, repeat syncs are idempotent', () => {
-  const b = new LampBank(8);
-  b.sync([W], 1000);
-  assert.deepEqual(b.bank('W01'), [{ status: 'RUNNING', at: 1000 }]);
-  b.sync([W], 1100);
-  b.sync([W], 1200);
-  assert.equal(b.bank('W01').length, 1, 'no new lamp without a status change');
+/* ------------------------------------------------------------------ *
+ * Lamp field (liveness + colour source)
+ * ------------------------------------------------------------------ */
+
+test('field tracks liveness and current status, idempotently', () => {
+  const f = new LampField(DEFAULT_LAMPS);
+  f.sync([W], 1000);
+  assert.equal(f.statusOf('W01'), 'RUNNING');
+  f.sync([W], 1100);
+  f.sync([W], 1200);
+  assert.equal(f.statusOf('W01'), 'RUNNING', 'repeat syncs do not disturb the field');
+  f.sync([{ id: 'W01', status: 'WAITING' }], 1300);
+  assert.equal(f.statusOf('W01'), 'WAITING');
+  assert.equal(f.statusOf('W99'), undefined);
 });
 
-test('each status change lights exactly one new lamp', () => {
-  const b = new LampBank(8);
-  b.sync([W], 0);
-  b.sync([{ id: 'W01', status: 'WAITING' }], 10);
-  b.sync([{ id: 'W01', status: 'BLOCKED' }], 20);
-  assert.deepEqual(b.bank('W01').map((l) => l.status), ['RUNNING', 'WAITING', 'BLOCKED']);
-  assert.deepEqual(b.bank('W01').map((l) => l.at), [0, 10, 20]);
+test('prune drops workers gone for longer than the ttl, keeps the live ones', () => {
+  const f = new LampField(DEFAULT_LAMPS);
+  f.sync([W, { id: 'W02', status: 'RUNNING' }], 0);
+  f.prune(['W01'], 60_000, 30_000);
+  assert.equal(f.statusOf('W02'), 'RUNNING', 'still inside the ttl');
+  f.prune(['W01'], 60_000, 90_000);
+  assert.equal(f.statusOf('W02'), undefined, 'now stale');
+  assert.equal(f.statusOf('W01'), 'RUNNING', 'live workers keep their lamps');
 });
 
-test('a full bank drops the oldest lamp', () => {
-  const b = new LampBank(3);
-  for (let i = 0; i < 6; i++) b.sync([{ id: 'W01', status: `S${i}` }], i);
-  assert.deepEqual(b.bank('W01').map((l) => l.status), ['S3', 'S4', 'S5']);
-  assert.equal(b.bank('W01').length, 3);
-});
+/* ------------------------------------------------------------------ *
+ * Clock
+ * ------------------------------------------------------------------ */
 
-test('banks are per worker and do not leak across ids', () => {
-  const b = new LampBank(8);
-  b.sync([W, { id: 'W02', status: 'IDLE' }], 0);
-  assert.deepEqual(b.bank('W02').map((l) => l.status), ['IDLE']);
-  assert.equal(b.bank('W99').length, 0);
-});
-
-test('prune drops banks of workers gone for longer than the ttl', () => {
-  const b = new LampBank(8);
-  b.sync([W, { id: 'W02', status: 'RUNNING' }], 0);
-  b.prune(['W01'], 60_000, 30_000);          // W02 still inside the ttl
-  assert.equal(b.bank('W02').length, 1);
-  b.prune(['W01'], 60_000, 90_000);          // W02 now stale
-  assert.equal(b.bank('W02').length, 0);
-  assert.equal(b.bank('W01').length, 1, 'live workers keep their lamps');
-});
-
-test('clock advances by real deltas and wraps at one full cycle', () => {
-  const c = new RackClock(BLINK_PERIOD_MS);
+test('clock accumulates clamped real deltas', () => {
+  const c = new RackClock();
   assert.equal(c.advance(0), false, 'first tick only establishes a baseline');
-  c.advance(100);
-  assert.equal(c.phase, 0.25);
+  assert.equal(c.advance(100), true);
+  assert.equal(c.elapsedMs, 100);
   c.advance(300);
-  assert.equal(c.phase, 0.75);
-  c.advance(800);                              // dt clamped, but still past one cycle
-  assert.equal(c.phase, 0, 'wrapped');
+  assert.equal(c.elapsedMs, 300);
 });
 
 test('a suspended process does not make the lamps jump', () => {
-  const c = new RackClock(BLINK_PERIOD_MS);
+  const c = new RackClock();
   c.advance(0);
-  c.advance(10_000);                          // laptop lid closed for ten seconds
-  assert.ok(c.phase <= MAX_DT_MS / BLINK_PERIOD_MS, `phase jumped to ${c.phase}`);
+  c.advance(10_000);                       // laptop lid closed for ten seconds
+  assert.equal(c.elapsedMs, MAX_DT_MS);
 });
 
 test('clock never goes backwards on a non-monotonic tick', () => {
-  const c = new RackClock(BLINK_PERIOD_MS);
+  const c = new RackClock();
   c.advance(1000);
   c.advance(200);
-  assert.equal(c.phase, 0);
+  assert.equal(c.elapsedMs, 0);
 });
 
-test('blink offsets differ per worker so the rack does not strobe in unison', () => {
-  const offsets = ['W01', 'W02', 'W03', 'W04', 'W05'].map(blinkOffset);
-  assert.ok(offsets.every((o) => o >= 0 && o < 1));
-  assert.equal(new Set(offsets).size, offsets.length);
-  // At any given phase at least two of five workers sit on opposite halves of the cycle.
-  for (const phase of [0, 0.13, 0.37, 0.62, 0.88]) {
-    const ons = ['W01', 'W02', 'W03', 'W04', 'W05'].map((id) => blinkOn(id, phase));
-    assert.ok(ons.includes(true) && ons.includes(false), `all lamps in phase at ${phase}`);
+/* ------------------------------------------------------------------ *
+ * Per-lamp oscillators: the whole point
+ * ------------------------------------------------------------------ */
+
+test('every lamp gets its own period, offset, duty and segment count', () => {
+  const specs = IDS.flatMap((id) => [0, 1, 2, 3, 4, 5].map((i) => lampSpec(id, i)));
+  assert.ok(specs.every((s) => s.periodMs >= MIN_PERIOD_MS && s.periodMs <= MAX_PERIOD_MS));
+  assert.ok(specs.every((s) => s.offsetMs >= 0 && s.offsetMs < s.periodMs));
+  assert.ok(specs.every((s) => s.duty > 0 && s.duty < 1));
+  assert.ok(specs.every((s) => s.segments >= 1 && s.segments <= 3));
+  // 36 lamps, 36 different periods: nothing is wired to a shared oscillator.
+  assert.equal(new Set(specs.map((s) => s.periodMs)).size, specs.length);
+});
+
+test('lamp specs are stable across calls (no per-frame reshuffle)', () => {
+  assert.deepEqual(lampSpec('W01', 3), lampSpec('W01', 3));
+  assert.notDeepEqual(lampSpec('W01', 3), lampSpec('W02', 3));
+});
+
+test('lampOn is a pure function of id, index and animation time', () => {
+  assert.equal(lampOn('W01', 2, 1234), lampOn('W01', 2, 1234));
+});
+
+test('no two lamps in a rack are ever in lockstep', () => {
+  // Over a long run, no pair may agree on their on/off state more often than chance.
+  for (const [a, b] of [[0, 1], [0, 3], [2, 5], [1, 4]]) {
+    let agree = 0;
+    const samples = 4000;
+    for (let k = 0; k < samples; k++) {
+      const t = k * 7;
+      if (lampOn('W01', a, t) === lampOn('W01', b, t)) agree++;
+    }
+    const ratio = agree / samples;
+    assert.ok(ratio > 0.25 && ratio < 0.75, `lamps ${a}/${b} agree ${(ratio * 100).toFixed(0)}% of the time`);
   }
 });
 
-test('blinkOn is a pure function of id and phase', () => {
-  assert.equal(blinkOn('W01', 0.25), blinkOn('W01', 0.25));
-  assert.equal(blinkOffset('W01'), blinkOffset('W01'));
+test('a busy bank is rarely all-on or all-off (real panels do go briefly dark)', () => {
+  let allOff = 0;
+  let allOn = 0;
+  const samples = 3000;
+  for (let k = 0; k < samples; k++) {
+    const t = k * 11;
+    const lit = Array.from({ length: DEFAULT_LAMPS }, (_, i) => lampOn('W01', i, t, 1));
+    const n = lit.filter(Boolean).length;
+    if (n === 0) allOff++;
+    if (n === DEFAULT_LAMPS) allOn++;
+  }
+  assert.ok(allOff / samples < 0.06, `bank goes dark too often: ${((allOff / samples) * 100).toFixed(1)}%`);
+  assert.ok(allOn / samples < 0.06, `bank floods too often: ${((allOn / samples) * 100).toFixed(1)}%`);
 });
 
-test('a real bank feeds the renderer: lit lamps carry the state colour, sockets are dark', () => {
-  const b = new LampBank(8);
-  const idle: RackWorker = { id: 'W01', status: 'IDLE', model: 'm1', task_id: 't-0001' };
-  b.sync([{ id: 'W01', status: 'RUNNING' }], 0);
-  b.sync([{ id: 'W01', status: 'COMPLETE' }], 10);
-  const row = renderRack([idle], 96, { maxLamps: 6, phase: 0, lamps: (id) => b.bank(id) })[1]!;
-  const cell = (row.match(/[█▓▒░·]+(?= W01)/) ?? [''])[0]!;
-  assert.equal(cell.length, 6, 'sockets are drawn, so the cell never changes width');
-  assert.equal(cell.slice(0, 4), '\u00b7\u00b7\u00b7\u00b7', 'four dark sockets');
-  assert.match(cell.slice(4), /^[\u2593][\u2588]$/, 'one step back, then the newest lamp at the right');
+test('a RUNNING worker blazes; a COMPLETE one is nearly dark', () => {
+  let busy = 0;
+  let done = 0;
+  const samples = 3000;
+  for (let k = 0; k < samples; k++) {
+    const t = k * 9;
+    for (let i = 0; i < DEFAULT_LAMPS; i++) {
+      if (lampOn('W01', i, t, activityOf('RUNNING'))) busy++;
+      if (lampOn('W01', i, t, activityOf('COMPLETE'))) done++;
+    }
+  }
+  assert.ok(busy / done > 3, `RUNNING ${busy} vs COMPLETE ${done}: activity scaling is too weak`);
+  assert.ok(busy / (samples * DEFAULT_LAMPS) > 0.4, 'a running worker should blaze');
+});
+
+/* ------------------------------------------------------------------ *
+ * Renderer
+ * ------------------------------------------------------------------ */
+
+test('a real bank feeds the renderer: six drawn sockets, colour from the state token', () => {
+  const f = new LampField(DEFAULT_LAMPS);
+  f.sync([W], 0);
+  const lines = renderRack([W], 96, { maxLamps: DEFAULT_LAMPS, nowMs: 137, lit: (id, i) => lampOn(id, i, 137, activityOf('RUNNING')) });
+  const row = lines[1]!;
+  const cell = (row.match(/[█▓▒·]+(?= W01)/) ?? [''])[0]!;
+  assert.equal(cell.length, DEFAULT_LAMPS, 'every socket is drawn, so the cell width is constant');
   assert.ok(visibleWidth(row) <= 96);
+  assert.equal(f.statusOf('W01'), 'RUNNING');
+});
+
+test('lamp sockets never change the row width, whatever the animation time', () => {
+  const widths = new Set<string>();
+  for (let k = 0; k < 400; k++) {
+    const line = renderRack([W, { ...W, id: 'W02', status: 'COMPLETE' }], 110, { nowMs: k * 13 })[1]!;
+    widths.add((line.match(/[█▓▒·]+/)?.[0] ?? '').length + ':' + visibleWidth(line));
+  }
+  assert.equal(widths.size, 1, `rows changed width over time: ${[...widths].join(', ')}`);
+});
+
+test('the rack is alive: consecutive frames differ for every worker', () => {
+  const workers = IDS.map((id) => ({ ...W, id }));
+  let changed = 0;
+  for (const id of IDS) {
+    let diff = 0;
+    for (let k = 0; k < 60; k++) {
+      const a = renderRack([{ ...W, id }], 96, { nowMs: k * 100 })[1]!;
+      const b = renderRack([{ ...W, id }], 96, { nowMs: k * 100 + 100 })[1]!;
+      if (a !== b) diff++;
+    }
+    if (diff > 30) changed++;
+  }
+  assert.equal(changed, IDS.length, 'some workers never move');
 });
