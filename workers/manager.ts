@@ -145,6 +145,10 @@ export class WorkerManager {
       this.patch(id, { current_action: String(p.action ?? p.summary ?? '') });
       return;
     }
+    if (p?.kind === 'collaboration_changed') {
+      this.em.emit('collaboration');
+      return;
+    }
     if (p?.kind !== 'finish') return;
     const w = getWorker(this.root, id);
     const result: WorkerResult = {
