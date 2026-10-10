@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   acceptProposal, claimPaths, closeSolicitation, hashFile, listCheckouts, listSolicitations,
-  markNoticeDelivered, pendingNotices, proposeWrite, readSolicitation, rejectProposal,
+  markNoticeDelivered, pendingNotices, proposeWrite, readSolicitation, recordSolicitationWorkerResult, rejectProposal,
   releasePaths, routeSolicitation, solicitProposals,
 } from '../../workspace/checkouts.ts';
 import { dispatchNotices, type CollaborationDispatch } from '../../workspace/dispatch.ts';
@@ -126,4 +126,17 @@ test('closed solicitation cannot be dispatched late', async () => {
   await dispatchNotices(root, m.deps);
   assert.equal(m.spawned.length, 0);
   assert.equal(readSolicitation(root, q.id).status, 'closed');
+});
+
+test('finished proposal helper sends owner structured result without transferring ownership', async () => {
+  const root = repo(), m = mock();
+  claimPaths(root, 'W01', ['file.ts']);
+  const q = solicitProposals(root, 'W01', ['file.ts'], 'Assess caching', { target: 'W02' });
+  await dispatchNotices(root, m.deps);
+  assert.deepEqual(recordSolicitationWorkerResult(root, 'W02', 'complete', 'Proposed cache invalidation'), [q.id]);
+  await dispatchNotices(root, m.deps);
+  assert.match(m.delivered.at(-1)!, /W01: Proposal helper W02 finished/);
+  assert.match(m.delivered.at(-1)!, /Proposed cache invalidation/);
+  assert.equal(listCheckouts(root).claims[0]!.owner, 'W01');
+  assert.deepEqual(recordSolicitationWorkerResult(root, 'W02', 'complete', 'duplicate'), []);
 });
