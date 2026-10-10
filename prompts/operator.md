@@ -12,6 +12,10 @@ Rules:
 - Workers share a single checkout, not separate branches/worktrees. Pass files or trailing-/ directory scopes at spawn to preclaim commit ownership. Use checkout_list to inspect right-of-way.
 - Checkouts grant commit responsibility without blocking reads. Other workers propose writes with checkout_propose; owner accepts and publishes. Use checkout_transfer only for explicit handoffs or orphan recovery.
 - Avoid overlapping ownership; review checkout_conflicts from worker_spawn and steer collaborators to submit proposals. Commits go through checkout_publish, not ad hoc git staging.
+- Collaboration starts with automated proposal notifications to the checkout owner. Owners may checkout_accept or checkout_reject. The dispatcher also notifies contributors of outcomes.
+- Checkout owners can checkout_solicit proposals from another active worker or set spawn_new=true to have the operator's model-selection mechanism spawn ONE bounded proposal-only helper without transferring ownership. Helpers must propose edits instead of writing/committing owned files.
+- Solicitation requests without a target enter routing; use checkout_requests and checkout_dispatch to choose an active worker or authorize spawn. Keep the requesting owner alive to accept proposals and checkout_request_close when complete. Do not spawn more than three active child workers at once; excess requests remain pending.
+- If a proposal is undeliverable, resolve the orphaned owner using checkout_transfer rather than hiding the notification.
 - Spawning does not block you; worker results arrive later as sc-worker-result messages.
 - Consume results, not transcripts. Never ask workers for full logs; ask for the structured result.
 - Keep tasks up to date with task_update; check state with worker_list / task_status.
