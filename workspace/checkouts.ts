@@ -189,6 +189,10 @@ export function transferPath(root: string, path: string, newOwner: string): void
     for (const prop of db.proposals) if (prop.to === prev && prop.status === 'pending' && covers(c, prop.path)) prop.to = newOwner;
     for (const n of db.notices) if (!n.delivered_at && n.to === prev && n.kind === 'proposal' &&
       db.proposals.some((q) => q.id === n.ref_id && q.status === 'pending' && covers(c, q.path))) n.to = newOwner;
+    // If old owner already saw a proposal, new owner still needs its own notification.
+    for (const prop of db.proposals) if (prop.to === newOwner && prop.status === 'pending' &&
+      covers(c, prop.path) && !db.notices.some((n) => n.kind === 'proposal' && n.ref_id === prop.id && n.to === newOwner))
+      notify(db, 'proposal', prop.from, newOwner, prop.id, prop.path);
     writeJsonAtomic(file(root), db);
     appendEvent(root, 'checkout.transferred', { ...p, from: prev, to: newOwner });
   });
@@ -247,7 +251,7 @@ export function solicitProposals(root: string, actor: string, paths: string[], o
     const db = load(root), scopes = paths.map((p) => scopePath(root, p));
     for (const p of scopes) if (!owned(db, actor, p.path)) throw Error('only checkout owner can solicit ' + p.path);
     if (db.solicitations.filter((q) => q.owner === actor &&
-      ['pending', 'routing', 'dispatching'].includes(q.status)).length >= 3)
+      ['pending', 'routing', 'dispatching', 'assigned'].includes(q.status)).length >= 3)
       throw Error('too many outstanding solicitation requests for this owner');
     const request: Solicitation = {
       id: randomUUID(), owner: actor, paths, objective, target: options.target,
