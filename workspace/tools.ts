@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { acceptProposal, claimPaths, hashFile, listCheckouts, listSolicitations, proposeWrite, publish, readProposal, rejectProposal, releasePaths, routeSolicitation, solicitProposals, transferPath } from './checkouts.ts';
+import { acceptProposal, claimPaths, closeSolicitation, hashFile, listCheckouts, listSolicitations, proposeWrite, publish, readProposal, rejectProposal, releasePaths, routeSolicitation, solicitProposals, transferPath } from './checkouts.ts';
 
 const out = (s: unknown) => ({ content: [{ type: 'text' as const, text: typeof s === 'string' ? s : JSON.stringify(s, null, 2) }], details: {} });
 const paths = () => Type.Array(Type.String());
@@ -8,8 +8,14 @@ const paths = () => Type.Array(Type.String());
 export function registerCheckoutTools(pi: ExtensionAPI, root: () => string, actor: () => string, operator = false): void {
   const tool = (name: string, desc: string, parameters: any, fn: (p: any) => unknown) =>
     pi.registerTool({ name, label: name, description: desc, parameters,
-      async execute(_id: string, p: any) {
-        try { return out(fn(p)); } catch (e) { return out('error: ' + (e as Error).message); }
+      async execute(_id: string, p: any, _s: any, _u: any, ctx: any) {
+        try {
+          const result = fn(p);
+          if (!operator && ['checkout_propose', 'checkout_solicit', 'checkout_accept', 'checkout_reject', 'checkout_request_close'].includes(name)) {
+            try { ctx?.ui?.notify('SC1 ' + JSON.stringify({ kind: 'collaboration_changed' }), 'info'); } catch { /* durable inbox still polled */ }
+          }
+          return out(result);
+        } catch (e) { return out('error: ' + (e as Error).message); }
       },
     });
   tool('checkout_list', 'List checkout owners and pending proposal metadata for the shared project.', Type.Object({}),
@@ -36,6 +42,9 @@ export function registerCheckoutTools(pi: ExtensionAPI, root: () => string, acto
   }));
   tool('checkout_requests', 'List solicited proposal requests, statuses and assigned helper workers.', Type.Object({}),
     () => listSolicitations(root()));
+  tool('checkout_request_close', 'Mark a solicitation complete/cancelled after its proposals have been considered; frees checkout for release.', Type.Object({
+    id: Type.String(),
+  }), (p) => { closeSolicitation(root(), actor(), p.id); return 'solicitation closed'; });
   tool('checkout_publish', 'Commit ONLY explicitly named owned files/subtrees from the shared checkout (no git add -A).', Type.Object({
     paths: paths(), message: Type.String(),
   }), (p) => ({ commit: publish(root(), actor(), p.paths, p.message) }));
