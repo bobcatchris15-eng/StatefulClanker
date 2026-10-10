@@ -50,6 +50,18 @@ export async function dispatchNotices(root: string, d: CollaborationDispatch): P
         catch { d.notifyOperator('Could not deliver contributor outcome to ' + n.to + ': ' + msg); }
       }
       markNoticeDelivered(root, n.id); handled++;
+    } else if (n.kind === 'solicitation_result') {
+      const q = readSolicitation(root, n.ref_id);
+      const result = q.result;
+      const msg = 'Proposal helper ' + n.from + ' finished solicitation ' + q.id + ' for ' +
+        q.paths.join(', ') + ': ' + (result?.status ?? 'unknown') + '. ' +
+        (result?.summary ?? '') + '\nReview proposals, validate, publish, then checkout_request_close.';
+      if (n.to === 'operator') d.notifyOperator(msg);
+      else {
+        try { await d.sendWorker(n.to, msg); }
+        catch { d.notifyOperator('Checkout owner ' + n.to + ' unavailable. ' + msg); }
+      }
+      markNoticeDelivered(root, n.id); handled++;
     } else if (n.kind === 'solicit') {
       const q = readSolicitation(root, n.ref_id);
       if (q.status !== 'pending') { markNoticeDelivered(root, n.id); continue; }
