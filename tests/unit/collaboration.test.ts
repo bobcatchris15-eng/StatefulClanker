@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import {
   acceptProposal, claimPaths, closeSolicitation, hashFile, listCheckouts, listSolicitations,
   markNoticeDelivered, pendingNotices, proposeWrite, readSolicitation, recordSolicitationWorkerResult, rejectProposal,
-  releasePaths, routeSolicitation, solicitProposals,
+  releasePaths, routeSolicitation, solicitProposals, transferPath,
 } from '../../workspace/checkouts.ts';
 import { dispatchNotices, type CollaborationDispatch } from '../../workspace/dispatch.ts';
 
@@ -139,4 +139,25 @@ test('finished proposal helper sends owner structured result without transferrin
   assert.match(m.delivered.at(-1)!, /Proposed cache invalidation/);
   assert.equal(listCheckouts(root).claims[0]!.owner, 'W01');
   assert.deepEqual(recordSolicitationWorkerResult(root, 'W02', 'complete', 'duplicate'), []);
+});
+
+test('new checkout owner receives a previously delivered pending proposal on transfer', async () => {
+  const root = repo(), m = mock();
+  claimPaths(root, 'W01', ['file.ts']);
+  proposeWrite(root, 'W02', 'file.ts', hashFile(root, 'file.ts'), 'idea\n');
+  await dispatchNotices(root, m.deps);
+  assert.equal(pendingNotices(root).length, 0);
+  transferPath(root, 'file.ts', 'W03');
+  await dispatchNotices(root, m.deps);
+  assert.match(m.delivered.at(-1)!, /W03: Checkout proposal/);
+});
+
+test('checkout owners cannot queue an unlimited number of fresh helpers', () => {
+  const root = repo();
+  claimPaths(root, 'W01', ['file.ts']);
+  const ids = Array.from({ length: 3 }, (_, i) =>
+    solicitProposals(root, 'W01', ['file.ts'], 'Review task ' + i, { spawn_new: true }).id);
+  assert.throws(() => solicitProposals(root, 'W01', ['file.ts'], 'Fourth helper', { spawn_new: true }), /too many outstanding/);
+  closeSolicitation(root, 'W01', ids[0]!);
+  assert.doesNotThrow(() => solicitProposals(root, 'W01', ['file.ts'], 'Replacement helper', { spawn_new: true }));
 });
