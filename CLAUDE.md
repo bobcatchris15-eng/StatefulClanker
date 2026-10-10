@@ -15,7 +15,7 @@ Pi extension at repo root. Entry `index.ts` (operator vs worker by `SC_WORKER_ID
 - Worker<->parent channel is `SC1 {json}` lines via notify.
 - Candidate pool == Pi's available models (model registry), nothing else.
 - Tests set `SC_MACHINE_DIR` to isolate machine state.
-- Workers share the repository cwd, do not create Git worktrees, and use checkout_claim / checkout_publish for file authority. This is cooperative, not filesystem-enforced.\n- Workers get `-e <this index.ts>`; parentExtensionArgs excludes self. Double-load guard uses `Symbol.for("statefulclanker.loaded")`.
+- Workers share the repository cwd, do not create Git worktrees, and use checkout_claim / checkout_publish for file authority. This is cooperative, not filesystem-enforced. Checkout proposals/solicitations are persisted and notified through workspace/dispatch.ts and the operator's live pump; helper spawns are proposal-only and share the checkout.\n- Workers get `-e <this index.ts>`; parentExtensionArgs excludes self. Double-load guard uses `Symbol.for("statefulclanker.loaded")`.
 
 ## VALIDATE
 
