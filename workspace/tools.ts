@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { acceptProposal, claimPaths, hashFile, listCheckouts, proposeWrite, publish, readProposal, releasePaths, transferPath } from './checkouts.ts';
+import { acceptProposal, claimPaths, hashFile, listCheckouts, listSolicitations, proposeWrite, publish, readProposal, rejectProposal, releasePaths, routeSolicitation, solicitProposals, transferPath } from './checkouts.ts';
 
 const out = (s: unknown) => ({ content: [{ type: 'text' as const, text: typeof s === 'string' ? s : JSON.stringify(s, null, 2) }], details: {} });
 const paths = () => Type.Array(Type.String());
@@ -25,11 +25,25 @@ export function registerCheckoutTools(pi: ExtensionAPI, root: () => string, acto
     (p) => readProposal(root(), actor(), p.id));
   tool('checkout_accept', 'As checkout owner, apply a proposal only when its base hash still matches current file.', Type.Object({ id: Type.String() }),
     (p) => { acceptProposal(root(), actor(), p.id); return 'proposal applied; owner must validate and publish'; });
+  tool('checkout_reject', 'As checkout owner, reject a pending proposal and notify its author.', Type.Object({
+    id: Type.String(), reason: Type.String(),
+  }), (p) => { rejectProposal(root(), actor(), p.id, p.reason); return 'proposal rejected'; });
+  tool('checkout_solicit', 'Request proposals for owned paths from an existing worker, a NEW specialist, or the operator for routing.', Type.Object({
+    paths: paths(), objective: Type.String(), target: Type.Optional(Type.String()),
+    spawn_new: Type.Optional(Type.Boolean()), ability_profile: Type.Optional(Type.String()),
+  }), (p) => solicitProposals(root(), actor(), p.paths, p.objective, {
+    target: p.target, spawn_new: p.spawn_new, ability_profile: p.ability_profile,
+  }));
+  tool('checkout_requests', 'List solicited proposal requests, statuses and assigned helper workers.', Type.Object({}),
+    () => listSolicitations(root()));
   tool('checkout_publish', 'Commit ONLY explicitly named owned files/subtrees from the shared checkout (no git add -A).', Type.Object({
     paths: paths(), message: Type.String(),
   }), (p) => ({ commit: publish(root(), actor(), p.paths, p.message) }));
   tool('checkout_release', 'Release owned checkouts after all their changes are committed.', Type.Object({ paths: paths() }),
     (p) => { releasePaths(root(), actor(), p.paths); return 'checkouts released'; });
+  if (operator) tool('checkout_dispatch', 'Route a solicitation to an existing worker or authorize a fresh helper; one assignment per request.', Type.Object({
+    id: Type.String(), target: Type.Optional(Type.String()), spawn_new: Type.Optional(Type.Boolean()),
+  }), (p) => routeSolicitation(root(), p.id, p.target, p.spawn_new ?? false));
   if (operator) tool('checkout_transfer', 'Operator-only right-of-way handoff/recovery (does not alter file contents).', Type.Object({
     path: Type.String(), new_owner: Type.String(),
   }), (p) => { transferPath(root(), p.path, p.new_owner); return 'checkout transferred'; });
