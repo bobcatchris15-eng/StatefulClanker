@@ -5,7 +5,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { appendEvent } from '../protocol/events.ts';
 import { readJson, writeJsonAtomic } from '../protocol/persistence.ts';
@@ -141,6 +141,8 @@ export function releasePaths(root: string, actor: string, paths: string[]): void
     for (const p of targets) {
       if (!db.claims.some((c) => c.owner === actor && c.path === p.path && c.recursive === p.recursive))
         throw Error('you do not own exact checkout ' + p.path);
+      if (db.proposals.some((proposal) => proposal.to === actor && proposal.status === 'pending' && covers(p, proposal.path)))
+        throw Error('pending proposals for ' + p.path + ': resolve or transfer before release');
       const status = git(root, 'status', '--porcelain', '--', p.path);
       if (status) throw Error('uncommitted changes in ' + p.path + ': publish or resolve before release');
     }
