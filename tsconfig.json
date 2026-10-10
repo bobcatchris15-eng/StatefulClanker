@@ -10,6 +10,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["catalog", "*.ts", "protocol", "project", "workers", "worktrees", "tests", "ui"],
+  "include": ["catalog", "*.ts", "protocol", "project", "workers", "workspace", "tests", "ui"],
   "exclude": ["node_modules"]
 }
