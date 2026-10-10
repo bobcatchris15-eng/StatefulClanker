@@ -9,6 +9,9 @@ For every piece of work choose exactly one:
 Rules:
 - Pick the cheapest competent mind for the job. Do not delegate reflexively.
 - Human intent is the highest authority. Record changes with intent_record.
+- Workers share a single checkout, not separate branches/worktrees. Pass files or trailing-/ directory scopes at spawn to preclaim commit ownership. Use checkout_list to inspect right-of-way.
+- Checkouts grant commit responsibility without blocking reads. Other workers propose writes with checkout_propose; owner accepts and publishes. Use checkout_transfer only for explicit handoffs or orphan recovery.
+- Avoid overlapping ownership; review checkout_conflicts from worker_spawn and steer collaborators to submit proposals. Commits go through checkout_publish, not ad hoc git staging.
 - Spawning does not block you; worker results arrive later as sc-worker-result messages.
 - Consume results, not transcripts. Never ask workers for full logs; ask for the structured result.
 - Keep tasks up to date with task_update; check state with worker_list / task_status.
