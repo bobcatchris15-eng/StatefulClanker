@@ -14,7 +14,7 @@ import { ensureLayout } from '../project/paths.ts';
 export interface Claim { path: string; recursive: boolean; owner: string; acquired_at: string }
 export interface Proposal { id: string; path: string; from: string; to: string; base_hash: string | null; content: string; created_at: string; status: 'pending' | 'accepted' | 'rejected' }
 
-export type NoticeKind = 'proposal' | 'proposal_result' | 'solicit';
+export type NoticeKind = 'proposal' | 'proposal_result' | 'solicit' | 'solicitation_result';
 export interface CollaborationNotice {
   id: string; kind: NoticeKind; from: string; to: string; ref_id: string; path: string;
   created_at: string; delivered_at?: string;
@@ -23,7 +23,7 @@ export interface Solicitation {
   id: string; owner: string; paths: string[]; objective: string;
   target?: string; spawn_new: boolean; ability_profile: string;
   status: 'pending' | 'routing' | 'dispatching' | 'assigned' | 'failed' | 'closed';
-  assigned_worker?: string; error?: string; created_at: string;
+  assigned_worker?: string; error?: string; result?: { status: string; summary: string }; created_at: string;
 }
 interface Ledger { claims: Claim[]; proposals: Proposal[]; notices: CollaborationNotice[]; solicitations: Solicitation[] }
 const EMPTY = (): Ledger => ({ claims: [], proposals: [], notices: [], solicitations: [] });
@@ -320,5 +320,23 @@ export function closeSolicitation(root: string, actor: string, id: string): void
     q.status = 'closed';
     writeJsonAtomic(file(root), db);
     appendEvent(root, 'collaboration.solicitation_closed', { id, owner: q.owner, by: actor });
+  });
+}
+
+/** Give the requester a structured finish receipt; status stays assigned until owner closes it. */
+export function recordSolicitationWorkerResult(root: string, workerId: string, status: string, summary: string): string[] {
+  return locked(root, () => {
+    const db = load(root), completed: string[] = [];
+    for (const q of db.solicitations) {
+      if (q.assigned_worker !== workerId || q.status !== 'assigned' || q.result) continue;
+      q.result = { status: status.slice(0, 100), summary: summary.slice(0, 2000) };
+      notify(db, 'solicitation_result', workerId, q.owner, q.id, q.paths[0]!);
+      completed.push(q.id);
+    }
+    if (completed.length) {
+      writeJsonAtomic(file(root), db);
+      appendEvent(root, 'collaboration.helper_finished', { worker_id: workerId, requests: completed });
+    }
+    return completed;
   });
 }
