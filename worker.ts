@@ -6,6 +6,7 @@ import { Type } from 'typebox';
 import { listActiveIntent } from './project/intent.ts';
 import { getTask } from './project/tasks.ts';
 import { CatalogService } from './catalog/service.ts';
+import { registerCheckoutTools } from './workspace/tools.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const prompt = (n: string) => readFileSync(join(here, 'prompts', n), 'utf8');
@@ -24,6 +25,8 @@ export function workerMode(pi: ExtensionAPI): void {
   pi.on('before_agent_start', async (event: any) => ({
     systemPrompt: `${event.systemPrompt}\n\n${prompt('worker.md')}\n\n${prompt('authority.md')}\n\nYou are worker ${process.env.SC_WORKER_ID}, task ${process.env.SC_TASK_ID}.`,
   }));
+
+  registerCheckoutTools(pi, root, () => process.env.SC_WORKER_ID ?? 'unidentified');
 
   pi.registerTool({
     name: 'task_context', label: 'Task Context',

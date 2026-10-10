@@ -5,7 +5,7 @@ import { writeJsonAtomic } from '../protocol/persistence.ts';
 import type { Worker, WorkerResult } from '../protocol/types.ts';
 import { ensureLayout } from '../project/paths.ts';
 import { createTask, updateTask } from '../project/tasks.ts';
-import { createWorktree } from '../worktrees/create.ts';
+import { claimPaths, releasePaths } from '../workspace/checkouts.ts';
 import type { AbilityRequest } from '../catalog/types.ts';
 import { allocateWorkerId, archiveWorker, getWorker, listWorkers, upsertWorker } from './registry.ts';
 import { PiRpcRuntime } from './runtime.ts';
@@ -17,7 +17,6 @@ export interface SpawnSpec {
   /** Pre-allocated id (see allocateId); allocated here when absent. */
   workerId?: string; thinking?: string; abilityProfile?: string;
   lease?: { lease_id: string; expires_at: number } | null;
-  worktree?: { path: string; branch: string; base_commit: string };
   extensionPath: string; piCommand: string; args?: string[]; env?: Record<string, string>; extraExtensions?: string[];
 }
 export interface ManagerOpts { hangMs?: number; activityThrottleMs?: number; superviseEveryMs?: number; catalog?: CatalogService }
@@ -46,6 +45,13 @@ export class WorkerManager {
     if (e) { if (e.released) return; e.released = true; }
     try { this.opts.catalog?.releaseWorker(id); } catch { /* best effort */ }
   }
+  private releaseCheckouts(id: string): void {
+    try { releasePaths(this.root, id, []); }
+    catch (err) {
+      // Preserve ownership if there are uncommitted changes. Operator must inspect/transfer.
+      appendEvent(this.root, 'checkout.needs_handoff', { owner: id, reason: String((err as Error).message) });
+    }
+  }
   private report(id: string, e: Entry, outcome: any, extra: { latency_ms?: number } = {}): void {
     try { this.opts.catalog?.reportOutcome(e.modelKey, outcome, { worker_id: id, ...extra }); } catch { /* best effort */ }
   }
@@ -53,12 +59,12 @@ export class WorkerManager {
   async spawn(spec: SpawnSpec): Promise<string> {
     const id = spec.workerId ?? allocateWorkerId(this.root);
     const now = new Date().toISOString();
-    const cwd = spec.worktree?.path ?? this.root;
+    const cwd = this.root; // All workers inhabit one shared checkout.
     const prior = getWorker(this.root, id)?.display_name;
     const w: Worker = {
       id, ...(prior ? { display_name: prior } : {}), task_id: spec.taskId, role: spec.role, ability_profile: spec.abilityProfile ?? spec.role, provider: spec.provider, model: spec.model,
       endpoint_lease: spec.lease ? { endpoint_id: `${spec.provider}/${spec.model}`, worker_id: id, acquired_at: now, expires_at: new Date(spec.lease.expires_at).toISOString() } : null, session_id: null, generation: 1, pid: null, status: 'STARTING', project_root: this.root,
-      worktree: spec.worktree ?? null, started_at: now, last_activity: now, current_action: '', current_tool: '',
+      worktree: null, started_at: now, last_activity: now, current_action: '', current_tool: '',
       context_usage: { tokens_used: 0, context_window: 0, percentage: 0, compactions: 0 },
       collaboration: { team_ids: [], inbox_cursor: 0, unread_count: 0 }, results: [],
     };
@@ -155,6 +161,7 @@ export class WorkerManager {
     appendEvent(this.root, 'worker.completed', { id, receipt: file });
     const eE = this.runtimes.get(id);
     if (eE) { this.report(id, eE, 'success', { latency_ms: Date.now() - eE.startedMs }); this.release(id, eE); }
+    this.releaseCheckouts(id);
     this.em.emit('result', id, result, file);
   }
 
@@ -166,6 +173,7 @@ export class WorkerManager {
       appendEvent(this.root, 'worker.failed', { id, code: x.code, reason: 'process exited' });
     }
     this.release(id, e);
+    // Crashed workers keep any ownership until operator recovers them; do not lose changes.
     this.em.emit('exit', id, x);
   }
 
@@ -184,6 +192,7 @@ export class WorkerManager {
     this.patch(id, { status: 'CANCELLED', current_tool: '' });
     appendEvent(this.root, 'worker.cancelled', { id });
     this.release(id, e);
+    // The process may still be unwinding. Keep file checkout ownership until clean finish/retire or operator handoff.
   }
 
   async retire(id: string): Promise<void> {
@@ -195,6 +204,7 @@ export class WorkerManager {
       this.release(id, e);
       this.runtimes.delete(id);
     } else this.release(id);
+    this.releaseCheckouts(id);
     archiveWorker(this.root, id);
   }
 
@@ -226,7 +236,7 @@ export interface SpawnParams {
   requirements?: { min?: Record<string, string>; weights?: Record<string, number>; min_context?: number };
   preferences?: { free_only?: boolean; prefer_provider?: string[]; avoid_provider?: string[]; diversity_from?: string[] };
   relationship?: { independent?: boolean; independent_of?: string };
-  dry_run?: boolean; role?: string; task_title?: string; files?: string[]; worktree_required?: boolean;
+  dry_run?: boolean; role?: string; task_title?: string; files?: string[]; 
   expected_outputs?: string[]; context_hints?: string[];
 }
 export interface SpawnLaunch { extensionPath: string; piCommand: string; args?: string[]; env?: Record<string, string>; extraExtensions?: string[] }
@@ -268,11 +278,11 @@ export function buildRequest(p: SpawnParams, parentKey: string | undefined): Abi
 }
 
 /**
- * Select (never inheriting the parent model), claim lease, create task+worktree keyed by the pre-allocated
+ * Select (never inheriting the parent model), claim model lease, create task and optional file checkouts keyed by the pre-allocated
  * worker id, write receipts/spawn/<id>.json, spawn. dry_run returns the ranking and spawns nothing.
  */
 export async function spawnSelected(mgr: WorkerManager, catalog: CatalogService, root: string, p: SpawnParams, launch: SpawnLaunch):
-  Promise<{ ok: boolean; error?: string; dry_run?: boolean; selection?: any; worker_id?: string; model?: string; worktree?: string | null; task_id?: string; receipt?: string }> {
+  Promise<{ ok: boolean; error?: string; dry_run?: boolean; selection?: any; worker_id?: string; model?: string; workspace?: string; checkout_conflicts?: string[]; task_id?: string; receipt?: string }> {
   const parentKey = catalog.parentModelKey();
   const request = buildRequest(p, parentKey);
   const sel = catalog.resolve(request, { explicit: p.model });
@@ -288,19 +298,30 @@ export async function spawnSelected(mgr: WorkerManager, catalog: CatalogService,
       scope: { files: p.files ?? [], subsystem: '', worktree: '' },
       expected_outputs: p.expected_outputs ?? [], context_hints: p.context_hints ?? [],
     });
-    const worktree = p.worktree_required === false ? undefined : createWorktree(root, id, slugify(p.task_title ?? p.assignment));
+    const checkoutConflicts: string[] = [];
+    const claimed: string[] = [];
+    for (const path of p.files ?? []) {
+      try { claimPaths(root, id, [path]); claimed.push(path); }
+      catch (err) { checkoutConflicts.push(`${path}: ${(err as Error).message}`); }
+    }
+    const checkoutBrief = '\n\nSHARED CHECKOUT: You work directly in the one project root. ' +
+      'You have right-of-way ONLY for claimed paths. Read any source; claim more paths before writing. ' +
+      'For paths held by another worker, submit a checkout_propose instead of editing in place. ' +
+      'Use checkout_publish to commit only your owned paths. Do not run git add/commit directly. ' +
+      'Claims: ' + JSON.stringify(claimed) + '. Conflicts: ' + JSON.stringify(checkoutConflicts) + '.';
     const receipt = join(ensureLayout(root), 'receipts', 'spawn', `${id}.json`);
     writeJsonAtomic(receipt, { worker_id: id, task_id: task.id, request: { ...p, assignment: undefined, resolved: request },
-      selection: sel, lease, parent_model: parentKey ?? null,
+      selection: sel, lease, parent_model: parentKey ?? null, claimed_paths: claimed, checkout_conflicts: checkoutConflicts,
       agent_dir: launch.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? null, extensions: launch.extraExtensions ?? [] });
     await mgr.spawn({
       workerId: id, taskId: task.id, role: p.role ?? 'worker', abilityProfile: request.profile, provider: chosen.provider, model: chosen.id,
-      thinking: chosen.thinking ?? 'off', lease, assignment: p.assignment, worktree, ...launch,
+      thinking: chosen.thinking ?? 'off', lease, assignment: p.assignment + checkoutBrief, ...launch,
     });
-    updateTask(root, task.id, { assigned_worker: id, scope: { ...task.scope, worktree: worktree?.path ?? '' } });
-    return { ok: true, worker_id: id, model: chosen.key, worktree: worktree?.path ?? null, task_id: task.id, receipt, selection: { reason: sel.reason } };
+    updateTask(root, task.id, { assigned_worker: id });
+    return { ok: true, worker_id: id, model: chosen.key, workspace: root, checkout_conflicts: checkoutConflicts, task_id: task.id, receipt, selection: { reason: sel.reason } };
   } catch (e) {
     try { catalog.releaseWorker(id); } catch { /* */ }
+    try { releasePaths(root, id, []); } catch { /* preserve modified files */ }
     return { ok: false, error: `spawn failed: ${(e as Error).message}` };
   }
 }

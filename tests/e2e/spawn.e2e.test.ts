@@ -46,7 +46,8 @@ test('real pi worker with mock provider reaches COMPLETE', { timeout: 120000 }, 
   });
   assert.equal(sp.ok, true, sp.error);
   const id = sp.worker_id!;
-  const wt = { path: sp.worktree!, branch: git(root, 'branch', '--list', 'clanker/*').replace(/^[*+\s]+/, '') };
+  assert.equal(sp.workspace, root);
+  assert.equal(sp.checkout_conflicts?.length, 0);
   const receipt = JSON.parse(readFileSync(sp.receipt!, 'utf8'));
   assert.equal(receipt.selection.chosen.key, 'scmock/scmock-1');
   assert.match(receipt.selection.reason, /chose scmock\/scmock-1/);
@@ -67,8 +68,8 @@ test('real pi worker with mock provider reaches COMPLETE', { timeout: 120000 }, 
     assert.equal(receipts.length, 1);
     assert.equal(catalog.status('scmock/scmock-1').leases.used, 0, 'lease released after COMPLETE');
     assert.ok(readEvents(root, { types: ['worker.completed'] }).length >= 1);
-    assert.ok(existsSync(wt.path));
-    assert.match(git(root, 'branch', '--list', wt.branch), /clanker/);
+    assert.equal(w.worktree, null);
+    assert.equal(git(root, 'branch', '--list', 'clanker/*'), '');
   } catch (e) {
     throw new Error(`${(e as Error).message}\nstderr: ${err.slice(0, 1500)}`);
   } finally {

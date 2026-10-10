@@ -11,6 +11,7 @@ import { CatalogService } from './catalog/service.ts';
 import { spawnSelected, WorkerManager } from './workers/manager.ts';
 import { parentExtensionArgs } from './workers/runtime.ts';
 import { getWorker, listWorkers } from './workers/registry.ts';
+import { registerCheckoutTools } from './workspace/tools.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const prompt = (n: string) => readFileSync(join(here, 'prompts', n), 'utf8');
@@ -79,9 +80,11 @@ export function operatorMode(pi: ExtensionAPI): void {
     return { systemPrompt: `${event.systemPrompt}\n\n${extra}` };
   });
 
+  registerCheckoutTools(pi, root, () => 'operator', true);
+
   pi.registerTool({
     name: 'worker_spawn', label: 'Spawn Worker',
-    description: 'Select a model by ability profile (never inherits yours), create task + worktree, spawn a worker. Non-blocking. Use dry_run to inspect the choice.',
+    description: 'Select a model by ability profile (never inherits yours), create task, assign file checkout responsibility in one shared working tree, spawn a worker. Non-blocking. Use dry_run to inspect the choice.',
     parameters: Type.Object({
       assignment: Type.String(),
       model: opt(Type.String({ description: 'Explicit provider/id; only when the human names a model' })),
@@ -94,7 +97,7 @@ export function operatorMode(pi: ExtensionAPI): void {
       relationship: opt(Type.Object({ independent: opt(Type.Boolean()), independent_of: opt(Type.String()) })),
       dry_run: opt(Type.Boolean()),
       role: opt(Type.String()), task_title: opt(Type.String()), files: strs(),
-      worktree_required: opt(Type.Boolean()), expected_outputs: strs(), context_hints: strs(),
+      expected_outputs: strs(), context_hints: strs(),
     }),
     async execute(_id: string, p: any, _s: any, _u: any, ctx: any) {
       if (ctx) uiCtx = ctx;
@@ -109,7 +112,7 @@ export function operatorMode(pi: ExtensionAPI): void {
       }
       if (!r.ok) return txt(`error: ${r.error}`);
       draw();
-      return txt(JSON.stringify({ worker_id: r.worker_id, name: null, model: r.model, reason: r.selection?.reason, worktree: r.worktree, task_id: r.task_id }));
+      return txt(JSON.stringify({ worker_id: r.worker_id, name: null, model: r.model, reason: r.selection?.reason, workspace: r.workspace, checkout_conflicts: r.checkout_conflicts, task_id: r.task_id }));
     },
   });
 
@@ -168,7 +171,7 @@ export function operatorMode(pi: ExtensionAPI): void {
       const w = getWorker(root(), p.id);
       if (!w) return txt(`no worker ${p.id}`);
       const r = w.results[w.results.length - 1];
-      return txt(line(w) + (w.worktree ? `\nworktree=${w.worktree.path} branch=${w.worktree.branch}` : '') + (r ? `\nresult: ${r.status} ${r.summary}` : ''));
+      return txt(line(w) + `\nworkspace=${root()}` + (r ? `\nresult: ${r.status} ${r.summary}` : ''));
     },
   });
   const act = (name: string, desc: string, fn: (id: string, text: string) => Promise<unknown>) =>

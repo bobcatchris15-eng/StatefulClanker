@@ -6,7 +6,7 @@ Pi extension at repo root. Entry `index.ts` (operator vs worker by `SC_WORKER_ID
 
 - `index.ts` — entry + double-load guard; `operator.ts` / `worker.ts` — mode registration
 - `catalog/` — profiles, observations, health, leases, selection, pool
-- `workers/` — spawn manager, runtime, registry; `worktrees/`, `protocol/`, `project/`, `ui/`, `prompts/`
+- `workers/` — spawn manager, runtime, registry; `workspace/` — cooperative checkouts, proposals, publish; `protocol/`, `project/`, `ui/`, `prompts/`
 - `tests/unit`, `tests/e2e` (runs real pi from root node_modules with a mock provider)
 
 ## Gotchas
@@ -15,7 +15,7 @@ Pi extension at repo root. Entry `index.ts` (operator vs worker by `SC_WORKER_ID
 - Worker<->parent channel is `SC1 {json}` lines via notify.
 - Candidate pool == Pi's available models (model registry), nothing else.
 - Tests set `SC_MACHINE_DIR` to isolate machine state.
-- Workers get `-e <this index.ts>`; parentExtensionArgs excludes self. Double-load guard uses `Symbol.for("statefulclanker.loaded")`.
+- Workers share the repository cwd, do not create Git worktrees, and use checkout_claim / checkout_publish for file authority. This is cooperative, not filesystem-enforced.\n- Workers get `-e <this index.ts>`; parentExtensionArgs excludes self. Double-load guard uses `Symbol.for("statefulclanker.loaded")`.
 
 ## VALIDATE
 
