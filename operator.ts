@@ -8,7 +8,7 @@ import { reconstruct } from './project/reconstruct.ts';
 import { createTask, getTask, listTasks, updateTask } from './project/tasks.ts';
 import { renderRack } from './ui/worker-rack.ts';
 import { CatalogService } from './catalog/service.ts';
-import { spawnSelected, WorkerManager } from './workers/manager.ts';
+import { spawnSelected, WorkerManager, type SpawnLaunch } from './workers/manager.ts';
 import { parentExtensionArgs } from './workers/runtime.ts';
 import { getWorker, listWorkers } from './workers/registry.ts';
 import { registerCheckoutTools } from './workspace/tools.ts';
@@ -30,7 +30,7 @@ export function operatorMode(pi: ExtensionAPI): void {
   let collabActive = false;
   let lastCollabError = '';
   const root = () => process.env.SC_PROJECT_ROOT ?? cwd;
-  const launch = () => ({
+  const launch = (): SpawnLaunch => ({
     extensionPath: join(here, 'index.ts'), piCommand: process.execPath,
     args: process.argv[1] ? [process.argv[1]] : [],
     extraExtensions: parentExtensionArgs(process.argv, join(here, 'index.ts')),
