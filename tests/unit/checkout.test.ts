@@ -86,3 +86,16 @@ test('subtree claims overlap files, and paths cannot escape repository', () => {
   assert.throws(() => scopePath(root, '.git/config'), /metadata/);
   assert.throws(() => scopePath(root, '.statefulclanker/ledger.json'), /broker state/);
 });
+
+test('pending proposals keep ownership durable; operator handoff retargets them', () => {
+  const root = repo();
+  claimPaths(root, 'W01', ['one.txt']);
+  const id = proposeWrite(root, 'W02', 'one.txt', hashFile(root, 'one.txt'), 'from collaborator\n');
+  assert.throws(() => releasePaths(root, 'W01', []), /pending proposals/);
+  transferPath(root, 'one.txt', 'W03');
+  assert.equal(readProposal(root, 'W03', id).to, 'W03');
+  acceptProposal(root, 'W03', id);
+  publish(root, 'W03', ['one.txt'], 'accept W02 contribution');
+  releasePaths(root, 'W03', []);
+  assert.equal(listCheckouts(root).claims.length, 0);
+});
