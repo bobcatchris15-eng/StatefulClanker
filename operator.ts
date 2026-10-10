@@ -12,6 +12,8 @@ import { spawnSelected, WorkerManager } from './workers/manager.ts';
 import { parentExtensionArgs } from './workers/runtime.ts';
 import { getWorker, listWorkers } from './workers/registry.ts';
 import { registerCheckoutTools } from './workspace/tools.ts';
+import { dispatchNotices, proposalAssignment } from './workspace/dispatch.ts';
+import type { Solicitation } from './workspace/checkouts.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const prompt = (n: string) => readFileSync(join(here, 'prompts', n), 'utf8');
@@ -24,7 +26,16 @@ export function operatorMode(pi: ExtensionAPI): void {
   let uiCtx: any = null;
   let mgr: WorkerManager | null = null;
   let first = true;
+  let collabTimer: NodeJS.Timeout | null = null;
+  let collabActive = false;
+  let lastCollabError = '';
   const root = () => process.env.SC_PROJECT_ROOT ?? cwd;
+  const launch = () => ({
+    extensionPath: join(here, 'index.ts'), piCommand: process.execPath,
+    args: process.argv[1] ? [process.argv[1]] : [],
+    extraExtensions: parentExtensionArgs(process.argv, join(here, 'index.ts')),
+    env: process.env.PI_CODING_AGENT_DIR ? { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR } : {},
+  });
 
   let timer: NodeJS.Timeout | null = null;
   let last = 0;
@@ -59,17 +70,79 @@ export function operatorMode(pi: ExtensionAPI): void {
       draw();
     });
     m.on('event', draw);
+    m.on('collaboration', () => { void pumpCollaboration(); });
     m.on('exit', draw);
     mgr = m;
     return m;
   };
 
+  /**
+   * Parent is the only runtime delivery/spawn broker. This loop also replays undelivered
+   * notices after a crash; child workers only enqueue durable intent into the ledger.
+   */
+  async function pumpCollaboration(): Promise<void> {
+    if (collabActive) return;
+    collabActive = true;
+    try {
+      await dispatchNotices(root(), {
+        async sendWorker(id, message) {
+          const w = getWorker(root(), id);
+          const rt = manager().runtime(id);
+          if (!w || ['COMPLETE', 'CANCELLED', 'FAILED', 'LOST'].includes(w.status) || !rt || rt.exited || rt.stopping)
+            throw Error('worker is no longer available');
+          if (rt.streaming) await manager().message(id, message);
+          else await manager().followUp(id, message);
+        },
+        notifyOperator(message) {
+          pi.sendMessage({
+            customType: 'sc-collaboration', display: true, details: { kind: 'collaboration' },
+            content: message,
+          }, { deliverAs: 'followUp', triggerTurn: true });
+        },
+        canSpawn() {
+          return listWorkers(root()).filter((w) =>
+            !['COMPLETE', 'CANCELLED', 'FAILED', 'LOST'].includes(w.status)).length < 3;
+        },
+        async spawn(q: Solicitation) {
+          const owner = q.owner === 'operator' ? null : getWorker(root(), q.owner);
+          if (q.owner !== 'operator' && (!owner ||
+            ['COMPLETE', 'CANCELLED', 'FAILED', 'LOST'].includes(owner.status)))
+            return { error: 'requesting checkout owner is not active; transfer or close the solicitation' };
+          const result = await spawnSelected(manager(), catalog(), root(), {
+            assignment: proposalAssignment(q),
+            role: 'proposal-helper', ability_profile: q.ability_profile,
+            task_title: 'Proposal assistance ' + q.paths.join(', ').slice(0, 70),
+            files: [], context_hints: ['solicitation:' + q.id],
+          }, launch());
+          return result.ok ? { worker_id: result.worker_id } : { error: result.error ?? 'no available model' };
+        },
+      });
+      lastCollabError = '';
+    } catch (err) {
+      const msg = String((err as Error).message);
+      if (msg !== lastCollabError) {
+        lastCollabError = msg;
+        pi.sendMessage({
+          customType: 'sc-collaboration-error', display: true, details: {},
+          content: 'Collaboration dispatcher error: ' + msg,
+        }, { deliverAs: 'followUp', triggerTurn: true });
+      }
+    } finally {
+      collabActive = false;
+    }
+  }
+
   pi.on('session_start', async (_e: any, ctx: any) => {
     cwd = ctx.cwd ?? cwd; uiCtx = ctx; first = true;
     manager().recover();
+    if (collabTimer) clearInterval(collabTimer);
+    collabTimer = setInterval(() => { void pumpCollaboration(); }, 500);
+    collabTimer.unref();
+    void pumpCollaboration();
     drawNow();
   });
   pi.on('session_shutdown', async () => {
+    if (collabTimer) { clearInterval(collabTimer); collabTimer = null; }
     if (!mgr) return;
     for (const w of listWorkers(root())) { try { await mgr.runtime(w.id)?.stop(); } catch { /* */ } }
     mgr.releaseAll();
@@ -101,11 +174,7 @@ export function operatorMode(pi: ExtensionAPI): void {
     }),
     async execute(_id: string, p: any, _s: any, _u: any, ctx: any) {
       if (ctx) uiCtx = ctx;
-      const r = await spawnSelected(manager(), catalog(), root(), p, {
-        extensionPath: join(here, 'index.ts'), piCommand: process.execPath, args: process.argv[1] ? [process.argv[1]] : [],
-        extraExtensions: parentExtensionArgs(process.argv, join(here, 'index.ts')),
-        env: process.env.PI_CODING_AGENT_DIR ? { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR } : {},
-      });
+      const r = await spawnSelected(manager(), catalog(), root(), p, launch());
       if (p.dry_run) {
         const s = r.selection ?? {};
         return txt(JSON.stringify({ dry_run: true, ok: r.ok, chosen: s.chosen?.key ?? null, reason: s.reason, ranked: s.ranked, excluded: s.excluded, error: r.error }, null, 1));
