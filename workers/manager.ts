@@ -192,7 +192,7 @@ export class WorkerManager {
     this.patch(id, { status: 'CANCELLED', current_tool: '' });
     appendEvent(this.root, 'worker.cancelled', { id });
     this.release(id, e);
-    this.releaseCheckouts(id);
+    // The process may still be unwinding. Keep file checkout ownership until clean finish/retire or operator handoff.
   }
 
   async retire(id: string): Promise<void> {
