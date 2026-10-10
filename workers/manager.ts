@@ -5,7 +5,7 @@ import { writeJsonAtomic } from '../protocol/persistence.ts';
 import type { Worker, WorkerResult } from '../protocol/types.ts';
 import { ensureLayout } from '../project/paths.ts';
 import { createTask, updateTask } from '../project/tasks.ts';
-import { claimPaths, releasePaths } from '../workspace/checkouts.ts';
+import { claimPaths, recordSolicitationWorkerResult, releasePaths } from '../workspace/checkouts.ts';
 import type { AbilityRequest } from '../catalog/types.ts';
 import { allocateWorkerId, archiveWorker, getWorker, listWorkers, upsertWorker } from './registry.ts';
 import { PiRpcRuntime } from './runtime.ts';
@@ -145,6 +145,10 @@ export class WorkerManager {
       this.patch(id, { current_action: String(p.action ?? p.summary ?? '') });
       return;
     }
+    if (p?.kind === 'collaboration_changed') {
+      this.em.emit('collaboration');
+      return;
+    }
     if (p?.kind !== 'finish') return;
     const w = getWorker(this.root, id);
     const result: WorkerResult = {
@@ -159,6 +163,12 @@ export class WorkerManager {
     writeJsonAtomic(file, result);
     if (w) upsertWorker(this.root, { ...w, status: 'COMPLETE', current_tool: '', results: [...w.results, result] });
     appendEvent(this.root, 'worker.completed', { id, receipt: file });
+    try {
+      const requests = recordSolicitationWorkerResult(this.root, id, result.status, result.summary);
+      if (requests.length) this.em.emit('collaboration');
+    } catch (err) {
+      appendEvent(this.root, 'collaboration.helper_result_error', { id, error: String((err as Error).message) });
+    }
     const eE = this.runtimes.get(id);
     if (eE) { this.report(id, eE, 'success', { latency_ms: Date.now() - eE.startedMs }); this.release(id, eE); }
     this.releaseCheckouts(id);

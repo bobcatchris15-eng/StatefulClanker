@@ -13,11 +13,30 @@ import { ensureLayout } from '../project/paths.ts';
 
 export interface Claim { path: string; recursive: boolean; owner: string; acquired_at: string }
 export interface Proposal { id: string; path: string; from: string; to: string; base_hash: string | null; content: string; created_at: string; status: 'pending' | 'accepted' | 'rejected' }
-interface Ledger { claims: Claim[]; proposals: Proposal[] }
-const EMPTY = (): Ledger => ({ claims: [], proposals: [] });
+
+export type NoticeKind = 'proposal' | 'proposal_result' | 'solicit' | 'solicitation_result';
+export interface CollaborationNotice {
+  id: string; kind: NoticeKind; from: string; to: string; ref_id: string; path: string;
+  created_at: string; delivered_at?: string;
+}
+export interface Solicitation {
+  id: string; owner: string; paths: string[]; objective: string;
+  target?: string; spawn_new: boolean; ability_profile: string;
+  status: 'pending' | 'routing' | 'dispatching' | 'assigned' | 'failed' | 'closed';
+  assigned_worker?: string; error?: string; result?: { status: string; summary: string }; created_at: string;
+}
+interface Ledger { claims: Claim[]; proposals: Proposal[]; notices: CollaborationNotice[]; solicitations: Solicitation[] }
+const EMPTY = (): Ledger => ({ claims: [], proposals: [], notices: [], solicitations: [] });
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 const file = (root: string) => join(ensureLayout(root), 'checkouts', 'ledger.json');
-const load = (root: string) => readJson<Ledger>(file(root), EMPTY());
+const load = (root: string): Ledger => {
+  const raw = readJson<Partial<Ledger>>(file(root), EMPTY());
+  return { claims: raw.claims ?? [], proposals: raw.proposals ?? [],
+    notices: raw.notices ?? [], solicitations: raw.solicitations ?? [] };
+};
+const notify = (db: Ledger, kind: NoticeKind, from: string, to: string, ref_id: string, path: string) => {
+  db.notices.push({ id: randomUUID(), kind, from, to, ref_id, path, created_at: new Date().toISOString() });
+};
 const git = (root: string, ...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true }).trim();
 const pause = new Int32Array(new SharedArrayBuffer(4));
 
@@ -106,6 +125,7 @@ export function proposeWrite(root: string, actor: string, path: string, baseHash
     const prop: Proposal = { id: randomUUID(), path: p.path, from: actor, to: c.owner,
       base_hash: baseHash, content, created_at: new Date().toISOString(), status: 'pending' };
     db.proposals.push(prop);
+    notify(db, 'proposal', actor, c.owner, prop.id, p.path);
     writeJsonAtomic(file(root), db);
     appendEvent(root, 'checkout.proposed', { id: prop.id, path: p.path, from: actor, to: c.owner });
     return prop.id;
@@ -130,6 +150,7 @@ export function acceptProposal(root: string, actor: string, id: string): void {
     try { writeFileSync(tmp, p.content, 'utf8'); renameSync(tmp, dest); }
     finally { if (existsSync(tmp)) rmSync(tmp); }
     p.status = 'accepted';
+    notify(db, 'proposal_result', actor, p.from, p.id, p.path);
     writeJsonAtomic(file(root), db);
     appendEvent(root, 'checkout.accepted', { id, path: p.path, owner: actor, from: p.from });
   });
@@ -143,6 +164,10 @@ export function releasePaths(root: string, actor: string, paths: string[]): void
         throw Error('you do not own exact checkout ' + p.path);
       if (db.proposals.some((proposal) => proposal.to === actor && proposal.status === 'pending' && covers(p, proposal.path)))
         throw Error('pending proposals for ' + p.path + ': resolve or transfer before release');
+      if (db.solicitations.some((request) => request.owner === actor &&
+        !['closed', 'failed'].includes(request.status) &&
+        request.paths.some((path) => covers(p, scopePath(root, path).path))))
+        throw Error('outstanding collaboration solicitation for ' + p.path + ': close it before releasing');
       const status = git(root, 'status', '--porcelain', '--', p.path);
       if (status) throw Error('uncommitted changes in ' + p.path + ': publish or resolve before release');
     }
@@ -162,6 +187,12 @@ export function transferPath(root: string, path: string, newOwner: string): void
     if (db.claims.some((x) => x !== c && x.owner !== newOwner && overlap(x, p))) throw Error('overlapping checkout');
     c.owner = newOwner; c.acquired_at = new Date().toISOString();
     for (const prop of db.proposals) if (prop.to === prev && prop.status === 'pending' && covers(c, prop.path)) prop.to = newOwner;
+    for (const n of db.notices) if (!n.delivered_at && n.to === prev && n.kind === 'proposal' &&
+      db.proposals.some((q) => q.id === n.ref_id && q.status === 'pending' && covers(c, q.path))) n.to = newOwner;
+    // If old owner already saw a proposal, new owner still needs its own notification.
+    for (const prop of db.proposals) if (prop.to === newOwner && prop.status === 'pending' &&
+      covers(c, prop.path) && !db.notices.some((n) => n.kind === 'proposal' && n.ref_id === prop.id && n.to === newOwner))
+      notify(db, 'proposal', prop.from, newOwner, prop.id, prop.path);
     writeJsonAtomic(file(root), db);
     appendEvent(root, 'checkout.transferred', { ...p, from: prev, to: newOwner });
   });
@@ -184,5 +215,132 @@ export function publish(root: string, actor: string, paths: string[], message: s
     if (before === after) throw Error('no commit produced');
     appendEvent(root, 'checkout.published', { owner: actor, paths: requested.map((p) => p.path), commit: after });
     return after;
+  });
+}
+
+/** The broker is the durable inbox. Undelivered notices are retried after operator restart. */
+export function pendingNotices(root: string): CollaborationNotice[] {
+  return load(root).notices.filter((n) => !n.delivered_at);
+}
+export function markNoticeDelivered(root: string, id: string): void {
+  locked(root, () => {
+    const db = load(root), n = db.notices.find((v) => v.id === id);
+    if (!n) throw Error('notice not found');
+    if (!n.delivered_at) {
+      n.delivered_at = new Date().toISOString();
+      writeJsonAtomic(file(root), db);
+      appendEvent(root, 'collaboration.delivered', { id, kind: n.kind, to: n.to });
+    }
+  });
+}
+export function readSolicitation(root: string, id: string): Solicitation {
+  const q = load(root).solicitations.find((v) => v.id === id);
+  if (!q) throw Error('solicitation not found');
+  return q;
+}
+export function listSolicitations(root: string): Solicitation[] { return load(root).solicitations; }
+
+/** Only a checkout owner can solicit a modification to its own path(s). */
+export function solicitProposals(root: string, actor: string, paths: string[], objective: string,
+  options: { target?: string; spawn_new?: boolean; ability_profile?: string } = {}): Solicitation {
+  if (!paths.length || !objective.trim()) throw Error('owned paths and objective required');
+  if (objective.length > 5000 || paths.length > 20) throw Error('solicitation exceeds size limit');
+  if (options.target && options.spawn_new) throw Error('choose an existing target OR spawn_new');
+  if (options.target === actor) throw Error('cannot solicit yourself');
+  return locked(root, () => {
+    const db = load(root), scopes = paths.map((p) => scopePath(root, p));
+    for (const p of scopes) if (!owned(db, actor, p.path)) throw Error('only checkout owner can solicit ' + p.path);
+    if (db.solicitations.filter((q) => q.owner === actor &&
+      ['pending', 'routing', 'dispatching', 'assigned'].includes(q.status)).length >= 3)
+      throw Error('too many outstanding solicitation requests for this owner');
+    const request: Solicitation = {
+      id: randomUUID(), owner: actor, paths, objective, target: options.target,
+      spawn_new: !!options.spawn_new, ability_profile: options.ability_profile ?? 'implementation',
+      status: 'pending', created_at: new Date().toISOString(),
+    };
+    db.solicitations.push(request);
+    notify(db, 'solicit', actor, request.target ?? 'operator', request.id, scopes[0]!.path);
+    writeJsonAtomic(file(root), db);
+    appendEvent(root, 'collaboration.solicited', { id: request.id, owner: actor, target: request.target ?? 'operator', spawn_new: request.spawn_new, paths });
+    return request;
+  });
+}
+/** Operator chooses an existing worker or authorizes one new specialist. */
+export function routeSolicitation(root: string, id: string, target?: string, spawn_new = false): Solicitation {
+  if ((!target && !spawn_new) || (target && spawn_new)) throw Error('choose worker target or spawn_new');
+  return locked(root, () => {
+    const db = load(root), q = db.solicitations.find((v) => v.id === id);
+    if (!q || !['routing', 'failed'].includes(q.status)) throw Error('request is not awaiting routing');
+    if (target === q.owner) throw Error('cannot solicit yourself');
+    q.target = target;
+    q.spawn_new = spawn_new;
+    q.status = 'pending'; q.error = undefined;
+    notify(db, 'solicit', q.owner, target ?? 'operator', q.id, q.paths[0]!);
+    writeJsonAtomic(file(root), db);
+    return q;
+  });
+}
+/** Reserve a spawn before starting the subprocess, preventing duplicate spawns on restart. */
+export function beginSolicitationSpawn(root: string, id: string): boolean {
+  return locked(root, () => {
+    const db = load(root), q = db.solicitations.find((v) => v.id === id);
+    if (!q || q.status !== 'pending' || !q.spawn_new) return false;
+    q.status = 'dispatching';
+    writeJsonAtomic(file(root), db);
+    return true;
+  });
+}
+export function resolveSolicitation(root: string, id: string, status: 'routing' | 'assigned' | 'failed',
+  workerId?: string, error?: string): void {
+  locked(root, () => {
+    const db = load(root), q = db.solicitations.find((v) => v.id === id);
+    if (!q) throw Error('solicitation not found');
+    q.status = status;
+    if (workerId) q.assigned_worker = workerId;
+    if (error) q.error = error;
+    writeJsonAtomic(file(root), db);
+    appendEvent(root, 'collaboration.solicitation_status', { id, status, worker_id: workerId ?? null, error: error ?? null });
+  });
+}
+/** Owner declines a proposed write without touching the shared checkout. */
+export function rejectProposal(root: string, actor: string, id: string, reason: string): void {
+  locked(root, () => {
+    const db = load(root), p = db.proposals.find((v) => v.id === id);
+    if (!p || p.status !== 'pending') throw Error('no pending proposal');
+    if (p.to !== actor || !owned(db, actor, p.path)) throw Error('only current checkout owner can reject');
+    p.status = 'rejected';
+    notify(db, 'proposal_result', actor, p.from, p.id, p.path);
+    writeJsonAtomic(file(root), db);
+    appendEvent(root, 'checkout.rejected', { id, path: p.path, owner: actor, reason: reason.slice(0, 500) });
+  });
+}
+
+/** Owner closes a request once proposals have been handled, or deliberately cancels the request. */
+export function closeSolicitation(root: string, actor: string, id: string): void {
+  locked(root, () => {
+    const db = load(root), q = db.solicitations.find((r) => r.id === id);
+    if (!q || (q.owner !== actor && actor !== 'operator')) throw Error('only the requester/operator may close a solicitation');
+    if (q.status === 'dispatching') throw Error('cannot close while helper spawn is dispatching');
+    q.status = 'closed';
+    writeJsonAtomic(file(root), db);
+    appendEvent(root, 'collaboration.solicitation_closed', { id, owner: q.owner, by: actor });
+  });
+}
+
+/** Give the requester a structured finish receipt; status stays assigned until owner closes it. */
+export function recordSolicitationWorkerResult(root: string, workerId: string, status: string, summary: string): string[] {
+  return locked(root, () => {
+    const db = load(root), completed: string[] = [];
+    for (const q of db.solicitations) {
+      if (q.assigned_worker !== workerId || q.status !== 'assigned' || q.result) continue;
+      q.result = { status: status.slice(0, 100), summary: summary.slice(0, 2000) };
+      notify(db, 'solicitation_result', workerId, q.owner, q.id, q.paths[0]!);
+      completed.push(q.id);
+    }
+    if (completed.length) {
+      writeJsonAtomic(file(root), db);
+      appendEvent(root, 'collaboration.helper_finished', { worker_id: workerId, requests: completed });
+    }
+    return completed;
   });
 }
