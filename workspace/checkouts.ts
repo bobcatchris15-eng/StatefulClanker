@@ -22,7 +22,7 @@ export interface CollaborationNotice {
 export interface Solicitation {
   id: string; owner: string; paths: string[]; objective: string;
   target?: string; spawn_new: boolean; ability_profile: string;
-  status: 'pending' | 'routing' | 'dispatching' | 'assigned' | 'failed';
+  status: 'pending' | 'routing' | 'dispatching' | 'assigned' | 'failed' | 'closed';
   assigned_worker?: string; error?: string; created_at: string;
 }
 interface Ledger { claims: Claim[]; proposals: Proposal[]; notices: CollaborationNotice[]; solicitations: Solicitation[] }
@@ -164,6 +164,10 @@ export function releasePaths(root: string, actor: string, paths: string[]): void
         throw Error('you do not own exact checkout ' + p.path);
       if (db.proposals.some((proposal) => proposal.to === actor && proposal.status === 'pending' && covers(p, proposal.path)))
         throw Error('pending proposals for ' + p.path + ': resolve or transfer before release');
+      if (db.solicitations.some((request) => request.owner === actor &&
+        !['closed', 'failed'].includes(request.status) &&
+        request.paths.some((path) => covers(p, scopePath(root, path).path))))
+        throw Error('outstanding collaboration solicitation for ' + p.path + ': close it before releasing');
       const status = git(root, 'status', '--porcelain', '--', p.path);
       if (status) throw Error('uncommitted changes in ' + p.path + ': publish or resolve before release');
     }
@@ -304,5 +308,17 @@ export function rejectProposal(root: string, actor: string, id: string, reason: 
     notify(db, 'proposal_result', actor, p.from, p.id, p.path);
     writeJsonAtomic(file(root), db);
     appendEvent(root, 'checkout.rejected', { id, path: p.path, owner: actor, reason: reason.slice(0, 500) });
+  });
+}
+
+/** Owner closes a request once proposals have been handled, or deliberately cancels the request. */
+export function closeSolicitation(root: string, actor: string, id: string): void {
+  locked(root, () => {
+    const db = load(root), q = db.solicitations.find((r) => r.id === id);
+    if (!q || (q.owner !== actor && actor !== 'operator')) throw Error('only the requester/operator may close a solicitation');
+    if (q.status === 'dispatching') throw Error('cannot close while helper spawn is dispatching');
+    q.status = 'closed';
+    writeJsonAtomic(file(root), db);
+    appendEvent(root, 'collaboration.solicitation_closed', { id, owner: q.owner, by: actor });
   });
 }
