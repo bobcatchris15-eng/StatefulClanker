@@ -32,3 +32,17 @@ P1 (workers, shared-checkout ownership, state) and P2 (model selection) implemen
 ## Develop
 
 `npm install && npm run validate`
+
+
+## Living shared context (Pi fork v0.87+)
+
+Every worker and the operator share the Git-tracked Markdown foundation at `.clanker/foundation.md` and documents under `.clanker/knowledge/**/*.md`.
+
+- The `memory_search`, `memory_read`, `memory_graph` and `memory_write` tools are available to all agents. `memory_write` uses an exact SHA-256 `base_hash` (null for new files), claims and publishes free paths through the checkout broker, and proposes changes to another checkout owner instead of overwriting their work.
+- Deterministic retrieval combines task description, active human intent, file overlap, verified status and one-hop Markdown `[[wikilinks]]`. The index is rebuilt from files; no embeddings, daemon or local model are needed.
+- The Pi `context_with_system` hook silently recompiles the living Markdown section before each provider request. No memory-change messages are delivered to workers; model sessions retain separate episodic histories.
+- The `context` hook keeps the original assignment and recent contiguous transcript window in the effective provider payload; the canonical on-disk session remains untouched. `SC_CONTEXT_HISTORY_CHARS` sets this soft window (default 26000; 8000–120000 supported). Native Pi compaction still handles actual overflow.
+- A context receipt is stored in `.statefulclanker/context/receipts/latest-<actor>.json` whenever the selected knowledge fingerprint changes. Receipts include source paths and revision hashes.
+- The operator explicitly stewards and revises the knowledge graph, and can suggest improvements to the Clanker harness itself. In human-authorized autonomous/clanker-mode it may run bounded reversible experiments and report their results; destructive/irreversible changes and spending still require appropriate permission.
+
+The foundation is seeded automatically if a project has none. Commit `.clanker/` in projects where you want its evolving knowledge to travel with Git. This is soft context projection, not a destructive compaction or extra LLM summarization call; workers should preserve important findings in knowledge before depending on old transient tool results.

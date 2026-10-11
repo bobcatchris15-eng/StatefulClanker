@@ -7,6 +7,8 @@ import { listActiveIntent } from './project/intent.ts';
 import { getTask } from './project/tasks.ts';
 import { CatalogService } from './catalog/service.ts';
 import { registerCheckoutTools } from './workspace/tools.ts';
+import { registerLivingContext } from './context/runtime.ts';
+import { registerMemoryTools } from './context/tools.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const prompt = (n: string) => readFileSync(join(here, 'prompts', n), 'utf8');
@@ -22,11 +24,18 @@ export function workerMode(pi: ExtensionAPI): void {
   const root = () => process.env.SC_PROJECT_ROOT ?? process.cwd();
   const emit = (ctx: any, payload: unknown) => ctx.ui.notify('SC1 ' + JSON.stringify(payload), 'info');
 
-  pi.on('before_agent_start', async (event: any) => ({
-    systemPrompt: `${event.systemPrompt}\n\n${prompt('worker.md')}\n\n${prompt('authority.md')}\n\nYou are worker ${process.env.SC_WORKER_ID}, task ${process.env.SC_TASK_ID}.`,
-  }));
+  pi.on('before_agent_start', async (event: any) => {
+    const core = `${prompt('authority.md')}\n\n${prompt('common.md')}\n\n${prompt('worker.md')}\n\nYou are worker ${process.env.SC_WORKER_ID}, task ${process.env.SC_TASK_ID}.`;
+    if (event.systemPromptOptions?.sections) {
+      event.systemPromptOptions.sections['statefulclanker-core'] = core;
+      return;
+    }
+    return { systemPrompt: `${event.systemPrompt}\n\n${core}` };
+  });
 
   registerCheckoutTools(pi, root, () => process.env.SC_WORKER_ID ?? 'unidentified');
+  registerMemoryTools(pi, root, () => process.env.SC_WORKER_ID ?? 'unidentified');
+  registerLivingContext(pi, root, () => process.env.SC_WORKER_ID ?? 'unidentified');
 
   pi.registerTool({
     name: 'task_context', label: 'Task Context',
