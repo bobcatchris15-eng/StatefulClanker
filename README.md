@@ -5,8 +5,8 @@ A [Pi](https://github.com/earendil-works/pi) package. The parent Clanker (your P
 ## Install
 
 ```
-pi install git:github.com/bobcatchris15-eng/StatefulClanker@v1.0.0
-pi install -l git:github.com/bobcatchris15-eng/StatefulClanker@v1.0.0   # project-local
+pi install git:github.com/bobcatchris15-eng/StatefulClanker@v1.1.0
+pi install -l git:github.com/bobcatchris15-eng/StatefulClanker@v1.1.0   # project-local
 ```
 
 ## Supervisor panel

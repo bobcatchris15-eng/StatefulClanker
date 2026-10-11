@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+      - package-lock.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run validate
+      - name: Create version tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p 'require("./package.json").version')"
+          LOCK_VERSION="$(node -p 'require("./package-lock.json").version')"
+          ROOT_VERSION="$(node -p 'require("./package-lock.json").packages[""].version')"
+          if [[ "$VERSION" != "$LOCK_VERSION" || "$VERSION" != "$ROOT_VERSION" ]]; then
+            echo "package.json and package-lock.json versions disagree" >&2
+            exit 1
+          fi
+          TAG="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "$TAG already exists; refusing to replace its tag."
+            exit 0
+          fi
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "StatefulClanker $TAG" --generate-notes
