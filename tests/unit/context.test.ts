@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ensureFoundation, knowledgeGraph, listKnowledge, selectKnowledge } from '../../context/knowledge.ts';
-import { projectHistory } from '../../context/runtime.ts';
+import { projectHistory, registerLivingContext } from '../../context/runtime.ts';
 import { updateKnowledge } from '../../context/tools.ts';
 import { claimPaths, listCheckouts } from '../../workspace/checkouts.ts';
 
@@ -60,4 +60,31 @@ test('memory updates use checkout publication and stale writes are rejected', ()
   const proposal = updateKnowledge(root, 'W02', path, '# Proposed update\n', made.hash!);
   assert.ok(proposal.proposal_id);
   assert.equal(listCheckouts(root).proposals.length, 1);
+});
+
+test('per-inference hook silently replaces living foundation without mutating session messages', async () => {
+  const root = repo();
+  const handlers: Record<string, (e: any) => any> = {};
+  registerLivingContext({ on(name: string, fn: (e: any) => any) { handlers[name] = fn; } } as any,
+    () => root, () => 'W01');
+  const original = [{ role: 'system', content: 'stable', timestamp: 1,
+    sections: { stable: 'keep' }, toolsAdded: [{ name: 'test' }] },
+    { role: 'user', content: 'work', timestamp: 2 }];
+  const first = await handlers['context_with_system']!({ messages: original });
+  assert.match(first.messages[0].sections['statefulclanker-living-context'], /Living Clanker foundation/);
+  assert.equal(first.messages[0].sections.stable, 'keep');
+  assert.deepEqual(first.messages[0].toolsAdded, original[0]!.toolsAdded);
+  assert.deepEqual(original[0]!.sections, { stable: 'keep' });
+  writeFileSync(join(root, '.clanker', 'foundation.md'), '# New foundation\nA new shared procedure.\n');
+  const next = await handlers['context_with_system']!({ messages: original });
+  assert.match(next.messages[0].sections['statefulclanker-living-context'], /A new shared procedure/);
+  assert.doesNotMatch(next.messages[0].sections['statefulclanker-living-context'], /Living Clanker foundation/);
+});
+test('verified records without query relevance are not blindly injected', () => {
+  const root = repo();
+  mkdirSync(join(root, '.clanker', 'knowledge'), { recursive: true });
+  writeFileSync(join(root, '.clanker', 'knowledge', 'irrelevant.md'),
+    '---\nstatus: verified\n---\n# Unrelated\nA completely different topic.\n');
+  const selected = selectKnowledge(root, 'git conflict', ['workspace/checkouts.ts']);
+  assert.ok(!selected.sources.some(x => x.path.endsWith('irrelevant.md')));
 });
