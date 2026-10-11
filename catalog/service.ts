@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AbilityRequest, CandidateModel, Capability, Rating } from "./types.ts";
+import { RATINGS } from "./types.ts";
 import { buildPool, toCandidate } from "./pool.ts";
 import type { PoolCtx } from "./pool.ts";
-import { loadCurated, resolveProfile } from "./profiles.ts";
+import { loadCurated, normalizeQuirks, resolveProfile } from "./profiles.ts";
 import type { ResolvedProfile } from "./profiles.ts";
 import { select } from "./select.ts";
 import type { SelectResult } from "./select.ts";
@@ -165,8 +166,15 @@ export class CatalogService {
     const bucket = raw.profiles && typeof raw.profiles === "object" && !Array.isArray(raw.profiles) ? raw.profiles : raw;
     const prev = bucket[p.pattern] ?? {};
     const next: any = { ...prev };
-    if (p.capabilities) next.capabilities = { ...(prev.capabilities ?? {}), ...p.capabilities };
-    if (p.quirks) next.quirks = { ...(prev.quirks ?? {}), ...p.quirks };
+    if (p.capabilities) {
+      const clean: Record<string, Rating> = {};
+      for (const [k, v] of Object.entries(p.capabilities)) {
+        if ((CAPABILITIES as readonly string[]).includes(k) && RATINGS.includes(v as Rating)) clean[k] = v as Rating;
+        else if (v !== undefined) console.error(`profile_set: ignoring ${p.pattern} ${k}=${String(v)} (not a valid capability/rating)`);
+      }
+      next.capabilities = { ...(prev.capabilities ?? {}), ...clean };
+    }
+    if (p.quirks) next.quirks = normalizeQuirks({ ...(prev.quirks ?? {}), ...p.quirks });
     if (p.lease_capacity !== undefined) next.lease_capacity = p.lease_capacity;
     bucket[p.pattern] = next;
     mkdirSync(dirname(file), { recursive: true });

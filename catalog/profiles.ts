@@ -61,6 +61,26 @@ export function loadCurated(machine?: string, project?: string): CuratedEntry[] 
 
 function specificity(p: string): number { return p.replace(/\*/g, "").length; }
 
+/** Flatten anything array-ish (array, string, {key: [...]} object) into a string list. */
+function coerceList(v: unknown): string[] {
+  if (v === undefined || v === null) return [];
+  if (typeof v === "string") return [v];
+  if (Array.isArray(v)) return v.flatMap(coerceList);
+  if (typeof v === "object") return Object.values(v as Record<string, unknown>).flatMap(coerceList);
+  return [];
+}
+
+/**
+ * Quirks are free-form, but known_issues must stay string[] — a malformed
+ * curated file must not throw inside resolveProfile (it runs per candidate).
+ */
+export function normalizeQuirks(q: unknown): Quirks {
+  if (!q || typeof q !== "object" || Array.isArray(q)) return { known_issues: [] };
+  const out: Quirks = { ...(q as Quirks) };
+  out.known_issues = coerceList(out.known_issues);
+  return out;
+}
+
 function matching(key: string, curated: CuratedEntry[]): CuratedEntry[] {
   return curated.filter((e) => globMatch(e.pattern, key)).sort((a, b) =>
     a.layer - b.layer || specificity(a.pattern) - specificity(b.pattern) || a.order - b.order);
@@ -78,14 +98,15 @@ export function resolveProfile(
   const source = {} as Record<Capability, Source>;
   for (const c of CAPABILITIES) { ratings[c] = "unknown"; source[c] = "unknown"; }
   for (const [c, r] of Object.entries(derive(m))) { ratings[c as Capability] = r; source[c as Capability] = "derived"; }
-  let quirks: Quirks = {};
+  let quirks: Quirks = { known_issues: [] };
   let family = m.family;
   let lease: number | undefined;
   for (const e of matching(m.key, curated)) {
     for (const [c, r] of Object.entries(e.capabilities ?? {})) {
       if ((CAPABILITIES as readonly string[]).includes(c) && r) { ratings[c as Capability] = r; source[c as Capability] = "curated"; }
     }
-    if (e.quirks) quirks = { ...quirks, ...e.quirks, known_issues: [...(quirks.known_issues ?? []), ...(e.quirks.known_issues ?? [])] };
+    const nq = normalizeQuirks(e.quirks);
+    if (Object.keys(nq).length) quirks = { ...quirks, ...nq, known_issues: [...(quirks.known_issues ?? []), ...nq.known_issues!] };
     if (e.family) family = e.family;
     if (e.lease_capacity !== undefined) lease = e.lease_capacity;
   }
