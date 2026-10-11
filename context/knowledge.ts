@@ -57,8 +57,10 @@ function parse(path: string, raw: string): KnowledgeDoc {
     tags: values(meta.tags), paths: values(meta.paths), links: [...new Set([...values(meta.links), ...inline, ...linkedMd])] };
 }
 export function ensureFoundation(root: string): void {
+  const base = join(root, '.clanker');
+  if (existsSync(base) && lstatSync(base).isSymbolicLink()) throw Error('symlinked .clanker roots are unsupported');
   const file = join(root, FOUNDATION);
-  if (existsSync(file)) return;
+  if (existsSync(file)) { if (lstatSync(file).isSymbolicLink()) throw Error('symlinked foundation is unsupported'); return; }
   mkdirSync(join(root, '.clanker'), { recursive: true });
   try { writeFileSync(file, DEFAULT_FOUNDATION, { encoding: 'utf8', flag: 'wx' }); }
   catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
@@ -102,7 +104,7 @@ export function scoreKnowledge(d: KnowledgeDoc, query: string, paths: string[] =
   const queryTerms = terms(query);
   const title = low(d.title + ' ' + d.id + ' ' + d.tags.join(' '));
   const body = low(d.body);
-  let score = d.status === 'verified' ? 2 : 0;
+  let score = 0;
   for (const t of queryTerms) {
     if (title.includes(t)) score += 6;
     else if (body.includes(t)) score += 1;
@@ -115,7 +117,7 @@ export function scoreKnowledge(d: KnowledgeDoc, query: string, paths: string[] =
     }
     if (key && low(d.path).includes(key)) score += 3;
   }
-  return score;
+  return score > 0 && d.status === 'verified' ? score + 2 : score;
 }
 export function selectKnowledge(root: string, query: string, paths: string[] = [], budget = 9500): SelectedKnowledge {
   const docs = listKnowledge(root);

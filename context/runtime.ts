@@ -1,5 +1,6 @@
 /** Non-destructive, silent per-inference context recompilation for Pi >= 0.87. */
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { getTask, listTasks } from '../project/tasks.ts';
 import { listActiveIntent } from '../project/intent.ts';
@@ -52,14 +53,15 @@ export function registerLivingContext(pi: ExtensionAPI, root: () => string, acto
     const selected = selectKnowledge(project, query, paths);
     const taskContext = task ? '## Current task\n' + task.id + ': ' + task.title + '\n' + task.objective : '';
     const living = [selected.text, taskContext].filter(Boolean).join('\n\n');
-    if (selected.fingerprint !== lastFingerprint) {
+    const fingerprint = createHash('sha256').update(living).digest('hex');
+    if (fingerprint !== lastFingerprint) {
       try {
         writeJsonAtomic(join(ensureLayout(project), 'context', 'receipts', 'latest-' + actor() + '.json'), {
           actor: actor(), task_id: task?.id ?? null, compiled_at: new Date().toISOString(),
-          fingerprint: selected.fingerprint, sources: selected.sources,
+          fingerprint, sources: selected.sources,
           token_estimate: Math.ceil(living.length / 4),
         });
-        lastFingerprint = selected.fingerprint;
+        lastFingerprint = fingerprint;
       } catch { /* context projection must never block model inference */ }
     }
     const head = messages[0];
