@@ -15,6 +15,8 @@ import { parentExtensionArgs } from './workers/runtime.ts';
 import { getWorker, listWorkers } from './workers/registry.ts';
 import { registerCheckoutTools } from './workspace/tools.ts';
 import { dispatchNotices, proposalAssignment } from './workspace/dispatch.ts';
+import { registerLivingContext } from './context/runtime.ts';
+import { registerMemoryTools } from './context/tools.ts';
 import type { Solicitation } from './workspace/checkouts.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -263,12 +265,18 @@ export function operatorMode(pi: ExtensionAPI): void {
     mgr.releaseAll();
   });
   pi.on('before_agent_start', async (event: any) => {
-    let extra = `${prompt('operator.md')}\n\n${prompt('authority.md')}`;
+    let extra = `${prompt('authority.md')}\n\n${prompt('common.md')}\n\n${prompt('operator.md')}`;
     if (first) { first = false; extra += `\n\n${reconstruct(root())}`; }
+    if (event.systemPromptOptions?.sections) {
+      event.systemPromptOptions.sections['statefulclanker-core'] = extra;
+      return;
+    }
     return { systemPrompt: `${event.systemPrompt}\n\n${extra}` };
   });
 
   registerCheckoutTools(pi, root, () => 'operator', true);
+  registerMemoryTools(pi, root, () => 'operator');
+  registerLivingContext(pi, root, () => 'operator');
 
   pi.registerTool({
     name: 'worker_spawn', label: 'Spawn Worker',
