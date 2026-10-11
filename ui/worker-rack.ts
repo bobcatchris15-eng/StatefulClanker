@@ -1,5 +1,5 @@
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
-import { activityOf, ACTIVE_STATES, DEFAULT_LAMPS, lampOn } from './lamp-bank.ts';
+import { activityOf, ACTIVE_STATES, DEFAULT_LAMPS, lampColor, lampOn } from './lamp-bank.ts';
 
 export interface RackWorker {
   id: string; display_name?: string; status: string; model: string; current_action?: string; current_tool?: string; role?: string; task_id?: string;
@@ -37,15 +37,15 @@ export const MIN_BOX_WIDTH = 24;
 const BANK_PAD = 2;
 
 export const SYMBOLS: Record<string, { sym: string; label: string; token: string }> = {
-  RUNNING: { sym: '●', label: 'RUN', token: 'success' },
-  STARTING: { sym: '◌', label: 'START', token: 'accent' },
-  WAITING: { sym: '◐', label: 'WAIT', token: 'warning' },
+  RUNNING: { sym: '*', label: 'RUN', token: 'success' },
+  STARTING: { sym: '+', label: 'START', token: 'accent' },
+  WAITING: { sym: '~', label: 'WAIT', token: 'warning' },
   BLOCKED: { sym: '!', label: 'BLOCK', token: 'error' },
-  COMPLETE: { sym: '✓', label: 'DONE', token: 'success' },
-  FAILED: { sym: '✗', label: 'FAIL', token: 'error' },
-  CANCELLED: { sym: '⊘', label: 'CANCEL', token: 'dim' },
-  LOST: { sym: '⊗', label: 'LOST', token: 'error' },
-  IDLE: { sym: '○', label: 'IDLE', token: 'muted' },
+  COMPLETE: { sym: 'v', label: 'DONE', token: 'success' },
+  FAILED: { sym: 'x', label: 'FAIL', token: 'error' },
+  CANCELLED: { sym: '-', label: 'CANCEL', token: 'dim' },
+  LOST: { sym: '#', label: 'LOST', token: 'error' },
+  IDLE: { sym: 'o', label: 'IDLE', token: 'muted' },
 };
 
 /** Header segment priority: supervisor wants RUN/WAIT/FAIL visible before the rest. */
@@ -98,17 +98,17 @@ function ordered(workers: RackWorker[]): RackWorker[] {
  *
  * No lamp here can see any other lamp. Each has its own period, phase offset, duty,
  * segment count and per-cycle skip, so at any instant a bank is a random-looking
- * scatter - which is the entire point. Lit lamps burn the worker's state colour; dark
+ * scatter - which is the entire point. Lit lamps pick a colour per ignition; dark
  * sockets are drawn, not skipped, so the cell width never changes and the columns
  * never jitter as lamps switch.
  */
 function bank(w: RackWorker, depth: number, tMs: number, st: (t: string, s: string) => string, opts: RackOpts): string {
-  const token = SYMBOLS[w.status]?.token ?? UNKNOWN.token;
   const act = activityOf(w.status);
   const out: string[] = [];
   for (let i = 0; i < depth; i++) {
     const on = opts.lit ? opts.lit(w.id, i) : lampOn(w.id, i, tMs, act);
-    out.push(on ? st(token, LAMP_SYMS[i % LAMP_SYMS.length]!) : st('dim', SOCKET));
+    const bulb = LAMP_SYMS[i % LAMP_SYMS.length]!;
+    out.push(on ? (opts.theme ? `\u001b[${lampColor(w.id, i, tMs)}m${bulb}\u001b[39m` : bulb) : st('dim', SOCKET));
   }
   return out.join('');
 }

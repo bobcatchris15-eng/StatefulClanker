@@ -149,6 +149,16 @@ export function lampSpec(id: string, index: number): LampSpec {
   };
 }
 
+/** Bright terminal colours, selected independently for each ignition. */
+export const LAMP_COLORS = [91, 92, 93, 94, 95, 96] as const;
+
+/** Stable during one on-segment; a new pseudo-random colour on subsequent flashes. */
+export function lampColor(id: string, index: number, tMs: number): number {
+  const s = lampSpec(id, index);
+  const ignition = Math.floor((tMs + s.offsetMs) / s.periodMs * s.segments);
+  return LAMP_COLORS[Math.floor(rand(hash32(`${id}#${index}:color`), ignition) * LAMP_COLORS.length)]!;
+}
+
 /** How busy a worker is, 0..1. Feeds lamp density without synchronising anything. */
 export function activityOf(status: string): number {
   if (status === 'RUNNING') return 1;

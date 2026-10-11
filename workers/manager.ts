@@ -91,10 +91,14 @@ export class WorkerManager {
       }, this.opts.superviseEveryMs ?? Math.max(50, Math.floor(hang / 2)));
       e.timer.unref();
     }
-    try { await rt.prompt(spec.assignment); } catch (err) {
+    try {
+      const response = await rt.prompt(spec.assignment);
+      if (response?.success === false) throw Error(response.error ?? 'Pi rejected the initial prompt');
+    } catch (err) {
       appendEvent(this.root, 'worker.failed', { id, error: String((err as Error).message) });
       this.patch(id, { status: 'FAILED' });
       this.release(id, e);
+      throw err;
     }
     return id;
   }
@@ -302,12 +306,15 @@ export async function spawnSelected(mgr: WorkerManager, catalog: CatalogService,
   const id = mgr.allocateId();
   const lease = catalog.claimLease(chosen.key, id);
   if (!lease) return { ok: false, error: `lease unavailable for ${chosen.key}`, selection: sel };
+  let taskId: string | undefined;
   try {
     const task = createTask(root, {
       title: p.task_title ?? p.assignment.slice(0, 60), objective: p.assignment, status: 'active',
+      assigned_worker: id,
       scope: { files: p.files ?? [], subsystem: '', worktree: '' },
       expected_outputs: p.expected_outputs ?? [], context_hints: p.context_hints ?? [],
     });
+    taskId = task.id;
     const checkoutConflicts: string[] = [];
     const claimed: string[] = [];
     for (const path of p.files ?? []) {
@@ -327,9 +334,14 @@ export async function spawnSelected(mgr: WorkerManager, catalog: CatalogService,
       workerId: id, taskId: task.id, role: p.role ?? 'worker', abilityProfile: request.profile, provider: chosen.provider, model: chosen.id,
       thinking: chosen.thinking ?? 'off', lease, assignment: p.assignment + checkoutBrief, ...launch,
     });
-    updateTask(root, task.id, { assigned_worker: id });
     return { ok: true, worker_id: id, model: chosen.key, workspace: root, checkout_conflicts: checkoutConflicts, task_id: task.id, receipt, selection: { reason: sel.reason } };
   } catch (e) {
+    // A child may already exist when startup fails. Retire it before relinquishing authority.
+    try { await mgr.retire(id); } catch { /* retain recovery evidence if retirement fails */ }
+    if (taskId) {
+      try { updateTask(root, taskId, { status: 'failed', unresolved: [`Worker startup failed: ${(e as Error).message}`] }); }
+      catch { /* keep the spawn error as the primary failure */ }
+    }
     try { catalog.releaseWorker(id); } catch { /* */ }
     try { releasePaths(root, id, []); } catch { /* preserve modified files */ }
     return { ok: false, error: `spawn failed: ${(e as Error).message}` };

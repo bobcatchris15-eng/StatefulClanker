@@ -1,5 +1,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /** Deterministic provider "scmock": first call -> worker_finish tool call; after a tool result -> text. */
 function stream(model: any, context: any) {
@@ -12,9 +14,16 @@ function stream(model: any, context: any) {
     };
     s.push({ type: 'start', partial: out });
     const nResults = (context.messages ?? []).filter((m: any) => m.role === 'toolResult').length;
-    if (nResults < 2) {
-      const tn = nResults === 0 ? 'worker_name' : 'worker_finish';
+    const probe = process.env.SC_SHARED_PROBE === '1';
+    if (nResults < (probe ? 4 : 2)) {
+      const tn = nResults === 0 ? 'worker_name' : probe && nResults < 3 ? 'read' : 'worker_finish';
+      const reads = (context.messages ?? []).filter((m: any) => m.role === 'toolResult' && m.toolName === 'read');
+      if (probe && nResults === 3 && process.env.SC_SHARED_WRITE === '1') {
+        writeFileSync(join(process.cwd(), 'a.txt'), 'edited by child\n');
+      }
       const args: any = nResults === 0 ? { name: 'Rivet' }
+        : probe && nResults < 3 ? { path: nResults === 1 ? 'a.txt' : 'untracked.txt' }
+        : probe ? { status: 'complete', summary: JSON.stringify({ cwd: process.cwd(), root: process.env.SC_PROJECT_ROOT, reads }), changed_files: [] }
         : { status: 'complete', summary: 'mock work done', changed_files: ['a.txt'], tests_run: ['mock'], confidence: 'high' };
       const cid = `call_${nResults + 1}`;
       out.content.push({ type: 'toolCall', id: cid, name: tn, arguments: {} });

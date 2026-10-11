@@ -1,11 +1,12 @@
 /** All Clankers can read, graph, and mutate the shared substrate. Mutations use checkout authority. */
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { claimPaths, hashFile, listCheckouts, proposeWrite, publish, releasePaths, scopePath } from '../workspace/checkouts.ts';
 import { FOUNDATION, knowledgeGraph, listKnowledge, scoreKnowledge } from './knowledge.ts';
+import { replaceFileAtomic } from '../protocol/persistence.ts';
 
 const out = (x: unknown) => ({ content: [{ type: 'text' as const, text: typeof x === 'string' ? x : JSON.stringify(x, null, 2) }], details: {} });
 function check(root: string, path: string): string {
@@ -15,31 +16,40 @@ function check(root: string, path: string): string {
   return parsed.path;
 }
 export function updateKnowledge(root: string, actor: string, name: string, content: string, expectedHash: string | null):
-  { commit?: string; proposal_id?: string; hash?: string } {
+  { commit?: string; proposal_id?: string; hash?: string; unchanged?: boolean } {
   const path = check(root, name);
   if (Buffer.byteLength(content, 'utf8') > 64000) throw Error('knowledge entry too large (64 KB max)');
   if (!content.trim()) throw Error('empty knowledge entry');
   const current = hashFile(root, path);
   if (current !== expectedHash) throw Error('stale knowledge revision: read the latest memory and retry');
+  const dest = join(root, path);
+  // Git normalizes CRLF: equivalent content needs neither a claim nor an empty commit.
+  if (current !== null && readFileSync(dest, 'utf8').replace(/\r\n/g, '\n') === content.replace(/\r\n/g, '\n'))
+    return { hash: current, unchanged: true };
   const claims = listCheckouts(root).claims;
   const holder = claims.find(c => c.path.toLowerCase() === path.toLowerCase() ||
     c.recursive && path.toLowerCase().startsWith(c.path.toLowerCase() + '/'));
   if (holder && holder.owner !== actor) return { proposal_id: proposeWrite(root, actor, path, expectedHash, content) };
   let claimed = false;
   if (!holder) { claimPaths(root, actor, [path]); claimed = true; }
-  // Recheck after claim, which serializes with other cooperating writers.
-  if (hashFile(root, path) !== expectedHash) {
-    if (claimed) releasePaths(root, actor, [path]);
-    throw Error('knowledge changed before claim; retry');
-  }
-  const dest = join(root, path), tmp = dest + '.' + randomUUID() + '.tmp';
-  mkdirSync(dirname(dest), { recursive: true });
+  const tmp = dest + '.' + randomUUID() + '.tmp';
   try {
+    if (hashFile(root, path) !== expectedHash) throw Error('knowledge changed before claim; retry');
+    mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(tmp, content, 'utf8');
-    renameSync(tmp, dest);
+    replaceFileAtomic(tmp, dest);
     const commit = publish(root, actor, [path], 'knowledge: update ' + path);
     if (claimed) releasePaths(root, actor, [path]);
     return { commit, hash: hashFile(root, path) ?? undefined };
+  } catch (error) {
+    let recovery = '';
+    if (claimed) {
+      try { releasePaths(root, actor, [path]); }
+      catch { recovery = ` Checkout claim retained for ${actor} on ${path} to protect unpublished changes or pending collaboration. Inspect the file, then use checkout_publish or operator handoff to recover.`; }
+    } else if (holder?.owner === actor) {
+      recovery = ` Existing checkout ownership for ${actor} on ${path} is preserved. Inspect the file, then use checkout_publish or operator handoff to recover.`;
+    }
+    throw Error(`Knowledge update failed for ${path}: ${(error as Error).message}.${recovery}`);
   } finally { if (existsSync(tmp)) rmSync(tmp, { force: true }); }
 }
 export function registerMemoryTools(pi: ExtensionAPI, root: () => string, actor: () => string): void {

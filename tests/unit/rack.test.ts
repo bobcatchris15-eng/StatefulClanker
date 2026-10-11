@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { visibleWidth } from '@earendil-works/pi-tui';
+import { lampColor, lampSpec, LAMP_COLORS } from '../../ui/lamp-bank.ts';
 import { DEFAULT_MAX_ROWS, MIN_BOX_WIDTH, renderRack, SYMBOLS, type RackWorker } from '../../ui/worker-rack.ts';
 
 const ws: RackWorker[] = [
@@ -24,6 +25,24 @@ const eight: RackWorker[] = Array.from({ length: 8 }, (_, i) => ({
 
 /** Every line must fit the width, measured in visible columns, ANSI included. */
 const fits = (l: string[], w: number): boolean => l.every((x) => visibleWidth(x) <= w);
+
+test('status markers use portable ASCII and lamps hold colour per ignition', () => {
+  for (const meta of Object.values(SYMBOLS)) assert.match(meta.sym, /^[\x21-\x7e]$/);
+  const spec = lampSpec('W01', 0);
+  const colors = new Set<number>();
+  for (let ignition = 1; ignition < 40; ignition++) {
+    const start = ignition * spec.periodMs / spec.segments - spec.offsetMs;
+    const color = lampColor('W01', 0, start + 1);
+    assert.equal(lampColor('W01', 0, start + 2), color);
+    assert.ok((LAMP_COLORS as readonly number[]).includes(color));
+    colors.add(color);
+  }
+  assert.ok(colors.size > 3);
+  const plain = renderRack(ws, 110, { nowMs: 137, lit: () => true });
+  const colored = renderRack(ws, 110, { nowMs: 137, lit: () => true, theme: { fg: (_t, text) => text } });
+  assert.match(colored[1]!, /\u001b\[9[1-6]m/);
+  assert.deepEqual(colored.map(visibleWidth), plain.map(visibleWidth));
+});
 
 test('boxed panel: header carries per-state counts and job totals', () => {
   const l = renderRack(ws, 110);
@@ -101,9 +120,9 @@ test('every worker blinks, including idle and finished ones', () => {
 test('golden render: 3 workers at 80 cols, animation time pinned', () => {
   const golden = [
     '\u250c SUPERVISOR  \u00b7 RUN 1 \u00b7  DONE 1 \u00b7  IDLE 1 jobs 1/2 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510',
-    '\u2502 \u25cf \u00b7\u00b7\u2592\u00b7\u2593\u00b7 W01 Rivet  Ship the lamp bank  m1                      edit ui/lamp \u2502',
-    '\u2502 \u25cb \u00b7\u00b7\u00b7\u00b7\u00b7\u00b7 W03                            m3                                   \u2502',
-    '\u2502 \u2713 \u2588\u00b7\u00b7\u00b7\u00b7\u2592 W02 Anvil  Review              m2                                   \u2502',
+    '\u2502 * \u00b7\u00b7\u2592\u00b7\u2593\u00b7 W01 Rivet  Ship the lamp bank  m1                      edit ui/lamp \u2502',
+    '\u2502 o \u00b7\u00b7\u00b7\u00b7\u00b7\u00b7 W03                            m3                                   \u2502',
+    '\u2502 v \u2588\u00b7\u00b7\u00b7\u00b7\u2592 W02 Anvil  Review              m2                                   \u2502',
     '\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500┘',
   ];
   const rows: RackWorker[] = [

@@ -38,15 +38,16 @@ function values(s: string | undefined): string[] {
   return (s ?? '').replace(/^\[/, '').replace(/\]$/, '').split(',').map(v => v.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
 }
 function parse(path: string, raw: string): KnowledgeDoc {
-  let body = raw, meta: Record<string,string> = {};
-  if (raw.startsWith('---\n')) {
-    const end = raw.indexOf('\n---', 4);
+  const normalized = raw.replace(/\r\n/g, '\n');
+  let body = normalized, meta: Record<string,string> = {};
+  if (normalized.startsWith('---\n')) {
+    const end = normalized.indexOf('\n---', 4);
     if (end > 0) {
-      for (const line of raw.slice(4, end).split('\n')) {
+      for (const line of normalized.slice(4, end).split('\n')) {
         const match = /^([a-z_]+):\s*(.*)$/.exec(line);
         if (match) meta[match[1]!] = match[2]!;
       }
-      body = raw.slice(end + 4).trimStart();
+      body = normalized.slice(end + 4).trimStart();
     }
   }
   const title = /^#\s+(.+)$/m.exec(body)?.[1]?.trim() ?? path;

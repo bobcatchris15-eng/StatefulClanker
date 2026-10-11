@@ -14,6 +14,10 @@ process.stdin.on('data', (c) => {
 process.stdin.on('end', () => process.exit(0));
 function handle(m) {
   if (m.type === 'extension_ui_response') return;
+  if (m.type === 'prompt' && process.env.FAKE_PROMPT_FAIL === '1') {
+    out({ id: m.id, type: 'response', command: m.type, success: false, error: 'injected prompt failure' });
+    return;
+  }
   out({ id: m.id, type: 'response', command: m.type, success: true });
   if (m.type === 'prompt') {
     out({ type: 'agent_start' });

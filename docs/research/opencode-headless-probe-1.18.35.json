@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-10T23:00:19.382Z",
+  "executable": "C:\\Users\\Chris\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe",
+  "fixture": "C:\\Users\\Chris\\AppData\\Local\\Temp\\sc-opencode-headless-vZG7Av",
+  "model_calls": 0,
+  "checks": {
+    "git_root_matches_cwd": true,
+    "dirty_and_untracked_files_visible": true,
+    "live_parent_edit_visible": true,
+    "two_sessions_share_directory": true,
+    "session_histories_separate": true,
+    "unauthenticated_request_rejected": true,
+    "one_physical_git_worktree": true,
+    "sessions_survive_server_restart": true
+  },
+  "health": {
+    "healthy": true,
+    "version": "1.18.35"
+  },
+  "sessions": [
+    "ses_ed7f43279ffeLWWtmGoH00DO6x",
+    "ses_ed7f4325fffeLwm0SnfC6UKAEi"
+  ],
+  "api": {
+    "prompt_fields": [
+      "messageID",
+      "model",
+      "agent",
+      "noReply",
+      "tools",
+      "format",
+      "system",
+      "variant",
+      "parts"
+    ],
+    "native_delivery": {
+      "type": "string",
+      "enum": [
+        "steer",
+        "queue"
+      ]
+    },
+    "permission_reply": true,
+    "question_reject": true
+  }
+}

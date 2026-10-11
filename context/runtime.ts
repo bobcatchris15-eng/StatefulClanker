@@ -27,8 +27,8 @@ export function projectHistory<T extends { role: string }>(messages: T[], budget
   // Never drop the initial assignment, even when much of the intervening transcript is dropped.
   const firstUser = messages.findIndex(m => m.role === 'user');
   const pinned = firstUser >= 0 && firstUser < cut ? [messages[firstUser]!] : [];
-  // Preserve recent steering from a parent/human. Older tool outputs are disposable.
-  const recentUser = messages.slice(firstUser + 1, cut).filter(m => m.role === 'user').slice(-3);
+  // Steering is authority, not disposable tool history. The budget is soft when it must be retained.
+  const recentUser = messages.slice(firstUser + 1, cut).filter(m => m.role === 'user');
   return [...pinned, ...recentUser, ...messages.slice(cut)];
 }
 export function registerLivingContext(pi: ExtensionAPI, root: () => string, actor: () => string): void {
@@ -50,9 +50,19 @@ export function registerLivingContext(pi: ExtensionAPI, root: () => string, acto
       ...intent.map(i => i.statement), ...active.map(t => t.title),
     ].filter(Boolean).join(' ').slice(0, 5000);
     const paths = task?.scope.files ?? [];
-    const selected = selectKnowledge(project, query, paths);
-    const taskContext = task ? '## Current task\n' + task.id + ': ' + task.title + '\n' + task.objective : '';
-    const living = [selected.text, taskContext].filter(Boolean).join('\n\n');
+    const intentContext = intent.length ? '## Active human intent\n' + intent.map(i =>
+      `${i.id} [scope: ${i.scope}; source: ${i.source}]\n${i.statement}`).join('\n\n') : '';
+    const taskContext = task ? '## Current task\n' + JSON.stringify({
+      id: task.id, title: task.title, objective: task.objective, status: task.status,
+      scope: task.scope, constraints: task.constraints, dependencies: task.dependencies,
+      expected_outputs: task.expected_outputs, verification_expectations: task.verification_expectations,
+      context_hints: task.context_hints, unresolved: task.unresolved,
+    }, null, 2) : '';
+    // Governing intent and task requirements are never truncated to make room for optional knowledge.
+    const governing = [intentContext, taskContext].filter(Boolean).join('\n\n');
+    const knowledgeBudget = Math.max(0, 9500 - governing.length);
+    const selected = selectKnowledge(project, query, paths, Math.max(1500, knowledgeBudget));
+    const living = [governing, selected.text].filter(Boolean).join('\n\n');
     const fingerprint = createHash('sha256').update(living).digest('hex');
     if (fingerprint !== lastFingerprint) {
       try {

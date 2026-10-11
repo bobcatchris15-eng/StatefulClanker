@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,5 +76,51 @@ test('real pi worker with mock provider reaches COMPLETE', { timeout: 120000 }, 
     throw new Error(`${(e as Error).message}\nstderr: ${err.slice(0, 1500)}`);
   } finally {
     await m.retire(id);
+  }
+});
+
+test('real pi children read the orchestrator physical checkout including uncommitted changes', { timeout: 120000 }, async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'sc-shared-')));
+  git(root, 'init', '-q');
+  git(root, 'config', 'user.email', 't@t'); git(root, 'config', 'user.name', 't');
+  writeFileSync(join(root, 'a.txt'), 'committed baseline\n');
+  git(root, 'add', '.'); git(root, 'commit', '-qm', 'init');
+  writeFileSync(join(root, 'a.txt'), 'uncommitted parent edit\n');
+  writeFileSync(join(root, 'untracked.txt'), 'untracked parent file\n');
+  const agentDir = mkdtempSync(join(tmpdir(), 'sc-shared-agent-'));
+  const machine = mkdtempSync(join(tmpdir(), 'sc-shared-machine-'));
+  const m = new WorkerManager(root);
+  const ids: string[] = [];
+  async function run(write: boolean) {
+    const result = new Promise<any>((resolveResult, reject) => {
+      const timer = setTimeout(() => reject(new Error('shared read timeout')), 45000);
+      timer.unref();
+      m.on('result', (_id, r) => { clearTimeout(timer); resolveResult(r); });
+    });
+    const id = await m.spawn({ taskId: 'shared-read', role: 'probe', provider: 'scmock', model: 'scmock-1',
+      assignment: 'Read the shared checkout', extensionPath: ext, piCommand: process.execPath,
+      args: [cli, '-e', mock], env: { PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: '1', SC_MACHINE_DIR: machine,
+        SC_SHARED_PROBE: '1', SC_SHARED_WRITE: write ? '1' : '0' } });
+    ids.push(id);
+    const r = await result;
+    const probe = JSON.parse(r.summary);
+    assert.equal(realpathSync(probe.cwd), root);
+    assert.equal(realpathSync(probe.root), root);
+    assert.equal(probe.reads.length, 2);
+    assert.ok(probe.reads.every((read: any) => !read.isError));
+    assert.match(JSON.stringify(probe.reads[1].content), /untracked parent file/);
+    assert.equal(getWorker(root, id)?.worktree, null);
+    return probe;
+  }
+  try {
+    const first = await run(true);
+    assert.match(JSON.stringify(first.reads[0].content), /uncommitted parent edit/);
+    assert.equal(readFileSync(join(root, 'a.txt'), 'utf8'), 'edited by child\n');
+    const second = await run(false);
+    assert.match(JSON.stringify(second.reads[0].content), /edited by child/);
+    assert.equal(git(root, 'worktree', 'list', '--porcelain').match(/^worktree /gm)?.length, 1);
+    assert.equal(git(root, 'branch', '--list', 'clanker/*'), '');
+  } finally {
+    for (const id of ids) await m.retire(id);
   }
 });

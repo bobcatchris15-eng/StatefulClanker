@@ -1,13 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ensureFoundation, knowledgeGraph, listKnowledge, selectKnowledge } from '../../context/knowledge.ts';
 import { projectHistory, registerLivingContext } from '../../context/runtime.ts';
 import { updateKnowledge } from '../../context/tools.ts';
 import { claimPaths, listCheckouts } from '../../workspace/checkouts.ts';
+import { createTask } from '../../project/tasks.ts';
+import { recordIntent, setIntentStatus } from '../../project/intent.ts';
 
 function repo(): string {
   const root = mkdtempSync(join(tmpdir(), 'sc-knowledge-'));
@@ -87,4 +90,71 @@ test('verified records without query relevance are not blindly injected', () => 
     '---\nstatus: verified\n---\n# Unrelated\nA completely different topic.\n');
   const selected = selectKnowledge(root, 'git conflict', ['workspace/checkouts.ts']);
   assert.ok(!selected.sources.some(x => x.path.endsWith('irrelevant.md')));
+});
+
+test('Git CRLF checkout preserves metadata and excludes archived knowledge', () => {
+  const root = repo();
+  mkdirSync(join(root, '.clanker', 'knowledge'), { recursive: true });
+  const path = '.clanker/knowledge/windows.md';
+  const raw = '---\nid: windows-id\nstatus: archived\ntags: [windows]\npaths: [workspace/]\nlinks: [other]\n---\n# Windows\nObsolete checkout guidance.\n';
+  writeFileSync(join(root, path), raw);
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+  git('config', 'core.autocrlf', 'true');
+  git('add', '--', path); git('commit', '-qm', 'knowledge');
+  unlinkSync(join(root, path));
+  git('checkout-index', '--force', '--', path);
+  const bytes = readFileSync(join(root, path), 'utf8');
+  assert.ok(bytes.includes('\r\n'));
+  const doc = listKnowledge(root).find(d => d.path === path)!;
+  assert.equal(doc.id, 'windows-id'); assert.equal(doc.status, 'archived');
+  assert.deepEqual(doc.paths, ['workspace/']); assert.deepEqual(doc.tags, ['windows']);
+  assert.deepEqual(doc.links, ['other']);
+  assert.equal(doc.hash, createHash('sha256').update(bytes).digest('hex'));
+  assert.ok(!selectKnowledge(root, 'checkout', ['workspace/checkouts.ts']).sources.some(s => s.path === path));
+});
+
+test('projection retains old human steering and reinjects governing intent and complete task requirements', async () => {
+  const root = repo(), handlers: Record<string, (e: any) => any> = {};
+  const intent = recordIntent(root, { statement: 'Never touch deployment files', scope: 'project', source: 'human' });
+  const task = createTask(root, { title: 'Parser', objective: 'Parse input', constraints: ['No network access'],
+    scope: { files: ['parser.ts'], subsystem: 'parser', worktree: '' },
+    expected_outputs: ['parser implementation'], verification_expectations: ['reject malformed input'] });
+  const previous = process.env.SC_TASK_ID;
+  process.env.SC_TASK_ID = task.id;
+  try {
+    registerLivingContext({ on(name: string, fn: (e: any) => any) { handlers[name] = fn; } } as any, () => root, () => 'W01');
+    const messages: any[] = [{ role: 'user', content: 'assignment' }, { role: 'user', content: 'Old crucial steering' }];
+    for (let i = 0; i < 10; i++) messages.push({ role: 'user', content: `steering ${i}` },
+      { role: 'assistant', content: 'x'.repeat(3000) }, { role: 'toolResult', content: 'y'.repeat(3000) });
+    const projected = await handlers.context!({ messages });
+    assert.ok(projected.messages.some((m: any) => m.content === 'Old crucial steering'));
+    assert.ok(projected.messages.length < messages.length);
+    const compiled = await handlers.context_with_system!({ messages: [{ role: 'system', sections: {} }, ...projected.messages] });
+    const section = compiled.messages[0].sections['statefulclanker-living-context'];
+    for (const requirement of ['Never touch deployment files', 'No network access', 'parser.ts',
+      'parser implementation', 'reject malformed input']) assert.ok(section.includes(requirement), requirement);
+    setIntentStatus(root, intent.id, 'withdrawn');
+    const next = await handlers.context_with_system!({ messages: [{ role: 'system', sections: {} }] });
+    assert.ok(!next.messages[0].sections['statefulclanker-living-context'].includes('Never touch deployment files'));
+  } finally { if (previous === undefined) delete process.env.SC_TASK_ID; else process.env.SC_TASK_ID = previous; }
+});
+
+test('identical memory writes do not claim paths or create empty commits, including CRLF equivalents', () => {
+  const root = repo(), path = '.clanker/knowledge/same.md', content = '# Same\nContent\n';
+  const made = updateKnowledge(root, 'W01', path, content, null);
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
+  const head = git('rev-parse', 'HEAD');
+  const result = updateKnowledge(root, 'W02', path, content.replace(/\n/g, '\r\n'), made.hash!);
+  assert.equal(result.unchanged, true); assert.equal(result.hash, made.hash);
+  assert.equal(git('rev-parse', 'HEAD'), head); assert.deepEqual(listCheckouts(root).claims, []);
+});
+
+test('failed memory commit preserves unpublished content with explicit ownership recovery', () => {
+  const root = repo(), path = '.clanker/knowledge/recovery.md';
+  // A Git identity error is portable and fails publication after the file has been replaced.
+  execFileSync('git', ['-C', root, 'config', 'user.name', '']);
+  assert.throws(() => updateKnowledge(root, 'W01', path, '# Unpublished\nKeep this evidence\n', null), /claim retained.*checkout_publish/s);
+  assert.match(readFileSync(join(root, path), 'utf8'), /Keep this evidence/);
+  assert.equal(listCheckouts(root).claims[0]?.owner, 'W01');
+  assert.ok(!readdirSync(join(root, '.clanker', 'knowledge')).some(name => name.endsWith('.tmp')));
 });
