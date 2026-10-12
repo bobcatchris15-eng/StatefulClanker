@@ -1,7 +1,7 @@
 {
   "name": "statefulclanker",
-  "version": "1.1.0",
-  "description": "Pi package: parent Clanker orchestrating heterogeneous Pi RPC workers with ability-based model selection and durable state",
+  "version": "1.2.0",
+  "description": "Pi package orchestrating native Pi, OpenCode, Antigravity and Jules REST coding workers",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -21,6 +21,7 @@
     "operator.ts",
     "worker.ts",
     "catalog",
+    "pools",
     "protocol",
     "context",
     "project",
