@@ -42,7 +42,7 @@ test('proposals notify their owner once and accepted/rejected outcomes notify au
   assert.equal(await dispatchNotices(root, m.deps), 0);
   acceptProposal(root, 'W01', id);
   await dispatchNotices(root, m.deps);
-  assert.match(m.delivered[1]!, /W02: Your proposal/);
+  assert.match(m.delivered[1]!, /W02: Notice .*: Your proposal/);
   assert.match(m.delivered[1]!, /accepted/);
   assert.equal(pendingNotices(root).length, 0);
 });

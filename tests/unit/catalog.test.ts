@@ -83,7 +83,7 @@ test("observed nudges below minSamples and dominates at minSamples", () => {
   assert.equal(r.source.coding, "observed");
   assert.equal(agg.success_rate, 0);
   const line = readFileSync(join(d, "observations.jsonl"), "utf8").split("\n")[0]!;
-  assert.deepEqual(Object.keys(JSON.parse(line)).sort(), ["latency_ms", "model", "outcome", "ts"]);
+  assert.deepEqual(Object.keys(JSON.parse(line)).sort(), ["latency_ms", "model", "outcome", "task_class", "ts"]);
 });
 
 test("health backoff, cap, reset, persistence", () => {
