@@ -15,6 +15,7 @@ import { parentExtensionArgs } from './workers/runtime.ts';
 import { getWorker, listWorkers } from './workers/registry.ts';
 import { registerCheckoutTools } from './workspace/tools.ts';
 import { dispatchNotices, proposalAssignment } from './workspace/dispatch.ts';
+import { reconcileSolicitations } from './workspace/checkouts.ts';
 import { registerLivingContext } from './context/runtime.ts';
 import { registerMemoryTools } from './context/tools.ts';
 import type { Solicitation } from './workspace/checkouts.ts';
@@ -194,6 +195,10 @@ export function operatorMode(pi: ExtensionAPI): void {
     if (collabActive) return;
     collabActive = true;
     try {
+      reconcileSolicitations(root(), (id) => {
+        const w = getWorker(root(), id);
+        return !!w && !['COMPLETE', 'CANCELLED', 'FAILED', 'LOST'].includes(w.status);
+      });
       await dispatchNotices(root(), {
         async sendWorker(id, message) {
           const w = getWorker(root(), id);
@@ -247,6 +252,10 @@ export function operatorMode(pi: ExtensionAPI): void {
     cwd = ctx.cwd ?? cwd; uiCtx = ctx; first = true;
     clock.reset();
     manager().recover();
+    reconcileSolicitations(root(), (id) => {
+      const w = getWorker(root(), id);
+      return !!w && !['COMPLETE', 'CANCELLED', 'FAILED', 'LOST'].includes(w.status);
+    }, true);
     if (collabTimer) clearInterval(collabTimer);
     collabTimer = setInterval(() => { void pumpCollaboration(); }, 500);
     collabTimer.unref();

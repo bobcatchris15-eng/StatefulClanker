@@ -29,12 +29,19 @@ export function proposalAssignment(q: Solicitation): string {
 export async function dispatchNotices(root: string, d: CollaborationDispatch): Promise<number> {
   let handled = 0;
   for (const n of pendingNotices(root).slice(0, 30)) {
-    if (n.kind === 'proposal') {
+    if (n.kind === 'solicitation_closed') {
+      const q = readSolicitation(root, n.ref_id);
+      const msg = 'Notice ' + n.id + ': solicitation ' + q.id + ' closed (' +
+        (q.closure?.outcome ?? 'unknown') + '). Stop additional proposal work. Acknowledge with checkout_notice_ack.';
+      if (n.to === 'operator') d.notifyOperator(msg);
+      else { try { await d.sendWorker(n.to, msg); } catch { /* worker may already be gone */ } }
+      markNoticeDelivered(root, n.id); handled++;
+    } else if (n.kind === 'proposal') {
       const p = readProposal(root, 'operator', n.ref_id);
       if (p.status !== 'pending') { markNoticeDelivered(root, n.id); continue; }
-      const msg = 'Checkout proposal ' + p.id + ' from ' + p.from + ' for ' + p.path +
+      const msg = 'Notice ' + n.id + ': Checkout proposal ' + p.id + ' from ' + p.from + ' for ' + p.path +
         '. You hold commit responsibility. Call checkout_proposal_read, then checkout_accept or checkout_reject; ' +
-        'validate and checkout_publish accepted changes. Check the current hash before applying.';
+        'validate and checkout_publish accepted changes. Check the current hash before applying. Acknowledge with checkout_notice_ack.';
       if (n.to === 'operator') d.notifyOperator(msg);
       else {
         try { await d.sendWorker(n.to, msg); }
@@ -43,7 +50,7 @@ export async function dispatchNotices(root: string, d: CollaborationDispatch): P
       markNoticeDelivered(root, n.id); handled++;
     } else if (n.kind === 'proposal_result') {
       const p = readProposal(root, 'operator', n.ref_id);
-      const msg = 'Your proposal ' + p.id + ' for ' + p.path + ' was ' + p.status + ' by ' + p.to + '.';
+      const msg = 'Notice ' + n.id + ': Your proposal ' + p.id + ' for ' + p.path + ' was ' + p.status + ' by ' + p.to + '.';
       if (n.to === 'operator') d.notifyOperator(msg);
       else {
         try { await d.sendWorker(n.to, msg); }
@@ -53,9 +60,9 @@ export async function dispatchNotices(root: string, d: CollaborationDispatch): P
     } else if (n.kind === 'solicitation_result') {
       const q = readSolicitation(root, n.ref_id);
       const result = q.result;
-      const msg = 'Proposal helper ' + n.from + ' finished solicitation ' + q.id + ' for ' +
-        q.paths.join(', ') + ': ' + (result?.status ?? 'unknown') + '. ' +
-        (result?.summary ?? '') + '\nReview proposals, validate, publish, then checkout_request_close.';
+      const msg = 'Notice ' + n.id + ': Proposal helper ' + n.from + ' updated solicitation ' + q.id + ' for ' +
+        q.paths.join(', ') + ': ' + (result?.status ?? q.error ?? 'unknown') + '. ' +
+        (result?.summary ?? '') + '\nReview proposals, validate, publish, then checkout_request_close with outcome and evidence. Acknowledge with checkout_notice_ack.';
       if (n.to === 'operator') d.notifyOperator(msg);
       else {
         try { await d.sendWorker(n.to, msg); }
@@ -83,12 +90,13 @@ export async function dispatchNotices(root: string, d: CollaborationDispatch): P
         handled++;
       } else if (n.to === 'operator') {
         resolveSolicitation(root, q.id, 'routing');
-        d.notifyOperator('Assistance requested: ' + summary(q) +
-          '\nUse checkout_dispatch with target worker or spawn_new to assign help.');
+        d.notifyOperator('Notice ' + n.id + ': Assistance requested: ' + summary(q) +
+          '\nUse checkout_dispatch with target worker or spawn_new to assign help; acknowledge with checkout_notice_ack.');
         markNoticeDelivered(root, n.id); handled++;
       } else {
         try {
-          await d.sendWorker(n.to, proposalAssignment(q));
+          await d.sendWorker(n.to, 'Notice ' + n.id + ': ' + proposalAssignment(q) +
+            '\nAcknowledge the notice with checkout_notice_ack.');
           resolveSolicitation(root, q.id, 'assigned', n.to);
         } catch {
           resolveSolicitation(root, q.id, 'routing');

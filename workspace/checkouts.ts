@@ -14,16 +14,18 @@ import { ensureLayout } from '../project/paths.ts';
 export interface Claim { path: string; recursive: boolean; owner: string; acquired_at: string }
 export interface Proposal { id: string; path: string; from: string; to: string; base_hash: string | null; content: string; created_at: string; status: 'pending' | 'accepted' | 'rejected' }
 
-export type NoticeKind = 'proposal' | 'proposal_result' | 'solicit' | 'solicitation_result';
+export type NoticeKind = 'proposal' | 'proposal_result' | 'solicit' | 'solicitation_result' | 'solicitation_closed';
 export interface CollaborationNotice {
   id: string; kind: NoticeKind; from: string; to: string; ref_id: string; path: string;
-  created_at: string; delivered_at?: string;
+  created_at: string; delivered_at?: string; acknowledged_at?: string; attempts?: number;
 }
 export interface Solicitation {
   id: string; owner: string; paths: string[]; objective: string;
   target?: string; spawn_new: boolean; ability_profile: string;
-  status: 'pending' | 'routing' | 'dispatching' | 'assigned' | 'failed' | 'closed';
-  assigned_worker?: string; error?: string; result?: { status: string; summary: string }; created_at: string;
+  status: 'pending' | 'routing' | 'dispatching' | 'assigned' | 'submitted' | 'failed' | 'closed';
+  assigned_worker?: string; error?: string; result?: { status: string; summary: string };
+  closure?: { outcome: 'integrated' | 'rejected' | 'cancelled'; evidence: string[]; at: string };
+  created_at: string;
 }
 interface Ledger { claims: Claim[]; proposals: Proposal[]; notices: CollaborationNotice[]; solicitations: Solicitation[] }
 const EMPTY = (): Ledger => ({ claims: [], proposals: [], notices: [], solicitations: [] });
@@ -150,6 +152,7 @@ export function acceptProposal(root: string, actor: string, id: string): void {
     try { writeFileSync(tmp, p.content, 'utf8'); renameSync(tmp, dest); }
     finally { if (existsSync(tmp)) rmSync(tmp); }
     p.status = 'accepted';
+    ackRelated(db, actor, p.id);
     notify(db, 'proposal_result', actor, p.from, p.id, p.path);
     writeJsonAtomic(file(root), db);
     appendEvent(root, 'checkout.accepted', { id, path: p.path, owner: actor, from: p.from });
@@ -220,17 +223,60 @@ export function publish(root: string, actor: string, paths: string[], message: s
 
 /** The broker is the durable inbox. Undelivered notices are retried after operator restart. */
 export function pendingNotices(root: string): CollaborationNotice[] {
-  return load(root).notices.filter((n) => !n.delivered_at);
+  const now = Date.now();
+  return load(root).notices.filter((n) => {
+    if (n.acknowledged_at) return false;
+    if (!n.delivered_at) return true;
+    const last = Date.parse(n.delivered_at);
+    return !Number.isFinite(last) || now - last >= Math.min(600000, 60000 * 2 ** Math.min(n.attempts ?? 1, 4));
+  });
 }
 export function markNoticeDelivered(root: string, id: string): void {
   locked(root, () => {
     const db = load(root), n = db.notices.find((v) => v.id === id);
     if (!n) throw Error('notice not found');
-    if (!n.delivered_at) {
+    if (!n.acknowledged_at) {
       n.delivered_at = new Date().toISOString();
+      n.attempts = (n.attempts ?? 0) + 1;
       writeJsonAtomic(file(root), db);
       appendEvent(root, 'collaboration.delivered', { id, kind: n.kind, to: n.to });
     }
+  });
+}
+/** Explicit processing acknowledgement; delivery alone does not prove an agent consumed a notice. */
+export function acknowledgeNotice(root: string, actor: string, id: string): void {
+  locked(root, () => {
+    const db = load(root), n = db.notices.find(v => v.id === id);
+    if (!n || n.to !== actor) throw Error('notice does not belong to this actor');
+    if (!n.acknowledged_at) {
+      n.acknowledged_at = new Date().toISOString();
+      writeJsonAtomic(file(root), db);
+      appendEvent(root, 'collaboration.acknowledged', { id, actor });
+    }
+  });
+}
+function ackRelated(db: Ledger, actor: string, refId: string): void {
+  for (const n of db.notices) if (n.to === actor && n.ref_id === refId) n.acknowledged_at ??= new Date().toISOString();
+}
+/** Reconcile interrupted helper lifecycles without replacing or discarding unpublished work. */
+export function reconcileSolicitations(root: string, isActive: (worker: string) => boolean,
+  recoverDispatching = false): string[] {
+  return locked(root, () => {
+    const db = load(root), recovered: string[] = [];
+    for (const q of db.solicitations) {
+      const stranded = q.status === 'assigned' && !!q.assigned_worker && !isActive(q.assigned_worker);
+      if (!stranded && !(recoverDispatching && q.status === 'dispatching')) continue;
+      q.status = 'failed';
+      q.error = stranded ? 'helper no longer active; inspect proposals before reassignment'
+        : 'operator restarted during helper spawn; inspect before retrying';
+      notify(db, 'solicitation_result', 'broker', q.owner, q.id, q.paths[0]!);
+      recovered.push(q.id);
+    }
+    if (recovered.length) {
+      writeJsonAtomic(file(root), db);
+      for (const id of recovered) appendEvent(root, 'collaboration.recovered', { id });
+    }
+    return recovered;
   });
 }
 export function readSolicitation(root: string, id: string): Solicitation {
@@ -309,6 +355,7 @@ export function rejectProposal(root: string, actor: string, id: string, reason: 
     if (!p || p.status !== 'pending') throw Error('no pending proposal');
     if (p.to !== actor || !owned(db, actor, p.path)) throw Error('only current checkout owner can reject');
     p.status = 'rejected';
+    ackRelated(db, actor, p.id);
     notify(db, 'proposal_result', actor, p.from, p.id, p.path);
     writeJsonAtomic(file(root), db);
     appendEvent(root, 'checkout.rejected', { id, path: p.path, owner: actor, reason: reason.slice(0, 500) });
@@ -316,14 +363,28 @@ export function rejectProposal(root: string, actor: string, id: string, reason: 
 }
 
 /** Owner closes a request once proposals have been handled, or deliberately cancels the request. */
-export function closeSolicitation(root: string, actor: string, id: string): void {
+export function closeSolicitation(root: string, actor: string, id: string,
+  outcome?: 'integrated' | 'rejected' | 'cancelled', evidence: string[] = []): void {
   locked(root, () => {
     const db = load(root), q = db.solicitations.find((r) => r.id === id);
     if (!q || (q.owner !== actor && actor !== 'operator')) throw Error('only the requester/operator may close a solicitation');
     if (q.status === 'dispatching') throw Error('cannot close while helper spawn is dispatching');
+    if (q.status === 'closed') return;
+    const verdict = outcome ?? (q.result ? undefined : 'cancelled');
+    if (!verdict) throw Error('provide integrated/rejected/cancelled outcome after a helper submission');
+    if (verdict === 'integrated') {
+      if (!q.result || q.status !== 'submitted') throw Error('no submitted helper result to integrate');
+      if (!evidence.length) throw Error('integration requires commit/test evidence');
+      if (db.proposals.some(p => p.status === 'pending' && p.to === q.owner &&
+        q.paths.some(path => covers(scopePath(root, path), p.path))))
+        throw Error('pending proposals must be reviewed before marking integrated');
+    }
+    q.closure = { outcome: verdict, evidence: evidence.slice(0, 20), at: new Date().toISOString() };
     q.status = 'closed';
+    ackRelated(db, actor, q.id);
+    if (q.assigned_worker) notify(db, 'solicitation_closed', actor, q.assigned_worker, q.id, q.paths[0]!);
     writeJsonAtomic(file(root), db);
-    appendEvent(root, 'collaboration.solicitation_closed', { id, owner: q.owner, by: actor });
+    appendEvent(root, 'collaboration.solicitation_closed', { id, owner: q.owner, by: actor, outcome: verdict, evidence: q.closure.evidence });
   });
 }
 
@@ -334,6 +395,7 @@ export function recordSolicitationWorkerResult(root: string, workerId: string, s
     for (const q of db.solicitations) {
       if (q.assigned_worker !== workerId || q.status !== 'assigned' || q.result) continue;
       q.result = { status: status.slice(0, 100), summary: summary.slice(0, 2000) };
+      q.status = 'submitted';
       notify(db, 'solicitation_result', workerId, q.owner, q.id, q.paths[0]!);
       completed.push(q.id);
     }

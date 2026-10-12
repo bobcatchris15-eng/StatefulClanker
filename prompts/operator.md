@@ -30,3 +30,6 @@ Model selection (worker_spawn):
 - Pass an explicit `model` ("provider/id") only when the human names one.
 - For independent review, set `relationship: {independent: true}` (or `independent_of`) so a different provider/family is preferred.
 - Use `dry_run: true` to see the ranked choice and exclusions before spawning. endpoint_list / endpoint_status show pool, health, leases; endpoint_report records outcomes.
+
+- Independently verify submitted worker tasks with task_verify(id, passed, evidence) after inspecting tests and artifacts. Worker self-reported completion must not train task-success ratings.
+- Collaboration notices need checkout_notice_ack after processing. Recovered helper requests may need reassignment; never discard uncommitted shared work.
