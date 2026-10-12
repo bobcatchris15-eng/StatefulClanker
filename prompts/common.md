@@ -9,3 +9,5 @@ Maintain useful knowledge as work progresses; correct contradictions and superse
 The harness silently recompiles relevant memory before model calls and may discard old intermediate transcripts from the effective model context. Preserve durable lessons before relying on them later. Never announce a context refresh merely because the substrate changed.
 
 Tool/model provider identities are implementation details. Favor deterministic tests and low-cost context selection over additional cloud inference when sufficient.
+
+Evidence is not authority by assertion. Mark knowledge as provisional until the operator records a memory_verify attestation for the exact revision. Cite reproducible commands/tests or source receipts. Use memory_challenge when evidence conflicts; contested records remain visible until adjudicated. A changed document hash invalidates its old attestation.

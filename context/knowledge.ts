@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { assessEvidence } from './evidence.ts';
 
 export const FOUNDATION = '.clanker/foundation.md';
 export const DEFAULT_FOUNDATION = [
@@ -25,6 +26,9 @@ export interface KnowledgeDoc {
   tags: string[];
   paths: string[];
   links: string[];
+  contradicts: string[];
+  evidence: string[];
+  open_challenges: number;
 }
 export interface SelectedKnowledge {
   text: string;
@@ -55,7 +59,8 @@ function parse(path: string, raw: string): KnowledgeDoc {
   const linkedMd = [...body.matchAll(/\[[^\]]+\]\(([^)#?]+\.md)(?:#[^)]*)?\)/g)].map(m => m[1]!);
   return { id: meta.id || path.replace(/^\.clanker\/knowledge\//, '').replace(/\.md$/, ''),
     path, title, body, hash: sha(raw), status: meta.status ?? 'provisional',
-    tags: values(meta.tags), paths: values(meta.paths), links: [...new Set([...values(meta.links), ...inline, ...linkedMd])] };
+    tags: values(meta.tags), paths: values(meta.paths), links: [...new Set([...values(meta.links), ...inline, ...linkedMd])],
+    contradicts: values(meta.contradicts), evidence: [], open_challenges: 0 };
 }
 export function ensureFoundation(root: string): void {
   const base = join(root, '.clanker');
@@ -79,13 +84,15 @@ export function listKnowledge(root: string): KnowledgeDoc[] {
       if (stat.isDirectory()) { walk(full, depth + 1); continue; }
       if (!name.endsWith('.md') || !stat.isFile() || stat.size > 64_000) continue;
       const path = relative(root, full).replace(/\\/g, '/');
-      out.push(parse(path, readFileSync(full, 'utf8')));
+      const doc = parse(path, readFileSync(full, 'utf8'));
+      const assessed = assessEvidence(root, doc.path, doc.hash, doc.status);
+      out.push({ ...doc, ...assessed });
     }
   };
   walk(base, 0);
   return out;
 }
-export function knowledgeGraph(docs: KnowledgeDoc[]): { nodes: string[]; edges: [string,string][] } {
+export function knowledgeGraph(docs: KnowledgeDoc[]): { nodes: string[]; edges: [string,string][]; contradictions: [string,string][] } {
   const byName = new Map<string,KnowledgeDoc>();
   for (const d of docs) {
     byName.set(low(d.id), d); byName.set(low(d.path), d);
@@ -97,7 +104,12 @@ export function knowledgeGraph(docs: KnowledgeDoc[]): { nodes: string[]; edges: 
     const target = byName.get(low(l)) ?? byName.get(low(l.replace(/^\.\//, '')));
     if (target && target.path !== d.path) edges.push([d.path, target.path]);
   }
-  return { nodes: docs.map(d => d.path), edges };
+  const contradictions: [string, string][] = [];
+  for (const d of docs) for (const link of d.contradicts) {
+    const t = byName.get(low(link)) ?? byName.get(low(link.replace(/^\.\//, '')));
+    if (t && t.path !== d.path) contradictions.push([d.path, t.path]);
+  }
+  return { nodes: docs.map(d => d.path), edges, contradictions };
 }
 export function scoreKnowledge(d: KnowledgeDoc, query: string, paths: string[] = []): number {
   if (d.path === FOUNDATION) return 100000;
@@ -118,7 +130,7 @@ export function scoreKnowledge(d: KnowledgeDoc, query: string, paths: string[] =
     }
     if (key && low(d.path).includes(key)) score += 3;
   }
-  return score > 0 && d.status === 'verified' ? score + 2 : score;
+  return score > 0 ? score + (d.status === 'verified' ? 2 : d.status === 'contested' ? 3 : 0) : score;
 }
 export function selectKnowledge(root: string, query: string, paths: string[] = [], budget = 9500): SelectedKnowledge {
   const docs = listKnowledge(root);
@@ -136,7 +148,9 @@ export function selectKnowledge(root: string, query: string, paths: string[] = [
     const cap = Math.min(d.path === FOUNDATION ? 4000 : 2200, remaining - reserve - 100);
     if (cap < 150) return;
     const excerpt = d.body.length > cap ? d.body.slice(0, cap) + '\n[excerpt truncated; use memory_read]' : d.body;
-    const passage = '### ' + d.path + ' (' + d.hash.slice(0,12) + '; ' + d.status + ')\n' + excerpt;
+    const note = d.status === 'contested' ? '\nWARNING: unresolved evidence challenge; verify independently.' : '';
+    const proof = d.evidence.length ? '\nVerified evidence: ' + d.evidence.join('; ').slice(0, 650) : '';
+    const passage = '### ' + d.path + ' (' + d.hash.slice(0,12) + '; ' + d.status + ')' + proof + note + '\n' + excerpt;
     pieces.push(passage);
     remaining -= passage.length;
     sources.push({ path: d.path, hash: d.hash, score });

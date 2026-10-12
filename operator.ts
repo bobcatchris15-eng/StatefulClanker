@@ -284,7 +284,7 @@ export function operatorMode(pi: ExtensionAPI): void {
   });
 
   registerCheckoutTools(pi, root, () => 'operator', true);
-  registerMemoryTools(pi, root, () => 'operator');
+  registerMemoryTools(pi, root, () => 'operator', true);
   registerLivingContext(pi, root, () => 'operator');
 
   pi.registerTool({
