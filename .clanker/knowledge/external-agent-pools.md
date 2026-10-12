@@ -18,14 +18,15 @@ for these contracts. See [[evidence-discipline]].
 |---|---|---|---|
 | Pi (`pi --mode rpc`) | local child process | yes | JSONL RPC; exported `RpcClient`; one Pi per worker (`workers/runtime.ts`) |
 | opencode 1.18.35 | local child process | yes | `opencode run [msg]` with `--format json` raw JSON events, `-s/--session <id>` (the documented session switch), `-c/--continue`, `--fork`, `-m/--model provider/model`, `--variant`, `--agent`, `--dir`, `-f/--file` (repeatable), `--title`, `--print-logs`/`--log-level`, `--attach URL`/`--port`. **No per-run read-only flag**: the only safety lever is opencode's own permission deny-list, so do not auto-approve permissions by default. |
-| agy 1.3.3 (`agy.exe`) | local child process | yes | **Print mode, not a subcommand**: `agy --print "<prompt>"` with aliases `-p` / `--prompt` (there is NO `agy exec`). Options: `--output-format text\|json\|stream-json`, `--input-format text\|stream-json` (NDJSON stdin, one message per line, requires `--output-format stream-json`), `--json-schema`, `--conversation <id>`, `-c/--continue`, `--mode accept-edits\|plan` (**`plan` = safe headless default**), `--sandbox`, `--dangerously-skip-permissions`, `--add-dir <path>` (repeatable), `--project`, `--model`, `--agent`, `--effort low\|medium\|high\|xhigh\|max`, `--print-timeout <dur>` (0 = no limit), `--new-project`, `--disable-slash-commands`, `--log-file`, `--remote-control`, `-i/--prompt-interactive`. Real subcommand list (only these): `agent`, `agents`, `changelog`, `help`, `install`, `mcp`, `mic-serve`, `models`, `plugin`, `plugins`, `remote-control`, `update`. **No git autocommit flag.** |
+| agy 1.3.3 (`agy.exe`) | local child process | yes | **Print mode, not a subcommand**: `agy --print "<prompt>"` with aliases `-p` / `--prompt` (there is NO `agy exec`). Options: `--output-format text\|json\|stream-json`, `--input-format text\|stream-json` (NDJSON stdin, one message per line, requires `--output-format stream-json`), `--json-schema`, `--conversation <id>`, `-c/--continue`, `--mode accept-edits\|plan` (**`accept-edits` = default**, per human intent i-0002; `plan` is an explicit per-task opt-in), `--sandbox`, `--dangerously-skip-permissions` (explicit opt-in only, never implied by accept-edits), `--add-dir <path>` (repeatable; scope to the task's claimed paths), `--project`, `--model`, `--agent`, `--effort low\|medium\|high\|xhigh\|max`, `--print-timeout <dur>` (0 = no limit; **a headless run can hang on an unanswered tool-permission prompt**, so a non-zero default is mandatory and a timeout must be reported distinctly from a failure), `--new-project`, `--disable-slash-commands`, `--log-file`, `--remote-control`, `-i/--prompt-interactive`. Real subcommand list (only these): `agent`, `agents`, `changelog`, `help`, `install`, `mcp`, `mic-serve`, `models`, `plugin`, `plugins`, `remote-control`, `update`. **No git autocommit flag.** |
 | Google Jules | cloud VM, via local `jules` CLI | no | `jules new "<task>" [--repo owner/name] [--parallel 1-5]`; script-friendly `jules remote new --session "<task>"`; `jules remote list --session` -> columns `ID \| Description \| Repo \| Last active \| Status`; `jules remote list --repo`; `jules remote pull --session <id> [--apply]`; `jules teleport <id>`; `jules login/logout/version`. Observed Status values: `Planning`, `Completed`. IDs are large numeric strings. Connected repo: `bobcatchris15-eng/StatefulClanker`. Prefer `jules remote ...`: it is the script-friendly surface. **Never pass `--apply` automatically.** Supersedes an earlier sketch of a raw REST API. |
 
 Session resume, per source (deliberately asymmetric - see the human intent note in [[evidence-discipline]]):
 - opencode: `-s/--session <id>`, plus `-c/--continue` and `--fork`. Documented and supported.
 - agy: the human states agy has **no** `--session`. `--conversation <id>` and `-c/--continue` appear in
   `--help` but are unverified in practice, so resume must be an **optional** pool capability: agy workers
-  must complete correctly without it. Do not make the pool contract depend on it.
+  must complete correctly without it. Do not make the pool contract depend on it, and do not pass
+  `-c/--continue` by default - with `accept-edits` there is no session switch to bound the blast radius.
 - jules: session identity is the Jules session ID itself.
 
 Per-pool catalogs (do not merge with the Pi selection ranking):
@@ -35,16 +36,24 @@ Per-pool catalogs (do not merge with the Pi selection ranking):
   agent names are unverified.
 - jules: no model choice; the task description selects the work.
 
+Write authority (human intent i-0003, supersedes the earlier propose-only sketch): external pools write
+files **directly**. Do not route pool edits through `checkout_propose`, and do not add approval gates,
+dry-run staging, or write sandboxing that stalls progress. The human accepts the risk explicitly; the
+escalation chain is agent pool -> orchestrator -> human. Non-blocking safeguards remain wanted:
+end-of-task change receipts (files touched, diffstat, exit status, elapsed, timeout-vs-failure), diffs
+surfaced to the operator and the pool pane, and recoverability. These are observability, never vetoes.
+
 Consequences for the design:
 
 1. **Pool separation.** Jules has no local process and cloud-side git authority: its only local effect is
    `jules remote pull --apply`, which must be operator-mediated and never automatic. It must never take
-   checkout ownership (see [[shared-checkouts]]). opencode/agy edit the shared tree, so they need the same
-   `checkout_claim`/`checkout_propose` discipline as native workers.
+   checkout ownership (see [[shared-checkouts]]). opencode/agy edit the shared tree directly under the
+   write-authority model above; `--add-dir` still scopes agy to the task's claimed paths.
 2. **Receipts are CLI-output level, not `worker_finish` JSON.** Normalize to a common record shape
    (pool, external_session_id, task, status, model, started/last-active, summary, changed_files, receipt)
    so the supervisor can render any pool without knowing the source. `changed_files` comes from
-   `git status --porcelain` differences - never stage, never commit from a pool adapter.
+   `git status --porcelain` differences. A pool adapter may never stage or commit; publication remains
+   the checkout broker's job.
 3. **Supervisor pane split (`ui/pool-pane.ts`, pure renderer).** Native workers keep the animated pane;
    each external pool gets its own static pane, hidden when empty, header carrying pool availability +
    last error. External pools only have coarse lifecycle, so no animation. Layout: minimum column width
@@ -65,3 +74,6 @@ Consequences for the design:
    receipt with `failed` + reason. Availability probes (`opencodeAvailable`, `agyAvailable`, `julesAvailable`)
    must be cheap and return false (not throw) when the CLI is missing or unauthenticated; on win32 resolve
    both `agy` and `agy.exe`.
+
+Open conflict: `pools/` is claimed by two workers (t-0004 agy/opencode, t-0005 jules); they build in
+`.pool-scratch/` and the operator sequences the proposals.
