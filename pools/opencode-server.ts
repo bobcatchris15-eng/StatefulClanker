@@ -59,18 +59,19 @@ export class OpenCodeServer {
     this.url = `http://127.0.0.1:${port}`;
     this.password = randomBytes(30).toString('hex');
     const command = process.env.SC_OPENCODE_COMMAND ?? 'opencode';
-    this.child = spawn(command, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
+    const child = spawn(command, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
       cwd: resolve(this.root),
       windowsHide: true, stdio: 'ignore',
       env: { ...process.env, OPENCODE_SERVER_USERNAME: 'opencode', OPENCODE_SERVER_PASSWORD: this.password },
       // Windows npm shims may be .cmd; the launched arguments here contain NO model-generated strings.
       shell: process.platform === 'win32' && !/\.exe$/i.test(command),
     });
+    this.child = child;
     let error = '';
-    this.child.on('error', e => { error = e.message; });
-    this.child.on('exit', () => { if (this.child) this.url = ''; });
+    child.on('error', e => { error = e.message; });
+    child.on('exit', () => { if (this.child === child) this.url = ''; });
     for (let i = 0; i < 60; i++) {
-      if (error || this.child.exitCode !== null) break;
+      if (error || child.exitCode !== null) break;
       try {
         const health = await this.request<Json>('/global/health', 'GET', undefined, 500);
         if (health.healthy === true) return;
@@ -133,6 +134,7 @@ export class OpenCodeServer {
   }
 
   async inspect(id: string, baseline: number): Promise<OpenCodeResult> {
+    await this.start();
     const [states, messages] = await Promise.all([
       this.request<Json>('/session/status'),
       this.messages(id),
