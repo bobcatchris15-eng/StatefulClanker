@@ -7,6 +7,8 @@ import { recordIntent } from './project/intent.ts';
 import { reconstruct } from './project/reconstruct.ts';
 import { createTask, getTask, listTasks, updateTask } from './project/tasks.ts';
 import { renderRack, type RackOpts, type RackWorker } from './ui/worker-rack.ts';
+import { renderSplitPanes, externalPoolIds, type PoolPaneInput } from './ui/pool-pane.ts';
+import { ExternalPoolManager } from './pools/manager.ts';
 import { RowSource } from './ui/row-source.ts';
 import { DEFAULT_LAMPS, LampField, LARGE_LAMPS, RackClock } from './ui/lamp-bank.ts';
 import { Key, matchesKey, visibleWidth } from '@earendil-works/pi-tui';
@@ -32,6 +34,20 @@ export function operatorMode(pi: ExtensionAPI): void {
   let cwd = process.cwd();
   let uiCtx: any = null;
   let mgr: WorkerManager | null = null;
+  let external: ExternalPoolManager | null = null;
+  const externalManager = (): ExternalPoolManager => external ??= new ExternalPoolManager(root(), { onChange: () => draw() });
+  function externalPanes(): PoolPaneInput[] {
+    const rows = external?.list() ?? [];
+    return externalPoolIds().map(pool => ({
+      pool,
+      jobs: rows.filter(s => s.pool === pool).map(s => ({
+        id: s.id, title: String(s.metadata?.title ?? s.assignment.slice(0, 60)),
+        status: s.status === 'streaming' ? 'running' : s.status === 'timeout' || s.status === 'lost' ? 'failed' : s.status,
+        startedAtMs: s.startedAt, endedAtMs: s.endedAt,
+        changedFiles: s.touchedPaths?.length ?? (s.metadata?.patchFile ? 1 : 0),
+      })),
+    }));
+  }
   let first = true;
   let collabTimer: NodeJS.Timeout | null = null;
   let collabActive = false;
@@ -103,7 +119,12 @@ export function operatorMode(pi: ExtensionAPI): void {
       invalidate(): void { /* data is read fresh in render() */ },
       render(width: number): string[] {
         // Theme is read per render so a theme switch is picked up without re-registering the widget.
-        return renderRack(rack.workers, width, rackOptions({ maxLamps: DEFAULT_LAMPS }));
+        const hasExternal = (external?.list().length ?? 0) > 0;
+        if (!hasExternal) return renderRack(rack.workers, width, rackOptions({ maxLamps: DEFAULT_LAMPS }));
+        // Render rack inside its own width first; the compositor clamps it in the split.
+        const nativeWidth = Math.max(24, Math.floor(width / (1 + externalPanes().filter(p => p.jobs.length).length)));
+        const nativeLines = renderRack(rack.workers, nativeWidth, rackOptions({ maxLamps: DEFAULT_LAMPS }));
+        return renderSplitPanes({ rackLines: nativeLines }, externalPanes(), width, { nowMs: Date.now() });
       },
       dispose(): void { rack.comp = null; },
     };
@@ -275,6 +296,9 @@ export function operatorMode(pi: ExtensionAPI): void {
     cwd = ctx.cwd ?? cwd; uiCtx = ctx; first = true;
     clock.reset();
     manager().recover();
+    await externalManager().start().catch((e: unknown) => {
+      pi.sendMessage({ customType: 'sc-external-error', display: true, content: 'External pools: ' + String(e) }, { deliverAs: 'followUp', triggerTurn: false });
+    });
     reconcileSolicitations(root(), (id) => {
       const w = getWorker(root(), id);
       return !!w && !['COMPLETE', 'CANCELLED', 'FAILED', 'LOST'].includes(w.status);
@@ -294,6 +318,7 @@ export function operatorMode(pi: ExtensionAPI): void {
   pi.on('session_shutdown', async () => {
     if (collabTimer) { clearInterval(collabTimer); collabTimer = null; }
     stopTicker();
+    await external?.stop();
     banks.clear();
     if (!mgr) return;
     try { uiCtx?.ui?.setWidget('sc-rack', undefined); } catch { /* ctx stale */ }
@@ -320,6 +345,9 @@ export function operatorMode(pi: ExtensionAPI): void {
     description: 'Select a model by ability profile (never inherits yours), create task, assign file checkout responsibility in one shared working tree, spawn a worker. Non-blocking. Use dry_run to inspect the choice.',
     parameters: Type.Object({
       assignment: Type.String(),
+      backend: opt(Type.Union([Type.Literal('pi'), Type.Literal('opencode'), Type.Literal('agy'), Type.Literal('jules')])),
+      source: opt(Type.String({ description: 'Jules connected source name, e.g. sources/github/org/repo' })),
+      branch: opt(Type.String({ description: 'Jules starting remote branch, defaults to main' })),
       model: opt(Type.String({ description: 'Explicit provider/id; only when the human names a model' })),
       ability_profile: opt(Type.String({ description: 'implementation|research|architecture|review|fast' })),
       requirements: opt(Type.Object({
@@ -334,6 +362,21 @@ export function operatorMode(pi: ExtensionAPI): void {
     }),
     async execute(_id: string, p: any, _s: any, _u: any, ctx: any) {
       if (ctx) uiCtx = ctx;
+      if (p.backend && p.backend !== 'pi') {
+        if (p.dry_run) return txt(JSON.stringify({ backend: p.backend, dry_run: true, note: 'External backend uses its own authentication and quota; not a Pi model endpoint' }));
+        try {
+          const task = createTask(root(), { title: p.task_title ?? p.assignment.slice(0, 70), objective: p.assignment,
+            expected_outputs: p.expected_outputs ?? [], context_hints: p.context_hints ?? [] });
+          const job = await externalManager().launch({
+            pool: p.backend, assignment: p.assignment, title: p.task_title, taskId: task.id,
+            model: p.model, repo: root(), source: p.source, branch: p.branch,
+          });
+          updateTask(root(), task.id, { assigned_worker: job.id, status: 'active' });
+          draw();
+          return txt(JSON.stringify({ worker_id: job.id, backend: job.pool, session_id: job.externalSessionId,
+            task_id: task.id, status: job.status, note: 'Backend completion requires independent task_verify' }));
+        } catch (e) { return txt('error: ' + String(e)); }
+      }
       const r = await spawnSelected(manager(), catalog(), root(), p, launch());
       if (p.dry_run) {
         const s = r.selection ?? {};
@@ -342,6 +385,70 @@ export function operatorMode(pi: ExtensionAPI): void {
       if (!r.ok) return txt(`error: ${r.error}`);
       draw();
       return txt(JSON.stringify({ worker_id: r.worker_id, name: null, model: r.model, reason: r.selection?.reason, workspace: r.workspace, checkout_conflicts: r.checkout_conflicts, task_id: r.task_id }));
+    },
+  });
+
+  pi.registerTool({
+    name: 'external_worker_list', label: 'External Workers',
+    description: 'List OpenCode, agy and Jules workers and their independent quota / backend health.',
+    parameters: Type.Object({}),
+    async execute() {
+      return txt(JSON.stringify({ jobs: externalManager().list().map(s => ({
+        id: s.id, pool: s.pool, status: s.status, session: s.externalSessionId,
+        note: s.note, changed_files: s.touchedPaths, task: s.metadata?.taskId,
+        url: s.metadata?.url, patch_file: s.metadata?.patchFile,
+      })), availability: await externalManager().availability() }, null, 2));
+    },
+  });
+  pi.registerTool({
+    name: 'external_worker_refresh', label: 'Refresh External Workers',
+    description: 'Poll OpenCode and Jules now; no inference call or new session is created.',
+    parameters: Type.Object({}),
+    async execute() { await externalManager().refresh(); draw(); return txt(JSON.stringify(externalManager().list(), null, 2)); },
+  });
+  pi.registerTool({
+    name: 'external_worker_message', label: 'Message External Worker',
+    description: 'Steer a Jules session or queue a follow-up in an existing OpenCode session. Reuses the same worker.',
+    parameters: Type.Object({ worker_id: Type.String(), message: Type.String() }),
+    async execute(_i: string, p: any) {
+      try { const s = await externalManager().message(p.worker_id, p.message); draw(); return txt(JSON.stringify({ id: s.id, status: s.status, session: s.externalSessionId, note: s.note })); }
+      catch (e) { return txt('error: ' + String(e)); }
+    },
+  });
+  pi.registerTool({
+    name: 'external_worker_cancel', label: 'Cancel External Worker',
+    description: 'Cancel a local OpenCode/agy worker; Jules REST does not expose a reliable abort endpoint.',
+    parameters: Type.Object({ worker_id: Type.String() }),
+    async execute(_i: string, p: any) {
+      try { await externalManager().cancel(p.worker_id); draw(); return txt('Cancellation requested'); }
+      catch (e) { return txt('error: ' + String(e)); }
+    },
+  });
+  pi.registerTool({
+    name: 'external_worker_collect', label: 'Collect Jules Results',
+    description: 'Retrieve Jules activities and any latest gitPatch into a durable local .patch file. Does not apply changes.',
+    parameters: Type.Object({ worker_id: Type.String() }),
+    async execute(_i: string, p: any) {
+      try { await externalManager().collectJules(p.worker_id); draw(); return txt(JSON.stringify(externalManager().get(p.worker_id), null, 2)); }
+      catch (e) { return txt('error: ' + String(e)); }
+    },
+  });
+  pi.registerTool({
+    name: 'external_worker_apply', label: 'Apply Jules Patch',
+    description: 'Explicitly apply a completed Jules git patch to the shared checkout without resetting any peer edits. Conflicts leave patch intact.',
+    parameters: Type.Object({ worker_id: Type.String() }),
+    async execute(_i: string, p: any) {
+      try { const r = await externalManager().applyJules(p.worker_id); draw(); return txt(r); }
+      catch (e) { return txt('error: ' + String(e)); }
+    },
+  });
+  pi.registerTool({
+    name: 'external_worker_approve', label: 'Approve Jules Plan',
+    description: 'Approve an awaiting Jules plan via the REST API.',
+    parameters: Type.Object({ worker_id: Type.String() }),
+    async execute(_i: string, p: any) {
+      try { await externalManager().approve(p.worker_id); draw(); return txt('Plan approved'); }
+      catch (e) { return txt('error: ' + String(e)); }
     },
   });
 
