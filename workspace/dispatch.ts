@@ -1,5 +1,5 @@
 import {
-  beginSolicitationSpawn, markNoticeDelivered, pendingNotices, readProposal, readSolicitation,
+  acknowledgeNotice, beginSolicitationSpawn, markNoticeDelivered, pendingNotices, readProposal, readSolicitation,
   resolveSolicitation, type Solicitation,
 } from './checkouts.ts';
 
@@ -38,7 +38,7 @@ export async function dispatchNotices(root: string, d: CollaborationDispatch): P
       markNoticeDelivered(root, n.id); handled++;
     } else if (n.kind === 'proposal') {
       const p = readProposal(root, 'operator', n.ref_id);
-      if (p.status !== 'pending') { markNoticeDelivered(root, n.id); continue; }
+      if (p.status !== 'pending') { acknowledgeNotice(root, n.to, n.id); continue; }
       const msg = 'Notice ' + n.id + ': Checkout proposal ' + p.id + ' from ' + p.from + ' for ' + p.path +
         '. You hold commit responsibility. Call checkout_proposal_read, then checkout_accept or checkout_reject; ' +
         'validate and checkout_publish accepted changes. Check the current hash before applying. Acknowledge with checkout_notice_ack.';
@@ -71,7 +71,7 @@ export async function dispatchNotices(root: string, d: CollaborationDispatch): P
       markNoticeDelivered(root, n.id); handled++;
     } else if (n.kind === 'solicit') {
       const q = readSolicitation(root, n.ref_id);
-      if (q.status !== 'pending') { markNoticeDelivered(root, n.id); continue; }
+      if (q.status !== 'pending') { acknowledgeNotice(root, n.to, n.id); continue; }
       if (n.to === 'operator' && q.spawn_new) {
         if (!d.canSpawn()) continue;
         if (!beginSolicitationSpawn(root, q.id)) continue;

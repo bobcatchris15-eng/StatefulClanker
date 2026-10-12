@@ -193,6 +193,10 @@ export function transferPath(root: string, path: string, newOwner: string): void
     for (const prop of db.proposals) if (prop.to === prev && prop.status === 'pending' && covers(c, prop.path)) prop.to = newOwner;
     for (const n of db.notices) if (!n.delivered_at && n.to === prev && n.kind === 'proposal' &&
       db.proposals.some((q) => q.id === n.ref_id && q.status === 'pending' && covers(c, q.path))) n.to = newOwner;
+    // Old owner must not repeatedly receive stale proposals after responsibility moves.
+    for (const n of db.notices) if (n.kind === 'proposal' && n.to === prev &&
+      db.proposals.some(q => q.id === n.ref_id && q.to === newOwner))
+      n.acknowledged_at ??= new Date().toISOString();
     // If old owner already saw a proposal, new owner still needs its own notification.
     for (const prop of db.proposals) if (prop.to === newOwner && prop.status === 'pending' &&
       covers(c, prop.path) && !db.notices.some((n) => n.kind === 'proposal' && n.ref_id === prop.id && n.to === newOwner))

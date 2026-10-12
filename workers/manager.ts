@@ -6,7 +6,7 @@ import type { Worker, WorkerResult } from '../protocol/types.ts';
 import { ensureLayout } from '../project/paths.ts';
 import { createTask, getTask, updateTask } from '../project/tasks.ts';
 import { claimPaths, recordSolicitationWorkerResult, releasePaths } from '../workspace/checkouts.ts';
-import { initializeTaskInterest } from '../context/subscriptions.ts';
+import { initializeTaskInterest, stopWatching } from '../context/subscriptions.ts';
 import type { AbilityRequest } from '../catalog/types.ts';
 import { allocateWorkerId, archiveWorker, getWorker, listWorkers, releaseWorkerReservation, upsertWorker } from './registry.ts';
 import { PiRpcRuntime } from './runtime.ts';
@@ -194,6 +194,7 @@ export class WorkerManager {
     const eE = this.runtimes.get(id);
     if (eE) { this.report(id, eE, 'success', { latency_ms: Date.now() - eE.startedMs }); this.release(id, eE); }
     this.releaseCheckouts(id);
+    try { stopWatching(this.root, id); } catch { /* worker result is still durable */ }
     this.em.emit('result', id, result, file);
   }
 
@@ -224,6 +225,7 @@ export class WorkerManager {
     this.patch(id, { status: 'CANCELLED', current_tool: '' });
     appendEvent(this.root, 'worker.cancelled', { id });
     this.release(id, e);
+    try { stopWatching(this.root, id); } catch { /* */ }
     // The process may still be unwinding. Keep file checkout ownership until clean finish/retire or operator handoff.
   }
 
@@ -238,6 +240,7 @@ export class WorkerManager {
     } else this.release(id);
     this.releaseCheckouts(id);
     archiveWorker(this.root, id);
+    try { stopWatching(this.root, id); } catch { /* best effort cleanup */ }
   }
 
   /** Release every live worker's lease (parent session shutdown). */

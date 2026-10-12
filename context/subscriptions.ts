@@ -53,6 +53,9 @@ export function watch(root: string, actor: string, change: Partial<Interest>, re
 }
 export const getWatch = (root: string, actor: string): Interest =>
   read(root).watchers[actor] ?? {paths:[],topics:[]};
+export function stopWatching(root: string, actor: string): void {
+  locked(root, db => { delete db.watchers[actor]; delete db.inbox[actor]; });
+}
 export function initializeTaskInterest(root: string, actor: string, p: {paths?: string[]; task?: string; hints?: string[]}): void {
   watch(root, actor, {paths:p.paths ?? [], topics:tokens([p.task ?? '',...(p.hints ?? [])].join(' ')).slice(0,50)});
 }
