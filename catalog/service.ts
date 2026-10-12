@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AbilityRequest, CandidateModel, Capability, Rating } from "./types.ts";
-import { RATINGS } from "./types.ts";
+import { CAPABILITIES, RATINGS } from "./types.ts";
 import { buildPool, toCandidate } from "./pool.ts";
 import type { PoolCtx } from "./pool.ts";
 import { loadCurated, normalizeQuirks, resolveProfile } from "./profiles.ts";
