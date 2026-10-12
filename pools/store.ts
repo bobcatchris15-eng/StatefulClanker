@@ -11,7 +11,8 @@
  *
  * Erasable TypeScript only.
  */
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile, rename } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { ExternalWorkerSpec, PoolWorkerStatus } from './types.ts';
@@ -53,7 +54,14 @@ export class PoolStore {
 
   async save(spec: ExternalWorkerSpec): Promise<void> {
     await this.ensureDirs();
-    await writeFile(this.recordPath(spec.id), `${JSON.stringify(spec, null, 2)}\n`, 'utf8');
+    const dest = this.recordPath(spec.id);
+    const temporary = dest + '.' + randomUUID() + '.tmp';
+    try {
+      await writeFile(temporary, `${JSON.stringify(spec, null, 2)}\n`, 'utf8');
+      await rename(temporary, dest);
+    } finally {
+      // A failed rename leaves an orphan .tmp, which list() intentionally ignores.
+    }
   }
 
   async get(id: string): Promise<ExternalWorkerSpec | undefined> {
