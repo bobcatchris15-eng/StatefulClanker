@@ -23,6 +23,9 @@ const eight: RackWorker[] = Array.from({ length: 8 }, (_, i) => ({
   current_action: i % 3 ? '' : `editing ui/worker-rack.ts with a very long action string ${i}`,
 }));
 
+/** The subset the supervisor panel actually shows: everything not in a terminal state. */
+const LIVE = ws.filter((w) => w.status !== 'COMPLETE' && w.status !== 'FAILED');
+
 /** Every line must fit the width, measured in visible columns, ANSI included. */
 const fits = (l: string[], w: number): boolean => l.every((x) => visibleWidth(x) <= w);
 
@@ -49,16 +52,30 @@ test('boxed panel: header carries per-state counts and job totals', () => {
   assert.ok(l[0]!.startsWith('┌') && l[0]!.includes('SUPERVISOR'));
   assert.match(l[0]!, /RUN 1/);
   assert.match(l[0]!, /WAIT 1/);
-  assert.match(l[0]!, /FAIL 1/);
-  assert.match(l[0]!, /jobs 3\/6/); // W03 + W08 + W04 active, 6 distinct jobs
+  assert.match(l[0]!, /BLOCK 1/);
+  assert.doesNotMatch(l[0]!, /FAIL 1/); // a failed worker is not live supervision
+  assert.match(l[0]!, /jobs 3\/6/); // W03 + W08 + W04 active; 6 distinct jobs overall
   assert.ok(l.at(-1)!.startsWith('└'));
   assert.ok(fits(l, 110));
-  assert.equal(l.length, ws.length + 2);
+  assert.equal(l.length, LIVE.length + 3); // head + rows + finished tally + foot
 });
 
-test('active workers sort above idle/finished, id order within a group', () => {
-  const ids = renderRack(ws, 110).slice(1, -1).map((l) => l.match(/W\d\d/)![0]);
-  assert.deepEqual(ids, ['W03', 'W04', 'W08', 'W07', 'W05', 'W06']);
+test('terminal workers stay off the panel; they are only counted', () => {
+  const body = renderRack(ws, 110).join('\n');
+  assert.ok(!body.includes('W05') && !body.includes('W06'), body);
+  assert.match(body, /2 finished \(DONE 1, FAIL 1\) — \/rack all/);
+  // The explicit override still shows them, for anyone auditing history in place.
+  const all = renderRack(ws, 110, { includeFinished: true }).join('\n');
+  assert.ok(all.includes('W05') && all.includes('W06'));
+  assert.ok(!all.includes('/rack all'));
+});
+
+test('active workers sort above idle, id order within a group', () => {
+  const ids = renderRack(ws, 110)
+    .slice(1, -1)
+    .map((l) => l.match(/W\d\d/)?.[0])
+    .filter(Boolean);
+  assert.deepEqual(ids, ['W03', 'W04', 'W08', 'W07']);
 });
 
 test('zero workers renders an idle panel, never an empty array', () => {
@@ -72,7 +89,7 @@ test('narrow widths drop the box and strip', () => {
   const width = MIN_BOX_WIDTH - 1;
   const l = renderRack(ws, width);
   assert.ok(l.every((x) => !x.startsWith('│')));
-  assert.equal(l.length, ws.length);
+  assert.equal(l.length, LIVE.length + 1); // live rows + the finished tally
   // Narrow rows keep a lamp bank, just a shallower one.
   assert.match(l[0]!, /^W03 \S+ [█▓▒░·]+ RUN t-0/);
   assert.ok(fits(l, width));
@@ -83,12 +100,12 @@ test('lamp banks never exceed the requested depth, at any width', () => {
     const l = renderRack(ws, width, { maxLamps: 4 });
     const banks = l.filter((x) => x.startsWith('│') && x.includes('W')).map((x) => (x.match(/[█▓▒░·]+(?= W\d)/) ?? [''])[0]!.length);
     for (const n of banks) assert.ok(n <= 4, `bank of ${n} at width ${width}`);
-    assert.ok(banks.length === ws.length);
+    assert.equal(banks.length, LIVE.length);
   }
 });
 
 test('every row keeps a fixed-width bank cell so the columns never jitter', () => {
-  const cells = renderRack(ws, 110, { maxLamps: 6 }).slice(1, -1).map((l) => (l.match(/[█▓▒·]+(?= W\d)/) ?? [''])[0]!.length);
+  const cells = renderRack(LIVE, 110, { maxLamps: 6 }).slice(1, -1).map((l) => (l.match(/[█▓▒·]+(?= W\d)/) ?? [''])[0]!.length);
   assert.equal(new Set(cells).size, 1);
   assert.ok(cells[0]! > 1);
 });
@@ -104,10 +121,10 @@ test('two animation instants render differently - the rack is never frozen', () 
   assert.notEqual(a, b);
 });
 
-test('every worker blinks, including idle and finished ones', () => {
+test('every live worker blinks, idle ones included', () => {
   // The old model held idle/finished lamps steady. The human's panel has no such rule:
   // every socket has its own oscillator, and only the duty/dark-cycle rate tracks state.
-  for (const w of ws) {
+  for (const w of LIVE) {
     const seen = new Set<string>();
     for (let k = 0; k < 40; k++) {
       const line = renderRack([w], 96, { maxLamps: 6, nowMs: k * 97 }).join('');
@@ -122,7 +139,7 @@ test('golden render: 3 workers at 80 cols, animation time pinned', () => {
     '\u250c SUPERVISOR  \u00b7 RUN 1 \u00b7  DONE 1 \u00b7  IDLE 1 jobs 1/2 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510',
     '\u2502 * \u00b7\u00b7\u2592\u00b7\u2593\u00b7 W01 Rivet  Ship the lamp bank  m1                      edit ui/lamp \u2502',
     '\u2502 o \u00b7\u00b7\u00b7\u00b7\u00b7\u00b7 W03                            m3                                   \u2502',
-    '\u2502 v \u2588\u00b7\u00b7\u00b7\u00b7\u2592 W02 Anvil  Review              m2                                   \u2502',
+    '\u2502 v \u00b7\u00b7\u00b7\u00b7\u00b7\u00b7 W02 Anvil  Review              m2                                   \u2502',
     '\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500┘',
   ];
   const rows: RackWorker[] = [
@@ -130,7 +147,7 @@ test('golden render: 3 workers at 80 cols, animation time pinned', () => {
     { id: 'W02', display_name: 'Anvil', status: 'COMPLETE', model: 'm2', task_id: 't-0002', task_title: 'Review' },
     { id: 'W03', status: 'IDLE', model: 'm3' },
   ];
-  assert.deepEqual(renderRack(rows, 80, { maxLamps: 6, nowMs: 0 }), golden);
+  assert.deepEqual(renderRack(rows, 80, { maxLamps: 6, nowMs: 0, includeFinished: true }), golden);
 });
 
 test('long worker names and task titles never widen a line', () => {
@@ -159,8 +176,9 @@ test('emoji and CJK in names measure by column, not by string length', () => {
 
 test('many workers are capped with an overflow line', () => {
   const l = renderRack(eight, 120, { maxRows: 3 });
-  assert.equal(l.length, 3 + 1 + 2);
-  assert.match(l[l.length - 2]!, /\+5 more/);
+  assert.equal(l.length, 3 + 1 + 1 + 1 + 1); // head + 3 rows + overflow + finished tally + foot
+  assert.match(l[l.length - 3]!, /\+3 more/); // 6 live, 3 shown; the 2 terminal ones are on the tally line, not here
+  assert.match(l[l.length - 2]!, /2 finished/);
   assert.equal(DEFAULT_MAX_ROWS, 8);
 });
 

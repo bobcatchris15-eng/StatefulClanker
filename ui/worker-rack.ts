@@ -1,6 +1,18 @@
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import { activityOf, ACTIVE_STATES, DEFAULT_LAMPS, lampColor, lampOn } from './lamp-bank.ts';
 
+/**
+ * States a worker can never leave on its own. Registry entries in these states are
+ * history, not supervision: they keep showing up in the panel until the worker is
+ * retired, which is exactly how a pane ends up advertising 13 dead workers.
+ */
+export const TERMINAL_STATES = new Set(['COMPLETE', 'FAILED', 'CANCELLED', 'LOST']);
+
+/** Is this worker still worth a lamp? */
+export function isLive(w: RackWorker): boolean {
+  return !TERMINAL_STATES.has(w.status);
+}
+
 export interface RackWorker {
   id: string; display_name?: string; status: string; model: string; current_action?: string; current_tool?: string; role?: string; task_id?: string;
   /** Human-readable task/job title. Supplied by the caller (registry has only `task_id`). */
@@ -28,6 +40,12 @@ export interface RackOpts {
   lit?: (id: string, index: number) => boolean;
   /** Draw the state legend inside the box (fullscreen console). */
   legend?: boolean;
+  /**
+   * Show workers in terminal states (COMPLETE/FAILED/CANCELLED/LOST) as rows.
+   * Default false: the supervisor pane tracks live work only, and finished workers
+   * are summarised on a dim `… N done` line instead. `/rack all` turns this on.
+   */
+  includeFinished?: boolean;
 }
 
 export const DEFAULT_MAX_ROWS = 8;
@@ -70,7 +88,10 @@ function status(w: RackWorker): { sym: string; label: string; token: string } {
 /** ANSI/wide-char aware clip to `w` visible columns. */
 function clip(s: string, w: number): string {
   if (w <= 0) return '';
-  return visibleWidth(s) <= w ? s : truncateToWidth(s, w, ELL);
+  if (visibleWidth(s) <= w) return s;
+  // Drop a trailing ellipsis first so re-clipping never stacks "………".
+  const body = s.endsWith(ELL) ? s.slice(0, -ELL.length) : s;
+  return truncateToWidth(body, w, ELL);
 }
 
 /** ANSI/wide-char aware pad to exactly `w` visible columns. */
@@ -81,6 +102,14 @@ function pad(s: string, w: number): string {
 
 function jobLabel(w: RackWorker): string {
   return w.task_title || w.task_id || '';
+}
+
+/** `… 2 finished (DONE 1, FAIL 1) — /rack all`: terminal workers stay visible as counts. */
+function finishedTally(finished: RackWorker[]): string {
+  const tally = new Map<string, number>();
+  for (const w of finished) tally.set(w.status, (tally.get(w.status) ?? 0) + 1);
+  const parts = [...tally].sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0)).map(([s, n]) => `${SYMBOLS[s]?.label ?? s} ${n}`);
+  return `… ${finished.length} finished (${parts.join(', ')}) — /rack all`;
 }
 
 /** Stable grouping: in-flight workers first, then idle, then finished; id order within a group. */
@@ -104,9 +133,12 @@ function ordered(workers: RackWorker[]): RackWorker[] {
  */
 function bank(w: RackWorker, depth: number, tMs: number, st: (t: string, s: string) => string, opts: RackOpts): string {
   const act = activityOf(w.status);
+  // A finished worker gets a full row of dark sockets: wired, never lit. It must not
+  // blink like live work, or a glance at the pane reads as activity that isn't there.
+  const dead = TERMINAL_STATES.has(w.status);
   const out: string[] = [];
   for (let i = 0; i < depth; i++) {
-    const on = opts.lit ? opts.lit(w.id, i) : lampOn(w.id, i, tMs, act);
+    const on = dead ? false : opts.lit ? opts.lit(w.id, i) : lampOn(w.id, i, tMs, act);
     const bulb = LAMP_SYMS[i % LAMP_SYMS.length]!;
     out.push(on ? (opts.theme ? `\u001b[${lampColor(w.id, i, tMs)}m${bulb}\u001b[39m` : bulb) : st('dim', SOCKET));
   }
@@ -205,20 +237,27 @@ export function renderRack(workers: RackWorker[], width: number, opts: RackOpts 
   const theme = opts.theme;
   const st = (t: string, s: string): string => (theme ? theme.fg(t, s) : s);
   const tMs = opts.nowMs ?? 0;
-  const rows = ordered(workers ?? []);
+  const all = ordered(workers ?? []);
+  // Terminal workers are retained registry history, not live supervision. Hidden by
+  // default; counted (not dropped) on the dim summary line and in the header totals.
+  const finished = all.filter((w) => !isLive(w));
+  const rows = opts.includeFinished ? all : all.filter(isLive);
   const maxLamps = Math.max(1, Math.floor(opts.maxLamps ?? DEFAULT_LAMPS));
 
   if (W <= 0) return [];
   if (W < MIN_BOX_WIDTH) {
     const depth = Math.max(1, Math.min(maxLamps, W - 14));
     const lines = rows.length ? rows.map((w) => compact(w, depth, tMs, st, opts)) : [st('muted', '○ idle — no workers')];
+    if (!opts.includeFinished && finished.length) lines.push(st('muted', finishedTally(finished)));
     return lines.map((l) => clip(l, W));
   }
 
   const cw = W - 4;
   const maxRows = Math.max(1, Math.floor(opts.maxRows ?? DEFAULT_MAX_ROWS));
   const shown = rows.slice(0, maxRows);
-  const hidden = rows.length - shown.length;
+  // The overflow count describes rows the default panel would have shown. When finished
+  // workers are hidden they are not "more" - they are on the tally line below.
+  const hidden = Math.max(0, rows.filter((w) => opts.includeFinished || isLive(w)).length - shown.length);
 
   const body: string[] = [];
   if (!shown.length) body.push(st('muted', '○ idle — no workers spawned'));
@@ -227,13 +266,14 @@ export function renderRack(workers: RackWorker[], width: number, opts: RackOpts 
     for (const w of shown) body.push(row(w, b, tMs, st, opts));
   }
   if (hidden > 0) body.push(st('muted', `… +${hidden} more (see /worker_list)`));
+  if (!opts.includeFinished && finished.length) body.push(st('muted', finishedTally(finished)));
   if (opts.legend) body.push(st('muted', `lamp ${SOCKET}=dark socket ${LAMP_SYMS.join('')}=lit, each bulb on its own unsynchronized timer`));
   if (opts.legend) body.push(legend(st));
 
   // Header line carries the supervisor totals; the box is closed by a plain rule.
   const title = st('accent', ' SUPERVISOR ');
   const activeJobs = new Set(rows.filter((w) => ACTIVE_STATES.has(w.status)).map(jobLabel).filter(Boolean)).size;
-  const totalJobs = new Set(rows.map(jobLabel).filter(Boolean)).size;
+  const totalJobs = new Set(all.map(jobLabel).filter(Boolean)).size;
   const jobs = ` ${st('muted', 'jobs')} ${st(activeJobs ? 'accent' : 'muted', `${activeJobs}/${totalJobs}`)} `;
   const headBudget = cw - visibleWidth(title) - visibleWidth(jobs) - 4;
   const counts = header(rows, headBudget, st);

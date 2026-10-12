@@ -7,6 +7,7 @@ import { recordIntent } from './project/intent.ts';
 import { reconstruct } from './project/reconstruct.ts';
 import { createTask, getTask, listTasks, updateTask } from './project/tasks.ts';
 import { renderRack, type RackOpts, type RackWorker } from './ui/worker-rack.ts';
+import { RowSource } from './ui/row-source.ts';
 import { DEFAULT_LAMPS, LampField, LARGE_LAMPS, RackClock } from './ui/lamp-bank.ts';
 import { Key, matchesKey, visibleWidth } from '@earendil-works/pi-tui';
 import { CatalogService } from './catalog/service.ts';
@@ -59,7 +60,6 @@ export function operatorMode(pi: ExtensionAPI): void {
   const TICK_MS = 100;          // ~10fps: fast enough for the quickest bulb, cheap enough to ignore
   const ROWS_EVERY_MS = 500;    // registry re-read while animating
   let tick: NodeJS.Timeout | null = null;
-  let lastRows = 0;
   /** True when there is an interactive terminal to animate for. */
   const animatable = () => Boolean(uiCtx?.hasUI && uiCtx.mode === 'tui');
 
@@ -68,13 +68,27 @@ export function operatorMode(pi: ExtensionAPI): void {
     try { for (const t of listTasks(root())) titles.set(t.id, t.title); } catch { /* no task store yet */ }
     return listWorkers(root()).map((w: any) => ({ ...w, task_title: w.task_id ? titles.get(w.task_id) : undefined }));
   }
-  /** Pull worker rows and refresh the lamp field's view of who is on the panel. */
+  /**
+   * Worker rows, refreshed defensively. Reads are captured rather than thrown so a transient bad
+   * read (the registry is written concurrently by worker processes, and `listWorkers` takes no
+   * lock) cannot kill the poll or blank the pane; the previous snapshot simply stays on screen.
+   */
+  const rowFeed = new RowSource<RackWorker[]>({
+    read: rackRows,
+    everyMs: 500,
+    onError: (e) => { if (!lastRowsError) lastRowsError = e instanceof Error ? e.message : String(e); },
+  });
+  let lastRowsError = '';
+  /** Pull worker rows if stale and refresh the lamp field's view of who is on the panel. */
   function syncRows(now: number): void {
-    rack.workers = rackRows();
-    // Idempotent liveness + status sync, so a periodic re-read never disturbs a lamp bank.
-    banks.sync(rack.workers, now);
-    banks.prune(rack.workers.map((w) => w.id), 60_000, now);
-    lastRows = now;
+    const ok = rowFeed.ensureFresh(now);
+    if (ok && rowFeed.rows) {
+      rack.workers = rowFeed.rows;
+      // Idempotent liveness + status sync, so a periodic re-read never disturbs a lamp bank.
+      banks.sync(rack.workers, now);
+      banks.prune(rack.workers.map((w) => w.id), 60_000, now);
+    }
+    if (rowFeed.failures === 0) lastRowsError = '';
   }
   function rackOptions(extra: Partial<RackOpts> = {}): RackOpts {
     return {
@@ -108,15 +122,23 @@ export function operatorMode(pi: ExtensionAPI): void {
    */
   function startTicker(): void {
     if (tick || !animatable()) return;
+    // The feed and the ticker are independent: rows refresh on their own cadence so a pane that is
+    // not animating (custom screens, paused UIs) still learns about finished work.
+    rowFeed.start();
     tick = setInterval(() => {
-      const now = Date.now();
-      if (now - lastRows >= ROWS_EVERY_MS) syncRows(now);
-      clock.advance(now);
+      // Every body statement is guarded: an escape from here would leave a half-updated pane
+      // (clock advancing, rows frozen) that looks alive right up until it is hours stale.
+      try {
+        const now = Date.now();
+        syncRows(now);
+        clock.advance(now);
+      } catch { /* the pane keeps its last good snapshot */ }
       try { rack.tui?.requestRender(); } catch { /* ctx stale */ }
     }, TICK_MS);
     tick.unref?.();
   }
   function stopTicker(): void {
+    rowFeed.stop();
     if (!tick) return;
     clearInterval(tick);
     tick = null;
@@ -145,7 +167,7 @@ export function operatorMode(pi: ExtensionAPI): void {
         invalidate(): void { /* data is read fresh in render() */ },
         render(width: number): string[] {
           const now = Date.now();
-          if (now - lastRows >= ROWS_EVERY_MS) syncRows(now);
+          syncRows(now);
           clock.advance(now);
           const w = Math.max(0, Math.floor(width));
           const lines = renderRack(rack.workers, w, rackOptions({ theme, maxRows: 64, maxLamps: LARGE_LAMPS, legend: true }));
@@ -258,9 +280,13 @@ export function operatorMode(pi: ExtensionAPI): void {
       return !!w && !['COMPLETE', 'CANCELLED', 'FAILED', 'LOST'].includes(w.status);
     }, true);
     if (collabTimer) clearInterval(collabTimer);
-    collabTimer = setInterval(() => { void pumpCollaboration(); }, 500);
+    // Guarded like the ticker: an escape from this callback would return a rejected promise into
+    // the void and quietly stop every later proposal notification, leaving work requests unserved.
+    collabTimer = setInterval(() => {
+      try { void pumpCollaboration().catch(() => undefined); } catch { /* transient registry read */ }
+    }, 500);
     collabTimer.unref();
-    void pumpCollaboration();
+    void pumpCollaboration().catch(() => undefined);
     syncRows(Date.now());
     installWidget();
     drawNow();
