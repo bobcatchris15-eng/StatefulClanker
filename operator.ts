@@ -35,7 +35,32 @@ export function operatorMode(pi: ExtensionAPI): void {
   let uiCtx: any = null;
   let mgr: WorkerManager | null = null;
   let external: ExternalPoolManager | null = null;
-  const externalManager = (): ExternalPoolManager => external ??= new ExternalPoolManager(root(), { onChange: () => draw() });
+  const externalManager = (): ExternalPoolManager => external ??= new ExternalPoolManager(root(), {
+    onChange: (job) => {
+      // External workers submit receipts into the SAME task graph as native workers.
+      // Their self-reported backend success NEVER counts as independent verification.
+      const taskId = job.metadata?.taskId;
+      if (typeof taskId === 'string' && ['succeeded', 'failed', 'cancelled', 'timeout', 'lost'].includes(job.status)) {
+        try {
+          const task = getTask(root(), taskId);
+          if (task && !['complete', 'failed', 'cancelled'].includes(task.status)
+              && !task.results.some((r: any) => r.kind === 'verification')) {
+            const submission = {
+              kind: 'worker_submission', worker_id: job.id, backend: job.pool,
+              status: job.status, summary: job.note ?? '',
+              changed_files: job.touchedPaths ?? [], patch_file: job.metadata?.patchFile,
+              session_id: job.externalSessionId, at: new Date().toISOString(),
+            };
+            const results = task.results.filter((r: any) => r.kind !== 'worker_submission' || r.worker_id !== job.id);
+            results.push(submission);
+            updateTask(root(), taskId, { status: job.status === 'succeeded' ? 'review' : 'blocked',
+              assigned_worker: job.id, results });
+          }
+        } catch { /* task may be racing initial creation; next status event can recover */ }
+      }
+      draw();
+    },
+  });
   function externalPanes(): PoolPaneInput[] {
     const rows = external?.list() ?? [];
     return externalPoolIds().map(pool => ({
@@ -575,7 +600,8 @@ export function operatorMode(pi: ExtensionAPI): void {
         if (t.results.some((r: any) => r.kind === 'verification'))
           return txt('error: task already verified; create a new task for subsequent changes');
         const w = t.assigned_worker ? getWorker(root(), t.assigned_worker) : null;
-        if (!w) return txt('error: worker record unavailable; recovery required');
+        const externalJob = !w && t.assigned_worker ? external?.list().find(j => j.id === t.assigned_worker) : undefined;
+        if (!w && !externalJob) return txt('error: worker record unavailable; recovery required');
         const taskClass: Record<string, string> = {
           implementation: 'coding', research: 'research', architecture: 'reasoning',
           review: 'reasoning', fast: 'speed',
@@ -584,10 +610,13 @@ export function operatorMode(pi: ExtensionAPI): void {
           note: p.note ?? '', at: new Date().toISOString(), verifier: 'operator' };
         updateTask(root(), t.id, { status: p.passed ? 'complete' : 'failed',
           results: [...t.results, verdict] });
-        catalog().recordTaskVerification(w.provider + '/' + w.model, p.passed,
+        if (w) catalog().recordTaskVerification(w.provider + '/' + w.model, p.passed,
           taskClass[w.ability_profile] ?? 'coding', t.id);
+        // External pools have their own model catalogs and quota accounting.
+        // Do not contaminate native Pi model observations with their task results.
         return txt(JSON.stringify({ task_id: t.id, verdict: p.passed ? 'verified' : 'rejected',
-          model: w.provider + '/' + w.model, evidence: p.evidence }));
+          executor: w ? w.provider + '/' + w.model : externalJob?.pool,
+          evidence: p.evidence }));
       } catch (e) { return txt('error: ' + (e as Error).message); }
     },
   });
