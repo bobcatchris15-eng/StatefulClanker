@@ -10,6 +10,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { appendEvent } from '../protocol/events.ts';
 import { readJson, writeJsonAtomic } from '../protocol/persistence.ts';
 import { ensureLayout } from '../project/paths.ts';
+import { recordRelevantChange } from '../context/subscriptions.ts';
 
 export interface Claim { path: string; recursive: boolean; owner: string; acquired_at: string }
 export interface Proposal { id: string; path: string; from: string; to: string; base_hash: string | null; content: string; created_at: string; status: 'pending' | 'accepted' | 'rejected' }
@@ -207,7 +208,7 @@ export function transferPath(root: string, path: string, newOwner: string): void
  */
 export function publish(root: string, actor: string, paths: string[], message: string): string {
   if (!paths.length || !message.trim()) throw Error('paths and message required');
-  return locked(root, () => {
+  const commit = locked(root, () => {
     const db = load(root), requested = paths.map((p) => scopePath(root, p));
     for (const p of requested) if (!owned(db, actor, p.path)) throw Error('no checkout right-of-way for ' + p.path);
     // Add intent-to-add for new files so --only can include them without including unrelated staging.
@@ -219,6 +220,9 @@ export function publish(root: string, actor: string, paths: string[], message: s
     appendEvent(root, 'checkout.published', { owner: actor, paths: requested.map((p) => p.path), commit: after });
     return after;
   });
+  try { recordRelevantChange(root, actor, paths.map(p => scopePath(root,p).path), commit); }
+  catch (e) { appendEvent(root,'context.relevance_error',{commit,reason:String((e as Error).message)}); }
+  return commit;
 }
 
 /** The broker is the durable inbox. Undelivered notices are retried after operator restart. */

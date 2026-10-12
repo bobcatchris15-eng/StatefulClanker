@@ -18,6 +18,7 @@ import { dispatchNotices, proposalAssignment } from './workspace/dispatch.ts';
 import { reconcileSolicitations } from './workspace/checkouts.ts';
 import { registerLivingContext } from './context/runtime.ts';
 import { registerMemoryTools } from './context/tools.ts';
+import { registerWatchTools } from './context/watch-tools.ts';
 import type { Solicitation } from './workspace/checkouts.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -285,6 +286,7 @@ export function operatorMode(pi: ExtensionAPI): void {
 
   registerCheckoutTools(pi, root, () => 'operator', true);
   registerMemoryTools(pi, root, () => 'operator', true);
+  registerWatchTools(pi, root, () => 'operator');
   registerLivingContext(pi, root, () => 'operator');
 
   pi.registerTool({

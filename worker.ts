@@ -9,6 +9,7 @@ import { CatalogService } from './catalog/service.ts';
 import { registerCheckoutTools } from './workspace/tools.ts';
 import { registerLivingContext } from './context/runtime.ts';
 import { registerMemoryTools } from './context/tools.ts';
+import { registerWatchTools } from './context/watch-tools.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const prompt = (n: string) => readFileSync(join(here, 'prompts', n), 'utf8');
@@ -35,6 +36,7 @@ export function workerMode(pi: ExtensionAPI): void {
 
   registerCheckoutTools(pi, root, () => process.env.SC_WORKER_ID ?? 'unidentified');
   registerMemoryTools(pi, root, () => process.env.SC_WORKER_ID ?? 'unidentified');
+  registerWatchTools(pi, root, () => process.env.SC_WORKER_ID ?? 'unidentified');
   registerLivingContext(pi, root, () => process.env.SC_WORKER_ID ?? 'unidentified');
 
   pi.registerTool({

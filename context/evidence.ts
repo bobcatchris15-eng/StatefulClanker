@@ -4,6 +4,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendEvent } from '../protocol/events.ts';
 import { ensureLayout } from '../project/paths.ts';
+import { recordRelevantChange } from './subscriptions.ts';
 import { readJson, writeJsonAtomic } from '../protocol/persistence.ts';
 
 export interface Attestation {
@@ -67,7 +68,7 @@ export function listChallenges(root: string, path?: string): Challenge[] {
 export function challengeKnowledge(root: string, actor: string, path: string,
   currentHash: string, reason: string, evidence: string[]): Challenge {
   if (!reason.trim() || reason.length > 3000) throw Error('bounded reason required');
-  return mutate(root, db => {
+  const challenge = mutate(root, db => {
     const challenge: Challenge = { id: randomUUID(), path, hash: currentHash, by: actor,
       reason: reason.trim(), evidence: ensureEvidence(evidence), status: 'open',
       at: new Date().toISOString() };
@@ -75,6 +76,9 @@ export function challengeKnowledge(root: string, actor: string, path: string,
     appendEvent(root, 'knowledge.challenged', { id: challenge.id, path, hash: currentHash, by: actor });
     return challenge;
   });
+  try { recordRelevantChange(root, actor, [path], 'challenge:' + challenge.id); }
+  catch { /* challenge is still durable */ }
+  return challenge;
 }
 export function verifyKnowledge(root: string, actor: string, path: string,
   currentHash: string, evidence: string[]): Attestation {

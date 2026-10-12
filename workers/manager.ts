@@ -6,6 +6,7 @@ import type { Worker, WorkerResult } from '../protocol/types.ts';
 import { ensureLayout } from '../project/paths.ts';
 import { createTask, getTask, updateTask } from '../project/tasks.ts';
 import { claimPaths, recordSolicitationWorkerResult, releasePaths } from '../workspace/checkouts.ts';
+import { initializeTaskInterest } from '../context/subscriptions.ts';
 import type { AbilityRequest } from '../catalog/types.ts';
 import { allocateWorkerId, archiveWorker, getWorker, listWorkers, releaseWorkerReservation, upsertWorker } from './registry.ts';
 import { PiRpcRuntime } from './runtime.ts';
@@ -337,6 +338,8 @@ export async function spawnSelected(mgr: WorkerManager, catalog: CatalogService,
       expected_outputs: p.expected_outputs ?? [], context_hints: p.context_hints ?? [],
     });
     taskId = task.id;
+    initializeTaskInterest(root, id, { paths: p.files ?? [],
+      task: task.title + ' ' + task.objective, hints: p.context_hints });
     const checkoutConflicts: string[] = [];
     const claimed: string[] = [];
     for (const path of p.files ?? []) {
