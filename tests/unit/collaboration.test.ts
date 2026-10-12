@@ -37,12 +37,12 @@ test('proposals notify their owner once and accepted/rejected outcomes notify au
   const id = proposeWrite(root, 'W02', 'file.ts', hashFile(root, 'file.ts'), 'proposed\n');
   assert.equal(pendingNotices(root).length, 1);
   await dispatchNotices(root, m.deps);
-  assert.match(m.delivered[0]!, /W01: Checkout proposal/);
+  assert.match(m.delivered[0]!, /W01: Notice .*: Checkout proposal/);
   assert.match(m.delivered[0]!, new RegExp(id));
   assert.equal(await dispatchNotices(root, m.deps), 0);
   acceptProposal(root, 'W01', id);
   await dispatchNotices(root, m.deps);
-  assert.match(m.delivered[1]!, /W02: Your proposal/);
+  assert.match(m.delivered[1]!, /W02: Notice .*: Your proposal/);
   assert.match(m.delivered[1]!, /accepted/);
   assert.equal(pendingNotices(root).length, 0);
 });
@@ -135,7 +135,7 @@ test('finished proposal helper sends owner structured result without transferrin
   await dispatchNotices(root, m.deps);
   assert.deepEqual(recordSolicitationWorkerResult(root, 'W02', 'complete', 'Proposed cache invalidation'), [q.id]);
   await dispatchNotices(root, m.deps);
-  assert.match(m.delivered.at(-1)!, /W01: Proposal helper W02 finished/);
+  assert.match(m.delivered.at(-1)!, /W01: Notice .*: Proposal helper W02 updated/);
   assert.match(m.delivered.at(-1)!, /Proposed cache invalidation/);
   assert.equal(listCheckouts(root).claims[0]!.owner, 'W01');
   assert.deepEqual(recordSolicitationWorkerResult(root, 'W02', 'complete', 'duplicate'), []);
@@ -149,7 +149,7 @@ test('new checkout owner receives a previously delivered pending proposal on tra
   assert.equal(pendingNotices(root).length, 0);
   transferPath(root, 'file.ts', 'W03');
   await dispatchNotices(root, m.deps);
-  assert.match(m.delivered.at(-1)!, /W03: Checkout proposal/);
+  assert.match(m.delivered.at(-1)!, /W03: Notice .*: Checkout proposal/);
 });
 
 test('checkout owners cannot queue an unlimited number of fresh helpers', () => {

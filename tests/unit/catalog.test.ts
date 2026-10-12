@@ -65,14 +65,17 @@ test("observed nudges below minSamples and dominates at minSamples", () => {
   const d = tmp();
   const m = model("p/m");
   const curated = [{ pattern: "p/m", capabilities: { coding: "good" as const }, layer: 0, order: 0 }];
-  for (let i = 0; i < 7; i++) recordOutcome({ model: "p/m", outcome: "task_failure", latency_ms: 100 + i }, d);
+  for (let i = 0; i < 7; i++) recordOutcome({ model: "p/m", outcome: "task_verified_failure", task_class: "coding", latency_ms: 100 + i }, d);
   let agg = aggregate("p/m", readOutcomes(d));
   assert.equal(agg.failures, 7);
   assert.equal(agg.median_latency, 103);
   let r = resolveProfile(m, curated, agg, 8);
   assert.equal(r.ratings.coding, "fair"); // nudged down one step only
   assert.equal(r.source.coding, "curated");
+  // Transport success/failure does not train task competence.
   recordOutcome({ model: "p/m", outcome: "task_failure" }, d);
+  assert.equal(aggregate("p/m", readOutcomes(d)).failures, 7);
+  recordOutcome({ model: "p/m", outcome: "task_verified_failure", task_class: "coding" }, d);
   recordOutcome({ model: "other/x", outcome: "success" }, d);
   agg = aggregate("p/m", readOutcomes(d));
   r = resolveProfile(m, curated, agg, 8);
@@ -80,7 +83,7 @@ test("observed nudges below minSamples and dominates at minSamples", () => {
   assert.equal(r.source.coding, "observed");
   assert.equal(agg.success_rate, 0);
   const line = readFileSync(join(d, "observations.jsonl"), "utf8").split("\n")[0]!;
-  assert.deepEqual(Object.keys(JSON.parse(line)).sort(), ["latency_ms", "model", "outcome", "ts"]);
+  assert.deepEqual(Object.keys(JSON.parse(line)).sort(), ["latency_ms", "model", "outcome", "task_class", "ts"]);
 });
 
 test("health backoff, cap, reset, persistence", () => {

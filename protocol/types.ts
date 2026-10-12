@@ -9,7 +9,7 @@ export interface Intent {
   status: IntentStatus;
 }
 
-export type TaskStatus = 'pending' | 'active' | 'blocked' | 'complete' | 'failed' | 'cancelled';
+export type TaskStatus = 'pending' | 'active' | 'review' | 'blocked' | 'complete' | 'failed' | 'cancelled';
 export interface Task {
   id: string;
   title: string;

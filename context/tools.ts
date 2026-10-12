@@ -7,6 +7,7 @@ import { Type } from 'typebox';
 import { claimPaths, hashFile, listCheckouts, proposeWrite, publish, releasePaths, scopePath } from '../workspace/checkouts.ts';
 import { FOUNDATION, knowledgeGraph, listKnowledge, scoreKnowledge } from './knowledge.ts';
 import { replaceFileAtomic } from '../protocol/persistence.ts';
+import { challengeKnowledge, listChallenges, resolveChallenge, verifyKnowledge } from './evidence.ts';
 
 const out = (x: unknown) => ({ content: [{ type: 'text' as const, text: typeof x === 'string' ? x : JSON.stringify(x, null, 2) }], details: {} });
 function check(root: string, path: string): string {
@@ -52,7 +53,7 @@ export function updateKnowledge(root: string, actor: string, name: string, conte
     throw Error(`Knowledge update failed for ${path}: ${(error as Error).message}.${recovery}`);
   } finally { if (existsSync(tmp)) rmSync(tmp, { force: true }); }
 }
-export function registerMemoryTools(pi: ExtensionAPI, root: () => string, actor: () => string): void {
+export function registerMemoryTools(pi: ExtensionAPI, root: () => string, actor: () => string, operator = false): void {
   const tool = (name: string, desc: string, parameters: any, fn: (args: any) => unknown) =>
     pi.registerTool({ name, label: name, description: desc, parameters,
       async execute(_id: string, args: any) {
@@ -63,13 +64,37 @@ export function registerMemoryTools(pi: ExtensionAPI, root: () => string, actor:
   }), p => listKnowledge(root()).map(d => ({ d, score: scoreKnowledge(d, p.query, p.paths ?? []) }))
     .filter(x => x.score > 0).sort((a,b) => b.score-a.score).slice(0, 12)
     .map(x => ({ id: x.d.id, path: x.d.path, hash: x.d.hash, score: x.score, status: x.d.status,
-      snippet: x.d.body.slice(0, 450) })));
+      snippet: x.d.body.slice(0, 450), evidence: x.d.evidence,
+      challenges: x.d.open_challenges })));
   tool('memory_read', 'Read one shared knowledge file and its current compare-and-swap revision hash.', Type.Object({
     path: Type.String(),
   }), p => { const path = check(root(), p.path), file = join(root(), path);
     return { path, hash: hashFile(root(), path), content: existsSync(file) ? readFileSync(file, 'utf8') : null }; });
   tool('memory_graph', 'Inspect Markdown/wiki-link graph (nodes and directed links).', Type.Object({}),
     () => knowledgeGraph(listKnowledge(root())));
+  tool('memory_challenges', 'List recorded evidence disputes for a knowledge document.', Type.Object({
+    path: Type.Optional(Type.String()),
+  }), p => listChallenges(root(), p.path ? check(root(), p.path) : undefined));
+  tool('memory_challenge', 'Record a persistent, evidenced contradiction; causes affected knowledge to be marked contested.', Type.Object({
+    path: Type.String(), base_hash: Type.String(), reason: Type.String(),
+    evidence: Type.Array(Type.String(), { minItems: 1 }),
+  }), p => {
+    const path = check(root(), p.path);
+    if (hashFile(root(), path) !== p.base_hash) throw Error('stale knowledge hash; reread');
+    return challengeKnowledge(root(), actor(), path, p.base_hash, p.reason, p.evidence);
+  });
+  if (operator) {
+    tool('memory_verify', 'Operator attests to independent evidence supporting an exact knowledge revision.', Type.Object({
+      path: Type.String(), base_hash: Type.String(), evidence: Type.Array(Type.String(), { minItems: 1 }),
+    }), p => {
+      const path = check(root(), p.path);
+      if (hashFile(root(), path) !== p.base_hash) throw Error('stale knowledge revision');
+      return verifyKnowledge(root(), actor(), path, p.base_hash, p.evidence);
+    });
+    tool('memory_resolve', 'Operator resolves a challenge with recorded reasoning and evidence.', Type.Object({
+      id: Type.String(), resolution: Type.String(), evidence: Type.Array(Type.String(), { minItems: 1 }),
+    }), p => resolveChallenge(root(), actor(), p.id, p.resolution, p.evidence));
+  }
   tool('memory_write', 'Revise or add Git-tracked knowledge at an exact base hash; direct commit if free/owned, otherwise propose to checkout owner. Does not bypass human intent.', Type.Object({
     path: Type.String(), content: Type.String(), base_hash: Type.Union([Type.String(), Type.Null()]),
   }), p => updateKnowledge(root(), actor(), p.path, p.content, p.base_hash));

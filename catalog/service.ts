@@ -116,6 +116,12 @@ export class CatalogService {
   /** Reap leases whose parent pid is dead or that expired. */
   recover(): number { return reapDead(this.o.isAlive ?? pidAlive, this.dir, this.now()); }
 
+  /** Task ratings are trained only after a separate, evidence-backed operator verification. */
+  recordTaskVerification(model: string, passed: boolean, taskClass: string, taskId: string): void {
+    recordOutcome({ model, outcome: passed ? "task_verified_success" : "task_verified_failure",
+      task_class: taskClass, note: "verified " + taskId }, this.dir);
+  }
+
   reportOutcome(model: string, outcome: OutcomeKind,
     extra: { task_class?: string; latency_ms?: number; worker_id?: string; note?: string } = {}): ModelHealth {
     recordOutcome({ model, outcome, ...extra }, this.dir);

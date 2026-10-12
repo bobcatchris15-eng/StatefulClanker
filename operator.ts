@@ -15,8 +15,10 @@ import { parentExtensionArgs } from './workers/runtime.ts';
 import { getWorker, listWorkers } from './workers/registry.ts';
 import { registerCheckoutTools } from './workspace/tools.ts';
 import { dispatchNotices, proposalAssignment } from './workspace/dispatch.ts';
+import { reconcileSolicitations } from './workspace/checkouts.ts';
 import { registerLivingContext } from './context/runtime.ts';
 import { registerMemoryTools } from './context/tools.ts';
+import { registerWatchTools } from './context/watch-tools.ts';
 import type { Solicitation } from './workspace/checkouts.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -194,6 +196,10 @@ export function operatorMode(pi: ExtensionAPI): void {
     if (collabActive) return;
     collabActive = true;
     try {
+      reconcileSolicitations(root(), (id) => {
+        const w = getWorker(root(), id);
+        return !!w && !['COMPLETE', 'CANCELLED', 'FAILED', 'LOST'].includes(w.status);
+      });
       await dispatchNotices(root(), {
         async sendWorker(id, message) {
           const w = getWorker(root(), id);
@@ -247,6 +253,10 @@ export function operatorMode(pi: ExtensionAPI): void {
     cwd = ctx.cwd ?? cwd; uiCtx = ctx; first = true;
     clock.reset();
     manager().recover();
+    reconcileSolicitations(root(), (id) => {
+      const w = getWorker(root(), id);
+      return !!w && !['COMPLETE', 'CANCELLED', 'FAILED', 'LOST'].includes(w.status);
+    }, true);
     if (collabTimer) clearInterval(collabTimer);
     collabTimer = setInterval(() => { void pumpCollaboration(); }, 500);
     collabTimer.unref();
@@ -275,7 +285,8 @@ export function operatorMode(pi: ExtensionAPI): void {
   });
 
   registerCheckoutTools(pi, root, () => 'operator', true);
-  registerMemoryTools(pi, root, () => 'operator');
+  registerMemoryTools(pi, root, () => 'operator', true);
+  registerWatchTools(pi, root, () => 'operator');
   registerLivingContext(pi, root, () => 'operator');
 
   pi.registerTool({
@@ -413,6 +424,38 @@ export function operatorMode(pi: ExtensionAPI): void {
     async execute(_i: string, p: any) {
       const { id, ...patch } = p;
       try { const t = updateTask(root(), id, patch); return txt(`${t.id} ${t.status}`); } catch (e) { return txt(`error: ${(e as Error).message}`); }
+    },
+  });
+  pi.registerTool({
+    name: 'task_verify', label: 'Verify Task',
+    description: 'Record independent evidence for a worker submission; only verified outcomes train task capability ratings.',
+    parameters: Type.Object({
+      id: Type.String(), passed: Type.Boolean(), evidence: Type.Array(Type.String(), { minItems: 1 }),
+      note: opt(Type.String()),
+    }),
+    async execute(_i: string, p: any) {
+      try {
+        const t = getTask(root(), p.id);
+        if (!t) return txt('error: task not found');
+        if (!t.results.some((r: any) => r.kind === 'worker_submission'))
+          return txt('error: no worker submission to verify');
+        if (t.results.some((r: any) => r.kind === 'verification'))
+          return txt('error: task already verified; create a new task for subsequent changes');
+        const w = t.assigned_worker ? getWorker(root(), t.assigned_worker) : null;
+        if (!w) return txt('error: worker record unavailable; recovery required');
+        const taskClass: Record<string, string> = {
+          implementation: 'coding', research: 'research', architecture: 'reasoning',
+          review: 'reasoning', fast: 'speed',
+        };
+        const verdict = { kind: 'verification', passed: p.passed, evidence: p.evidence,
+          note: p.note ?? '', at: new Date().toISOString(), verifier: 'operator' };
+        updateTask(root(), t.id, { status: p.passed ? 'complete' : 'failed',
+          results: [...t.results, verdict] });
+        catalog().recordTaskVerification(w.provider + '/' + w.model, p.passed,
+          taskClass[w.ability_profile] ?? 'coding', t.id);
+        return txt(JSON.stringify({ task_id: t.id, verdict: p.passed ? 'verified' : 'rejected',
+          model: w.provider + '/' + w.model, evidence: p.evidence }));
+      } catch (e) { return txt('error: ' + (e as Error).message); }
     },
   });
   pi.registerTool({

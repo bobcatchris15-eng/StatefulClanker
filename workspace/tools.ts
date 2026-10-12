@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { acceptProposal, claimPaths, closeSolicitation, hashFile, listCheckouts, listSolicitations, proposeWrite, publish, readProposal, rejectProposal, releasePaths, routeSolicitation, solicitProposals, transferPath } from './checkouts.ts';
+import { acknowledgeNotice, acceptProposal, claimPaths, closeSolicitation, hashFile, listCheckouts, listSolicitations, proposeWrite, publish, readProposal, rejectProposal, releasePaths, routeSolicitation, solicitProposals, transferPath } from './checkouts.ts';
 
 const out = (s: unknown) => ({ content: [{ type: 'text' as const, text: typeof s === 'string' ? s : JSON.stringify(s, null, 2) }], details: {} });
 const paths = () => Type.Array(Type.String());
@@ -42,9 +42,14 @@ export function registerCheckoutTools(pi: ExtensionAPI, root: () => string, acto
   }));
   tool('checkout_requests', 'List solicited proposal requests, statuses and assigned helper workers.', Type.Object({}),
     () => listSolicitations(root()));
-  tool('checkout_request_close', 'Mark a solicitation complete/cancelled after its proposals have been considered; frees checkout for release.', Type.Object({
+  tool('checkout_notice_ack', 'Confirm a collaboration notice has been processed (not merely delivered).', Type.Object({
     id: Type.String(),
-  }), (p) => { closeSolicitation(root(), actor(), p.id); return 'solicitation closed'; });
+  }), (p) => { acknowledgeNotice(root(), actor(), p.id); return 'notice acknowledged'; });
+  tool('checkout_request_close', 'Close a solicitation with an explicit outcome and evidence; frees checkout for release.', Type.Object({
+    id: Type.String(), outcome: Type.Optional(Type.Union([
+      Type.Literal('integrated'), Type.Literal('rejected'), Type.Literal('cancelled')])),
+    evidence: Type.Optional(Type.Array(Type.String())),
+  }), (p) => { closeSolicitation(root(), actor(), p.id, p.outcome, p.evidence ?? []); return 'solicitation closed'; });
   tool('checkout_publish', 'Commit ONLY explicitly named owned files/subtrees from the shared checkout (no git add -A).', Type.Object({
     paths: paths(), message: Type.String(),
   }), (p) => ({ commit: publish(root(), actor(), p.paths, p.message) }));

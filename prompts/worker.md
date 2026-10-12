@@ -16,3 +16,6 @@ You have one bounded task. Call task_context first to read your task record and 
 - Commit ONLY with checkout_publish, giving exact owned paths; do not call git add/commit directly. Release via checkout_release when clean. Failed operations require reporting the blocker, not bypassing checkout protocol.
 - Report progress with worker_progress when status changes or you are blocked.
 - You MUST finish by calling worker_finish with a structured result (status and summary required). Without it the task is not complete.
+
+- Collaboration notices carry IDs. When you process a notice, call checkout_notice_ack(id). Delivery alone is not acknowledgment; retries are possible and actions must be idempotent.
+- When ending a solicitation, record whether it was integrated, rejected, or cancelled. Successful integration requires commit/test evidence.

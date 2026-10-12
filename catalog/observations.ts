@@ -3,13 +3,14 @@ import { join } from "node:path";
 import { machineDir } from "./paths.ts";
 
 export type OutcomeKind = "success" | "rate_limit" | "timeout" | "auth_error" | "malformed_tool_call"
-  | "bad_continuation" | "tool_recovery" | "task_failure";
+  | "bad_continuation" | "tool_recovery" | "task_failure" | "task_verified_success" | "task_verified_failure";
 export interface Outcome {
   ts: string; model: string; outcome: OutcomeKind;
   task_class?: string; latency_ms?: number; worker_id?: string; note?: string;
 }
 export interface Aggregate {
   successes: number; failures: number;
+  provider_successes: number; provider_failures: number;
   by_task_class: Record<string, { successes: number; failures: number }>;
   median_latency: number | null; success_rate: number | null;
 }
@@ -39,11 +40,16 @@ export function readOutcomes(dir = machineDir()): Outcome[] {
 }
 
 export function aggregate(model: string, outcomes: Outcome[]): Aggregate {
-  const a: Aggregate = { successes: 0, failures: 0, by_task_class: {}, median_latency: null, success_rate: null };
+  const a: Aggregate = { successes: 0, failures: 0, provider_successes: 0, provider_failures: 0, by_task_class: {}, median_latency: null, success_rate: null };
   const lat: number[] = [];
   for (const o of outcomes) {
     if (o.model !== model) continue;
-    const ok = o.outcome === "success";
+    // Only independently verified task outcomes train capability ratings.
+    // A successful API round-trip is not evidence that an assignment was done correctly.
+    if (o.outcome === "success") a.provider_successes++;
+    else if (o.outcome !== "task_verified_success" && o.outcome !== "task_verified_failure") a.provider_failures++;
+    if (o.outcome !== "task_verified_success" && o.outcome !== "task_verified_failure") continue;
+    const ok = o.outcome === "task_verified_success";
     if (ok) a.successes++; else a.failures++;
     if (o.task_class) {
       const t = (a.by_task_class[o.task_class] ??= { successes: 0, failures: 0 });

@@ -1,0 +1,30 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { assessEvidence, challengeKnowledge, resolveChallenge, verifyKnowledge } from '../../context/evidence.ts';
+import { listKnowledge, selectKnowledge } from '../../context/knowledge.ts';
+import { hashFile } from '../../workspace/checkouts.ts';
+
+test('unattested verified label is provisional; challenge blocks verification; evidence follows exact revision', () => {
+  const root = mkdtempSync(join(tmpdir(), 'sc-evidence-'));
+  const git = (...args:string[]) => execFileSync('git',['-C',root,...args]);
+  git('init','-q'); git('config','user.name','tester');git('config','user.email','t@t');
+  const file='.clanker/knowledge/example.md';
+  mkdirSync(join(root,'.clanker','knowledge'),{recursive:true});
+  writeFileSync(join(root,file),'---\nstatus: verified\ntags: [geometry]\n---\n# Geometry\nMeasure first.\n');
+  git('add','.');git('commit','-qm','initial');
+  const hash=hashFile(root,file)!;
+  assert.equal(listKnowledge(root).find(d=>d.path===file)?.status,'provisional');
+  const c=challengeKnowledge(root,'W02',file,hash,'An opposing benchmark',['benchmark-12']);
+  assert.equal(assessEvidence(root,file,hash,'verified').status,'contested');
+  assert.throws(()=>verifyKnowledge(root,'operator',file,hash,['benchmark-13']),/resolve outstanding/);
+  resolveChallenge(root,'operator',c.id,'retested with reproducible inputs',['benchmark-14']);
+  verifyKnowledge(root,'operator',file,hash,['benchmark-14']);
+  assert.equal(assessEvidence(root,file,hash,'verified').status,'verified');
+  assert.ok(selectKnowledge(root,'geometry').text.includes('Verified evidence: benchmark-14'));
+  writeFileSync(join(root,file),'# Geometry\nDifferent conclusion.\n');
+  assert.equal(listKnowledge(root).find(d=>d.path===file)?.status,'provisional');
+});
