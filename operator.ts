@@ -385,11 +385,11 @@ export function operatorMode(pi: ExtensionAPI): void {
       'The operator owns final verification and publication. You do not need to request approval for routine task-scoped edits.',
       `Task ID: ${taskId}`,
       '## Assignment', String(p.assignment),
-      '## File scope', files.length ? files.join('\\n') : 'No explicit file scope; minimize overlapping writes.',
-      '## Expected outputs', expected.length ? expected.join('\\n') : 'Working changes and a concise evidence-backed summary.',
-      '## Context hints', hints.join('\\n') || '(none)',
+      '## File scope', files.length ? files.join('\n') : 'No explicit file scope; minimize overlapping writes.',
+      '## Expected outputs', expected.length ? expected.join('\n') : 'Working changes and a concise evidence-backed summary.',
+      '## Context hints', hints.join('\n') || '(none)',
       '## Shared foundation (bounded)', foundation || '(not available)',
-    ].join('\\n\\n');
+    ].join('\n\n');
   }
 
   pi.registerTool({
