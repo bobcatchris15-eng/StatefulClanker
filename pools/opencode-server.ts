@@ -35,7 +35,9 @@ export class OpenCodeServer {
   private child: ChildProcess | null = null;
   private starting: Promise<void> | null = null;
   private readonly send: JsonFetch;
-  constructor(private readonly root: string, send: JsonFetch = fetch) {
+  private readonly root: string;
+  constructor(root: string, send: JsonFetch = fetch) {
+    this.root = root;
     this.send = send;
   }
   async start(): Promise<void> {
@@ -52,7 +54,8 @@ export class OpenCodeServer {
         throw new Error('OPENCODE_SERVER_URL must be an HTTP loopback address');
       this.url = parsed.origin;
       this.password = process.env.OPENCODE_SERVER_PASSWORD ?? '';
-      await this.request('/global/health');
+      try { await this.request('/global/health'); }
+      catch (error) { this.url = ''; throw error; }
       return;
     }
     const port = await reservePort();
