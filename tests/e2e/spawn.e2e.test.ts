@@ -62,7 +62,12 @@ test('real pi worker with mock provider reaches COMPLETE', { timeout: 120000 }, 
     const w = getWorker(root, id)!;
     assert.equal(w.status, 'COMPLETE');
     assert.equal(w.display_name, 'Rivet');
-    const rack = renderRack([{ ...(w as any), task_title: 'e2e spawn task' }], 80);
+    const doneRow = { ...(w as any), task_title: 'e2e spawn task' };
+    // Default panel tracks live work only; a finished worker is tallied, not listed.
+    const defaultRack = renderRack([doneRow], 80).join('\n');
+    assert.doesNotMatch(defaultRack, /Rivet/, 'default supervisor pane does not list a finished worker');
+    assert.match(defaultRack, /1 finished/, 'default supervisor pane tallies the finished worker');
+    const rack = renderRack([doneRow], 80, { includeFinished: true });
     assert.match(rack[1]!, /W\d\d Rivet/, 'supervisor panel row shows id and display name');
     assert.match(rack[1]!, /e2e spawn task/);
     assert.ok(readEvents(root, { types: ['worker.named'] }).length >= 1);
