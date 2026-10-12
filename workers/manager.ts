@@ -7,7 +7,7 @@ import { ensureLayout } from '../project/paths.ts';
 import { createTask, getTask, updateTask } from '../project/tasks.ts';
 import { claimPaths, recordSolicitationWorkerResult, releasePaths } from '../workspace/checkouts.ts';
 import type { AbilityRequest } from '../catalog/types.ts';
-import { allocateWorkerId, archiveWorker, getWorker, listWorkers, upsertWorker } from './registry.ts';
+import { allocateWorkerId, archiveWorker, getWorker, listWorkers, releaseWorkerReservation, upsertWorker } from './registry.ts';
 import { PiRpcRuntime } from './runtime.ts';
 import type { CatalogService } from '../catalog/service.ts';
 import { deriveStatus, initialStatus, type StatusState } from './status.ts';
@@ -320,9 +320,14 @@ export async function spawnSelected(mgr: WorkerManager, catalog: CatalogService,
   if (p.dry_run) return { ok: sel.ok, dry_run: true, selection: sel, error: sel.error };
   if (!sel.ok || !sel.chosen) return { ok: false, error: sel.error ?? sel.reason, selection: sel };
   const chosen = sel.chosen;
-  const id = mgr.allocateId();
+  let id: string;
+  try { id = mgr.allocateId(); }
+  catch (e) { return { ok: false, error: (e as Error).message, selection: sel }; }
   const lease = catalog.claimLease(chosen.key, id);
-  if (!lease) return { ok: false, error: `lease unavailable for ${chosen.key}`, selection: sel };
+  if (!lease) {
+    releaseWorkerReservation(root, id);
+    return { ok: false, error: `lease unavailable for ${chosen.key}`, selection: sel };
+  }
   let taskId: string | undefined;
   try {
     const task = createTask(root, {
@@ -360,6 +365,7 @@ export async function spawnSelected(mgr: WorkerManager, catalog: CatalogService,
   } catch (e) {
     // A child may already exist when startup fails. Retire it before relinquishing authority.
     try { await mgr.retire(id); } catch { /* retain recovery evidence if retirement fails */ }
+    try { releaseWorkerReservation(root, id); } catch { /* preserve original error */ }
     if (taskId) {
       try { updateTask(root, taskId, { status: 'failed', unresolved: [`Worker startup failed: ${(e as Error).message}`] }); }
       catch { /* keep the spawn error as the primary failure */ }
