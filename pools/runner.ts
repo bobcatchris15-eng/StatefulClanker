@@ -155,7 +155,8 @@ export function runExternal(opts: PoolRunOptions): PoolRunHandle {
     spawnError = e.message;
     finalize(1, null);
   });
-  child.on('exit', (code, signal) => finalize(code, signal));
+  // 'close' fires after stdout/stderr have drained; 'exit' may precede the terminal result line.
+  child.on('close', (code, signal) => finalize(code, signal));
 
   const timeoutMs = opts.timeoutMs ?? 0;
   if (timeoutMs > 0) {
