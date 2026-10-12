@@ -2,3 +2,8 @@ node_modules/
 .statefulclanker/
 *.log
 *.tmp
+# worker scratch artifacts (isolated build trees, ad-hoc type probes)
+.pool-scratch/
+.w-*-scratch/
+_d.ts
+install/
