@@ -365,6 +365,33 @@ export function operatorMode(pi: ExtensionAPI): void {
   registerWatchTools(pi, root, () => 'operator');
   registerLivingContext(pi, root, () => 'operator');
 
+  /** External clients do not load Pi extension prompts or hooks. Give them a bounded,
+   * self-contained task packet including the current shared foundation and file scope.
+   * Never embed credentials, private machine state or full Pi transcripts. */
+  function externalAssignment(p: any, taskId: string): string {
+    let foundation = '';
+    try { foundation = readFileSync(join(root(), '.clanker', 'foundation.md'), 'utf8').slice(0, 12000); }
+    catch { /* project has no foundation yet */ }
+    const files = Array.isArray(p.files) ? p.files.filter((x: unknown) => typeof x === 'string') : [];
+    const expected = Array.isArray(p.expected_outputs) ? p.expected_outputs : [];
+    const hints = Array.isArray(p.context_hints) ? p.context_hints : [];
+    return [
+      '# StatefulClanker external worker assignment',
+      'You are a coding/research worker supervised by StatefulClanker. Work in the supplied repository.',
+      'Do not invent work completed. Test your changes and report limitations and actual modified paths.',
+      'The checkout is shared with peer workers; read their uncommitted changes and avoid modifying files outside your assignment.',
+      'Do not reset, clean, revert or hard-checkout the shared working tree; do not stage unrelated files.',
+      'For Jules: you are working on the pushed GitHub revision rather than the live local checkout; return changes as a patch/PR.',
+      'The operator owns final verification and publication. You do not need to request approval for routine task-scoped edits.',
+      `Task ID: ${taskId}`,
+      '## Assignment', String(p.assignment),
+      '## File scope', files.length ? files.join('\\n') : 'No explicit file scope; minimize overlapping writes.',
+      '## Expected outputs', expected.length ? expected.join('\\n') : 'Working changes and a concise evidence-backed summary.',
+      '## Context hints', hints.join('\\n') || '(none)',
+      '## Shared foundation (bounded)', foundation || '(not available)',
+    ].join('\\n\\n');
+  }
+
   pi.registerTool({
     name: 'worker_spawn', label: 'Spawn Worker',
     description: 'Select a model by ability profile (never inherits yours), create task, assign file checkout responsibility in one shared working tree, spawn a worker. Non-blocking. Use dry_run to inspect the choice.',
@@ -393,7 +420,7 @@ export function operatorMode(pi: ExtensionAPI): void {
           const task = createTask(root(), { title: p.task_title ?? p.assignment.slice(0, 70), objective: p.assignment,
             expected_outputs: p.expected_outputs ?? [], context_hints: p.context_hints ?? [] });
           const job = await externalManager().launch({
-            pool: p.backend, assignment: p.assignment, title: p.task_title, taskId: task.id,
+            pool: p.backend, assignment: externalAssignment(p, task.id), title: p.task_title, taskId: task.id,
             model: p.model, repo: root(), source: p.source, branch: p.branch,
           });
           updateTask(root(), task.id, { assigned_worker: job.id, status: 'active' });
