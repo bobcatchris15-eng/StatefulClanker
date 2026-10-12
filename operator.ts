@@ -416,6 +416,38 @@ export function operatorMode(pi: ExtensionAPI): void {
     },
   });
   pi.registerTool({
+    name: 'task_verify', label: 'Verify Task',
+    description: 'Record independent evidence for a worker submission; only verified outcomes train task capability ratings.',
+    parameters: Type.Object({
+      id: Type.String(), passed: Type.Boolean(), evidence: Type.Array(Type.String(), { minItems: 1 }),
+      note: opt(Type.String()),
+    }),
+    async execute(_i: string, p: any) {
+      try {
+        const t = getTask(root(), p.id);
+        if (!t) return txt('error: task not found');
+        if (!t.results.some((r: any) => r.kind === 'worker_submission'))
+          return txt('error: no worker submission to verify');
+        if (t.results.some((r: any) => r.kind === 'verification'))
+          return txt('error: task already verified; create a new task for subsequent changes');
+        const w = t.assigned_worker ? getWorker(root(), t.assigned_worker) : null;
+        if (!w) return txt('error: worker record unavailable; recovery required');
+        const taskClass: Record<string, string> = {
+          implementation: 'coding', research: 'research', architecture: 'reasoning',
+          review: 'reasoning', fast: 'speed',
+        };
+        const verdict = { kind: 'verification', passed: p.passed, evidence: p.evidence,
+          note: p.note ?? '', at: new Date().toISOString(), verifier: 'operator' };
+        updateTask(root(), t.id, { status: p.passed ? 'complete' : 'failed',
+          results: [...t.results, verdict] });
+        catalog().recordTaskVerification(w.provider + '/' + w.model, p.passed,
+          taskClass[w.ability_profile] ?? 'coding', t.id);
+        return txt(JSON.stringify({ task_id: t.id, verdict: p.passed ? 'verified' : 'rejected',
+          model: w.provider + '/' + w.model, evidence: p.evidence }));
+      } catch (e) { return txt('error: ' + (e as Error).message); }
+    },
+  });
+  pi.registerTool({
     name: 'intent_record', label: 'Record Intent', description: 'Record human intent (supersedes earlier intents).',
     parameters: Type.Object({ statement: Type.String(), scope: opt(Type.String()), supersedes: strs() }),
     async execute(_i: string, p: any) {

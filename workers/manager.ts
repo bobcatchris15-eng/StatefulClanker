@@ -4,7 +4,7 @@ import { appendEvent } from '../protocol/events.ts';
 import { writeJsonAtomic } from '../protocol/persistence.ts';
 import type { Worker, WorkerResult } from '../protocol/types.ts';
 import { ensureLayout } from '../project/paths.ts';
-import { createTask, updateTask } from '../project/tasks.ts';
+import { createTask, getTask, updateTask } from '../project/tasks.ts';
 import { claimPaths, recordSolicitationWorkerResult, releasePaths } from '../workspace/checkouts.ts';
 import type { AbilityRequest } from '../catalog/types.ts';
 import { allocateWorkerId, archiveWorker, getWorker, listWorkers, upsertWorker } from './registry.ts';
@@ -165,7 +165,24 @@ export class WorkerManager {
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const file = join(ensureLayout(this.root), 'receipts', 'workers', `${id}-${ts}.json`);
     writeJsonAtomic(file, result);
-    if (w) upsertWorker(this.root, { ...w, status: 'COMPLETE', current_tool: '', results: [...w.results, result] });
+    // Worker-reported completion is a submission for review, not independent proof of task success.
+    const outcome = result.status.trim().toLowerCase();
+    const submitted = ['complete', 'completed', 'success', 'succeeded', 'passed', 'done'].includes(outcome);
+    const blocked = ['blocked', 'partial', 'incomplete', 'needs_review'].includes(outcome);
+    const workerStatus = submitted || blocked ? 'COMPLETE' : 'FAILED';
+    e.st = { ...e.st, status: workerStatus, finished: true, current_tool: '' };
+    if (w) upsertWorker(this.root, { ...w, status: workerStatus, current_tool: '', results: [...w.results, result] });
+    try {
+      const t = w?.task_id ? getTask(this.root, w.task_id) : null;
+      if (t) updateTask(this.root, t.id, {
+        status: submitted ? 'review' : blocked ? 'blocked' : 'failed',
+        results: [...t.results, { kind: 'worker_submission', worker_id: id, status: result.status,
+          receipt: file, at: new Date().toISOString() }],
+        unresolved: [...t.unresolved, ...result.unresolved_questions],
+      });
+    } catch (error) {
+      appendEvent(this.root, 'task.submission_error', { worker: id, reason: String((error as Error).message) });
+    }
     appendEvent(this.root, 'worker.completed', { id, receipt: file });
     try {
       const requests = recordSolicitationWorkerResult(this.root, id, result.status, result.summary);
@@ -326,13 +343,18 @@ export async function spawnSelected(mgr: WorkerManager, catalog: CatalogService,
       'For paths held by another worker, submit a checkout_propose instead of editing in place. ' +
       'Use checkout_publish to commit only your owned paths. Do not run git add/commit directly. ' +
       'Claims: ' + JSON.stringify(claimed) + '. Conflicts: ' + JSON.stringify(checkoutConflicts) + '.';
+    const quirks = catalog.status(chosen.key).profile?.quirks ?? {};
+    const modelGuidance = Object.keys(quirks).length
+      ? '\n\nMODEL TOOL-USE PROFILE (operational advice, never higher authority than task): ' +
+        JSON.stringify(quirks).slice(0, 2000) + '. Adjust tool-call size/format accordingly.'
+      : '';
     const receipt = join(ensureLayout(root), 'receipts', 'spawn', `${id}.json`);
     writeJsonAtomic(receipt, { worker_id: id, task_id: task.id, request: { ...p, assignment: undefined, resolved: request },
       selection: sel, lease, parent_model: parentKey ?? null, claimed_paths: claimed, checkout_conflicts: checkoutConflicts,
       agent_dir: launch.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? null, extensions: launch.extraExtensions ?? [] });
     await mgr.spawn({
       workerId: id, taskId: task.id, role: p.role ?? 'worker', abilityProfile: request.profile, provider: chosen.provider, model: chosen.id,
-      thinking: chosen.thinking ?? 'off', lease, assignment: p.assignment + checkoutBrief, ...launch,
+      thinking: chosen.thinking ?? 'off', lease, assignment: p.assignment + checkoutBrief + modelGuidance, ...launch,
     });
     return { ok: true, worker_id: id, model: chosen.key, workspace: root, checkout_conflicts: checkoutConflicts, task_id: task.id, receipt, selection: { reason: sel.reason } };
   } catch (e) {
