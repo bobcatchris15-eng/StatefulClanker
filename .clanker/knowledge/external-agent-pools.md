@@ -2,7 +2,7 @@
 id: external-agent-pools
 status: provisional
 tags: [orchestrator, opencode, agy, jules, supervisor-pane, pools]
-paths: [operator.ts, ui/, workers/, catalog/]
+paths: [operator.ts, ui/, workers/, catalog/, protocol/]
 links: [living-context, shared-checkouts]
 ---
 # External agent pools (opencode, agy, Google Jules)
@@ -10,31 +10,37 @@ links: [living-context, shared-checkouts]
 Goal: the operator's orchestrator should also lean on non-Pi execution sources, each treated as an
 **unrelated pool** with its own model/catalog semantics, lifecycle, health and receipts.
 
-Survey (2026-03, verified locally: `opencode --version` = 1.18.35, `agy --version` = 1.3.3):
+All three CLIs are installed and authenticated on this machine (verified 2026-03). Prefer the local
+`--help` output over web docs; it is the primary evidence for these contracts.
 
 | Source | Kind | Local? | Contract |
 |---|---|---|---|
-| Pi (`pi --mode rpc`) | local child process | yes | JSONL RPC; exported `RpcClient`; this repo already drives one Pi per worker (`workers/runtime.ts`) |
-| opencode | local child process | yes (`opencode run`) | `opencode run --print-logs [--agent <name>] <prompt>`; exit code = result; OpenAgent SDK is TS-in-process, not a stream protocol |
-| agy | local child process | yes (`agy.exe`) | `agy exec -p <text>`, JSON/JSONL events on stdout; autocommit by default; `-` stdin, `-d/--dir`, `-m/--mode`, `-A/--model`, `-w/--write`; `agy mcp` exposes agy as MCP; unknown whether it can suppress git writes |
-| Google Jules | cloud | no | `POST /v1beta/sessions` -> poll `GET /v1/{id}` until state `FINISHED`; outputs land in a **Google Cloud worktree VM**, mirrored to a GitHub branch by a bot PR; API key + `X-Google-Api-Client-Version` header required |
+| Pi (`pi --mode rpc`) | local child process | yes | JSONL RPC; exported `RpcClient`; one Pi per worker (`workers/runtime.ts`) |
+| opencode 1.18.35 | local child process | yes | `opencode run [msg]` with `--format json` raw JSON events, `-s/--session <id>`, `-c/--continue`, `--fork`, `-m/--model provider/model`, `--variant`, `--agent`, `--dir`, `-f/--file` (repeatable), `--title`, `--print-logs`/`--log-level`, `--attach URL`/`--port`. `--auto` auto-approves permissions not explicitly denied - do not pass it by default. **No per-run read-only flag**: the only lever is opencode's own permission deny-lists. |
+| agy 1.3.3 (`agy.exe`) | local child process | yes | `agy exec -p <prompt>` (subcommand optional). `--output-format text\|json\|stream-json`, `--input-format text\|stream-json` (NDJSON in), `--json-schema`, `--conversation <id>` (resume by id - **there is no `--session` switch**), `-c/--continue`, `--mode accept-edits\|plan` (`plan` = safe headless default), `--sandbox`, `--dangerously-skip-permissions`, `--add-dir <path>` (repeatable), `--project`, `--model`, `--agent`, `--effort low\|medium\|high\|xhigh\|max`, `--print-timeout <dur>` (0 = no limit). Subcommands: `models`, `agent`, `mcp`, `plugin`, `remote-control`, `install`, `update`. **There is no git autocommit flag** (an earlier draft of this note claimed autocommit - wrong, see [[evidence-discipline]]). |
+| Google Jules | cloud VM, via local `jules` CLI | no | `jules new "<task>" [--repo owner/name] [--parallel 1-5]`; script-friendly `jules remote new --session "<task>"`; `jules remote list --session` -> columns `ID | Description | Repo | Last active | Status`; `jules remote list --repo`; `jules remote pull --session <id> [--apply]`; `jules teleport <id>`; `jules login/logout/version`; global `--theme dark\|light`. Observed Status values: `Planning`, `Completed`. IDs are large numeric strings. Connected repo for us: `bobcatchris15-eng/StatefulClanker`. Supersedes the earlier sketch of a raw REST API (`POST /v1beta/sessions`) - the CLI wraps it, and other operators may already be running Jules sessions concurrently. |
+
+Per-pool catalogs (do not merge with the Pi selection ranking):
+- opencode: model ids from its own config/`models` output, plus `--agent` presets.
+- agy: `agy models` verified -> `gemini-3.8/3.7/3.6-flash-{high,medium,low}`, `gemini-3.1-pro-{high,low}`,
+  `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium`. `agy agent` printed nothing, so
+  agent names are unverified.
+- jules: no model choice; the human's intent selects what the session description asks for.
 
 Consequences for the design:
 
-1. **Pool separation.** Jules has no local process, no local checkout edit, and cloud-side git authority:
-   it must never share checkout ownership with local pools. opencode/agy edit the shared tree, so they
-   need the same `checkout_claim`/`checkout_propose` discipline as native workers - probably enforced by a
-   `--permission`/tool-restriction flag, not by convention.
-2. **Receipts are filesystem- or API-level, not `worker_finish` JSON.** Each adapter must normalize to a
-   common `WorkerRecord`-ish shape (id, pool, task, status, summary, changed_files, receipt) so the
-   supervisor can render them without knowing the source.
-3. **Supervisor pane split.** Native workers show animated lamps; external pools only have coarse
-   lifecycle state, so they belong in their own static panes. Layout proposal: lamps left, one static
-   column per pool (native / opencode / agy / jules), collapsed when empty, with a header carrying pool
-   name, availability and last error.
-4. **Catalog.** `catalog/` today assumes "pool == Pi model registry". External pools need their own
-   discovery: opencode `models` from config, agy `agy models list`, Jules no model choice at all (or
-   agent-class presets). Keep per-pool catalogs; never merge into the Pi selection ranking.
-
-Open questions: agy's ability to run without git writes; whether opencode exposes per-session resume;
-Jules API key source and rate limits; how to map a Jules branch/PR back to this repo's shared tree.
+1. **Pool separation.** Jules has no local process and cloud-side git authority: its only local effect is
+   `jules remote pull --apply`, which must be operator-mediated and must never be automatic. It must never
+   take checkout ownership (see [[shared-checkouts]]). opencode/agy edit the shared tree, so they need the
+   same `checkout_claim`/`checkout_propose` discipline as native workers.
+2. **Receipts are CLI-output level, not `worker_finish` JSON.** Normalize to a common record shape
+   (pool, external_session_id, task, status, model, started/last-active, summary, changed_files, receipt)
+   so the supervisor can render any pool without knowing the source.
+3. **Supervisor pane split.** Native workers keep the animated pane on the left; each external pool gets its
+   own static pane on the right, collapsed/hidden when empty, header carrying pool availability + last error.
+   External pools only have coarse lifecycle (queued|planning|running|done|failed), so no animation.
+4. **Protocol separation.** The `SC1 {json}` worker<->parent channel stays native-only; external pools get
+   their own message namespace so the two cannot collide.
+5. **Jules lifecycle has no per-session detail subcommand**: poll `jules remote list --session` until a
+   terminal status, matching on session ID. Concurrent operators' sessions appear in the same table, so
+   match by ID and never by position.
