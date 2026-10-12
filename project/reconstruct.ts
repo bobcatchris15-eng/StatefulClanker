@@ -10,7 +10,7 @@ export function reconstruct(root: string): string {
   L.push('Active intent:'); none(intents);
   for (const i of intents) L.push(`  ${i.id}: ${i.statement}${i.scope ? ` [${i.scope}]` : ''}`);
   const tasks = listTasks(root);
-  const active = tasks.filter((t) => t.status === 'active' || t.status === 'pending');
+  const active = tasks.filter((t) => t.status === 'active' || t.status === 'pending' || t.status === 'review');
   const blocked = tasks.filter((t) => t.status === 'blocked');
   const done = tasks.filter((t) => t.status === 'complete' || t.status === 'failed').slice(-5);
   L.push('Active tasks:'); none(active);
