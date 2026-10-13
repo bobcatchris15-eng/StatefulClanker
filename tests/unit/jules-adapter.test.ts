@@ -68,11 +68,11 @@ test('status phase lists sessions', () => {
   assert.equal(julesPhase(s), 'status');
 });
 
-test('pull applies the patch by default; apply:false previews without writing', () => {
-  const s = spec({ metadata: { phase: 'pull' }, externalSessionId: '123456' });
-  assert.deepEqual(julesAdapter.buildArgs(s), ['remote', 'pull', '--session', '123456', '--apply']);
-  const preview = spec({ metadata: { phase: 'pull', apply: false }, externalSessionId: '123456' });
+test('Jules pull previews by default; only explicit apply:true writes to shared checkout', () => {
+  const preview = spec({ metadata: { phase: 'pull' }, externalSessionId: '123456' });
   assert.deepEqual(julesAdapter.buildArgs(preview), ['remote', 'pull', '--session', '123456']);
+  const apply = spec({ metadata: { phase: 'pull', apply: true }, externalSessionId: '123456' });
+  assert.deepEqual(julesAdapter.buildArgs(apply), ['remote', 'pull', '--session', '123456', '--apply']);
 });
 
 test('non-dispatch phases without a session id throw instead of emitting broken argv', () => {
