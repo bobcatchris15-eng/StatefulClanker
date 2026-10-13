@@ -9,7 +9,7 @@ import type { ExternalWorkerSpec } from './types.ts';
 export interface JulesSession {
   name: string;
   id?: string;
-  state: string;
+  state?: string;
   url?: string;
   outputs?: unknown[];
   title?: string;
@@ -19,7 +19,8 @@ export type JsonFetch = typeof fetch;
 const BASE = 'https://jules.googleapis.com/v1alpha';
 const terminal = new Set(['COMPLETED', 'FAILED']);
 
-export function julesStatus(state: string): ExternalWorkerSpec['status'] {
+export function julesStatus(state?: string): ExternalWorkerSpec['status'] {
+  if (!state) return 'queued'; // Create may return only a resource name.
   switch (state.toUpperCase()) {
     case 'COMPLETED': return 'succeeded';
     case 'FAILED': return 'failed';
@@ -30,8 +31,8 @@ export function julesStatus(state: string): ExternalWorkerSpec['status'] {
     default: return 'running';
   }
 }
-export function isJulesTerminal(state: string): boolean {
-  return terminal.has(state.toUpperCase());
+export function isJulesTerminal(state?: string): boolean {
+  return !!state && terminal.has(state.toUpperCase());
 }
 function origin(repo: string): string {
   if (/^[^\s/]+\/[^\s/]+$/.test(repo)) return repo.replace(/\.git$/, '');
