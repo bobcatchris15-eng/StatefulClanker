@@ -78,6 +78,7 @@ export function probeCli(
   return new Promise<PoolAvailability>((resolve) => {
     let version = '';
     let settled = false;
+    let timer: NodeJS.Timeout | undefined;
     const done = (value: PoolAvailability) => {
       if (settled) return;
       settled = true;
@@ -91,7 +92,7 @@ export function probeCli(
       done({ pool, available: false, command, reason: messageOf(err) });
       return;
     }
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       try {
         child.kill('SIGKILL');
       } catch {
