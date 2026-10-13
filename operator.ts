@@ -51,10 +51,22 @@ export function operatorMode(pi: ExtensionAPI): void {
               changed_files: job.touchedPaths ?? [], patch_file: job.metadata?.patchFile,
               session_id: job.externalSessionId, at: new Date().toISOString(),
             };
-            const results = task.results.filter((r: any) => r.kind !== 'worker_submission' || r.worker_id !== job.id);
+            const newSubmission = !task.results.some((r: any) =>
+              r.kind === 'worker_submission' && r.worker_id === job.id);
+            const results = task.results.filter((r: any) =>
+              r.kind !== 'worker_submission' || r.worker_id !== job.id);
             results.push(submission);
-            updateTask(root(), taskId, { status: job.status === 'succeeded' ? 'review' : 'blocked',
-              assigned_worker: job.id, results });
+            const nextStatus = job.status === 'succeeded' ? 'review' : 'blocked';
+            updateTask(root(), taskId, { status: nextStatus, assigned_worker: job.id, results });
+            if (newSubmission) {
+              pi.sendMessage({
+                customType: 'sc-external-result', display: true,
+                details: { worker_id: job.id, task_id: taskId, backend: job.pool, status: job.status },
+                content: `External ${job.pool} worker ${job.id} submitted task ${taskId} (${job.status}).
+Summary: ${job.note ?? '(no summary)'}
+Inspect the repository, diff, patch/PR and test evidence; independently verify with task_verify.`,
+              }, { deliverAs: 'followUp', triggerTurn: true });
+            }
           }
         } catch { /* task may be racing initial creation; next status event can recover */ }
       }
