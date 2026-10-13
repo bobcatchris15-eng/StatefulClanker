@@ -29,12 +29,12 @@ function reservePort(): Promise<number> {
  */
 export function openCodeBinary(): string {
   const explicit = process.env.SC_OPENCODE_COMMAND?.trim();
-  if (explicit && (!process.platform.startsWith('win') || /\\.exe$/i.test(explicit))) return explicit;
+  if (explicit && (!process.platform.startsWith('win') || /\.exe$/i.test(explicit))) return explicit;
   if (process.platform === 'win32') {
     const candidates: string[] = [];
     if (process.env.APPDATA) candidates.push(join(process.env.APPDATA, 'npm', 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'));
     const shim = spawnSync('where.exe', ['opencode'], { encoding: 'utf8', windowsHide: true });
-    for (const entry of String(shim.stdout ?? '').split(/\\r?\\n/).filter(Boolean)) {
+    for (const entry of String(shim.stdout ?? '').split(/\r?\n/).filter(Boolean)) {
       const d = dirname(entry.trim());
       candidates.push(join(d, 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'));
     }
