@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { OpenCodeServer } from '../../pools/opencode-server.ts';
 import { JulesRest, julesStatus } from '../../pools/jules-rest.ts';
 import { PoolStore } from '../../pools/store.ts';
+import { ExternalPoolManager } from '../../pools/manager.ts';
 
 test('OpenCode V2 admits prompts durably, selects native client model and inspects completed turns', async () => {
   const prev = process.env.OPENCODE_SERVER_URL;
@@ -121,4 +122,34 @@ test('PoolStore persists snapshots and reads in-progress jobs for restart recove
       assignment: 'fix test', externalSessionId: 'ses123' });
     assert.equal((await store.readStale()).length, 0);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('Jules manager persists remote ID before state interpretation and restores the same job after reboot', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'sc-jules-create-'));
+  const store = new PoolStore({ cwd: root });
+  let creates = 0;
+  const fakeJules: any = {
+    configured: true,
+    create: async () => { creates++; return { name: 'sessions/987654' }; },
+    get: async () => ({ name: 'sessions/987654', state: 'IN_PROGRESS' }),
+    collect: async () => ({ session: { name: 'sessions/987654', state: 'COMPLETED' }, patches: [], notes: ['done'] }),
+  };
+  const m = new ExternalPoolManager(root, { jules: fakeJules, store });
+  try {
+    await m.start();
+    const job = await m.launch({ pool: 'jules', assignment: 'Read a test', source: 'sources/github/example/repo' });
+    assert.equal(job.externalSessionId, 'sessions/987654');
+    assert.equal(job.status, 'running');
+    await m.stop();
+    const restarted = new ExternalPoolManager(root, { jules: fakeJules, store });
+    try {
+      await restarted.start();
+      assert.equal(restarted.get(job.id).externalSessionId, 'sessions/987654');
+      assert.equal(creates, 1, 'restart cannot duplicate the remote task');
+    } finally { await restarted.stop(); }
+  } finally {
+    await m.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
