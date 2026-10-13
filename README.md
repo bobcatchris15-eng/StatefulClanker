@@ -5,9 +5,38 @@ A [Pi](https://github.com/earendil-works/pi) package. The parent Clanker (your P
 ## Install
 
 ```
-pi install git:github.com/bobcatchris15-eng/StatefulClanker@v1.1.0
-pi install -l git:github.com/bobcatchris15-eng/StatefulClanker@v1.1.0   # project-local
+pi install git:github.com/bobcatchris15-eng/StatefulClanker@main
+pi install -l git:github.com/bobcatchris15-eng/StatefulClanker@main   # project-local
 ```
+
+## External worker pools (v1.2.0, main)
+
+The operator can now dispatch **four peer backends** with `worker_spawn` and explicit
+`backend: "pi" | "opencode" | "agy" | "jules"`. The packaged Pi skill
+`/skill:statefulclanker-orchestration` describes when and how to pick among them.
+No pool is favored simply because it is native. Existing Pi RPC worker spawning remains supported.
+
+- **OpenCode**: real OpenCode `serve` HTTP session control, async prompts, inspection, diffs, reuse/steering and cancellation. Uses the installed/authenticated OpenCode client's **own** configured model, not a Pi model endpoint. By default StatefulClanker launches `opencode serve` on loopback with generated authentication. Set `OPENCODE_SERVER_URL=http://127.0.0.1:4096` to attach to an already running local server; set `OPENCODE_SERVER_PASSWORD` when that server requires HTTP Basic authentication. Optional `SC_OPENCODE_COMMAND` selects the executable.
+- **Antigravity / agy**: uses the installed authenticated `agy` client in headless streaming JSON mode with direct file editing. Requires a terminal `SUCCESS` result rather than trusting an exit code. Captures conversation IDs. `SC_AGY_COMMAND` can override the executable. This version runs one-shot headless turns; persistent stdin steering is not yet integrated.
+- **Jules**: REST sessions (`https://jules.googleapis.com/v1alpha`), not inference calls and not Jules CLI subprocesses. Set `JULES_API_KEY` in the environment of the **Pi process**. The repository must be a connected Jules GitHub source. Dispatch, activity/status polling, REST follow-up messages, plan approval, patch retrieval and explicit patch application are supported. Jules sees the last pushed GitHub branch, not your dirty local work. Local scheduling caps default to **100 REST submissions per rolling 24h** and **15 concurrent**, configurable with `SC_JULES_DAILY_LIMIT` and `SC_JULES_CONCURRENT_LIMIT`. Actual server-side quotas may differ; 429s are not treated as proof that local limits are accurate.
+
+Operator tools: `external_worker_list`, `external_worker_refresh`,
+`external_worker_message`, `external_worker_cancel`,
+`external_worker_collect`, `external_worker_apply`, `external_worker_approve`.
+Receipts, raw agy logs and Jules patch files persist in `.statefulclanker/pools`
+and `.statefulclanker/pool-logs`. External results enter the task ledger as
+`worker_submission` and require independent `task_verify`, the same standard as Pi.
+
+**Example operator request:** “Use OpenCode to implement this, and send Jules REST
+an independent test suite task.” The operator should then call `worker_spawn`
+with explicit backend choices. For Jules, `external_worker_collect` retrieves
+a patch without writing; `external_worker_apply` is a separate Git operation
+that refuses conflicts rather than resetting another worker's files.
+
+**Windows/testing notes:** JavaScript/npm CLI shims may require native executable
+resolution. Authentication, account quota, API permission and live editing must
+be smoke-tested on the actual Windows host. The mocked unit tests and Pi E2E
+test suite cannot prove access to installed accounts or permission behavior.
 
 ## Supervisor panel
 
