@@ -21,7 +21,11 @@ test('OpenCode V2 admits prompts durably, selects native client model and inspec
     const headers = new Headers(init?.headers);
     calls.push({ path: url.pathname, method, body, auth: headers.get('authorization') });
     if (url.pathname === '/global/health') return Response.json({ healthy: true, version: 'test' });
-    if (url.pathname === '/session' && method === 'POST') return Response.json({ id: 'ses-test' });
+    if (url.pathname === '/api/session' && method === 'POST') {
+      assert.equal(body.agent, 'build');
+      assert.ok(body.location.directory);
+      return Response.json({ data: { id: 'ses-test' } });
+    }
     if (url.pathname === '/api/session/ses-test/model') return Response.json({});
     if (url.pathname === '/api/session/ses-test/message') {
       return Response.json({ data: completed ? [
