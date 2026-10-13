@@ -14,7 +14,7 @@ test('OpenCode V2 admits prompts durably, selects native client model and inspec
   process.env.OPENCODE_SERVER_URL = 'http://127.0.0.1:8098';
   process.env.OPENCODE_SERVER_PASSWORD = 'fixture-password';
   const calls: Array<{ path: string; method: string; body: any; auth: string | null }> = [];
-  let completed = false;
+  let phase = 0;
   const send = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? 'GET';
@@ -29,14 +29,19 @@ test('OpenCode V2 admits prompts durably, selects native client model and inspec
     }
     if (url.pathname === '/api/session/ses-test/model') return Response.json({});
     if (url.pathname === '/api/session/ses-test/message') {
-      return Response.json({ data: completed ? [
-        { id: 'msg-assistant', type: 'assistant', time: { created: 2, completed: 3 },
-          content: [{ type: 'text', text: 'I edited the files' }], snapshot: { files: ['src/example.ts'] } },
+      return Response.json({ data: phase > 0 ? [
+        ...(phase > 1 ? [{ id: 'msg-finished', type: 'assistant', finish: 'stop',
+          time: { created: 5, completed: 6 },
+          content: [{ type: 'text', text: 'I edited the files' }],
+          snapshot: { files: ['src/example.ts'] } }] : []),
+        { id: 'msg-intermediate', type: 'assistant', finish: 'tool-calls',
+          time: { created: 2, completed: 3 },
+          content: [{ type: 'text', text: "I'll read the file first" }] },
         { id: 'msg-user', type: 'user', text: 'do work', time: { created: 1 } },
       ] : [] });
     }
     if (url.pathname === '/api/session/ses-test/prompt') {
-      completed = true;
+      phase = 1;
       return Response.json({ data: { id: 'msg-prompt', sessionID: 'ses-test', admittedSeq: 1 } });
     }
     if (url.pathname === '/api/session/ses-test/permission') return Response.json({ data: [] });
@@ -48,11 +53,15 @@ test('OpenCode V2 admits prompts durably, selects native client model and inspec
     const session = await server.create('fix files');
     assert.equal(session, 'ses-test');
     assert.equal(await server.submit(session, 'implement change', 'opencode-go/qwen3.8-flash'), 0);
+    const partial = await server.inspect(session, 0);
+    assert.equal(partial.status, 'running', 'assistant tool-call step must not complete the job');
+    assert.equal(partial.completed, undefined);
+    phase = 2;
     const result = await server.inspect(session, 0);
     assert.equal(result.status, 'succeeded');
     assert.match(result.text ?? '', /edited/);
     assert.deepEqual(await server.diff(session), ['src/example.ts']);
-    assert.equal(await server.steer(session, 'add tests'), 2);
+    assert.equal(await server.steer(session, 'add tests'), 3);
     await server.abort(session);
     assert.ok(calls.some(c => c.path.endsWith('/prompt') && c.body.text === 'add tests' && c.body.delivery === 'queue'));
     assert.ok(calls.some(c => c.path.endsWith('/model') && c.body.model.id === 'qwen3.8-flash'));
