@@ -54,7 +54,7 @@ test('OpenCode V2 admits prompts durably, selects native client model and inspec
     assert.deepEqual(await server.diff(session), ['src/example.ts']);
     assert.equal(await server.steer(session, 'add tests'), 2);
     await server.abort(session);
-    assert.ok(calls.some(c => c.path.endsWith('/prompt') && c.body.prompt.text === 'add tests' && c.body.delivery === 'queue'));
+    assert.ok(calls.some(c => c.path.endsWith('/prompt') && c.body.text === 'add tests' && c.body.delivery === 'queue'));
     assert.ok(calls.some(c => c.path.endsWith('/model') && c.body.model.id === 'qwen3.8-flash'));
     assert.ok(calls.every(c => c.auth?.startsWith('Basic ')));
     assert.ok(!calls.some(c => c.path.endsWith('/prompt_async')));
