@@ -173,7 +173,7 @@ export class OpenCodeServer {
       });
     }
     const result = await this.request<{data?: Json}>('/api/session/' + this.sid(id) + '/prompt', 'POST', {
-      prompt: { text: prompt }, delivery: 'queue', resume: true,
+      text: prompt, delivery: 'queue', resume: true,
     });
     if (!result?.data?.id || !result.data.sessionID) throw new Error('OpenCode did not confirm durable prompt admission');
     // Number of projected messages BEFORE admission, used only for detecting a new assistant turn.
