@@ -135,8 +135,20 @@ export class ExternalPoolManager {
       } else if (p.pool === 'jules') {
         // Mark STARTING persistently before HTTP create. An ambiguous network failure is NOT retried automatically.
         const session = await this.jules.create(spec);
-        await this.patch(id, { status: julesStatus(session.state), externalSessionId: session.name,
-          metadata: { ...spec.metadata, url: session.url, remoteState: session.state } });
+        // Persist the REMOTE ID before parsing state or making a second network request.
+        // A Jules create response can contain only name/id; losing that name and retrying
+        // would consume another task and create a duplicate remote job.
+        await this.patch(id, { status: 'queued', externalSessionId: session.name,
+          metadata: { ...spec.metadata, url: session.url, remoteState: session.state ?? 'SUBMITTED' } });
+        try {
+          const current = await this.jules.get(session.name);
+          await this.patch(id, { status: julesStatus(current.state),
+            metadata: { ...this.get(id).metadata, url: current.url ?? session.url,
+              remoteState: current.state ?? 'SUBMITTED' } });
+        } catch (e) {
+          // The durable session identity is enough to recover and poll later.
+          await this.patch(id, { note: 'Jules dispatched; first status fetch: ' + String(e).slice(0, 260) });
+        }
       } else {
         this.launchAgy(spec);
         await this.patch(id, { status: 'running' });
@@ -262,7 +274,7 @@ export class ExternalPoolManager {
       await writeFile(patchFile, latest.patch, 'utf8');
     }
     await this.patch(id, { status: julesStatus(session.state),
-      note: notes.at(-1) ?? (session.outputs?.length ? 'Remote output ready' : session.state),
+      note: notes.at(-1) ?? (session.outputs?.length ? 'Remote output ready' : session.state ?? 'Remote status unavailable'),
       metadata: { ...spec.metadata, patchFile: patchFile || spec.metadata?.patchFile,
         baseCommitId: latest?.baseCommitId ?? spec.metadata?.baseCommitId, outputs: session.outputs } });
   }
