@@ -82,7 +82,7 @@ export class OpenCodeServer {
         throw new Error('OPENCODE_SERVER_URL must be an HTTP loopback address');
       this.url = parsed.origin;
       this.password = process.env.OPENCODE_SERVER_PASSWORD ?? '';
-      try { await this.request('/global/health'); }
+      try { await this.health(); }
       catch (error) { this.url = ''; throw error; }
       return;
     }
@@ -104,13 +104,21 @@ export class OpenCodeServer {
     for (let i = 0; i < 60; i++) {
       if (error || child.exitCode !== null) break;
       try {
-        const health = await this.request<Json>('/global/health', 'GET', undefined, 500);
-        if (health.healthy === true) return;
+        await this.health(650);
+        return;
       } catch { /* still starting */ }
       await new Promise(r => setTimeout(r, 150));
     }
     this.dispose();
     throw new Error('OpenCode server could not start: ' + (error || 'health check timed out / exited'));
+  }
+
+  /** V2 serves /global/health as a web-app fallback, NOT as JSON.
+   * Its authenticated /api/session endpoint is a reliable backend readiness probe.
+   */
+  private async health(timeout = 3000): Promise<void> {
+    const result = await this.request<{data?: Json[]}>('/api/session?limit=1', 'GET', undefined, timeout);
+    if (!Array.isArray(result?.data)) throw new Error('OpenCode server has no usable V2 session API');
   }
 
   private async request<T>(path: string, method = 'GET', body?: unknown, timeout = 15000): Promise<T> {
