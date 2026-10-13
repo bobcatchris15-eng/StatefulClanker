@@ -129,11 +129,15 @@ export class OpenCodeServer {
     } finally { clearTimeout(timer); }
   }
 
-  async create(title: string): Promise<string> {
+  async create(_title: string): Promise<string> {
     await this.start();
-    const s = await this.request<Json>('/session', 'POST', { title });
-    if (typeof s.id !== 'string') throw new Error('OpenCode session create returned no ID');
-    return s.id;
+    // Native V2 sessions have a selected agent and location. Compatibility /session
+    // creates a record without an active agent, which can strand admitted prompts.
+    const s = await this.request<{ data?: Json }>('/api/session', 'POST', {
+      agent: 'build', location: { directory: resolve(this.root) },
+    });
+    if (typeof s.data?.id !== 'string') throw new Error('OpenCode V2 session create returned no ID');
+    return s.data.id;
   }
   private sid(id: string): string { return encodeURIComponent(id); }
   /** OpenCode 1.18.35 V2 exposes durable message/turn state. The legacy
