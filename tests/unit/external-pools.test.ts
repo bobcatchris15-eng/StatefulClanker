@@ -7,13 +7,13 @@ import { OpenCodeServer } from '../../pools/opencode-server.ts';
 import { JulesRest, julesStatus } from '../../pools/jules-rest.ts';
 import { PoolStore } from '../../pools/store.ts';
 
-test('OpenCode uses its own authenticated server, preserves session for steering, and inspects completed turns', async () => {
+test('OpenCode V2 admits prompts durably, selects native client model and inspects completed turns', async () => {
   const prev = process.env.OPENCODE_SERVER_URL;
   const prevPass = process.env.OPENCODE_SERVER_PASSWORD;
   process.env.OPENCODE_SERVER_URL = 'http://127.0.0.1:8098';
   process.env.OPENCODE_SERVER_PASSWORD = 'fixture-password';
   const calls: Array<{ path: string; method: string; body: any; auth: string | null }> = [];
-  let complete = false;
+  let completed = false;
   const send = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? 'GET';
@@ -22,32 +22,37 @@ test('OpenCode uses its own authenticated server, preserves session for steering
     calls.push({ path: url.pathname, method, body, auth: headers.get('authorization') });
     if (url.pathname === '/global/health') return Response.json({ healthy: true, version: 'test' });
     if (url.pathname === '/session' && method === 'POST') return Response.json({ id: 'ses-test' });
-    if (url.pathname === '/session/ses-test/message') {
-      return Response.json(complete ? [
-        { info: { role: 'user' }, parts: [{ type: 'text', text: 'task' }] },
-        { info: { role: 'assistant', finish: 'stop', time: { completed: 22 } },
-          parts: [{ type: 'text', text: 'I edited the files' }] },
-      ] : []);
+    if (url.pathname === '/api/session/ses-test/model') return Response.json({});
+    if (url.pathname === '/api/session/ses-test/message') {
+      return Response.json({ data: completed ? [
+        { id: 'msg-assistant', type: 'assistant', time: { created: 2, completed: 3 },
+          content: [{ type: 'text', text: 'I edited the files' }], snapshot: { files: ['src/example.ts'] } },
+        { id: 'msg-user', type: 'user', text: 'do work', time: { created: 1 } },
+      ] : [] });
     }
-    if (url.pathname === '/session/status') return Response.json({});
-    if (url.pathname === '/session/ses-test/prompt_async') { complete = true; return new Response(null, { status: 204 }); }
-    if (url.pathname === '/session/ses-test/diff') return Response.json([{ file: 'src/example.ts' }]);
-    if (url.pathname === '/session/ses-test/abort') return Response.json(true);
+    if (url.pathname === '/api/session/ses-test/prompt') {
+      completed = true;
+      return Response.json({ data: { id: 'msg-prompt', sessionID: 'ses-test', admittedSeq: 1 } });
+    }
+    if (url.pathname === '/api/session/ses-test/permission') return Response.json({ data: [] });
+    if (url.pathname === '/api/session/ses-test/interrupt') return new Response(null, { status: 204 });
     return new Response('missing ' + url.pathname, { status: 404 });
   }) as typeof fetch;
   const server = new OpenCodeServer(process.cwd(), send);
   try {
     const session = await server.create('fix files');
     assert.equal(session, 'ses-test');
-    assert.equal(await server.submit(session, 'implement change'), 0);
+    assert.equal(await server.submit(session, 'implement change', 'opencode-go/qwen3.8-flash'), 0);
     const result = await server.inspect(session, 0);
     assert.equal(result.status, 'succeeded');
     assert.match(result.text ?? '', /edited/);
     assert.deepEqual(await server.diff(session), ['src/example.ts']);
     assert.equal(await server.steer(session, 'add tests'), 2);
     await server.abort(session);
-    assert.ok(calls.some(c => c.path.endsWith('/prompt_async') && c.body.parts[0].text === 'add tests'));
+    assert.ok(calls.some(c => c.path.endsWith('/prompt') && c.body.prompt.text === 'add tests' && c.body.delivery === 'queue'));
+    assert.ok(calls.some(c => c.path.endsWith('/model') && c.body.model.id === 'qwen3.8-flash'));
     assert.ok(calls.every(c => c.auth?.startsWith('Basic ')));
+    assert.ok(!calls.some(c => c.path.endsWith('/prompt_async')));
   } finally {
     server.dispose();
     if (prev === undefined) delete process.env.OPENCODE_SERVER_URL;
