@@ -136,61 +136,77 @@ export class OpenCodeServer {
     return s.id;
   }
   private sid(id: string): string { return encodeURIComponent(id); }
+  /** OpenCode 1.18.35 V2 exposes durable message/turn state. The legacy
+   * prompt_async compatibility route can return HTTP 204 without ever storing the input.
+   * Use the V2 admission path and verify that a session turn actually finished.
+   */
   async messages(id: string): Promise<Json[]> {
     await this.start();
-    return this.request<Json[]>('/session/' + this.sid(id) + '/message');
+    const response = await this.request<{data?: Json[]}>('/api/session/' + this.sid(id) + '/message?order=desc&limit=200');
+    return Array.isArray(response.data) ? response.data : [];
   }
   async submit(id: string, prompt: string, model?: string): Promise<number> {
+    await this.start();
     const previous = await this.messages(id);
-    let selected: Json | undefined;
     if (model) {
       const slash = model.indexOf('/');
       if (slash < 1 || slash === model.length - 1) throw new Error('OpenCode model must be provider/model');
-      selected = { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) };
+      await this.request('/api/session/' + this.sid(id) + '/model', 'POST', {
+        model: { providerID: model.slice(0, slash), id: model.slice(slash + 1) },
+      });
     }
-    await this.request('/session/' + this.sid(id) + '/prompt_async', 'POST', {
-      ...(selected ? { model: selected } : {}),
-      parts: [{ type: 'text', text: prompt }],
+    const result = await this.request<{data?: Json}>('/api/session/' + this.sid(id) + '/prompt', 'POST', {
+      prompt: { text: prompt }, delivery: 'queue', resume: true,
     });
+    if (!result?.data?.id || !result.data.sessionID) throw new Error('OpenCode did not confirm durable prompt admission');
+    // Number of projected messages BEFORE admission, used only for detecting a new assistant turn.
     return previous.length;
   }
   async steer(id: string, text: string, model?: string): Promise<number> {
-    // Same session; caller serializes turns unless the installed API specifically supports steering busy turns.
     return this.submit(id, text, model);
   }
-
   async inspect(id: string, baseline: number): Promise<OpenCodeResult> {
     await this.start();
-    const [states, messages] = await Promise.all([
-      this.request<Json>('/session/status'),
-      this.messages(id),
-    ]);
-    const state = states?.[id];
-    const typ = typeof state?.type === 'string' ? state.type : 'idle';
-    const newer = messages.slice(baseline).filter(m => m?.info?.role === 'assistant');
-    const last = newer.at(-1);
-    const info = last?.info ?? {};
-    const rawError = info.error;
-    const error = rawError ? JSON.stringify(rawError).slice(0, 700) : undefined;
-    const text = (last?.parts ?? []).filter((p: Json) => p.type === 'text')
+    const messages = await this.messages(id);
+    // V2 returns newest messages first. Filter out old assistant turns using the
+    // pre-submission projection length as an advisory guard.
+    const newestFirst = messages.slice(0, Math.max(0, messages.length - baseline));
+    const assistant = newestFirst.find(m => m?.type === 'assistant');
+    const content = Array.isArray(assistant?.content) ? assistant.content : [];
+    const responseText = content.filter((p: Json) => p.type === 'text')
       .map((p: Json) => String(p.text ?? '')).join('').slice(-2500);
-    if (error) return { status: 'failed', error, text, completed: true };
-    // A completed assistant message plus no busy session is a real turn completion.
-    if (last && typ !== 'busy' && (info.time?.completed || info.finish)) {
-      return { status: 'succeeded', text, completed: true };
+    if (assistant?.error) return { status: 'failed', completed: true,
+      error: JSON.stringify(assistant.error).slice(0, 1200), text: responseText };
+    if (assistant && (assistant.time?.completed || assistant.finish)) {
+      return { status: 'succeeded', completed: true, text: responseText };
     }
-    if (typ === 'retry') return { status: 'waiting_input', text };
-    return { status: 'running', text };
+    try {
+      const pending = await this.request<{data?: Json[]}>('/api/session/' + this.sid(id) + '/permission');
+      if (Array.isArray(pending.data) && pending.data.length) return {
+        status: 'waiting_input', text: 'OpenCode requires permission for ' +
+          pending.data.map(p => String(p.action ?? p.id ?? 'operation')).join(', '),
+      };
+    } catch { /* permissions query is optional for compatibility */ }
+    return { status: 'running', text: responseText };
   }
 
   async diff(id: string): Promise<string[]> {
-    const diffs = await this.request<Json[]>('/session/' + this.sid(id) + '/diff');
-    return (Array.isArray(diffs) ? diffs : []).map(d => d.file ?? d.path ?? d.after ?? '')
-      .filter((v): v is string => typeof v === 'string' && v.length > 0);
+    await this.start();
+    const messages = await this.messages(id);
+    const files = new Set<string>();
+    for (const msg of messages) {
+      for (const file of msg?.snapshot?.files ?? []) if (typeof file === 'string') files.add(file);
+    }
+    if (files.size) return [...files];
+    try {
+      const diffs = await this.request<Json[]>('/session/' + this.sid(id) + '/diff');
+      return (Array.isArray(diffs) ? diffs : []).map(d => d.file ?? d.path ?? d.after ?? '')
+        .filter((v): v is string => typeof v === 'string' && v.length > 0);
+    } catch { return []; }
   }
   async abort(id: string): Promise<void> {
     await this.start();
-    await this.request('/session/' + this.sid(id) + '/abort', 'POST', {});
+    await this.request('/api/session/' + this.sid(id) + '/interrupt', 'POST', {});
   }
   async exists(id: string): Promise<boolean> {
     try { await this.start(); await this.request('/session/' + this.sid(id)); return true; }
