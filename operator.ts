@@ -559,14 +559,23 @@ export function operatorMode(pi: ExtensionAPI): void {
   const line = (w: any) => `${w.id}${w.display_name ? ` ${w.display_name}` : ''} ${w.status} ${w.provider}/${w.model} task=${w.task_id}${w.current_action ? ` "${w.current_action}"` : ''}`;
   pi.registerTool({
     name: 'worker_list', label: 'List Workers', description: 'List workers with status.', parameters: Type.Object({}),
-    async execute() { const ws = listWorkers(root()); return txt(ws.length ? ws.map(line).join('\n') : '(no workers)'); },
+    async execute() {
+      const ws = listWorkers(root());
+      const local = ws.map(line);
+      const other = externalManager().list().map(j =>
+        `${j.id} ${j.status.toUpperCase()} ${j.pool} task=${String(j.metadata?.taskId ?? '-')} ${j.note ?? ''}`);
+      return txt([...local, ...other].join('\n') || '(no workers)');
+    },
   });
   pi.registerTool({
     name: 'worker_status', label: 'Worker Status', description: 'Status of one worker incl. last result summary.',
     parameters: Type.Object({ id: Type.String() }),
     async execute(_i: string, p: any) {
       const w = getWorker(root(), p.id);
-      if (!w) return txt(`no worker ${p.id}`);
+      if (!w) {
+        const j = externalManager().list().find(job => job.id === p.id);
+        return txt(j ? JSON.stringify(j, null, 2) : `no worker ${p.id}`);
+      }
       const r = w.results[w.results.length - 1];
       return txt(line(w) + `\nworkspace=${root()}` + (r ? `\nresult: ${r.status} ${r.summary}` : ''));
     },
@@ -576,11 +585,19 @@ export function operatorMode(pi: ExtensionAPI): void {
       name, label: name, description: desc, parameters: Type.Object({ id: Type.String(), text: Type.String() }),
       async execute(_i: string, p: any) { try { await fn(p.id, p.text); return txt('sent'); } catch (e) { return txt(`error: ${(e as Error).message}`); } },
     });
-  act('worker_message', 'Steer a running worker.', (id, t) => manager().message(id, t));
-  act('worker_follow_up', 'Queue a follow-up for a worker.', (id, t) => manager().followUp(id, t));
+  act('worker_message', 'Steer a running worker.', (id, t) =>
+    id.startsWith('x-') ? externalManager().message(id, t) : manager().message(id, t));
+  act('worker_follow_up', 'Queue a follow-up for a worker.', (id, t) =>
+    id.startsWith('x-') ? externalManager().message(id, t) : manager().followUp(id, t));
   pi.registerTool({
     name: 'worker_cancel', label: 'Cancel Worker', description: 'Abort a worker.', parameters: Type.Object({ id: Type.String() }),
-    async execute(_i: string, p: any) { try { await manager().cancel(p.id); draw(); return txt('cancelled'); } catch (e) { return txt(`error: ${(e as Error).message}`); } },
+    async execute(_i: string, p: any) {
+      try {
+        if (String(p.id).startsWith('x-')) await externalManager().cancel(p.id);
+        else await manager().cancel(p.id);
+        draw(); return txt('cancelled');
+      } catch (e) { return txt(`error: ${(e as Error).message}`); }
+    },
   });
   pi.registerTool({
     name: 'worker_retire', label: 'Retire Worker', description: 'Stop and archive a worker.', parameters: Type.Object({ id: Type.String() }),
