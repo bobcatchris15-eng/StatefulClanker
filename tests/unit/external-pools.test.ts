@@ -79,7 +79,8 @@ test('Jules REST locates connected GitHub source, starts task, steers session an
       const body = JSON.parse(String(init.body));
       assert.equal(body.sourceContext.source, 'sources/github-owner-repo');
       assert.equal(body.sourceContext.githubRepoContext.startingBranch, 'develop');
-      return Response.json({ name: 'sessions/12345', state: 'QUEUED', url: 'https://jules.google.com/session/12345' });
+      // Real Jules API may omit state on creation; the supervisor must persist name first.
+      return Response.json({ name: 'sessions/12345', url: 'https://jules.google.com/session/12345' });
     }
     if (url.pathname === '/v1alpha/sessions/12345' && (init?.method ?? 'GET') === 'GET') return Response.json({
       name: 'sessions/12345', state: 'COMPLETED', outputs: [],
@@ -97,6 +98,8 @@ test('Jules REST locates connected GitHub source, starts task, steers session an
     repo: 'owner/repo', metadata: { branch: 'develop' } };
   const session = await api.create(job);
   assert.equal(session.name, 'sessions/12345');
+  assert.equal(session.state, undefined);
+  assert.equal(julesStatus(session.state), 'queued');
   assert.equal(julesStatus('AWAITING_PLAN_APPROVAL'), 'waiting_input');
   assert.equal(julesStatus('IN_PROGRESS'), 'running');
   await api.sendMessage(session.name, 'Please add tests');
