@@ -246,7 +246,10 @@ export class OpenCodeServer {
         if (name === 'apply_patch') {
           const patch = input.patchText ?? input.patch ?? '';
           if (typeof patch === 'string') {
-            for (const match of patch.matchAll(/^\\*\\*\\* (?:Add|Update|Delete) File: (.+)$/gm)) paths.add(match[1]);
+            for (const line of patch.split(/\r?\n/)) {
+              const found = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/.exec(line);
+              if (found) paths.add(found[1]);
+            }
           }
         }
       }
@@ -258,8 +261,11 @@ export class OpenCodeServer {
     await this.request('/api/session/' + this.sid(id) + '/interrupt', 'POST', {});
   }
   async exists(id: string): Promise<boolean> {
-    try { await this.start(); await this.request('/session/' + this.sid(id)); return true; }
-    catch { return false; }
+    try {
+      await this.start();
+      const session = await this.request<{ data?: Json }>('/api/session/' + this.sid(id));
+      return session.data?.id === id;
+    } catch { return false; }
   }
   dispose(): void {
     const child = this.child;
