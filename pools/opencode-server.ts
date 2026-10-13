@@ -217,17 +217,41 @@ export class OpenCodeServer {
 
   async diff(id: string): Promise<string[]> {
     await this.start();
-    const messages = await this.messages(id);
-    const files = new Set<string>();
-    for (const msg of messages) {
-      for (const file of msg?.snapshot?.files ?? []) if (typeof file === 'string') files.add(file);
-    }
-    if (files.size) return [...files];
+    const paths = new Set<string>();
+    // OpenCode V2 emits structured file diff data when repository snapshots exist.
     try {
-      const diffs = await this.request<Json[]>('/session/' + this.sid(id) + '/diff');
-      return (Array.isArray(diffs) ? diffs : []).map(d => d.file ?? d.path ?? d.after ?? '')
-        .filter((v): v is string => typeof v === 'string' && v.length > 0);
-    } catch { return []; }
+      const changes = await this.request<{ data?: Json[] }>('/api/session/' + this.sid(id) + '/diff');
+      for (const f of changes.data ?? []) {
+        const file = f.file ?? f.path ?? f.after?.path;
+        if (typeof file === 'string' && file.length) paths.add(file);
+      }
+    } catch { /* nongit directories have no session diff */ }
+
+    // Some agent sessions (particularly a disposable/non-Git workspace) have no
+    // snapshot diff. Recover explicit writes from the ACTUAL tool calls instead;
+    // never count mere reads as modifications or infer writes from prose.
+    const messages = await this.messages(id);
+    for (const msg of messages) {
+      for (const file of msg?.snapshot?.files ?? []) {
+        if (typeof file === 'string' && file.length) paths.add(file);
+      }
+      for (const part of msg?.content ?? []) {
+        if (part?.type !== 'tool' || part?.state?.status !== 'completed') continue;
+        const name = String(part.name ?? '').toLowerCase();
+        const input = part.state.input ?? {};
+        if (['write', 'edit', 'multiedit', 'file_write', 'file_edit'].includes(name)) {
+          const path = input.path ?? input.filePath ?? input.file_path ?? input.filename ?? input.target_file;
+          if (typeof path === 'string' && path.length) paths.add(path);
+        }
+        if (name === 'apply_patch') {
+          const patch = input.patchText ?? input.patch ?? '';
+          if (typeof patch === 'string') {
+            for (const match of patch.matchAll(/^\\*\\*\\* (?:Add|Update|Delete) File: (.+)$/gm)) paths.add(match[1]);
+          }
+        }
+      }
+    }
+    return [...paths];
   }
   async abort(id: string): Promise<void> {
     await this.start();
