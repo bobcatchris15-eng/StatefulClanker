@@ -428,9 +428,11 @@ Inspect the repository, diff, patch/PR and test evidence; independently verify w
       if (ctx) uiCtx = ctx;
       if (p.backend && p.backend !== 'pi') {
         if (p.dry_run) return txt(JSON.stringify({ backend: p.backend, dry_run: true, note: 'External backend uses its own authentication and quota; not a Pi model endpoint' }));
+        let createdTaskId: string | undefined;
         try {
           const task = createTask(root(), { title: p.task_title ?? p.assignment.slice(0, 70), objective: p.assignment,
             expected_outputs: p.expected_outputs ?? [], context_hints: p.context_hints ?? [] });
+          createdTaskId = task.id;
           const job = await externalManager().launch({
             pool: p.backend, assignment: externalAssignment(p, task.id), title: p.task_title, taskId: task.id,
             model: p.model, repo: root(), source: p.source, branch: p.branch,
@@ -439,7 +441,17 @@ Inspect the repository, diff, patch/PR and test evidence; independently verify w
           draw();
           return txt(JSON.stringify({ worker_id: job.id, backend: job.pool, session_id: job.externalSessionId,
             task_id: task.id, status: job.status, note: 'Backend completion requires independent task_verify' }));
-        } catch (e) { return txt('error: ' + String(e)); }
+        } catch (e) {
+          if (createdTaskId) {
+            try {
+              const task = getTask(root(), createdTaskId);
+              if (task) updateTask(root(), createdTaskId, {
+                status: 'blocked', unresolved: [...task.unresolved, 'External backend launch failed: ' + String(e).slice(0, 450)],
+              });
+            } catch { /* retain original launch error */ }
+          }
+          return txt('error: ' + String(e));
+        }
       }
       const r = await spawnSelected(manager(), catalog(), root(), p, launch());
       if (p.dry_run) {
