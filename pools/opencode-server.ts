@@ -194,8 +194,16 @@ export class OpenCodeServer {
       .map((p: Json) => String(p.text ?? '')).join('').slice(-2500);
     if (assistant?.error) return { status: 'failed', completed: true,
       error: JSON.stringify(assistant.error).slice(0, 1200), text: responseText };
-    if (assistant && (assistant.time?.completed || assistant.finish)) {
+    // Every tool invocation can end an assistant message with finish='tool-calls'.
+    // A message timestamp or arbitrary finish code is NOT a completed task.
+    // OpenCode V2 publishes a final assistant with finish='stop' (and then an idle
+    // projection). Require that terminal result rather than an intermediate step.
+    if (assistant?.finish === 'stop' && assistant?.time?.completed) {
       return { status: 'succeeded', completed: true, text: responseText };
+    }
+    if (assistant?.finish === 'length' && assistant?.time?.completed) {
+      return { status: 'failed', completed: true, text: responseText,
+        error: 'OpenCode assistant stopped at generation limit without completing its task' };
     }
     try {
       const pending = await this.request<{data?: Json[]}>('/api/session/' + this.sid(id) + '/permission');
