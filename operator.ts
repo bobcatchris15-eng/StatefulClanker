@@ -406,7 +406,7 @@ Inspect the repository, diff, patch/PR and test evidence; independently verify w
 
   pi.registerTool({
     name: 'worker_spawn', label: 'Spawn Worker',
-    description: 'Select a model by ability profile (never inherits yours), create task, assign file checkout responsibility in one shared working tree, spawn a worker. Non-blocking. Use dry_run to inspect the choice.',
+    description: 'Spawn a task in one of four peer backends: pi, opencode, agy or jules. Always select a backend deliberately; do not favor native Pi by default. Native Pi selects by ability profile; external clients own their own quotas and models. Non-blocking; use dry_run where appropriate.',
     parameters: Type.Object({
       assignment: Type.String(),
       backend: opt(Type.Union([Type.Literal('pi'), Type.Literal('opencode'), Type.Literal('agy'), Type.Literal('jules')])),
