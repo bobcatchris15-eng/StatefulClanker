@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { PoolStore } from './store.ts';
 import { OpenCodeServer } from './opencode-server.ts';
-import { JulesRest, githubOrigin, isJulesTerminal, julesStatus } from './jules-rest.ts';
+import { JulesRest, isJulesTerminal, julesStatus } from './jules-rest.ts';
 import { agyAdapter } from './agy.ts';
 import { runExternal, type PoolRunHandle } from './runner.ts';
 import type { ExternalWorkerSpec, ExternalPoolId, PoolWorkerStatus, PoolEvent } from './types.ts';
@@ -37,6 +37,7 @@ export class ExternalPoolManager {
   private readonly now: () => number;
   private readonly onChange: (s: ExternalWorkerSpec) => void;
   private readonly records = new Map<string, ExternalWorkerSpec>();
+  private readonly pendingWrites = new Map<string, Promise<void>>();
   private readonly processes = new Map<string, PoolRunHandle>();
   private ticking = false;
   private timer: NodeJS.Timeout | null = null;
@@ -60,8 +61,17 @@ export class ExternalPoolManager {
   }
   private async save(s: ExternalWorkerSpec): Promise<void> {
     this.records.set(s.id, s);
-    await this.store.save(s);
-    this.onChange(s);
+    // Serialize writes for the same worker; high-frequency activity updates must not
+    // allow a late completion to be overwritten by an earlier, slower JSON write.
+    const prior = this.pendingWrites.get(s.id) ?? Promise.resolve();
+    const pending = prior.catch(() => {}).then(() => this.store.save(s));
+    this.pendingWrites.set(s.id, pending);
+    try { await pending; }
+    finally {
+      if (this.pendingWrites.get(s.id) === pending) this.pendingWrites.delete(s.id);
+    }
+    // Avoid stale progress frames reaching the task ledger after a terminal result.
+    if (this.records.get(s.id) === s) this.onChange(s);
   }
   private async patch(id: string, props: Partial<ExternalWorkerSpec>): Promise<ExternalWorkerSpec> {
     const s = { ...this.get(id), ...props };
@@ -311,9 +321,11 @@ export class ExternalPoolManager {
     const records = this.list();
     const day = this.now() - 86400000;
     return {
-      opencode: { transport: 'session-server', configured: true },
-      agy: { transport: 'headless', command: process.env.SC_AGY_COMMAND ?? 'agy' },
-      jules: { transport: 'rest', configured: this.jules.configured,
+      opencode: { transport: 'session-server', executable: process.env.SC_OPENCODE_COMMAND ?? 'opencode',
+        health: 'not_probed', note: 'OpenCode server is checked when a worker is dispatched' },
+      agy: { transport: 'headless', executable: process.env.SC_AGY_COMMAND ?? 'agy',
+        health: 'not_probed' },
+      jules: { transport: 'rest', credentialPresent: this.jules.configured,
         recentSubmissions: records.filter(s => s.pool === 'jules' && (s.startedAt ?? 0) >= day).length,
         inFlight: records.filter(s => s.pool === 'jules' && !final.has(s.status)).length,
         dailyLimit: Number(process.env.SC_JULES_DAILY_LIMIT ?? 100),
