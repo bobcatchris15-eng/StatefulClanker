@@ -32,8 +32,9 @@ test('OpenCode V2 admits prompts durably, selects native client model and inspec
       return Response.json({ data: phase > 0 ? [
         ...(phase > 1 ? [{ id: 'msg-finished', type: 'assistant', finish: 'stop',
           time: { created: 5, completed: 6 },
-          content: [{ type: 'text', text: 'I edited the files' }],
-          snapshot: { files: ['src/example.ts'] } }] : []),
+          content: [{ type: 'text', text: 'I edited the files' },
+            { type: 'tool', name: 'write', state: { status: 'completed',
+              input: { path: 'src/example.ts' } } }] }] : []),
         { id: 'msg-intermediate', type: 'assistant', finish: 'tool-calls',
           time: { created: 2, completed: 3 },
           content: [{ type: 'text', text: "I'll read the file first" }] },
