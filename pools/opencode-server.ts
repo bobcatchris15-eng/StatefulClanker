@@ -3,10 +3,11 @@
  * Uses the installed OpenCode client (and its own provider credentials/models), NOT Pi's inference API.
  * Sessions are scoped with x-opencode-directory and may be steered while retained by the server.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
-import { resolve } from 'node:path';
+import { resolve, join, dirname } from 'node:path';
 
 type Json = Record<string, any>;
 type JsonFetch = typeof fetch;
@@ -22,6 +23,28 @@ function reservePort(): Promise<number> {
     });
   });
 }
+/** Resolve the native OpenCode binary on Windows, not the npm .cmd/.ps1 wrapper.
+ * Shell-launched shims orphan their child executable on cancellation and can lock the checkout.
+ * Resolve the installed opencode-ai package's executable before falling back to PATH.
+ */
+export function openCodeBinary(): string {
+  const explicit = process.env.SC_OPENCODE_COMMAND?.trim();
+  if (explicit && (!process.platform.startsWith('win') || /\\.exe$/i.test(explicit))) return explicit;
+  if (process.platform === 'win32') {
+    const candidates: string[] = [];
+    if (process.env.APPDATA) candidates.push(join(process.env.APPDATA, 'npm', 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'));
+    const shim = spawnSync('where.exe', ['opencode'], { encoding: 'utf8', windowsHide: true });
+    for (const entry of String(shim.stdout ?? '').split(/\\r?\\n/).filter(Boolean)) {
+      const d = dirname(entry.trim());
+      candidates.push(join(d, 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'));
+    }
+    for (const c of candidates) if (existsSync(c)) return c;
+    if (explicit) throw new Error('SC_OPENCODE_COMMAND must be a native .exe on Windows: ' + explicit);
+    throw new Error('Unable to locate native opencode.exe; set SC_OPENCODE_COMMAND to the installed executable');
+  }
+  return explicit || 'opencode';
+}
+
 export interface OpenCodeResult {
   status: 'running' | 'waiting_input' | 'succeeded' | 'failed';
   text?: string;
@@ -41,8 +64,8 @@ export class OpenCodeServer {
     this.send = send;
   }
   async start(): Promise<void> {
-    if (this.url) return;
     if (this.starting) return this.starting;
+    if (this.url) return;
     this.starting = this.boot();
     try { await this.starting; } finally { this.starting = null; }
   }
@@ -61,7 +84,7 @@ export class OpenCodeServer {
     const port = await reservePort();
     this.url = `http://127.0.0.1:${port}`;
     this.password = randomBytes(30).toString('hex');
-    const command = process.env.SC_OPENCODE_COMMAND ?? 'opencode';
+    const command = openCodeBinary();
     const child = spawn(command, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
       cwd: resolve(this.root),
       windowsHide: true, stdio: 'ignore',
@@ -176,8 +199,13 @@ export class OpenCodeServer {
   dispose(): void {
     const child = this.child;
     this.child = null;
-    if (child && child.exitCode === null) {
-      try { child.kill(); } catch { /* gone */ }
+    if (child && child.exitCode === null && child.pid) {
+      if (process.platform === 'win32') {
+        // Kill only this supervisor-owned server and its descendants, not other user's OpenCode sessions.
+        spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 5000 });
+      } else {
+        try { child.kill('SIGTERM'); } catch { /* gone */ }
+      }
     }
     this.url = '';
   }
