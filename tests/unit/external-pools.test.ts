@@ -72,7 +72,7 @@ test('Jules REST locates connected GitHub source, starts task, steers session an
       assert.equal(body.sourceContext.githubRepoContext.startingBranch, 'develop');
       return Response.json({ name: 'sessions/12345', state: 'QUEUED', url: 'https://jules.google.com/session/12345' });
     }
-    if (url.pathname === '/v1alpha/sessions/12345' && !init?.method) return Response.json({
+    if (url.pathname === '/v1alpha/sessions/12345' && (init?.method ?? 'GET') === 'GET') return Response.json({
       name: 'sessions/12345', state: 'COMPLETED', outputs: [],
     });
     if (url.pathname === '/v1alpha/sessions/12345/activities') return Response.json({
