@@ -100,9 +100,8 @@ export const julesAdapter: PoolAdapter = {
       return ['teleport', requireSession(spec, phase)];
     }
     const args = ['remote', 'pull', '--session', requireSession(spec, phase)];
-    // `--apply` is the single write to the shared tree. It is opt-in per run so a plain preview pull
-    // (which prints the patch) stays available; it is not a safety gate, just an explicit action.
-    if (extra.apply !== false) args.push('--apply');
+    // Patch application is an explicit operator action, never the default during collection.
+    if (extra.apply === true) args.push('--apply');
     return args;
   },
 
