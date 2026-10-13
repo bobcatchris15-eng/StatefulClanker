@@ -3,7 +3,7 @@
  * Credentials stay in JULES_API_KEY (never in receipts or logs).
  * https://jules.google/docs/api/reference/sessions
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import type { ExternalWorkerSpec } from './types.ts';
 
 export interface JulesSession {
@@ -44,10 +44,26 @@ function origin(repo: string): string {
 }
 export function githubOrigin(repo: string): string { return origin(repo); }
 
+/** A Windows Pi process may predate user environment changes. Read the persisted
+ * current-user variable without logging credentials or expanding shell command text.
+ */
+export function configuredJulesKey(): string {
+  if (process.env.JULES_API_KEY?.trim()) return process.env.JULES_API_KEY.trim();
+  if (process.platform !== 'win32') return '';
+  try {
+    const result = spawnSync('reg.exe',
+      ['query', 'HKCU\\Environment', '/v', 'JULES_API_KEY'],
+      { encoding: 'utf8', windowsHide: true, timeout: 3000 });
+    if (result.status !== 0) return '';
+    const match = /JULES_API_KEY\s+REG_(?:SZ|EXPAND_SZ)\s+([^\r\n]+)/i.exec(String(result.stdout ?? ''));
+    return match?.[1]?.trim() ?? '';
+  } catch { return ''; }
+}
+
 export class JulesRest {
   private readonly key: string;
   private readonly send: JsonFetch;
-  constructor(key = process.env.JULES_API_KEY ?? '', send: JsonFetch = fetch) {
+  constructor(key = configuredJulesKey(), send: JsonFetch = fetch) {
     this.key = key.trim();
     this.send = send;
   }
